@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url" // Import net/url
 	"os"
 	"path/filepath"
 
@@ -31,7 +32,27 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 		}
 	}
 
-	conn, err := sql.Open("sqlite3", cfg.DSN+"?_journal_mode=WAL&_foreign_keys=on")
+	// Safely append parameters to the DSN
+	var finalDSN string
+	if cfg.DSN == ":memory:" {
+		// Special case for in-memory database
+		finalDSN = ":memory:?_journal_mode=WAL&_foreign_keys=on"
+	} else {
+		// Parse the DSN as a URL
+		u, err := url.Parse(cfg.DSN)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse DSN '%s': %w", cfg.DSN, err)
+		}
+
+		queryParams := u.Query()
+		queryParams.Set("_journal_mode", "WAL")
+		queryParams.Set("_foreign_keys", "on")
+		u.RawQuery = queryParams.Encode()
+
+		finalDSN = u.String()
+	}
+
+	conn, err := sql.Open("sqlite3", finalDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

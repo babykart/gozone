@@ -17,6 +17,30 @@ func TestNewInMemory(t *testing.T) {
 	}
 	defer db.Close()
 
+	// Verify pragmas are set correctly
+	var journalMode string
+	err = db.Conn.QueryRow("PRAGMA journal_mode").Scan(&journalMode)
+	if err != nil {
+		t.Errorf("failed to query journal_mode: %v", err)
+	}
+	// In-memory databases use 'memory' journal mode, not 'wal'
+	if journalMode != "wal" && journalMode != "memory" {
+		t.Errorf("expected journal_mode wal or memory, got %s", journalMode)
+	}
+	// In-memory databases use 'memory' journal mode, not 'wal'
+	if journalMode != "wal" && journalMode != "memory" {
+		t.Errorf("expected journal_mode wal or memory, got %s", journalMode)
+	}
+
+	var enabled int
+	err = db.Conn.QueryRow("PRAGMA foreign_keys").Scan(&enabled) // Corrected variable name
+	if err != nil {
+		t.Errorf("failed to query foreign_keys: %v", err)
+	}
+	if enabled != 1 {
+		t.Errorf("expected foreign_keys=1, got %d", enabled)
+	}
+
 	// Verify tables exist
 	tables := []string{"users", "settings", "activity_logs", "api_keys"}
 	for _, table := range tables {
@@ -50,12 +74,12 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first New failed: %v", err)
 	}
+	defer db.Close()
 
 	// Running migrate again should succeed
 	if err := db.migrate(); err != nil {
 		t.Fatalf("second migrate failed: %v", err)
 	}
-	db.Close()
 }
 
 func TestClose(t *testing.T) {
