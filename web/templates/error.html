@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="container" style="margin-top:4rem;text-align:center">
+        <h1>Error</h1>
+        <div class="alert alert-error" style="max-width:600px;margin:1rem auto">
+            {{.Message}}
+        </div>
+        <a href="/dashboard" class="btn btn-primary">Back to Dashboard</a>
+    </main>
+</body>
+</html>

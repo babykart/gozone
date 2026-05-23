@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones">Zones</a>
+            <a href="/users" class="active">Users</a>
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <h2>Users</h2>
+            <a href="/users/new" class="btn btn-primary">Create User</a>
+        </div>
+
+        {{if .Users}}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Users}}
+                <tr>
+                    <td><strong>{{.Username}}</strong></td>
+                    <td>{{.Email}}</td>
+                    <td>{{.FirstName}} {{.LastName}}</td>
+                    <td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
+                    <td>{{if .Enabled}}<span class="badge badge-active">Active</span>{{else}}<span class="badge badge-disabled">Disabled</span>{{end}}</td>
+                    <td>
+                        <a href="/users/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
+                        {{if ne .ID $.User.ID}}
+                        <form method="POST" action="/users/delete" style="display:inline" onsubmit="return confirm('Delete user {{.Username}}?')">
+                            <input type="hidden" name="user_id" value="{{.ID}}">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <h3>No users</h3>
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

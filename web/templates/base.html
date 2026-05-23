@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+{{define "content"}}{{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

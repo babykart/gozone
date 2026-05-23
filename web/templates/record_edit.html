@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones" class="active">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <h2>Edit Record</h2>
+            <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Back to Zone</a>
+        </div>
+
+        {{if .Record}}
+        {{$rr := .Record}}
+        {{$rec := index $rr.Records 0}}
+        <div class="card">
+            <form method="POST" action="/zones/{{$.Zone.ID}}/records/update">
+                <input type="hidden" name="orig_name" value="{{$rr.Name}}">
+                <input type="hidden" name="orig_type" value="{{$rr.Type}}">
+                <div class="form-group">
+                    <label for="name">Record Name *</label>
+                    <input type="text" id="name" name="name" value="{{$rr.Name}}" required>
+                </div>
+                <div class="form-group">
+                    <label for="type">Record Type *</label>
+                    <select id="type" name="type" required>
+                        {{range $.RecordTypes}}
+                        <option value="{{.}}" {{if eq . $rr.Type}}selected{{end}}>{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="content">Content *</label>
+                    <input type="text" id="content" name="content" value="{{$rec.Content}}" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ttl">TTL</label>
+                        <input type="number" id="ttl" name="ttl" value="{{$rr.TTL}}" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="priority">Priority</label>
+                        <input type="number" id="priority" name="priority" value="{{$rec.Priority}}" min="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="disabled" {{if $rec.Disabled}}checked{{end}}>
+                        Disabled
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Update Record</button>
+                    <a href="/zones/{{$.Zone.ID}}" class="btn btn-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+        {{else}}
+        <div class="empty-state">
+            <h3>Record not found</h3>
+            <a href="/zones/{{.Zone.ID}}" class="btn btn-primary">Back to Zone</a>
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

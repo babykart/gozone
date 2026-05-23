@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones" class="active">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <h2>Zones</h2>
+            {{if .IsAdmin}}
+            <a href="/zones/new" class="btn btn-primary">Create Zone</a>
+            {{end}}
+        </div>
+
+        {{if .Zones}}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Serial</th>
+                    <th>Records</th>
+                    <th>DNSSEC</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Zones}}
+                <tr>
+                    <td><a href="/zones/{{.Zone.ID}}"><strong>{{.Zone.Name}}</strong></a></td>
+                    <td><span class="badge">{{.Zone.Kind}}</span></td>
+                    <td>{{.Zone.Serial}}</td>
+                    <td>{{.RecordCount}}</td>
+                    <td>{{if .Zone.DNSSEC}}Yes{{else}}No{{end}}</td>
+                    <td>
+                        <a href="/zones/{{.Zone.ID}}" class="btn btn-sm btn-secondary">View</a>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <h3>No zones found</h3>
+            <p>Create your first DNS zone to get started.</p>
+            {{if .IsAdmin}}<a href="/zones/new" class="btn btn-primary">Create Zone</a>{{end}}
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

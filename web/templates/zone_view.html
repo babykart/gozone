@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones" class="active">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <div>
+                <a href="/zones" class="breadcrumb">Zones</a> / <h2>{{.Zone.Name}}</h2>
+            </div>
+            <div class="header-actions">
+                <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
+                {{if .IsAdmin}}
+                <form method="POST" action="/zones/{{.Zone.ID}}/rectify" style="display:inline">
+                    <button type="submit" class="btn btn-secondary">Rectify</button>
+                </form>
+                <form method="POST" action="/zones/{{.Zone.ID}}/notify" style="display:inline">
+                    <button type="submit" class="btn btn-secondary">Notify</button>
+                </form>
+                {{end}}
+            </div>
+        </div>
+
+        <div class="zone-meta">
+            <span>Type: <strong>{{.Zone.Kind}}</strong></span>
+            <span>Serial: <strong>{{.Zone.Serial}}</strong></span>
+            <span>DNSSEC: <strong>{{if .Zone.DNSSEC}}Enabled{{else}}Disabled{{end}}</strong></span>
+            {{if .Zone.Account}}<span>Account: <strong>{{.Zone.Account}}</strong></span>{{end}}
+        </div>
+
+        {{if .Records}}
+        <div class="card">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Content</th>
+                        <th>TTL</th>
+                        <th>Priority</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{$zoneID := .Zone.ID}}
+                    {{range .Records}}
+                    {{$rrset := .}}
+                    {{range .Records}}
+                    <tr>
+                        <td>{{$rrset.Name}}</td>
+                        <td><span class="badge badge-type">{{$rrset.Type}}</span></td>
+                        <td>{{.Content}}</td>
+                        <td>{{$rrset.TTL}}</td>
+                        <td>{{if .Priority}}{{.Priority}}{{else}}-{{end}}</td>
+                        <td>{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</td>
+                        <td class="actions-cell">
+                            <a href="/zones/{{$zoneID}}/records/edit?name={{$rrset.Name}}&type={{$rrset.Type}}" class="btn btn-sm btn-secondary">Edit</a>
+                            <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" onsubmit="return confirm('Delete record {{$rrset.Name}}?')">
+                                <input type="hidden" name="name" value="{{$rrset.Name}}">
+                                <input type="hidden" name="type" value="{{$rrset.Type}}">
+                                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {{end}}
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <div class="empty-state">
+            <h3>No records</h3>
+            <p>Add DNS records to this zone.</p>
+            <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
+        </div>
+        {{end}}
+
+        {{if .IsAdmin}}
+        <div class="card" style="margin-top:2rem">
+            <h3>Danger Zone</h3>
+            <form method="POST" action="/zones/delete" onsubmit="return confirm('Delete zone {{.Zone.Name}}? This action cannot be undone.')">
+                <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
+                <button type="submit" class="btn btn-danger">Delete Zone</button>
+            </form>
+        </div>
+        {{end}}
+
+        {{if .Logs}}
+        <div class="card" style="margin-top:2rem">
+            <h3>Activity</h3>
+            <table class="table">
+                <thead>
+                    <tr><th>Action</th><th>Details</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Logs}}
+                    <tr>
+                        <td><span class="badge">{{.Action}}</span></td>
+                        <td>{{.Details}}</td>
+                        <td>{{.CreatedAt}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

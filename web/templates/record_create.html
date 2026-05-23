@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones" class="active">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <h2>Add Record to {{.Zone.Name}}</h2>
+            <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Back to Zone</a>
+        </div>
+
+        <div class="card">
+            <form method="POST" action="/zones/{{.Zone.ID}}/records/create">
+                <div class="form-group">
+                    <label for="name">Record Name *</label>
+                    <input type="text" id="name" name="name" placeholder="www" required>
+                    <small>Leave empty or use @ for zone root</small>
+                </div>
+                <div class="form-group">
+                    <label for="type">Record Type *</label>
+                    <select id="type" name="type" required>
+                        <option value="">Select type...</option>
+                        {{range .RecordTypes}}
+                        <option value="{{.}}">{{.}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="content">Content *</label>
+                    <input type="text" id="content" name="content" placeholder="192.168.1.1" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ttl">TTL</label>
+                        <input type="number" id="ttl" name="ttl" value="3600" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="priority">Priority</label>
+                        <input type="number" id="priority" name="priority" value="0" min="0">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Add Record</button>
+                    <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

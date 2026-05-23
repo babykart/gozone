@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard" class="active">Dashboard</a>
+            <a href="/zones">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <h2>Dashboard</h2>
+
+        <div class="stats-grid">
+            {{range .Stats}}
+            <div class="stat-card">
+                <div class="stat-value">{{.Value}}</div>
+                <div class="stat-label">{{.Label}}</div>
+            </div>
+            {{end}}
+        </div>
+
+        <div class="card">
+            <h3>Quick Actions</h3>
+            <div class="actions-row">
+                <a href="/zones" class="btn btn-primary">Manage Zones</a>
+                {{if .IsAdmin}}<a href="/users" class="btn btn-secondary">Manage Users</a>{{end}}
+                {{if .IsAdmin}}<a href="/zones/new" class="btn btn-secondary">Create Zone</a>{{end}}
+            </div>
+        </div>
+
+        {{if .Logs}}
+        <div class="card">
+            <h3>Recent Activity</h3>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Logs}}
+                    <tr>
+                        <td>{{.username}}</td>
+                        <td><span class="badge badge-{{.action}}">{{.action}}</span></td>
+                        <td>{{.details}}</td>
+                        <td>{{.created_at}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
