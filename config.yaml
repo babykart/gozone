@@ -1,0 +1,22 @@
+# gozone - PowerDNS Admin Interface Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  secret_key: "change-me-to-a-random-secret-key"
+
+database:
+  driver: "sqlite3"
+  dsn: "./data/gozone.db"
+
+powerdns:
+  api_url: "http://localhost:8081"
+  api_key: "changeme"
+  server_id: "localhost"
+
+auth:
+  session_duration_hours: 24
+  bcrypt_cost: 12
+
+logging:
+  level: "info"
