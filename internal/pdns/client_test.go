@@ -277,6 +277,57 @@ func TestNotifySlaves(t *testing.T) {
 	}
 }
 
+func TestUpdateRecord_Success(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		var payload map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&payload)
+
+		rrsets, ok := payload["rrsets"].([]interface{})
+		if !ok || len(rrsets) != 1 {
+			t.Errorf("expected 1 rrset in payload")
+			return
+		}
+		rrset := rrsets[0].(map[string]interface{})
+		if rrset["changetype"] != "REPLACE" {
+			t.Errorf("expected changetype REPLACE, got %v", rrset["changetype"])
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	err := client.UpdateRecord("example.com", models.RRSet{
+		Name: "www.example.com",
+		Type: "A",
+		TTL:  600,
+		Records: []models.RecordInfo{
+			{Content: "10.0.0.1", Disabled: false},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRecord failed: %v", err)
+	}
+}
+
+func TestUpdateRecord_PDNSError(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	err := client.UpdateRecord("example.com", models.RRSet{
+		Name: "www.example.com",
+		Type: "A",
+		TTL:  600,
+		Records: []models.RecordInfo{
+			{Content: "10.0.0.1"},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for 500 response")
+	}
+}
+
 func TestClientError(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

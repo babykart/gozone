@@ -120,7 +120,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - PowerDNS error → error rendering
   - Activity log creation
 
-- [ ] **Test `UpdateRecord()` in PowerDNS client** (`internal/pdns/client_test.go`)
+- [x] **Test `UpdateRecord()` in PowerDNS client** (`internal/pdns/client_test.go`)
   - Successful update (PATCH with REPLACE)
   - PowerDNS error
 
