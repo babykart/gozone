@@ -35,7 +35,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Document HTTPS configuration in README
 
 ### Endpoint Protection
-- [ ] **Implement rate limiting** on sensitive endpoints
+- [x] **Implement rate limiting** on sensitive endpoints
   - Install `golang.org/x/time/rate`
   - Limit `/login` to 5 attempts per minute per IP
   - Limit `/api/v1/*` to 100 requests per minute per API key

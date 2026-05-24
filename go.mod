@@ -13,4 +13,5 @@ require (
 require (
 	github.com/gorilla/csrf v1.7.3 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )

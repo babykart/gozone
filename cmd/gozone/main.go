@@ -77,13 +77,18 @@ func main() {
 		})),
 	)
 
+	// Rate limiters
+	loginLimiter := middleware.NewRateLimiter(5)    // 5 requests per minute per IP
+	apiLimiter := middleware.NewRateLimiter(100)    // 100 requests per minute per API key
+	dyndnsLimiter := middleware.NewRateLimiter(10)  // 10 requests per minute per user
+
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
 		r.Use(csrfMiddleware)
 
 		// Public routes
 		r.Get("/login", h.LoginPage)
-		r.Post("/login", h.Login)
+		r.With(loginLimiter.Limit(middleware.ExtractIP)).Post("/login", h.Login)
 
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
@@ -128,6 +133,7 @@ func main() {
 	// API routes (API key auth, no CSRF)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(db.Conn))
+		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
 
 		r.Get("/zones", h.APIListZones)
 		r.Post("/zones", h.APICreateZone)
@@ -141,12 +147,11 @@ func main() {
 	})
 
 	// DynDNS endpoint (Basic Auth, no web middleware)
-	r.Get("/nic/update", func(w http.ResponseWriter, r *http.Request) {
-		dyndnsHandler := dyndns.NewHandler(db.Conn, pdnsClient, "")
+	dyndnsHandler := dyndns.NewHandler(db.Conn, pdnsClient, "")
+	r.With(dyndnsLimiter.Limit(middleware.ExtractUsername)).Get("/nic/update", func(w http.ResponseWriter, r *http.Request) {
 		dyndnsHandler.ServeHTTP(w, r)
 	})
-	r.Post("/nic/update", func(w http.ResponseWriter, r *http.Request) {
-		dyndnsHandler := dyndns.NewHandler(db.Conn, pdnsClient, "")
+	r.With(dyndnsLimiter.Limit(middleware.ExtractUsername)).Post("/nic/update", func(w http.ResponseWriter, r *http.Request) {
 		dyndnsHandler.ServeHTTP(w, r)
 	})
 
