@@ -3,6 +3,8 @@
 
 app_name := "gozone"
 bin_dir := "./bin"
+git_bin := require("git")
+git_cliff_bin := require("git-cliff")
 
 # show available commands
 default:
@@ -52,3 +54,21 @@ docker-up:
 # stop services
 docker-down:
     docker-compose down
+
+# Auto generate the next release
+auto-gen-rel:
+    #!/usr/bin/env sh
+    _TAG=v$({{ git_cliff_bin }} --bumped-version)
+    {{ git_cliff_bin }} --unreleased --tag ${_TAG} -o
+    {{ git_bin }} commit -a -s -S -m "chore(release): prepare for ${_TAG}"
+    {{ git_bin }} tag -s ${_TAG} -m "${_TAG}"
+
+# Generate release
+gen-release tag:
+    {{ git_cliff_bin }} --unreleased --tag {{ tag }} -o
+    {{ git_bin }} commit -a -s -S -m "chore(release): prepare for {{ tag }}"
+    {{ git_bin }} tag -s {{ tag }} -m "{{ tag }}"
+
+# Generate tag
+gen-tag:
+    @{{ git_cliff_bin }} --bumped-version
