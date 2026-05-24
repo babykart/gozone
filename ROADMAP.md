@@ -66,7 +66,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
 ## 🟠 Priority 2 - Tests (High)
 
 ### Critical Coverage (< 50%)
-- [ ] **Test `APIKeyAuth()` completely** (`internal/middleware/auth_test.go`)
+- [x] **Test `APIKeyAuth()` completely** (`internal/middleware/auth_test.go`)
   - Valid API key via `X-API-Key` header
   - Fallback to `Authorization: Bearer`
   - Missing API key (401)
