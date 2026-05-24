@@ -28,7 +28,7 @@ test-verbose:
 
 # remove build artifacts and database
 clean:
-    rm -rf {{ bin_dir }}/{{ app_name }} ./data/gozone.db
+    rm -rf {{ bin_dir }}/{{ app_name }} ./data/gozone.db*
 
 # format all source files
 fmt:
