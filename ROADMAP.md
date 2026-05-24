@@ -241,7 +241,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Option 2: Cache record counts (TTL 5 min)
   - Option 3: Load counts in batch with single query
 
-- [ ] **Add additional indexes** if needed
+- [x] **Add additional indexes** if needed
   - Analyze slow queries with `EXPLAIN QUERY PLAN`
   - Add indexes on frequently filtered columns
   - Document indexes in `internal/database/database.go`
