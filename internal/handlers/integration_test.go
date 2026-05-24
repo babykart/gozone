@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/dyndns"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -68,7 +69,7 @@ func TestIntegration_CompleteWebFlow(t *testing.T) {
 		}
 
 		setCookie := w.Header().Get("Set-Cookie")
-		if setCookie == "" || !strings.Contains(setCookie, "gozone_session") {
+		if setCookie == "" || !strings.Contains(setCookie, constants.SessionCookieName) {
 			t.Fatal("expected gozone_session cookie to be set")
 		}
 	})
@@ -101,7 +102,7 @@ func TestIntegration_CompleteWebFlow(t *testing.T) {
 		}
 
 		setCookie := w.Header().Get("Set-Cookie")
-		if !strings.Contains(setCookie, "gozone_session") {
+		if !strings.Contains(setCookie, constants.SessionCookieName) {
 			t.Error("expected gozone_session cookie to be cleared")
 		}
 	})
@@ -214,7 +215,7 @@ func TestIntegration_NonAdminBlockedFromAdminEndpoints(t *testing.T) {
 			r.SetPathValue("zone_id", "example.com")
 			r.SetPathValue("user_id", "3")
 			r = r.WithContext(ctx)
-			tt.handler(w, r)
+			middleware.RequireAdmin(http.HandlerFunc(tt.handler)).ServeHTTP(w, r)
 
 			if w.Code != http.StatusForbidden {
 				t.Errorf("expected 403, got %d", w.Code)

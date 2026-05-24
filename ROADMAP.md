@@ -176,13 +176,13 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Call from `main.go`
   - Test all paths: first startup, existing users, env var override
 
-- [ ] **Eliminate code duplication**
+- [x] **Eliminate code duplication**
   - `internal/handlers/zones.go:61-65, 115-119`: Duplicated admin check
   - `internal/handlers/users.go:19-22, 55-58, 69-72, 123-126, 160-163, 220-223`: Duplicated admin check
   - Use existing `RequireAdmin` middleware: `r.With(middleware.RequireAdmin).Post(...)`
   - Create helpers for repetitive patterns
 
-- [ ] **Define constants for magic strings**
+- [x] **Define constants for magic strings**
   - Create `internal/constants/constants.go`
   - `SessionCookieName = "gozone_session"`
   - `UserContextKey = "user"`

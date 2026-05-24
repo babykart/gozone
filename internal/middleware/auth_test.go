@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/models"
 )
 
@@ -500,7 +501,7 @@ func TestAuth_SuccessViaCookie(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusOK {
@@ -563,7 +564,7 @@ func TestAuth_CookiePreferredOverHeader(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: cookieToken})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: cookieToken})
 	r.Header.Set("Authorization", "Bearer "+headerToken)
 	handler.ServeHTTP(w, r)
 
@@ -583,7 +584,7 @@ func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: "invalid-token"})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: "invalid-token"})
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -616,7 +617,7 @@ func TestAuth_ExpiredTokenClearsCookie(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -648,7 +649,7 @@ func TestAuth_UserNotFoundAfterValidToken(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -673,7 +674,7 @@ func TestAuth_DisabledUserRejected(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
 	handler.ServeHTTP(w, r)
 
 	if w.Code != http.StatusSeeOther {

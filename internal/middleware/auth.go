@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/models"
 )
 
@@ -90,7 +91,7 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 // Auth returns a middleware that validates JWT tokens for web UI requests.
 //
 // Authentication is attempted in the following order:
-//  1. Cookie named "gozone_session"
+//  1. Cookie named constants.SessionCookieName
 //  2. Authorization header with "Bearer " prefix
 //
 // If authentication fails, the user is redirected to /login. Invalid cookies
@@ -106,7 +107,7 @@ func Auth(db *sql.DB, secret []byte) func(http.Handler) http.Handler {
 			var tokenString string
 
 			// Try cookie first
-			cookie, err := r.Cookie("gozone_session")
+			cookie, err := r.Cookie(constants.SessionCookieName)
 			if err == nil && cookie.Value != "" {
 				tokenString = cookie.Value
 			}
@@ -128,7 +129,7 @@ func Auth(db *sql.DB, secret []byte) func(http.Handler) http.Handler {
 			if err != nil {
 				// Clear invalid cookie
 				http.SetCookie(w, &http.Cookie{
-					Name:     "gozone_session",
+					Name:     constants.SessionCookieName,
 					Value:    "",
 					Path:     "/",
 					Expires:  time.Unix(0, 0),

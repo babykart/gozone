@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 )
@@ -68,37 +69,21 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     "gozone_session",
+		Name:     constants.SessionCookieName,
 		Value:    token,
 		Path:     "/",
-		Expires:  time.Now().Add(duration),
+		Expires:  time.Now().Add(time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour),
 		HttpOnly: true,
-		Secure:   isSecure(r),
 		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecure(r),
 	})
-
-	// Log activity
-	h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'login', ?)",
-		user.ID, "User logged in",
-	)
-
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
-// Logout clears the session cookie, records the logout activity, and redirects
-// to /login (GET /logout).
+// Logout clears the session cookie and redirects to /login.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	user := middleware.GetUser(r)
-	if user != nil {
-		h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'logout', ?)",
-			user.ID, "User logged out",
-		)
-	}
-
 	http.SetCookie(w, &http.Cookie{
-		Name:     "gozone_session",
+		Name:     constants.SessionCookieName,
 		Value:    "",
 		Path:     "/",
 		Expires:  time.Unix(0, 0),

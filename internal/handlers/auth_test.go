@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 )
@@ -58,7 +59,7 @@ func TestLogin_Success(t *testing.T) {
 	cookies := w.Result().Cookies()
 	found := false
 	for _, c := range cookies {
-		if c.Name == "gozone_session" {
+		if c.Name == constants.SessionCookieName {
 			found = true
 			break
 		}
@@ -99,7 +100,7 @@ func TestLogout(t *testing.T) {
 	// Cookie should be cleared
 	cookies := w.Result().Cookies()
 	for _, c := range cookies {
-		if c.Name == "gozone_session" && c.Value != "" {
+		if c.Name == constants.SessionCookieName && c.Value != "" {
 			t.Error("expected empty session cookie")
 		}
 	}

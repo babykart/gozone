@@ -111,7 +111,7 @@ func TestCreateZone_NonAdmin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader("name=test.com"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
-	h.CreateZone(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.CreateZone)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)
@@ -174,7 +174,7 @@ func TestDeleteZone_NonAdmin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/zones/delete", strings.NewReader("zone_id=example.com"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
-	h.DeleteZone(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.DeleteZone)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)
@@ -257,7 +257,7 @@ func TestRectifyZone_NonAdmin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/rectify", nil)
 	r.SetPathValue("zone_id", "example.com")
 	r = r.WithContext(ctx)
-	h.RectifyZone(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.RectifyZone)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)
@@ -317,7 +317,7 @@ func TestNotifyZone_NonAdmin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/notify", nil)
 	r.SetPathValue("zone_id", "example.com")
 	r = r.WithContext(ctx)
-	h.NotifyZone(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.NotifyZone)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)

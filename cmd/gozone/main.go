@@ -104,29 +104,34 @@ func main() {
 			r.Get("/logout", h.Logout)
 			r.Get("/profile", h.ProfilePage)
 
-			// Zones
+			// Zones (viewing accessible to all authenticated users)
 			r.Get("/zones", h.ListZones)
-			r.Get("/zones/new", h.CreateZonePage)
-			r.Post("/zones/create", h.CreateZone)
-			r.Post("/zones/delete", h.DeleteZone)
 			r.Get("/zones/{zone_id}", h.ViewZone)
-			r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
-			r.Post("/zones/{zone_id}/notify", h.NotifyZone)
 
-			// Records
+			// Records (accessible to all authenticated users)
 			r.Get("/zones/{zone_id}/records/new", h.CreateRecordPage)
 			r.Post("/zones/{zone_id}/records/create", h.CreateRecord)
 			r.Get("/zones/{zone_id}/records/edit", h.EditRecordPage)
 			r.Post("/zones/{zone_id}/records/update", h.UpdateRecord)
 			r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
 
-			// Users (admin only)
-			r.Get("/users", h.ListUsers)
-			r.Get("/users/new", h.CreateUserPage)
-			r.Post("/users/create", h.CreateUser)
-			r.Get("/users/{user_id}/edit", h.EditUserPage)
-			r.Post("/users/{user_id}/update", h.UpdateUser)
-			r.Post("/users/delete", h.DeleteUser)
+			// Admin-only routes
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireAdmin)
+
+				r.Get("/zones/new", h.CreateZonePage)
+				r.Post("/zones/create", h.CreateZone)
+				r.Post("/zones/delete", h.DeleteZone)
+				r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
+				r.Post("/zones/{zone_id}/notify", h.NotifyZone)
+
+				r.Get("/users", h.ListUsers)
+				r.Get("/users/new", h.CreateUserPage)
+				r.Post("/users/create", h.CreateUser)
+				r.Get("/users/{user_id}/edit", h.EditUserPage)
+				r.Post("/users/{user_id}/update", h.UpdateUser)
+				r.Post("/users/delete", h.DeleteUser)
+			})
 		})
 	})
 

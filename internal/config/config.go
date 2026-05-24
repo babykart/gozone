@@ -11,6 +11,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/babykart/gozone/internal/constants"
 )
 
 // Config holds all configuration for the application.
@@ -75,7 +77,7 @@ func DefaultConfig() *Config {
 		},
 		Auth: AuthConfig{
 			SessionDurationHours: 24,
-			BcryptCost:           12,
+			BcryptCost:           constants.DefaultBcryptCost,
 		},
 		Logging: LoggingConfig{
 			Level: "info",

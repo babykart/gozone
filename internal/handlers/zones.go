@@ -63,10 +63,6 @@ func (h *Handler) CreateZonePage(w http.ResponseWriter, r *http.Request) {
 // nameservers are submitted via form values.
 func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	if !user.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/zones", http.StatusSeeOther)
@@ -124,10 +120,6 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 // Requires admin role.
 func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	if !user.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/zones", http.StatusSeeOther)
@@ -199,10 +191,6 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 // Requires admin role. After rectification, redirects back to the zone view.
 func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	if !user.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.RectifyZone(zoneID); err != nil {
@@ -222,12 +210,6 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 //
 // Requires admin role. Redirects back to the zone view after completion.
 func (h *Handler) NotifyZone(w http.ResponseWriter, r *http.Request) {
-	user := middleware.GetUser(r)
-	if !user.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.NotifySlaves(zoneID); err != nil {
 		h.renderError(w, r, "Notify failed: "+err.Error())

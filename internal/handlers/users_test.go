@@ -41,7 +41,7 @@ func TestListUsers_NonAdmin(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/users", nil)
 	r = r.WithContext(ctx)
-	h.ListUsers(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.ListUsers)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)
@@ -71,7 +71,7 @@ func TestCreateUserPage_NonAdmin(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/users/new", nil)
 	r = r.WithContext(ctx)
-	h.CreateUserPage(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.CreateUserPage)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)
@@ -118,7 +118,7 @@ func TestCreateUser_NonAdmin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader("username=new&email=new@test.com&password=pass"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
-	h.CreateUser(w, r)
+	middleware.RequireAdmin(http.HandlerFunc(h.CreateUser)).ServeHTTP(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", w.Code)

@@ -19,10 +19,6 @@ import (
 // Admin-only. Lists all users ordered by username.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	if !user.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	rows, err := h.DB.Query(
 		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at
@@ -57,10 +53,6 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 // Admin-only.
 func (h *Handler) CreateUserPage(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
-	if !admin.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	data := map[string]interface{}{
 		"Title": "Create User - GoZone",
@@ -75,10 +67,6 @@ func (h *Handler) CreateUserPage(w http.ResponseWriter, r *http.Request) {
 // The password is hashed with bcrypt before storage.
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
-	if !admin.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/users", http.StatusSeeOther)
@@ -156,10 +144,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 // Admin-only. Loads the target user by user_id path parameter.
 func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
-	if !admin.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	userIDStr := r.PathValue("user_id")
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
@@ -196,10 +180,6 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 // If a new password is provided, it is hashed and stored separately.
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
-	if !admin.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	userIDStr := r.PathValue("user_id")
 	userID, _ := strconv.ParseInt(userIDStr, 10, 64)
@@ -285,10 +265,6 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 // Admin-only. An admin cannot delete themselves.
 func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
-	if !admin.IsAdmin() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/users", http.StatusSeeOther)

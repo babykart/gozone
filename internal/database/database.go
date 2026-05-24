@@ -14,6 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/constants"
 )
 
 // DB wraps the sql.DB connection pool.
@@ -70,7 +71,7 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	conn.SetMaxOpenConns(1) // SQLite serializes writes
+	conn.SetMaxOpenConns(constants.MaxOpenConns) // SQLite serializes writes
 
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("ping database: %w", err)
