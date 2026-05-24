@@ -156,7 +156,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
 ## 🟡 Priority 3 - Architecture (Medium)
 
 ### Error Handling
-- [ ] **Standardize error handling**
+- [x] **Standardize error handling**
   - Create global error middleware in `internal/middleware/error.go`
   - Web UI: always use `h.renderError()` with `error.html` template
   - API: always use `writeJSON()` with standardized error codes
@@ -198,7 +198,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - `ValidateEmail(email string) error`: email format
   - `ValidateUsername(username string) error`: alphanumeric + underscore
 
-- [ ] **Add `internal/errors/` package**
+- [x] **Add `internal/errors/` package**
   - Define custom error types: `NotFoundError`, `ValidationError`, `UnauthorizedError`
   - Implement `Error() string` and `HTTPStatus() int`
   - Use in handlers and error middleware

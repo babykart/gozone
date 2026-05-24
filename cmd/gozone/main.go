@@ -67,6 +67,7 @@ func main() {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Compress(5))
 	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.ErrorHandler)
 
 	// CSRF protection for web UI forms
 	csrfMiddleware := csrf.Protect(
