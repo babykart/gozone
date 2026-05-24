@@ -108,7 +108,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - `APIDeleteRecord`: PowerDNS error → 500
   - `APIStats`: PowerDNS error → 500
 
-- [ ] **Test `EditRecordPage()`** (`internal/handlers/records_test.go`)
+- [x] **Test `EditRecordPage()`** (`internal/handlers/records_test.go`)
   - Successful rendering with matching record
   - Zone not found → error
   - Record not found (name/type mismatch) → error
