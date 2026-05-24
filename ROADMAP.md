@@ -42,7 +42,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Limit `/nic/update` to 10 requests per minute per user
   - Return HTTP 429 with `Retry-After` header
 
-- [ ] **Mask internal errors** in API responses
+- [x] **Mask internal errors** in API responses
   - `internal/handlers/api.go`: Never expose `err.Error()` directly
   - Log detailed errors server-side with context
   - Return generic error messages to clients
