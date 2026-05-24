@@ -191,7 +191,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Replace all occurrences in code
 
 ### Structural Improvements
-- [ ] **Add `internal/validators/` package**
+- [x] **Add `internal/validators/` package**
   - `ValidateDomainName(name string) error`: RFC 1035 regex
   - `ValidateRecordType(recordType string) error`: whitelist
   - `ValidateIPAddress(ip string) error`: IPv4/IPv6
