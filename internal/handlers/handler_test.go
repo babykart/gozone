@@ -8,79 +8,22 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"github.com/babykart/gozone/internal/config"
-	"github.com/babykart/gozone/internal/pdns"
+	"github.com/babykart/gozone/internal/testutil"
 )
-
-func newTestPDNSServer(t *testing.T) (*httptest.Server, *pdns.Client) {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(srv.Close)
-
-	client := pdns.NewClient(&config.PowerDNSConfig{
-		APIURL:   srv.URL,
-		APIKey:   "test",
-		ServerID: "localhost",
-	})
-	return srv, client
-}
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			email TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			first_name TEXT NOT NULL DEFAULT '',
-			last_name TEXT NOT NULL DEFAULT '',
-			role TEXT NOT NULL DEFAULT 'user',
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS activity_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER,
-			zone_id TEXT,
-			action TEXT NOT NULL,
-			details TEXT NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			key_hash TEXT NOT NULL UNIQUE,
-			description TEXT NOT NULL DEFAULT '',
-			last_used_at DATETIME,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at DATETIME
-		)`,
-	}
-	for _, m := range migrations {
-		if _, err := db.Exec(m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return db
+	return testutil.NewTestDB(t)
 }
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
-	_, pdnsClient := newTestPDNSServer(t)
+	_, pdnsClient := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	})
 	db := newTestDB(t)
 
 	tmpl := template.Must(template.New("test").Parse(`
@@ -104,6 +47,34 @@ func newTestHandler(t *testing.T) *Handler {
 		Cfg:  config.DefaultConfig(),
 		Tmpl: tmpl,
 	}
+}
+
+func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Handler, *httptest.Server) {
+	t.Helper()
+	srv, client := testutil.NewTestPDNSServer(t, handler)
+	db := newTestDB(t)
+
+	tmpl := template.Must(template.New("test").Parse(`
+		{{define "error.html"}}Error: {{.Message}}{{end}}
+		{{define "login.html"}}Login{{end}}
+		{{define "dashboard.html"}}Dashboard{{end}}
+		{{define "zones.html"}}Zones{{end}}
+		{{define "zone_create.html"}}Create Zone{{end}}
+		{{define "zone_view.html"}}View Zone{{end}}
+		{{define "record_create.html"}}Create Record{{end}}
+		{{define "record_edit.html"}}Edit Record{{end}}
+		{{define "users.html"}}Users{{end}}
+		{{define "user_create.html"}}Create User{{end}}
+		{{define "user_edit.html"}}Edit User{{end}}
+		{{define "profile.html"}}Profile{{end}}
+	`))
+
+	return &Handler{
+		DB:   db,
+		PDNS: client,
+		Cfg:  config.DefaultConfig(),
+		Tmpl: tmpl,
+	}, srv
 }
 
 func TestGetRecordTypes(t *testing.T) {

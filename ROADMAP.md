@@ -133,7 +133,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - DynDNS: Basic Auth → update → verification
 
 ### Test Infrastructure
-- [ ] **Create `internal/testutil/` package** with reusable helpers
+- [x] **Create `internal/testutil/` package** with reusable helpers
   - `NewTestDB()`: in-memory database with migrations
   - `NewTestPDNSServer()`: mock HTTP server for PowerDNS
   - `NewTestHandler()`: handler configured for tests

@@ -126,15 +126,15 @@ func Auth(db *sql.DB, secret []byte) func(http.Handler) http.Handler {
 
 			claims, err := ParseToken(tokenString, secret)
 			if err != nil {
-			// Clear invalid cookie
-			http.SetCookie(w, &http.Cookie{
-				Name:     "gozone_session",
-				Value:    "",
-				Path:     "/",
-				Expires:  time.Unix(0, 0),
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+				// Clear invalid cookie
+				http.SetCookie(w, &http.Cookie{
+					Name:     "gozone_session",
+					Value:    "",
+					Path:     "/",
+					Expires:  time.Unix(0, 0),
+					HttpOnly: true,
+					SameSite: http.SameSiteStrictMode,
+				})
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}

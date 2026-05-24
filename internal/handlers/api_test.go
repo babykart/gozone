@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
-	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/models"
-	"github.com/babykart/gozone/internal/pdns"
 )
 
 func TestAPIListZones(t *testing.T) {
@@ -468,48 +465,6 @@ func TestAPIStats_PDNSError(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
 	}
-}
-
-func newTestHandlerWithPDNS(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*Handler, *httptest.Server) {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handler != nil {
-			handler(w, r)
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	client := pdns.NewClient(&config.PowerDNSConfig{
-		APIURL:   srv.URL,
-		APIKey:   "test",
-		ServerID: "localhost",
-	})
-
-	db := newTestDB(t)
-
-	tmpl := template.Must(template.New("test").Parse(`
-		{{define "error.html"}}Error: {{.Message}}{{end}}
-		{{define "login.html"}}Login{{end}}
-		{{define "dashboard.html"}}Dashboard{{end}}
-		{{define "zones.html"}}Zones{{end}}
-		{{define "zone_create.html"}}Create Zone{{end}}
-		{{define "zone_view.html"}}View Zone{{end}}
-		{{define "record_create.html"}}Create Record{{end}}
-		{{define "record_edit.html"}}Edit Record{{end}}
-		{{define "users.html"}}Users{{end}}
-		{{define "user_create.html"}}Create User{{end}}
-		{{define "user_edit.html"}}Edit User{{end}}
-		{{define "profile.html"}}Profile{{end}}
-	`))
-
-	return &Handler{
-		DB:   db,
-		PDNS: client,
-		Cfg:  config.DefaultConfig(),
-		Tmpl: tmpl,
-	}, srv
 }
 
 func jsonBody(s string) *strings.Reader {

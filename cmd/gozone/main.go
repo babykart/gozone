@@ -79,9 +79,9 @@ func main() {
 	)
 
 	// Rate limiters
-	loginLimiter := middleware.NewRateLimiter(5)    // 5 requests per minute per IP
-	apiLimiter := middleware.NewRateLimiter(100)    // 100 requests per minute per API key
-	dyndnsLimiter := middleware.NewRateLimiter(10)  // 10 requests per minute per user
+	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
+	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key
+	dyndnsLimiter := middleware.NewRateLimiter(10) // 10 requests per minute per user
 
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
