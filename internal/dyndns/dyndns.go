@@ -21,7 +21,7 @@ import (
 // PowerDNS records accordingly.
 type Handler struct {
 	DB     *sql.DB
-	PDNS   *pdns.Client
+	PDNS   pdns.ZoneService
 	Domain string // Allow dyndns updates for *.domain
 }
 
@@ -31,7 +31,7 @@ type Handler struct {
 //   - db: database connection for authenticating users
 //   - pdnsClient: PowerDNS API client for updating records
 //   - domain: optional base domain restriction (empty means all zones)
-func NewHandler(db *sql.DB, pdnsClient *pdns.Client, domain string) *Handler {
+func NewHandler(db *sql.DB, pdnsClient pdns.ZoneService, domain string) *Handler {
 	return &Handler{
 		DB:     db,
 		PDNS:   pdnsClient,

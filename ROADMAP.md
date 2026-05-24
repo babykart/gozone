@@ -140,7 +140,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - `SeedTestUser()`: create test users
   - `SeedTestZone()`: create test zones
 
-- [ ] **Introduce `ZoneService` interface** for PowerDNS client
+- [x] **Introduce `ZoneService` interface** for PowerDNS client
   - Define interface in `internal/pdns/service.go`
   - Have `pdns.Client` implement the interface
   - Enable mocking without `httptest.Server`

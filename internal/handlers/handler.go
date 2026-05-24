@@ -17,13 +17,13 @@ import (
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
 	DB   *sql.DB
-	PDNS *pdns.Client
+	PDNS pdns.ZoneService
 	Cfg  *config.Config
 	Tmpl *template.Template
 }
 
 // New creates a new Handler with all dependencies.
-func New(db *sql.DB, pdnsClient *pdns.Client, cfg *config.Config, tmpl *template.Template) *Handler {
+func New(db *sql.DB, pdnsClient pdns.ZoneService, cfg *config.Config, tmpl *template.Template) *Handler {
 	return &Handler{
 		DB:   db,
 		PDNS: pdnsClient,
