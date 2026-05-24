@@ -50,7 +50,7 @@ Configuration is via `config.yaml` or environment variables:
 |-----------|---------------------|---------|
 | `server.host` | `GOZONE_SERVER_HOST` | `0.0.0.0` |
 | `server.port` | `GOZONE_SERVER_PORT` | `8080` |
-| `server.secret_key` | `GOZONE_SECRET_KEY` | `change-me...` |
+| `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
 | `database.driver` | `GOZONE_DB_DRIVER` | `sqlite3` |
 | `database.dsn` | `GOZONE_DB_DSN` | `./data/gozone.db` |
 | `powerdns.api_url` | `GOZONE_PDNS_API_URL` | `http://localhost:8081` |
@@ -60,6 +60,13 @@ Configuration is via `config.yaml` or environment variables:
 | `auth.bcrypt_cost` | — | `12` |
 
 Initial admin password: `GOZONE_ADMIN_PASSWORD` (default: `admin`)
+
+**Important**: If no `server.secret_key` is set in the config file or via `GOZONE_SECRET_KEY`, a random 32-byte key is auto-generated at startup and logged. The key changes on every restart unless persisted. Set `GOZONE_SECRET_KEY` or add `server.secret_key` to `config.yaml` for a stable key.
+
+To generate a persistent key:
+```bash
+openssl rand -hex 32
+```
 
 ## API
 

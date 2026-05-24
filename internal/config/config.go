@@ -4,6 +4,10 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"log"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -58,7 +62,7 @@ func DefaultConfig() *Config {
 		Server: ServerConfig{
 			Host:      "0.0.0.0",
 			Port:      8080,
-			SecretKey: "change-me-to-a-random-secret",
+			SecretKey: defaultSecretKey,
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite3",
@@ -113,6 +117,19 @@ func Load(path string) (*Config, error) {
 	// Environment variable overrides
 	applyEnvOverrides(cfg)
 
+	// Auto-generate a secret key if the default placeholder is still in use.
+	// This prevents deployments from running with a well-known default key.
+	if cfg.Server.SecretKey == defaultSecretKey {
+		key, err := generateSecretKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate secret key: %w", err)
+		}
+		cfg.Server.SecretKey = key
+		log.Printf("[config] WARNING: auto-generated a random secret key.")
+		log.Printf("[config] Set GOZONE_SECRET_KEY or server.secret_key in config.yaml to persist it across restarts.")
+		log.Printf("[config] Current generated key: %s", key)
+	}
+
 	// Ensure data directory exists for SQLite
 	if cfg.Database.Driver == "sqlite3" {
 		os.MkdirAll("./data", 0755)
@@ -149,6 +166,19 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GOZONE_SESSION_DURATION"); v != "" {
 		cfg.Auth.SessionDurationHours = parseIntOr(v, cfg.Auth.SessionDurationHours)
 	}
+}
+
+// defaultSecretKey is the placeholder value that triggers auto-generation.
+const defaultSecretKey = "change-me-to-a-random-secret"
+
+// generateSecretKey produces a cryptographically random 32-byte key
+// encoded as a hexadecimal string (64 characters).
+func generateSecretKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate secret key: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func parseIntOr(s string, defaultVal int) int {

@@ -17,7 +17,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Create `internal/validators/` package with reusable functions
 
 ### Authentication and Authorization
-- [ ] **Enforce strong secret key** (`internal/config/config.go:55`)
+- [x] **Enforce strong secret key** (`internal/config/config.go:55`)
   - Error on startup if `SecretKey == "change-me-to-a-random-secret"`
   - Or generate a random 32+ byte key and display it on first startup
   - Document secret key generation in README

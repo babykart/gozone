@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"os"
 	"testing"
 )
@@ -101,6 +102,37 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Auth.SessionDurationHours != 48 {
 		t.Errorf("expected 48, got %d", cfg.Auth.SessionDurationHours)
+	}
+}
+
+func TestLoad_AutoGenerateSecretKey(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Server.SecretKey == defaultSecretKey {
+		t.Errorf("secret key should not be the default placeholder %q", defaultSecretKey)
+	}
+	if len(cfg.Server.SecretKey) != 64 {
+		t.Errorf("expected 64-char hex key (32 bytes), got %d chars", len(cfg.Server.SecretKey))
+	}
+
+	decoded, err := hex.DecodeString(cfg.Server.SecretKey)
+	if err != nil {
+		t.Fatalf("generated key is not valid hex: %v", err)
+	}
+	if len(decoded) != 32 {
+		t.Errorf("expected 32-byte key, got %d bytes", len(decoded))
+	}
+}
+
+func TestLoad_AutoGenerateKeyDeterministic(t *testing.T) {
+	cfg1, _ := Load("")
+	cfg2, _ := Load("")
+
+	if cfg1.Server.SecretKey == cfg2.Server.SecretKey {
+		t.Error("two generated keys should be different (crypto/rand)")
 	}
 }
 
