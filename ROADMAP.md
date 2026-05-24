@@ -76,7 +76,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Disabled user with valid key (401)
   - Non-existent user for valid key (401)
 
-- [ ] **Test `Auth()` middleware completely** (`internal/middleware/auth_test.go`)
+- [x] **Test `Auth()` middleware completely** (`internal/middleware/auth_test.go`)
   - Successful authentication via cookie
   - Successful authentication via `Authorization: Bearer` header
   - Cookie preferred over header (precedence)

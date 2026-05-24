@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -473,5 +474,250 @@ func assertJSONError(t *testing.T, w *httptest.ResponseRecorder, want string) {
 	}
 	if body["error"] != want {
 		t.Errorf("expected error %q, got %q", want, body["error"])
+	}
+}
+
+func TestAuth_SuccessViaCookie(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "cookieuser", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "cookieuser", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := GetUser(r)
+		if user == nil {
+			t.Fatal("expected user in context")
+		}
+		if user.Username != "cookieuser" {
+			t.Errorf("expected cookieuser, got %s", user.Username)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAuth_SuccessViaAuthorizationBearer(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "bearerweb", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "bearerweb", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := GetUser(r)
+		if user == nil {
+			t.Fatal("expected user in context")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAuth_CookiePreferredOverHeader(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "cookie-pref", "user", true)
+
+	cookieToken, err := GenerateToken(&models.User{ID: userID, Username: "cookie-pref", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headerToken, err := GenerateToken(&models.User{ID: userID, Username: "other", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := GetUser(r)
+		if user == nil {
+			t.Fatal("expected user in context")
+		}
+		if user.Username != "cookie-pref" {
+			t.Errorf("expected cookie user 'cookie-pref', got %s", user.Username)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: cookieToken})
+	r.Header.Set("Authorization", "Bearer "+headerToken)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: "invalid-token"})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	setCookie := w.Header().Get("Set-Cookie")
+	if setCookie == "" {
+		t.Error("expected Set-Cookie header to be present")
+	}
+	if !strings.Contains(setCookie, "gozone_session=") {
+		t.Error("expected Set-Cookie to contain gozone_session")
+	}
+}
+
+func TestAuth_ExpiredTokenClearsCookie(t *testing.T) {
+	db := newTestAuthDB(t)
+	seedTestUser(t, db, "expired-web", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: 1, Username: "expired-web", Role: "user"}, testSecret, -time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for expired token")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	setCookie := w.Header().Get("Set-Cookie")
+	if setCookie == "" {
+		t.Error("expected Set-Cookie header to be present")
+	}
+	if !strings.Contains(setCookie, "gozone_session=") {
+		t.Error("expected Set-Cookie to contain gozone_session")
+	}
+}
+
+func TestAuth_UserNotFoundAfterValidToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	// Don't create user — token references non-existent user
+	token, err := GenerateToken(&models.User{ID: 99999, Username: "ghost", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for non-existent user")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+}
+
+func TestAuth_DisabledUserRejected(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "disabled-web", "user", false)
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "disabled-web", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for disabled user")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: "gozone_session", Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+}
+
+func TestLoadUser_Success(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "load-ok", "admin", true)
+
+	user, err := loadUser(db, userID)
+	if err != nil {
+		t.Fatalf("loadUser failed: %v", err)
+	}
+	if user.Username != "load-ok" {
+		t.Errorf("expected load-ok, got %s", user.Username)
+	}
+	if user.Role != "admin" {
+		t.Errorf("expected admin, got %s", user.Role)
+	}
+	if !user.Enabled {
+		t.Error("expected user to be enabled")
+	}
+}
+
+func TestLoadUser_NotFound(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	_, err := loadUser(db, 99999)
+	if err == nil {
+		t.Error("expected error for non-existent user")
+	}
+}
+
+func TestLoadUser_DisabledConversion(t *testing.T) {
+	db := newTestAuthDB(t)
+	seedTestUser(t, db, "conv-user", "user", false)
+
+	user, err := loadUser(db, 1)
+	if err != nil {
+		t.Fatalf("loadUser failed: %v", err)
+	}
+	if user.Enabled {
+		t.Error("expected user to be disabled (enabled=0 converted to false)")
 	}
 }
