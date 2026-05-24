@@ -22,7 +22,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Or generate a random 32+ byte key and display it on first startup
   - Document secret key generation in README
 
-- [ ] **Add CSRF protection** on all web forms
+- [x] **Add CSRF protection** on all web forms
   - Install `github.com/gorilla/csrf` or equivalent
   - Add CSRF middleware in `cmd/gozone/main.go:76`
   - Add CSRF tokens to all HTML templates

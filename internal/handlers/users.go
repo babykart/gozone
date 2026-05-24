@@ -29,7 +29,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		 FROM users ORDER BY username`,
 	)
 	if err != nil {
-		h.renderError(w, "Failed to fetch users: "+err.Error())
+		h.renderError(w, r, "Failed to fetch users: "+err.Error())
 		return
 	}
 	defer rows.Close()
@@ -49,7 +49,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		"User":  user,
 		"Users": users,
 	}
-	h.render(w, "users.html", data)
+	h.render(w, r, "users.html", data)
 }
 
 // CreateUserPage renders the user creation form (GET /users/new).
@@ -66,7 +66,7 @@ func (h *Handler) CreateUserPage(w http.ResponseWriter, r *http.Request) {
 		"Title": "Create User - GoZone",
 		"User":  admin,
 	}
-	h.render(w, "user_create.html", data)
+	h.render(w, r, "user_create.html", data)
 }
 
 // CreateUser creates a new user from form data (POST /users/create).
@@ -98,11 +98,11 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validators.ValidateUsername(username); err != nil {
-		h.renderError(w, "Invalid username: "+err.Error())
+		h.renderError(w, r, "Invalid username: "+err.Error())
 		return
 	}
 	if err := validators.ValidateEmail(email); err != nil {
-		h.renderError(w, "Invalid email: "+err.Error())
+		h.renderError(w, r, "Invalid email: "+err.Error())
 		return
 	}
 
@@ -112,7 +112,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), h.Cfg.Auth.BcryptCost)
 	if err != nil {
-		h.renderError(w, "Failed to hash password")
+		h.renderError(w, r, "Failed to hash password")
 		return
 	}
 
@@ -122,7 +122,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		username, email, string(hash), firstName, lastName, role,
 	)
 	if err != nil {
-		h.renderError(w, "Failed to create user: "+err.Error())
+		h.renderError(w, r, "Failed to create user: "+err.Error())
 		return
 	}
 
@@ -148,7 +148,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 	userIDStr := r.PathValue("user_id")
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil {
-		h.renderError(w, "Invalid user ID")
+		h.renderError(w, r, "Invalid user ID")
 		return
 	}
 
@@ -162,7 +162,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 	target.Enabled = enabled == 1
 
 	if err != nil {
-		h.renderError(w, "User not found")
+		h.renderError(w, r, "User not found")
 		return
 	}
 
@@ -171,7 +171,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 		"User":       admin,
 		"TargetUser": target,
 	}
-	h.render(w, "user_edit.html", data)
+	h.render(w, r, "user_edit.html", data)
 }
 
 // UpdateUser updates a user's profile from form data (POST /users/{user_id}/update).
@@ -206,7 +206,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	if email != "" {
 		if err := validators.ValidateEmail(email); err != nil {
-			h.renderError(w, "Invalid email: "+err.Error())
+			h.renderError(w, r, "Invalid email: "+err.Error())
 			return
 		}
 	}
@@ -222,7 +222,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		email, firstName, lastName, role, enabledVal, userID,
 	)
 	if err != nil {
-		h.renderError(w, "Failed to update user: "+err.Error())
+		h.renderError(w, r, "Failed to update user: "+err.Error())
 		return
 	}
 
@@ -230,7 +230,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if newPassword != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), h.Cfg.Auth.BcryptCost)
 		if err != nil {
-			h.renderError(w, "Failed to hash password")
+			h.renderError(w, r, "Failed to hash password")
 			return
 		}
 		h.DB.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userID)
@@ -270,7 +270,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.DB.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
-		h.renderError(w, "Failed to delete user: "+err.Error())
+		h.renderError(w, r, "Failed to delete user: "+err.Error())
 		return
 	}
 

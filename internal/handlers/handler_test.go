@@ -160,8 +160,9 @@ func TestWriteJSON_StatusCreated(t *testing.T) {
 func TestRender(t *testing.T) {
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	h.render(w, "login.html", map[string]interface{}{
+	h.render(w, r, "login.html", map[string]interface{}{
 		"Title": "Test",
 	})
 	if w.Code != http.StatusOK {
@@ -172,8 +173,9 @@ func TestRender(t *testing.T) {
 func TestRender_MissingTemplate(t *testing.T) {
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	h.render(w, "nonexistent.html", nil)
+	h.render(w, r, "nonexistent.html", nil)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
 	}

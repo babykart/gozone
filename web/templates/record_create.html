@@ -30,6 +30,7 @@
 
         <div class="card">
             <form method="POST" action="/zones/{{.Zone.ID}}/records/create">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
                 <div class="form-group">
                     <label for="name">Record Name *</label>
                     <input type="text" id="name" name="name" placeholder="www" required>

@@ -30,6 +30,7 @@
 
         <div class="card">
             <form method="POST" action="/users/create">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
                 <div class="form-group">
                     <label for="username">Username *</label>
                     <input type="text" id="username" name="username" required>

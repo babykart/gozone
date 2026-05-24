@@ -17,7 +17,7 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 
 	zones, err := h.PDNS.ListZones()
 	if err != nil {
-		h.renderError(w, "Failed to fetch zones: "+err.Error())
+		h.renderError(w, r, "Failed to fetch zones: "+err.Error())
 		return
 	}
 
@@ -43,7 +43,7 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 		"Zones":   zoneList,
 		"IsAdmin": user.IsAdmin(),
 	}
-	h.render(w, "zones.html", data)
+	h.render(w, r, "zones.html", data)
 }
 
 // CreateZonePage renders the zone creation form (GET /zones/new).
@@ -54,7 +54,7 @@ func (h *Handler) CreateZonePage(w http.ResponseWriter, r *http.Request) {
 		"User":     user,
 		"DNSTypes": []string{"Native", "Master", "Slave"},
 	}
-	h.render(w, "zone_create.html", data)
+	h.render(w, r, "zone_create.html", data)
 }
 
 // CreateZone creates a new PowerDNS zone from form data (POST /zones/create).
@@ -78,12 +78,12 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 	nameservers := strings.TrimSpace(r.FormValue("nameservers"))
 
 	if name == "" {
-		h.renderError(w, "Zone name is required")
+		h.renderError(w, r, "Zone name is required")
 		return
 	}
 
 	if err := validators.ValidateDomainName(name); err != nil {
-		h.renderError(w, "Invalid zone name: "+err.Error())
+		h.renderError(w, r, "Invalid zone name: "+err.Error())
 		return
 	}
 
@@ -107,7 +107,7 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.CreateZone(req)
 	if err != nil {
-		h.renderError(w, "Failed to create zone: "+err.Error())
+		h.renderError(w, r, "Failed to create zone: "+err.Error())
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.DeleteZone(zoneID); err != nil {
-		h.renderError(w, "Failed to delete zone: "+err.Error())
+		h.renderError(w, r, "Failed to delete zone: "+err.Error())
 		return
 	}
 
@@ -161,13 +161,13 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(zoneID)
 	if err != nil {
-		h.renderError(w, "Zone not found: "+err.Error())
+		h.renderError(w, r, "Zone not found: "+err.Error())
 		return
 	}
 
 	records, err := h.PDNS.ListRecords(zoneID)
 	if err != nil {
-		h.renderError(w, "Failed to fetch records: "+err.Error())
+		h.renderError(w, r, "Failed to fetch records: "+err.Error())
 		return
 	}
 
@@ -191,7 +191,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		"RecordTypes": GetRecordTypes(),
 		"IsAdmin":     user.IsAdmin(),
 	}
-	h.render(w, "zone_view.html", data)
+	h.render(w, r, "zone_view.html", data)
 }
 
 // RectifyZone triggers DNSSEC rectification for a zone (POST /zones/{zone_id}/rectify).
@@ -206,7 +206,7 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.RectifyZone(zoneID); err != nil {
-		h.renderError(w, "Rectify failed: "+err.Error())
+		h.renderError(w, r, "Rectify failed: "+err.Error())
 		return
 	}
 
@@ -230,7 +230,7 @@ func (h *Handler) NotifyZone(w http.ResponseWriter, r *http.Request) {
 
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.NotifySlaves(zoneID); err != nil {
-		h.renderError(w, "Notify failed: "+err.Error())
+		h.renderError(w, r, "Notify failed: "+err.Error())
 		return
 	}
 
@@ -261,12 +261,12 @@ func (h *Handler) getZoneActivityLogs(zoneID string) []models.ActivityLog {
 	return logs
 }
 
-func (h *Handler) renderError(w http.ResponseWriter, msg string) {
+func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, msg string) {
 	data := map[string]interface{}{
 		"Title":   "Error - GoZone",
 		"Message": msg,
 	}
-	h.render(w, "error.html", data)
+	h.render(w, r, "error.html", data)
 }
 
 // GetRecordTypes returns the list of common DNS record types.

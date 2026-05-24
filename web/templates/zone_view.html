@@ -31,9 +31,11 @@
                 <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
                 {{if .IsAdmin}}
                 <form method="POST" action="/zones/{{.Zone.ID}}/rectify" style="display:inline">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <button type="submit" class="btn btn-secondary">Rectify</button>
                 </form>
                 <form method="POST" action="/zones/{{.Zone.ID}}/notify" style="display:inline">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <button type="submit" class="btn btn-secondary">Notify</button>
                 </form>
                 {{end}}
@@ -76,6 +78,7 @@
                         <td class="actions-cell">
                             <a href="/zones/{{$zoneID}}/records/edit?name={{$rrset.Name}}&type={{$rrset.Type}}" class="btn btn-sm btn-secondary">Edit</a>
                             <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" onsubmit="return confirm('Delete record {{$rrset.Name}}?')">
+                                <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                                 <input type="hidden" name="name" value="{{$rrset.Name}}">
                                 <input type="hidden" name="type" value="{{$rrset.Type}}">
                                 <button type="submit" class="btn btn-sm btn-danger">Delete</button>
@@ -99,6 +102,7 @@
         <div class="card" style="margin-top:2rem">
             <h3>Danger Zone</h3>
             <form method="POST" action="/zones/delete" onsubmit="return confirm('Delete zone {{.Zone.Name}}? This action cannot be undone.')">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
                 <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
                 <button type="submit" class="btn btn-danger">Delete Zone</button>
             </form>

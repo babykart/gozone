@@ -30,6 +30,7 @@
 
         <div class="card">
             <form method="POST" action="/users/{{.TargetUser.ID}}/update">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
                 <div class="form-group">
                     <label>Username</label>
                     <input type="text" value="{{.TargetUser.Username}}" disabled>

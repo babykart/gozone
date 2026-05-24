@@ -33,6 +33,7 @@
         {{$rec := index $rr.Records 0}}
         <div class="card">
             <form method="POST" action="/zones/{{$.Zone.ID}}/records/update">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                 <input type="hidden" name="orig_name" value="{{$rr.Name}}">
                 <input type="hidden" name="orig_type" value="{{$rr.Type}}">
                 <div class="form-group">

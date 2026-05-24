@@ -8,6 +8,8 @@ import (
 	"html/template"
 	"net/http"
 
+	"github.com/gorilla/csrf"
+
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/pdns"
 )
@@ -30,8 +32,12 @@ func New(db *sql.DB, pdnsClient *pdns.Client, cfg *config.Config, tmpl *template
 	}
 }
 
-// render executes a template with the given data.
-func (h *Handler) render(w http.ResponseWriter, name string, data interface{}) {
+// render executes a template and automatically injects the CSRF token into the data map.
+func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, data map[string]interface{}) {
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+	data["CSRFToken"] = csrf.Token(r)
 	if err := h.Tmpl.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
 	}

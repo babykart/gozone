@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/gorilla/csrf"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/babykart/gozone/internal/config"
@@ -66,50 +67,65 @@ func main() {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Compress(5))
 
-	// Public routes
-	r.Get("/login", h.LoginPage)
-	r.Post("/login", h.Login)
+	// CSRF protection for web UI forms
+	csrfMiddleware := csrf.Protect(
+		[]byte(cfg.Server.SecretKey),
+		csrf.Secure(false), // set true in production with HTTPS
+		csrf.Path("/"),
+		csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "CSRF token validation failed", http.StatusForbidden)
+		})),
+	)
 
-	// Static files
-	fileServer(r, "/static", http.Dir("web/static"))
-
-	// Authenticated routes (web UI)
+	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(db.Conn, []byte(cfg.Server.SecretKey)))
+		r.Use(csrfMiddleware)
 
-		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		// Public routes
+		r.Get("/login", h.LoginPage)
+		r.Post("/login", h.Login)
+
+		// Authenticated routes (web UI)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Auth(db.Conn, []byte(cfg.Server.SecretKey)))
+
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+			})
+			r.Get("/dashboard", h.Dashboard)
+			r.Get("/logout", h.Logout)
+			r.Get("/profile", h.ProfilePage)
+
+			// Zones
+			r.Get("/zones", h.ListZones)
+			r.Get("/zones/new", h.CreateZonePage)
+			r.Post("/zones/create", h.CreateZone)
+			r.Post("/zones/delete", h.DeleteZone)
+			r.Get("/zones/{zone_id}", h.ViewZone)
+			r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
+			r.Post("/zones/{zone_id}/notify", h.NotifyZone)
+
+			// Records
+			r.Get("/zones/{zone_id}/records/new", h.CreateRecordPage)
+			r.Post("/zones/{zone_id}/records/create", h.CreateRecord)
+			r.Get("/zones/{zone_id}/records/edit", h.EditRecordPage)
+			r.Post("/zones/{zone_id}/records/update", h.UpdateRecord)
+			r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
+
+			// Users (admin only)
+			r.Get("/users", h.ListUsers)
+			r.Get("/users/new", h.CreateUserPage)
+			r.Post("/users/create", h.CreateUser)
+			r.Get("/users/{user_id}/edit", h.EditUserPage)
+			r.Post("/users/{user_id}/update", h.UpdateUser)
+			r.Post("/users/delete", h.DeleteUser)
 		})
-		r.Get("/dashboard", h.Dashboard)
-		r.Get("/logout", h.Logout)
-		r.Get("/profile", h.ProfilePage)
-
-		// Zones
-		r.Get("/zones", h.ListZones)
-		r.Get("/zones/new", h.CreateZonePage)
-		r.Post("/zones/create", h.CreateZone)
-		r.Post("/zones/delete", h.DeleteZone)
-		r.Get("/zones/{zone_id}", h.ViewZone)
-		r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
-		r.Post("/zones/{zone_id}/notify", h.NotifyZone)
-
-		// Records
-		r.Get("/zones/{zone_id}/records/new", h.CreateRecordPage)
-		r.Post("/zones/{zone_id}/records/create", h.CreateRecord)
-		r.Get("/zones/{zone_id}/records/edit", h.EditRecordPage)
-		r.Post("/zones/{zone_id}/records/update", h.UpdateRecord)
-		r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
-
-		// Users (admin only)
-		r.Get("/users", h.ListUsers)
-		r.Get("/users/new", h.CreateUserPage)
-		r.Post("/users/create", h.CreateUser)
-		r.Get("/users/{user_id}/edit", h.EditUserPage)
-		r.Post("/users/{user_id}/update", h.UpdateUser)
-		r.Post("/users/delete", h.DeleteUser)
 	})
 
-	// API routes (API key auth)
+	// Static files (no CSRF)
+	fileServer(r, "/static", http.Dir("web/static"))
+
+	// API routes (API key auth, no CSRF)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(db.Conn))
 

@@ -17,7 +17,7 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 		"Title": "Login - GoZone",
 		"Error": r.URL.Query().Get("error"),
 	}
-	h.render(w, "login.html", data)
+	h.render(w, r, "login.html", data)
 }
 
 // Login authenticates a user from a POST form submission (POST /login).
@@ -115,5 +115,5 @@ func (h *Handler) ProfilePage(w http.ResponseWriter, r *http.Request) {
 		"Title": "Profile - GoZone",
 		"User":  user,
 	}
-	h.render(w, "profile.html", data)
+	h.render(w, r, "profile.html", data)
 }

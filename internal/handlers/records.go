@@ -18,7 +18,7 @@ func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(zoneID)
 	if err != nil {
-		h.renderError(w, "Zone not found")
+		h.renderError(w, r, "Zone not found")
 		return
 	}
 
@@ -28,7 +28,7 @@ func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 		"Zone":        zone,
 		"RecordTypes": GetRecordTypes(),
 	}
-	h.render(w, "record_create.html", data)
+	h.render(w, r, "record_create.html", data)
 }
 
 // CreateRecord creates a DNS record in a zone from form data (POST /zones/{zone_id}/records/create).
@@ -65,7 +65,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		h.renderError(w, "Invalid record type: "+err.Error())
+		h.renderError(w, r, "Invalid record type: "+err.Error())
 		return
 	}
 
@@ -83,7 +83,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.CreateRecord(zoneID, rrset); err != nil {
-		h.renderError(w, "Failed to create record: "+err.Error())
+		h.renderError(w, r, "Failed to create record: "+err.Error())
 		return
 	}
 
@@ -108,13 +108,13 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(zoneID)
 	if err != nil {
-		h.renderError(w, "Zone not found")
+		h.renderError(w, r, "Zone not found")
 		return
 	}
 
 	records, err := h.PDNS.ListRecords(zoneID)
 	if err != nil {
-		h.renderError(w, "Failed to fetch records")
+		h.renderError(w, r, "Failed to fetch records")
 		return
 	}
 
@@ -127,7 +127,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if targetRRSet == nil {
-		h.renderError(w, "Record not found")
+		h.renderError(w, r, "Record not found")
 		return
 	}
 
@@ -138,7 +138,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 		"Record":      targetRRSet,
 		"RecordTypes": GetRecordTypes(),
 	}
-	h.render(w, "record_edit.html", data)
+	h.render(w, r, "record_edit.html", data)
 }
 
 // UpdateRecord replaces a DNS record in a zone from form data (POST /zones/{zone_id}/records/update).
@@ -172,7 +172,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		h.renderError(w, "Invalid record type: "+err.Error())
+		h.renderError(w, r, "Invalid record type: "+err.Error())
 		return
 	}
 
@@ -190,7 +190,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.UpdateRecord(zoneID, rrset); err != nil {
-		h.renderError(w, "Failed to update record: "+err.Error())
+		h.renderError(w, r, "Failed to update record: "+err.Error())
 		return
 	}
 
@@ -218,7 +218,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	recordType := r.FormValue("type")
 
 	if err := h.PDNS.DeleteRecord(zoneID, recordName, recordType); err != nil {
-		h.renderError(w, "Failed to delete record: "+err.Error())
+		h.renderError(w, r, "Failed to delete record: "+err.Error())
 		return
 	}
 

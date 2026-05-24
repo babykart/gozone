@@ -52,6 +52,7 @@
                         <a href="/users/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
                         {{if ne .ID $.User.ID}}
                         <form method="POST" action="/users/delete" style="display:inline" onsubmit="return confirm('Delete user {{.Username}}?')">
+                            <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                             <input type="hidden" name="user_id" value="{{.ID}}">
                             <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                         </form>

@@ -62,7 +62,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		"Zones":   zoneCount,
 		"IsAdmin": user.IsAdmin(),
 	}
-	h.render(w, "dashboard.html", data)
+	h.render(w, r, "dashboard.html", data)
 }
 
 func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
