@@ -43,6 +43,12 @@ deps:
     go mod download
     go mod tidy
 
+# run update
+update:
+    go get -u ./...
+    go mod tidy
+    go mod vendor
+
 # build Docker image
 docker-build:
     docker build -t gozone .
