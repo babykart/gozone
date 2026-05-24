@@ -8,6 +8,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // CreateRecordPage renders the record creation form for a zone (GET /zones/{zone_id}/records/new).
@@ -60,6 +61,11 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 
 	if name == "" || recordType == "" || content == "" {
 		http.Redirect(w, r, "/zones/"+zoneID+"/records/new", http.StatusSeeOther)
+		return
+	}
+
+	if err := validators.ValidateRecordType(recordType); err != nil {
+		h.renderError(w, "Invalid record type: "+err.Error())
 		return
 	}
 
@@ -163,6 +169,11 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	priority := 0
 	if priorityStr != "" {
 		priority, _ = strconv.Atoi(priorityStr)
+	}
+
+	if err := validators.ValidateRecordType(recordType); err != nil {
+		h.renderError(w, "Invalid record type: "+err.Error())
+		return
 	}
 
 	rrset := models.RRSet{

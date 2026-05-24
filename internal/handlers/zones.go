@@ -8,6 +8,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // ListZones renders the zones listing page with record counts per zone (GET /zones).
@@ -78,6 +79,11 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 
 	if name == "" {
 		h.renderError(w, "Zone name is required")
+		return
+	}
+
+	if err := validators.ValidateDomainName(name); err != nil {
+		h.renderError(w, "Invalid zone name: "+err.Error())
 		return
 	}
 

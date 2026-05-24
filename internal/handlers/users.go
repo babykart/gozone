@@ -11,6 +11,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // ListUsers renders the user management page (GET /users).
@@ -93,6 +94,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	if username == "" || email == "" || password == "" {
 		http.Redirect(w, r, "/users/new", http.StatusSeeOther)
+		return
+	}
+
+	if err := validators.ValidateUsername(username); err != nil {
+		h.renderError(w, "Invalid username: "+err.Error())
+		return
+	}
+	if err := validators.ValidateEmail(email); err != nil {
+		h.renderError(w, "Invalid email: "+err.Error())
 		return
 	}
 
@@ -192,6 +202,13 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	if role != "admin" && role != "user" {
 		role = "user"
+	}
+
+	if email != "" {
+		if err := validators.ValidateEmail(email); err != nil {
+			h.renderError(w, "Invalid email: "+err.Error())
+			return
+		}
 	}
 
 	enabledVal := 0

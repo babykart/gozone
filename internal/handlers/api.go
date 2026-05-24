@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // -- Zone API ---
@@ -41,6 +42,11 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 	var req models.ZoneCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if err := validators.ValidateDomainName(req.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid zone name: " + err.Error()})
 		return
 	}
 
@@ -89,6 +95,11 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validators.ValidateRecordType(rrset.Type); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid record type: " + err.Error()})
+		return
+	}
+
 	if err := h.PDNS.CreateRecord(zoneID, rrset); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -104,6 +115,11 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	var rrset models.RRSet
 	if err := json.NewDecoder(r.Body).Decode(&rrset); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if err := validators.ValidateRecordType(rrset.Type); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid record type: " + err.Error()})
 		return
 	}
 
@@ -126,6 +142,11 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if err := validators.ValidateRecordType(req.Type); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid record type: " + err.Error()})
 		return
 	}
 
