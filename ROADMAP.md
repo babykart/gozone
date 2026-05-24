@@ -54,7 +54,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - Add JSON serialization tests for all models
   - Check logs to ensure no hashes are logged
 
-- [ ] **Add HTTP security headers**
+- [x] **Add HTTP security headers**
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
   - `X-XSS-Protection: 1; mode=block`
