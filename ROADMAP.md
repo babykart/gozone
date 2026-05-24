@@ -289,7 +289,7 @@ List of tasks to improve the security, quality, and performance of GoZone.
   - How to add tests
   - How to report bugs
 
-- [ ] **Document architecture** (`docs/ARCHITECTURE.md`)
+- [x] **Document architecture** (`docs/ARCHITECTURE.md`)
   - Component diagram
   - Data flow
   - Design decisions
