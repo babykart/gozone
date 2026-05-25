@@ -39,6 +39,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	if r.Method != http.MethodPost {
+		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 		http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 		return
 	}
@@ -60,6 +61,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if name == "" || recordType == "" || content == "" {
+		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 		http.Redirect(w, r, "/zones/"+zoneID+"/records/new", http.StatusSeeOther)
 		return
 	}
@@ -92,6 +94,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", recordType, name, content),
 	)
 
+	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
@@ -150,6 +153,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	if r.Method != http.MethodPost {
+		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 		http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 		return
 	}
@@ -199,6 +203,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", recordType, name),
 	)
 
+	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
@@ -210,6 +215,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	if r.Method != http.MethodPost {
+		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 		http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 		return
 	}
@@ -227,5 +233,6 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 		user.ID, zoneID, fmt.Sprintf("Deleted %s record %s", recordType, recordName),
 	)
 
+	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }

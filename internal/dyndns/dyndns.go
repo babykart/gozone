@@ -137,6 +137,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- DynDNS protocol returns plain text, no HTML rendering
 	w.Write([]byte(strings.Join(results, "\n")))
 }
 

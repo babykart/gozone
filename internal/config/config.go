@@ -104,6 +104,7 @@ func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
 	if path != "" {
+		// #nosec G304 -- path comes from CLI flag -config, not user input
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {

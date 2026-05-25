@@ -187,6 +187,7 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 		user.ID, zoneID, fmt.Sprintf("Rectified zone %s", zoneID),
 	)
 
+	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
@@ -200,6 +201,7 @@ func (h *Handler) NotifyZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
