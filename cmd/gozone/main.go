@@ -57,7 +57,7 @@ func main() {
 	pdnsClient := pdns.NewClient(&cfg.PowerDNS)
 
 	// Seed admin user if no users exist
-	if err := database.SeedAdminUser(db.Conn, cfg); err != nil {
+	if err := database.SeedAdminUser(db, cfg); err != nil {
 		logger.Fatal("failed to seed admin user", "error", err)
 	}
 
@@ -65,7 +65,7 @@ func main() {
 	tmpl := parseTemplates()
 
 	// Create handler
-	h := handlers.New(db.Conn, pdnsClient, cfg, tmpl)
+	h := handlers.New(db, pdnsClient, cfg, tmpl)
 
 	// Set up router
 	r := chi.NewRouter()
@@ -115,7 +115,7 @@ func main() {
 
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(db.Conn, []byte(cfg.Server.SecretKey)))
+			r.Use(middleware.Auth(db, []byte(cfg.Server.SecretKey)))
 
 			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
@@ -160,7 +160,7 @@ func main() {
 
 	// API routes (API key auth, no CSRF)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db.Conn))
+		r.Use(middleware.APIKeyAuth(db))
 		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
 
 		r.Get("/zones", h.APIListZones)
@@ -175,7 +175,7 @@ func main() {
 	})
 
 	// DynDNS endpoint (Basic Auth, no web middleware)
-	dyndnsHandler := dyndns.NewHandler(db.Conn, pdnsClient, "")
+	dyndnsHandler := dyndns.NewHandler(db, pdnsClient, "")
 	r.With(dyndnsLimiter.Limit(middleware.ExtractUsername)).Get("/nic/update", func(w http.ResponseWriter, r *http.Request) {
 		dyndnsHandler.ServeHTTP(w, r)
 	})

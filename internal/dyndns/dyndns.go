@@ -4,12 +4,12 @@
 package dyndns
 
 import (
-	"database/sql"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/pdns"
@@ -20,7 +20,7 @@ import (
 // It authenticates users against the local user database and updates
 // PowerDNS records accordingly.
 type Handler struct {
-	DB     *sql.DB
+	DB     *database.DB
 	PDNS   pdns.ZoneService
 	Domain string // Allow dyndns updates for *.domain
 }
@@ -31,7 +31,7 @@ type Handler struct {
 //   - db: database connection for authenticating users
 //   - pdnsClient: PowerDNS API client for updating records
 //   - domain: optional base domain restriction (empty means all zones)
-func NewHandler(db *sql.DB, pdnsClient pdns.ZoneService, domain string) *Handler {
+func NewHandler(db *database.DB, pdnsClient pdns.ZoneService, domain string) *Handler {
 	return &Handler{
 		DB:     db,
 		PDNS:   pdnsClient,

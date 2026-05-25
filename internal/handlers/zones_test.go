@@ -10,6 +10,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 func TestListZones(t *testing.T) {
@@ -83,6 +84,8 @@ func TestCreateZone_Success(t *testing.T) {
 	})
 	defer pdnsSrv.Close()
 
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
@@ -147,6 +150,8 @@ func TestDeleteZone_Success(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -230,6 +235,8 @@ func TestRectifyZone_Success(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)

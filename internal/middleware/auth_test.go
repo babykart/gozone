@@ -12,7 +12,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/constants"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/models"
 )
 
@@ -161,7 +163,10 @@ func TestRequireAdmin(t *testing.T) {
 }
 
 func TestAuthMiddleware_NoToken(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := database.New(&config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,47 +186,20 @@ func TestAuthMiddleware_NoToken(t *testing.T) {
 	}
 }
 
-func newTestAuthDB(t *testing.T) *sql.DB {
+func newTestAuthDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
+	db, err := database.New(&config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			email TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			first_name TEXT NOT NULL DEFAULT '',
-			last_name TEXT NOT NULL DEFAULT '',
-			role TEXT NOT NULL DEFAULT 'user',
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			key_hash TEXT NOT NULL UNIQUE,
-			description TEXT NOT NULL DEFAULT '',
-			last_used_at DATETIME,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at DATETIME,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, m := range migrations {
-		if _, err := db.Exec(m); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return db
 }
 
-func seedTestUser(t *testing.T, db *sql.DB, username, role string, enabled bool) int64 {
+func seedTestUser(t *testing.T, db *database.DB, username, role string, enabled bool) int64 {
 	t.Helper()
 	enabledVal := 0
 	if enabled {
@@ -238,7 +216,7 @@ func seedTestUser(t *testing.T, db *sql.DB, username, role string, enabled bool)
 	return id
 }
 
-func seedTestAPIKey(t *testing.T, db *sql.DB, userID int64, keyHash string, expiresAt *time.Time) {
+func seedTestAPIKey(t *testing.T, db *database.DB, userID int64, keyHash string, expiresAt *time.Time) {
 	t.Helper()
 	var expires interface{}
 	if expiresAt != nil {

@@ -18,12 +18,12 @@ func TestSeedAdminUser_FirstStartup(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
 
-	if err := SeedAdminUser(db.Conn, cfg); err != nil {
+	if err := SeedAdminUser(db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	var count int
-	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -32,7 +32,7 @@ func TestSeedAdminUser_FirstStartup(t *testing.T) {
 
 	var username, role string
 	var passwordHash string
-	if err := db.Conn.QueryRow(
+	if err := db.QueryRow(
 		"SELECT username, password_hash, role FROM users WHERE id=1",
 	).Scan(&username, &passwordHash, &role); err != nil {
 		t.Fatal(err)
@@ -60,17 +60,17 @@ func TestSeedAdminUser_ExistingUsers(t *testing.T) {
 	cfg.Auth.BcryptCost = 4
 
 	// First seed
-	if err := SeedAdminUser(db.Conn, cfg); err != nil {
+	if err := SeedAdminUser(db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	// Second seed should be a no-op
-	if err := SeedAdminUser(db.Conn, cfg); err != nil {
+	if err := SeedAdminUser(db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	var count int
-	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -91,12 +91,12 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
 
-	if err := SeedAdminUser(db.Conn, cfg); err != nil {
+	if err := SeedAdminUser(db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	var passwordHash string
-	if err := db.Conn.QueryRow(
+	if err := db.QueryRow(
 		"SELECT password_hash FROM users WHERE id=1",
 	).Scan(&passwordHash); err != nil {
 		t.Fatal(err)

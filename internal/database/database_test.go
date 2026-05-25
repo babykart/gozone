@@ -57,12 +57,15 @@ func TestNewInMemory(t *testing.T) {
 
 func TestNewUnsupportedDriver(t *testing.T) {
 	cfg := &config.DatabaseConfig{
-		Driver: "postgres",
+		Driver: "oracle",
 		DSN:    ":memory:",
 	}
 	_, err := New(cfg)
 	if err == nil {
 		t.Fatal("expected error for unsupported driver")
+	}
+	if !strings.Contains(err.Error(), "unsupported database driver") {
+		t.Errorf("expected unsupported driver error, got: %v", err)
 	}
 }
 

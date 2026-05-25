@@ -5,16 +5,15 @@
 package testutil
 
 import (
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/pdns"
 )
 
@@ -22,56 +21,16 @@ import (
 // schema (users, activity_logs, api_keys, settings) already migrated.
 //
 // The database is automatically closed when the test finishes via t.Cleanup.
-func NewTestDB(t *testing.T) *sql.DB {
+func NewTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_foreign_keys=on")
+	db, err := database.New(&config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			email TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			first_name TEXT NOT NULL DEFAULT '',
-			last_name TEXT NOT NULL DEFAULT '',
-			role TEXT NOT NULL DEFAULT 'user',
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS activity_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER,
-			zone_id TEXT,
-			action TEXT NOT NULL,
-			details TEXT NOT NULL DEFAULT '',
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			key_hash TEXT NOT NULL UNIQUE,
-			description TEXT NOT NULL DEFAULT '',
-			last_used_at DATETIME,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			expires_at DATETIME,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS settings (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			key TEXT NOT NULL UNIQUE,
-			value TEXT NOT NULL DEFAULT ''
-		)`,
-	}
-	for _, m := range migrations {
-		if _, err := db.Exec(m); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return db
 }
 
@@ -106,7 +65,7 @@ func NewTestPDNSServer(t *testing.T, handler PDNSHandlerFunc) (*httptest.Server,
 //
 // The password is hashed with cost 4 for test performance.
 // Returns the new user's ID.
-func SeedTestUser(t *testing.T, db *sql.DB, username, password, role string, enabled bool) int64 {
+func SeedTestUser(t *testing.T, db *database.DB, username, password, role string, enabled bool) int64 {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), 4)
 	if err != nil {
@@ -130,7 +89,7 @@ func SeedTestUser(t *testing.T, db *sql.DB, username, password, role string, ena
 // SeedTestAPIKey inserts an API key for the given user into the database.
 //
 // Pass nil for expiresAt to create a non-expiring key.
-func SeedTestAPIKey(t *testing.T, db *sql.DB, userID int64, keyHash string, expiresAt *time.Time) {
+func SeedTestAPIKey(t *testing.T, db *database.DB, userID int64, keyHash string, expiresAt *time.Time) {
 	t.Helper()
 	var expires interface{}
 	if expiresAt != nil {

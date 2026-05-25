@@ -4,26 +4,26 @@
 package handlers
 
 import (
-	"database/sql"
 	"html/template"
 	"net/http"
 
 	"github.com/gorilla/csrf"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/pdns"
 )
 
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	DB   *sql.DB
+	DB   *database.DB
 	PDNS pdns.ZoneService
 	Cfg  *config.Config
 	Tmpl *template.Template
 }
 
 // New creates a new Handler with all dependencies.
-func New(db *sql.DB, pdnsClient pdns.ZoneService, cfg *config.Config, tmpl *template.Template) *Handler {
+func New(db *database.DB, pdnsClient pdns.ZoneService, cfg *config.Config, tmpl *template.Template) *Handler {
 	return &Handler{
 		DB:   db,
 		PDNS: pdnsClient,

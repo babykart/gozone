@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -309,6 +308,3 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }
-
-// Unused import guard
-var _ = sql.ErrNoRows

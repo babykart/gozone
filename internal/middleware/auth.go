@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/babykart/gozone/internal/constants"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/models"
 )
 
@@ -101,7 +102,7 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 // Parameters:
 //   - db: the database connection for loading the user record
 //   - secret: the HMAC key used to verify JWT signatures
-func Auth(db *sql.DB, secret []byte) func(http.Handler) http.Handler {
+func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenString string
@@ -166,7 +167,7 @@ func Auth(db *sql.DB, secret []byte) func(http.Handler) http.Handler {
 // and the API key's last_used_at timestamp is updated on each request.
 //
 // Note: In production, the incoming key should be hashed before comparison.
-func APIKeyAuth(db *sql.DB) func(http.Handler) http.Handler {
+func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("X-API-Key")
@@ -241,7 +242,7 @@ func GetUser(r *http.Request) *models.User {
 	return user
 }
 
-func loadUser(db *sql.DB, userID int64) (*models.User, error) {
+func loadUser(db *database.DB, userID int64) (*models.User, error) {
 	user := &models.User{}
 	var enabled int
 	err := db.QueryRow(

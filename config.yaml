@@ -1,4 +1,14 @@
 # gozone - PowerDNS Admin Interface Configuration
+#
+# Database driver choices:
+#   sqlite3    - Local SQLite file (default, recommended for development)
+#   mysql      - MySQL/MariaDB (production)
+#   postgres   - PostgreSQL (production)
+#
+# Example DSNs:
+#   sqlite3:  "./data/gozone.db"
+#   mysql:    "user:password@tcp(localhost:3306)/gozone"
+#   postgres: "host=localhost port=5432 user=gozone password=secret dbname=gozone sslmode=disable"
 
 server:
   host: "0.0.0.0"

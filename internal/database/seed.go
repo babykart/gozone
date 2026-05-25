@@ -1,7 +1,6 @@
 package database
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 
@@ -19,7 +18,7 @@ import (
 // The bcrypt cost is taken from cfg.Auth.BcryptCost.
 //
 // Returns an error if the database query or user insertion fails.
-func SeedAdminUser(db *sql.DB, cfg *config.Config) error {
+func SeedAdminUser(db *DB, cfg *config.Config) error {
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return fmt.Errorf("seed admin: count users: %w", err)

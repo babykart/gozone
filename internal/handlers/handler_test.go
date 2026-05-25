@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"html/template"
 	"net/http"
@@ -9,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/testutil"
 )
 
-func newTestDB(t *testing.T) *sql.DB {
+func newTestDB(t *testing.T) *database.DB {
 	t.Helper()
 	return testutil.NewTestDB(t)
 }
