@@ -41,7 +41,7 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 	// Ensure the directory exists
 	dir := filepath.Dir(cfg.DSN)
 	if dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0750); err != nil {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}

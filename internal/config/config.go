@@ -133,7 +133,7 @@ func Load(path string) (*Config, error) {
 
 	// Ensure data directory exists for SQLite
 	if cfg.Database.Driver == "sqlite3" {
-		os.MkdirAll("./data", 0755)
+		os.MkdirAll("./data", 0750)
 	}
 
 	return cfg, nil
