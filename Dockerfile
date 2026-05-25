@@ -22,6 +22,12 @@ COPY config.yaml .
 
 RUN mkdir -p /app/data
 
+RUN addgroup -g 65532 nonroot && \
+    adduser -D -u 65532 -G nonroot nonroot && \
+    chown -R nonroot:nonroot /app
+
+USER nonroot
+
 EXPOSE 8080
 
 ENV GOZONE_ADMIN_PASSWORD=""
