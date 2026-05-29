@@ -136,8 +136,12 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("failed to generate secret key: %w", err)
 		}
 		cfg.Server.SecretKey = key
-		logger.Warn("auto-generated random secret key, set GOZONE_SECRET_KEY to persist")
-		logger.Warn("current generated key", "key", key)
+		// Never log the key itself: it signs sessions and CSRF tokens. Logging a
+		// secret leaks it into log files, aggregators, and consoles. Operators
+		// should set their own persistent key instead of recovering it from logs.
+		logger.Warn("no secret key configured; generated an ephemeral random key for this run. " +
+			"Sessions and CSRF tokens are invalidated on every restart. " +
+			"Set server.secret_key or GOZONE_SECRET_KEY to a persistent value (openssl rand -hex 32)")
 	}
 
 	// Ensure data directory exists for SQLite

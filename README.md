@@ -62,7 +62,7 @@ Configuration is via `config.yaml` or environment variables:
 
 Initial admin password: `GOZONE_ADMIN_PASSWORD` (default: `admin`)
 
-**Important**: If no `server.secret_key` is set in the config file or via `GOZONE_SECRET_KEY`, a random 32-byte key is auto-generated at startup and logged. The key changes on every restart unless persisted. Set `GOZONE_SECRET_KEY` or add `server.secret_key` to `config.yaml` for a stable key.
+**Important**: If no `server.secret_key` is set in the config file or via `GOZONE_SECRET_KEY`, a random 32-byte key is auto-generated at startup. For security the generated key is **not** written to the logs, so it cannot be recovered after startup — the key changes on every restart, invalidating all sessions and CSRF tokens. Always set `GOZONE_SECRET_KEY` or add `server.secret_key` to `config.yaml` for a stable key.
 
 To generate a persistent key:
 ```bash
