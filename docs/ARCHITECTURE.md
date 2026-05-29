@@ -287,19 +287,19 @@ All user actions (login, zone creation, record updates) are logged to the `activ
 ### Authentication
 
 - JWT tokens are HMAC-SHA256 with a configurable secret. There is no key rotation mechanism — changing the secret invalidates all existing sessions.
-- API keys are compared as plain strings (not hashed on lookup). In production, the incoming key should be SHA-256 hashed before comparison against `key_hash`.
+- API keys are SHA-256 hashed before comparison against the stored `key_hash`. The raw key is only shown once at creation time.
 - The default admin password (`admin`/`admin`) should always be changed via `GOZONE_ADMIN_PASSWORD` at first startup.
 
 ### Web UI
 
-- No CSRF protection on forms. CSRF tokens should be added to all state-changing endpoints in production.
-- Cookies lack the `Secure` flag by default. Enable it and use HTTPS in production.
-- Templates are loaded from disk — they are not embedded in the binary, making single-binary deployment harder.
+- CSRF protection is implemented via gorilla/csrf middleware on all state-changing POST endpoints. Invalid CSRF tokens result in a redirect to `/login` with an error message.
+- Cookies lack the `Secure` flag by default (set dynamically based on request). Enable TLS and use HTTPS in production.
+- Templates are embedded at compile time via `//go:embed` and loaded with `template.ParseFS`, making deployment a single binary with no external template files required.
 
 ### Deployment
 
 - **CGO required**: The `mattn/go-sqlite3` driver requires a C compiler. Cross-compilation from macOS to Linux requires `CGO_ENABLED=1` and a cross-compilation toolchain.
-- **No CI/CD**: The repository contains no GitHub Actions or CI configuration.
+- **CI/CD**: A GitHub Actions workflow (`.github/workflows/release.yml`) builds and publishes multi-architecture Docker images to GHCR on tag pushes matching `v*`.
 - **Single process**: There is no support for multiple worker processes or load-balanced deployments.
 
 ### Future Database Migration
