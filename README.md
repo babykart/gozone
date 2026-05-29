@@ -51,6 +51,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.host` | `GOZONE_SERVER_HOST` | `0.0.0.0` |
 | `server.port` | `GOZONE_SERVER_PORT` | `8080` |
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
+| `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
 | `database.driver` | `GOZONE_DB_DRIVER` | `sqlite3` |
 | `database.dsn` | `GOZONE_DB_DSN` | `./data/gozone.db` |
 | `powerdns.api_url` | `GOZONE_PDNS_API_URL` | `http://localhost:8081` |
@@ -71,6 +72,8 @@ openssl rand -hex 32
 ### HTTPS Configuration
 
 Session cookies use the `Secure` flag and `SameSite=Strict` by default. The `Secure` flag is automatically enabled when the request arrives over HTTPS (direct TLS or via `X-Forwarded-Proto: https` header from a reverse proxy).
+
+The CSRF cookie's `Secure` flag is set once at startup and cannot be decided per request, so it is controlled by `server.secure_cookies` (`GOZONE_SECURE_COOKIES`). Set it to `true` whenever GoZone is served over HTTPS. Leave it `false` for plain-HTTP development, otherwise browsers will not return the CSRF cookie and form submissions will fail validation.
 
 **Option 1: Direct TLS**
 

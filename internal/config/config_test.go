@@ -165,6 +165,57 @@ func TestLoad_AutoGenerateKeyDeterministic(t *testing.T) {
 	}
 }
 
+func TestLoad_SecureCookiesDefaultFalse(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Server.SecureCookies {
+		t.Error("secure_cookies should default to false")
+	}
+}
+
+func TestLoad_SecureCookiesEnvOverride(t *testing.T) {
+	tests := []struct {
+		env  string
+		want bool
+	}{
+		{"true", true},
+		{"1", true},
+		{"on", true},
+		{"false", false},
+		{"0", false},
+		{"garbage", false}, // unrecognized keeps the prior value (default false)
+	}
+	for _, tt := range tests {
+		t.Setenv("GOZONE_SECURE_COOKIES", tt.env)
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.Server.SecureCookies != tt.want {
+			t.Errorf("GOZONE_SECURE_COOKIES=%q: got %v, want %v", tt.env, cfg.Server.SecureCookies, tt.want)
+		}
+	}
+}
+
+func TestParseBoolOr(t *testing.T) {
+	tests := []struct {
+		input string
+		def   bool
+		want  bool
+	}{
+		{"true", false, true},
+		{"YES", false, true},
+		{"Off", true, false},
+		{"", true, true},
+		{"maybe", true, true},
+		{"maybe", false, false},
+	}
+	for _, tt := range tests {
+		if got := parseBoolOr(tt.input, tt.def); got != tt.want {
+			t.Errorf("parseBoolOr(%q, %v) = %v, want %v", tt.input, tt.def, got, tt.want)
+		}
+	}
+}
+
 func TestLoadInvalidFile(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err != nil {

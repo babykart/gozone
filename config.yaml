@@ -17,6 +17,10 @@ server:
   # changes on every restart). Set a persistent value here or via
   # GOZONE_SECRET_KEY in production. Generate one with: openssl rand -hex 32
   secret_key: "change-me-to-a-random-secret-key"
+  # Set to true when serving over HTTPS (directly or behind a TLS-terminating
+  # reverse proxy) so the CSRF cookie gets the Secure flag. Keep false for
+  # plain-HTTP development.
+  secure_cookies: false
 
 database:
   driver: "sqlite3"
