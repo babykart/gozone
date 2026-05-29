@@ -80,7 +80,9 @@ func main() {
 	// CSRF protection for web UI forms
 	csrfMiddleware := csrf.Protect(
 		[]byte(cfg.Server.SecretKey),
-		csrf.Secure(false), // set true in production with HTTPS
+		// Mark the CSRF cookie Secure when served over HTTPS. Configurable via
+		// server.secure_cookies / GOZONE_SECURE_COOKIES (see config.yaml).
+		csrf.Secure(cfg.Server.SecureCookies),
 		csrf.Path("/"),
 		csrf.ErrorHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			logger.Warn("CSRF validation failed",

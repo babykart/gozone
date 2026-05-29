@@ -14,6 +14,10 @@ server:
   host: "0.0.0.0"
   port: 8080
   secret_key: "change-me-to-a-random-secret-key"
+  # Set to true when serving over HTTPS (directly or behind a TLS-terminating
+  # reverse proxy) so the CSRF cookie gets the Secure flag. Keep false for
+  # plain-HTTP development.
+  secure_cookies: false
 
 database:
   driver: "sqlite3"

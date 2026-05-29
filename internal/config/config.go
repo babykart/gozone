@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -29,6 +30,11 @@ type ServerConfig struct {
 	Host      string `yaml:"host"`
 	Port      int    `yaml:"port"`
 	SecretKey string `yaml:"secret_key"`
+	// SecureCookies marks the CSRF cookie with the Secure flag so browsers only
+	// send it over HTTPS. Enable it when GoZone is served over HTTPS (directly
+	// or behind a TLS-terminating reverse proxy). Leave it false for plain-HTTP
+	// development, otherwise browsers will not return the CSRF cookie.
+	SecureCookies bool `yaml:"secure_cookies"`
 }
 
 // DatabaseConfig holds database connection settings.
@@ -62,9 +68,10 @@ type LoggingConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Host:      "0.0.0.0",
-			Port:      8080,
-			SecretKey: defaultSecretKey,
+			Host:          "0.0.0.0",
+			Port:          8080,
+			SecretKey:     defaultSecretKey,
+			SecureCookies: false,
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite3",
@@ -93,8 +100,9 @@ func DefaultConfig() *Config {
 //  3. Apply environment variable overrides using the GOZONE_ prefix
 //
 // Supported environment variables: GOZONE_SERVER_HOST, GOZONE_SERVER_PORT,
-// GOZONE_SECRET_KEY, GOZONE_DB_DRIVER, GOZONE_DB_DSN, GOZONE_PDNS_API_URL,
-// GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION.
+// GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_DB_DRIVER, GOZONE_DB_DSN,
+// GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID,
+// GOZONE_SESSION_DURATION.
 //
 // Parameters:
 //   - path: filesystem path to the YAML configuration file
@@ -150,6 +158,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("GOZONE_SECRET_KEY"); v != "" {
 		cfg.Server.SecretKey = v
 	}
+	if v := os.Getenv("GOZONE_SECURE_COOKIES"); v != "" {
+		cfg.Server.SecureCookies = parseBoolOr(v, cfg.Server.SecureCookies)
+	}
 	if v := os.Getenv("GOZONE_DB_DRIVER"); v != "" {
 		cfg.Database.Driver = v
 	}
@@ -192,4 +203,17 @@ func parseIntOr(s string, defaultVal int) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// parseBoolOr parses a boolean environment value, returning defaultVal for
+// anything it does not recognize. Accepts the common truthy/falsy spellings.
+func parseBoolOr(s string, defaultVal bool) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "t", "true", "yes", "on":
+		return true
+	case "0", "f", "false", "no", "off":
+		return false
+	default:
+		return defaultVal
+	}
 }
