@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/validators"
@@ -33,10 +34,16 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var u models.User
 		var enabled int
-		rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName,
-			&u.Role, &enabled, &u.CreatedAt, &u.UpdatedAt)
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName,
+			&u.Role, &enabled, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			logger.Error("failed to scan user row", "error", err)
+			continue
+		}
 		u.Enabled = enabled == 1
 		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for users list", "error", err)
 	}
 
 	data := map[string]interface{}{

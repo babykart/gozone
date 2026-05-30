@@ -15,6 +15,7 @@ import (
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/models"
 )
 
@@ -200,7 +201,9 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			db.Exec("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash)
+			if _, err := db.Exec("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
+				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
+			}
 
 			user, err := loadUser(db, userID)
 			if err != nil || !user.Enabled {

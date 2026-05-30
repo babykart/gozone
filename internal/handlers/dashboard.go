@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 )
 
@@ -86,7 +87,10 @@ func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
 		var action, details, username string
 		var zoneID *string
 		var createdAt string
-		rows.Scan(&id, &action, &details, &zoneID, &createdAt, &username)
+		if err := rows.Scan(&id, &action, &details, &zoneID, &createdAt, &username); err != nil {
+			logger.Error("failed to scan activity log row", "error", err)
+			continue
+		}
 
 		log := map[string]interface{}{
 			"id":         id,
@@ -99,6 +103,9 @@ func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
 			log["zone_id"] = *zoneID
 		}
 		logs = append(logs, log)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for activity logs", "error", err)
 	}
 	return logs
 }

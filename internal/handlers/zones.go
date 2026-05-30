@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/validators"
@@ -96,10 +97,12 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_zone', ?)",
 		user.ID, zone.ID, fmt.Sprintf("Created zone %s (kind: %s)", zone.Name, zone.Kind),
-	)
+	); err != nil {
+		logger.Error("failed to log create_zone activity", "zone_id", zone.ID, "error", err)
+	}
 
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)
 }
@@ -126,10 +129,12 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_zone', ?)",
 		user.ID, zoneID, fmt.Sprintf("Deleted zone %s", zoneID),
-	)
+	); err != nil {
+		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
+	}
 
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)
 }
@@ -187,10 +192,12 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'rectify_zone', ?)",
 		user.ID, zoneID, fmt.Sprintf("Rectified zone %s", zoneID),
-	)
+	); err != nil {
+		logger.Error("failed to log rectify_zone activity", "zone_id", zoneID, "error", err)
+	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
@@ -228,8 +235,14 @@ func (h *Handler) getZoneActivityLogs(zoneID string) []models.ActivityLog {
 	for rows.Next() {
 		var log models.ActivityLog
 		var username sql.NullString
-		rows.Scan(&log.ID, &log.UserID, &log.ZoneID, &log.Action, &log.Details, &log.CreatedAt, &username)
+		if err := rows.Scan(&log.ID, &log.UserID, &log.ZoneID, &log.Action, &log.Details, &log.CreatedAt, &username); err != nil {
+			logger.Error("failed to scan activity log row", "zone_id", zoneID, "error", err)
+			continue
+		}
 		logs = append(logs, log)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for zone activity logs", "zone_id", zoneID, "error", err)
 	}
 	return logs
 }

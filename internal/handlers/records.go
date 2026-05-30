@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/validators"
@@ -89,10 +90,12 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_record', ?)",
 		user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", recordType, name, content),
-	)
+	); err != nil {
+		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
+	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
@@ -198,10 +201,12 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
 		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", recordType, name),
-	)
+	); err != nil {
+		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
+	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
@@ -228,10 +233,12 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_record', ?)",
 		user.ID, zoneID, fmt.Sprintf("Deleted %s record %s", recordType, recordName),
-	)
+	); err != nil {
+		logger.Error("failed to log delete_record activity", "zone_id", zoneID, "error", err)
+	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)

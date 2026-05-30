@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 )
@@ -45,8 +46,14 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	var keys []models.APIKey
 	for rows.Next() {
 		var k models.APIKey
-		rows.Scan(&k.ID, &k.UserID, &k.Description, &k.LastUsedAt, &k.CreatedAt, &k.ExpiresAt)
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Description, &k.LastUsedAt, &k.CreatedAt, &k.ExpiresAt); err != nil {
+			logger.Error("failed to scan API key row", "error", err)
+			continue
+		}
 		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for API keys", "error", err)
 	}
 
 	flash := r.URL.Query().Get("flash")

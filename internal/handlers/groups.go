@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 )
@@ -171,8 +172,9 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	groupIDStr := r.PathValue("group_id")
-	h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupIDStr)
-
+	if _, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupIDStr); err != nil {
+		logger.Error("failed to delete group", "group_id", groupIDStr, "error", err)
+	}
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
 
@@ -181,11 +183,12 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
 	userIDStr := r.FormValue("user_id")
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"INSERT OR IGNORE INTO zone_group_members (group_id, user_id) VALUES (?, ?)",
 		groupIDStr, userIDStr,
-	)
-
+	); err != nil {
+		logger.Error("failed to add member to group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
+	}
 	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
 }
 
@@ -194,11 +197,12 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 	groupIDStr := r.PathValue("group_id")
 	userIDStr := r.FormValue("user_id")
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"DELETE FROM zone_group_members WHERE group_id = ? AND user_id = ?",
 		groupIDStr, userIDStr,
-	)
-
+	); err != nil {
+		logger.Error("failed to remove member from group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
+	}
 	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
 }
 
@@ -208,12 +212,13 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 	zoneID := strings.TrimSpace(r.FormValue("zone_id"))
 
 	if zoneID != "" {
-		h.DB.Exec(
+		if _, err := h.DB.Exec(
 			"INSERT OR IGNORE INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)",
 			groupIDStr, zoneID,
-		)
+		); err != nil {
+			logger.Error("failed to add zone to group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
+		}
 	}
-
 	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
 }
 
@@ -222,11 +227,12 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
 	zoneID := r.FormValue("zone_id")
 
-	h.DB.Exec(
+	if _, err := h.DB.Exec(
 		"DELETE FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",
 		groupIDStr, zoneID,
-	)
-
+	); err != nil {
+		logger.Error("failed to remove zone from group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
+	}
 	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
 }
 
@@ -247,9 +253,15 @@ func (h *Handler) getGroupMembers(groupID int64) []models.User {
 	for rows.Next() {
 		var u models.User
 		var enabled int
-		rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.Role, &enabled)
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.Role, &enabled); err != nil {
+			logger.Error("failed to scan group member row", "group_id", groupID, "error", err)
+			continue
+		}
 		u.Enabled = enabled == 1
 		members = append(members, u)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for group members", "group_id", groupID, "error", err)
 	}
 	return members
 }
@@ -266,8 +278,14 @@ func (h *Handler) getGroupZones(groupID int64) []string {
 	var zones []string
 	for rows.Next() {
 		var z string
-		rows.Scan(&z)
+		if err := rows.Scan(&z); err != nil {
+			logger.Error("failed to scan group zone row", "group_id", groupID, "error", err)
+			continue
+		}
 		zones = append(zones, z)
+	}
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for group zones", "group_id", groupID, "error", err)
 	}
 	return zones
 }
@@ -286,9 +304,15 @@ func (h *Handler) getAllUsers() ([]models.User, error) {
 	for rows.Next() {
 		var u models.User
 		var enabled int
-		rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.Role, &enabled)
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.Role, &enabled); err != nil {
+			logger.Error("failed to scan user row", "error", err)
+			continue
+		}
 		u.Enabled = enabled == 1
 		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return users, nil
 }
@@ -308,8 +332,14 @@ func (h *Handler) getUserAllowedZoneIDs(userID int64) (map[string]bool, error) {
 	zoneIDs := make(map[string]bool)
 	for rows.Next() {
 		var id string
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			logger.Error("failed to scan allowed zone_id", "user_id", userID, "error", err)
+			continue
+		}
 		zoneIDs[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return zoneIDs, nil
 }
