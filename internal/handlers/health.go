@@ -55,7 +55,7 @@ func (h *Handler) HealthReady(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) // #nosec G104
 }
 
 // HealthLive returns a simple liveness probe indicating the process is running.
@@ -65,5 +65,5 @@ func (h *Handler) HealthReady(w http.ResponseWriter, r *http.Request) {
 // GET /health/live
 func (h *Handler) HealthLive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok","alive":true}`))
+	w.Write([]byte(`{"status":"ok","alive":true}`)) // #nosec G104
 }

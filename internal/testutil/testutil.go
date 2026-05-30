@@ -32,7 +32,7 @@ func NewTestDB(t *testing.T) *database.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { db.Close() }) // #nosec G104
 	return db
 }
 

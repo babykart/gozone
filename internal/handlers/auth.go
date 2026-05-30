@@ -60,7 +60,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	user.Enabled = enabled == 1
 
 	if err == sql.ErrNoRows {
-		bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
 		http.Redirect(w, r, "/login?error=invalid_credentials", http.StatusSeeOther)
 		return
 	}

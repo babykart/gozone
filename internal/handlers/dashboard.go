@@ -32,7 +32,9 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Get user count
 	var userCount int
-	h.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
+	if err := h.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		logger.Error("failed to scan user count", "error", err)
+	}
 
 	type StatItem struct {
 		Label string

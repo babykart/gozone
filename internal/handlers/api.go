@@ -40,7 +40,7 @@ func writeAPIError(w http.ResponseWriter, status int, code, label string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) // #nosec G104
 }
 
 // writeAPIErrorWithCause logs the cause and returns a generic error to the client.
@@ -247,5 +247,5 @@ func (h *Handler) APIStats(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	json.NewEncoder(w).Encode(data) // #nosec G104
 }

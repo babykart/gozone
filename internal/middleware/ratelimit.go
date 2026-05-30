@@ -94,7 +94,7 @@ func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
-				w.Write([]byte(`{"error":"rate_limit_exceeded","message":"too many requests, retry after 60 seconds"}`))
+				w.Write([]byte(`{"error":"rate_limit_exceeded","message":"too many requests, retry after 60 seconds"}`)) // #nosec G104
 				return
 			}
 

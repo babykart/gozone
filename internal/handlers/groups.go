@@ -33,7 +33,10 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	var groups []groupInfo
 	for rows.Next() {
 		var g groupInfo
-		rows.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt)
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt); err != nil {
+			logger.Error("failed to scan group row", "error", err)
+			continue
+		}
 		groups = append(groups, g)
 	}
 
@@ -85,7 +88,11 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		h.renderError(w, r, "Failed to get group ID")
+		return
+	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(id, 10)+"/edit", http.StatusSeeOther)
 }
 
@@ -140,6 +147,11 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	groupIDStr := r.PathValue("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	description := strings.TrimSpace(r.FormValue("description"))
 
@@ -148,9 +160,9 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.DB.Exec(
+	_, err = h.DB.Exec(
 		"UPDATE zone_groups SET name = ?, description = ? WHERE id = ?",
-		name, description, groupIDStr,
+		name, description, groupID,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -161,7 +173,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
 // DeleteGroup deletes a group (POST /groups/{group_id}/delete).
@@ -181,59 +193,79 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 // AddMemberToGroup adds a user to a group (POST /groups/{group_id}/add-member).
 func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
 	userIDStr := r.FormValue("user_id")
 
 	if _, err := h.DB.Exec(
 		"INSERT OR IGNORE INTO zone_group_members (group_id, user_id) VALUES (?, ?)",
-		groupIDStr, userIDStr,
+		groupID, userIDStr,
 	); err != nil {
 		logger.Error("failed to add member to group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
 // RemoveMemberFromGroup removes a user from a group (POST /groups/{group_id}/remove-member).
 func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
 	userIDStr := r.FormValue("user_id")
 
 	if _, err := h.DB.Exec(
 		"DELETE FROM zone_group_members WHERE group_id = ? AND user_id = ?",
-		groupIDStr, userIDStr,
+		groupID, userIDStr,
 	); err != nil {
 		logger.Error("failed to remove member from group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
 // AddZoneToGroup assigns a zone to a group (POST /groups/{group_id}/add-zone).
 func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
 	zoneID := strings.TrimSpace(r.FormValue("zone_id"))
 
 	if zoneID != "" {
 		if _, err := h.DB.Exec(
 			"INSERT OR IGNORE INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)",
-			groupIDStr, zoneID,
+			groupID, zoneID,
 		); err != nil {
 			logger.Error("failed to add zone to group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
 		}
 	}
-	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
 // RemoveZoneFromGroup removes a zone from a group (POST /groups/{group_id}/remove-zone).
 func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
 	zoneID := r.FormValue("zone_id")
 
 	if _, err := h.DB.Exec(
 		"DELETE FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",
-		groupIDStr, zoneID,
+		groupID, zoneID,
 	); err != nil {
 		logger.Error("failed to remove zone from group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+groupIDStr+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
 func (h *Handler) getGroupMembers(groupID int64) []models.User {
