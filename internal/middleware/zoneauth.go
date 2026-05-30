@@ -20,6 +20,9 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 			}
 
 			zoneID := r.PathValue("zone_id")
+			// Routes without a {zone_id} parameter (e.g. /zones list, /api/v1/stats)
+			// are handled by handler-level filtering (filterZonesForUser). This
+			// middleware only guards routes that carry a specific zone in the URL.
 			if zoneID == "" {
 				next.ServeHTTP(w, r)
 				return
