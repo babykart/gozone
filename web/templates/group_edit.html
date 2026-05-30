@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            {{if .IsAdmin}}<a href="/groups" class="active">Groups</a>{{end}}
+            <a href="/profile">Profile</a>
+            <a href="/profile/api-keys">API Keys</a>
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <div>
+                <a href="/groups" class="breadcrumb">Groups</a> / <h2>{{.Group.Name}}</h2>
+            </div>
+        </div>
+
+        <form method="POST" action="/groups/{{.Group.ID}}/update" style="margin-bottom:2rem">
+            <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" value="{{.Group.Name}}" required class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="description">Description</label>
+                <input type="text" id="description" name="description" value="{{.Group.Description}}" class="form-control">
+            </div>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+
+        <div class="card" style="margin-bottom:2rem">
+            <h3>Members</h3>
+            {{if .Members}}
+            <table class="table">
+                <thead>
+                    <tr><th>Username</th><th>Email</th><th>Role</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Members}}
+                    <tr>
+                        <td><strong>{{.Username}}</strong></td>
+                        <td>{{.Email}}</td>
+                        <td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
+                        <td>
+                            <form method="POST" action="/groups/{{$.Group.ID}}/remove-member" style="display:inline" onsubmit="return confirm('Remove {{.Username}} from group?')">
+                                <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                                <input type="hidden" name="user_id" value="{{.ID}}">
+                                <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty-state" style="text-align:left">No members in this group.</p>
+            {{end}}
+
+            <form method="POST" action="/groups/{{.Group.ID}}/add-member" style="margin-top:1rem;display:flex;gap:0.5rem;align-items:flex-end">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
+                <div class="form-group" style="margin:0;flex:1">
+                    <label for="user_id">Add member</label>
+                    <select id="user_id" name="user_id" class="form-control">
+                        {{range .AllUsers}}
+                        <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
+                        {{end}}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-secondary">Add</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h3>Zones</h3>
+            {{if .GroupZones}}
+            <table class="table">
+                <thead>
+                    <tr><th>Zone ID</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .GroupZones}}
+                    <tr>
+                        <td><strong>{{.}}</strong></td>
+                        <td>
+                            <form method="POST" action="/groups/{{$.Group.ID}}/remove-zone" style="display:inline" onsubmit="return confirm('Remove zone {{.}} from group?')">
+                                <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                                <input type="hidden" name="zone_id" value="{{.}}">
+                                <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty-state" style="text-align:left">No zones assigned to this group.</p>
+            {{end}}
+
+            <form method="POST" action="/groups/{{.Group.ID}}/add-zone" style="margin-top:1rem;display:flex;gap:0.5rem;align-items:flex-end">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
+                <div class="form-group" style="margin:0;flex:1">
+                    <label for="zone_id">Add zone</label>
+                    <select id="zone_id" name="zone_id" class="form-control">
+                        {{range .AllZones}}
+                        <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-secondary">Add</button>
+            </form>
+        </div>
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

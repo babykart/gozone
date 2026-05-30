@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">GoZone</a>
+            <span class="nav-subtitle">PowerDNS Admin</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/zones">Zones</a>
+            {{if .IsAdmin}}<a href="/users">Users</a>{{end}}
+            {{if .IsAdmin}}<a href="/groups" class="active">Groups</a>{{end}}
+            <a href="/profile">Profile</a>
+            <a href="/profile/api-keys">API Keys</a>
+            <div class="nav-user">
+                <span>{{.User.Username}}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-header">
+            <h2>Groups</h2>
+            <a href="/groups/new" class="btn btn-primary">Create Group</a>
+        </div>
+
+        {{if .Groups}}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Groups}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td>{{.Description}}</td>
+                    <td>{{.CreatedAt}}</td>
+                    <td>
+                        <a href="/groups/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
+                        <form method="POST" action="/groups/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Delete group {{.Name}}?')">
+                            <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <h3>No groups</h3>
+            <p>Create a zone group to manage access permissions.</p>
+            <a href="/groups/new" class="btn btn-primary">Create Group</a>
+        </div>
+        {{end}}
+    </main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
