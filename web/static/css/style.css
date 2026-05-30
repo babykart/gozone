@@ -16,6 +16,22 @@
     --shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+[data-theme="dark"] {
+    color-scheme: dark;
+    --primary: #3b82f6;
+    --primary-dark: #2563eb;
+    --secondary: #94a3b8;
+    --danger: #ef4444;
+    --success: #22c55e;
+    --warning: #fbbf24;
+    --bg: #0f172a;
+    --card-bg: #1e293b;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -97,6 +113,29 @@ body {
 .btn-logout {
     font-size: 0.75rem;
     color: var(--danger) !important;
+}
+
+.theme-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    color: var(--text);
+    transition: all 0.2s;
+}
+
+.theme-toggle:hover {
+    background: var(--bg);
+}
+
+.theme-toggle-fixed {
+    position: fixed;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 200;
 }
 
 /* Container */
@@ -213,6 +252,10 @@ body {
     background: #e2e8f0;
 }
 
+[data-theme="dark"] .btn-secondary:hover {
+    background: #334155;
+}
+
 .btn-danger {
     background: var(--danger);
     color: white;
@@ -256,6 +299,10 @@ body {
 
 .table tr:hover {
     background: #f8fafc;
+}
+
+[data-theme="dark"] .table tr:hover {
+    background: #1a2332;
 }
 
 .table a {
@@ -352,6 +399,7 @@ body {
     width: 100%;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
+    color: var(--text);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--card-bg);
