@@ -255,10 +255,7 @@ func fileServer(r chi.Router, path string, root http.FileSystem) {
 
 // parseTemplates loads all HTML templates from the embedded filesystem.
 func parseTemplates() *template.Template {
-	tmpl, err := template.New("base").Funcs(template.FuncMap{
-		"eq": func(a, b interface{}) bool { return a == b },
-		"ne": func(a, b interface{}) bool { return a != b },
-	}).ParseFS(web.FS, "templates/*.html")
+	tmpl, err := template.New("base").ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		logger.Fatal("failed to load embedded templates", "error", err)
 	}
