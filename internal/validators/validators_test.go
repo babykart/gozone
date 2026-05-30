@@ -157,6 +157,93 @@ func TestValidateIPAddress(t *testing.T) {
 	}
 }
 
+func TestValidateIPv4(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid", "192.168.1.1", false},
+		{"loopback", "127.0.0.1", false},
+		{"public", "8.8.8.8", false},
+		{"empty", "", true},
+		{"IPv6 fails", "2001:db8::1", true},
+		{"out of range", "256.0.0.1", true},
+		{"garbage", "not-an-ip", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateIPv4(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateIPv4(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateIPv6(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"loopback", "::1", false},
+		{"short", "2001:db8::1", false},
+		{"full", "2001:0db8:0000:0000:0000:0000:0000:0001", false},
+		{"empty", "", true},
+		{"IPv4 fails", "192.168.1.1", true},
+		{"garbage", "not-an-ip", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateIPv6(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateIPv6(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRecordContent(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordType string
+		content    string
+		wantErr    bool
+	}{
+		{"A valid", "A", "192.168.1.1", false},
+		{"A invalid", "A", "not-an-ip", true},
+		{"A empty", "A", "", true},
+		{"AAAA valid", "AAAA", "2001:db8::1", false},
+		{"AAAA invalid", "AAAA", "not-an-ip", true},
+		{"CNAME valid", "CNAME", "target.example.com", false},
+		{"CNAME with dot", "CNAME", "target.example.com.", false},
+		{"CNAME invalid", "CNAME", "invalid label with spaces", true},
+		{"ALIAS valid", "ALIAS", "target.example.com", false},
+		{"NS valid", "NS", "ns1.example.com", false},
+		{"PTR valid", "PTR", "host.example.com", false},
+		{"MX valid", "MX", "mail.example.com", false},
+		{"MX invalid", "MX", "", true},
+		{"SOA valid", "SOA", "ns1.example.com admin.example.com 2024010100 3600 900 604800 86400", false},
+		{"SOA invalid missing fields", "SOA", "ns1.example.com admin.example.com", true},
+		{"SRV valid", "SRV", "0 5 5060 sip.example.com", false},
+		{"SRV invalid missing target", "SRV", "0 5", true},
+		{"TXT any content", "TXT", "arbitrary text here", false},
+		{"SPF any content", "SPF", "v=spf1 include:_spf.example.com ~all", false},
+		{"CAA valid", "CAA", "0 issue ca.example.com", false},
+		{"empty content", "A", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordContent(tt.recordType, tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordContent(%q, %q) error = %v, wantErr = %v",
+					tt.recordType, tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRecordType_AllWhitelisted(t *testing.T) {
 	for _, rt := range []string{
 		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",

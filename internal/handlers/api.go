@@ -151,6 +151,13 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, r := range rrset.Records {
+		if err := validators.ValidateRecordContent(rrset.Type, r.Content); err != nil {
+			writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
+			return
+		}
+	}
+
 	if err := h.PDNS.CreateRecord(zoneID, rrset); err != nil {
 		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to create record", err)
 		return
@@ -172,6 +179,13 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
 		return
+	}
+
+	for _, r := range rrset.Records {
+		if err := validators.ValidateRecordContent(rrset.Type, r.Content); err != nil {
+			writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
+			return
+		}
 	}
 
 	if err := h.PDNS.UpdateRecord(zoneID, rrset); err != nil {

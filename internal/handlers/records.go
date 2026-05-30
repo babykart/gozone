@@ -72,6 +72,11 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validators.ValidateRecordContent(recordType, content); err != nil {
+		h.renderError(w, r, "Invalid record content: "+err.Error())
+		return
+	}
+
 	rrset := models.RRSet{
 		Name: name,
 		Type: recordType,
@@ -180,6 +185,11 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
 		h.renderError(w, r, "Invalid record type: "+err.Error())
+		return
+	}
+
+	if err := validators.ValidateRecordContent(recordType, content); err != nil {
+		h.renderError(w, r, "Invalid record content: "+err.Error())
 		return
 	}
 

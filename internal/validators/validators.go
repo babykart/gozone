@@ -153,3 +153,78 @@ func ValidateIPAddress(ip string) error {
 	}
 	return nil
 }
+
+// ValidateIPv4 checks that a string is a valid IPv4 address.
+func ValidateIPv4(ip string) error {
+	if ip == "" {
+		return fmt.Errorf("IPv4 address must not be empty")
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return fmt.Errorf("%q is not a valid IPv4 address", ip)
+	}
+	return nil
+}
+
+// ValidateIPv6 checks that a string is a valid IPv6 address.
+func ValidateIPv6(ip string) error {
+	if ip == "" {
+		return fmt.Errorf("IPv6 address must not be empty")
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return fmt.Errorf("%q is not a valid IPv6 address", ip)
+	}
+	return nil
+}
+
+// ValidateRecordContent validates a DNS record's content field based on its
+// record type. Different record types have different content format requirements:
+//
+//   - A: IPv4 address
+//   - AAAA: IPv6 address
+//   - CNAME, ALIAS, NS, PTR: fully-qualified domain name
+//   - MX: priority + FQDN, or just FQDN (priority handled separately)
+//   - TXT, SPF: free text (quoted strings allowed)
+//
+// Returns nil if valid, an error describing the violation otherwise.
+func ValidateRecordContent(recordType, content string) error {
+	if content == "" {
+		return fmt.Errorf("content must not be empty")
+	}
+
+	switch strings.ToUpper(recordType) {
+	case "A":
+		return ValidateIPv4(content)
+	case "AAAA":
+		return ValidateIPv6(content)
+	case "CNAME", "ALIAS", "NS", "PTR":
+		return ValidateDomainName(content)
+	case "MX":
+		// MX content can be "priority target" or just "target"
+		// The priority is handled as a separate field, so content is the FQDN
+		return ValidateDomainName(content)
+	case "SOA":
+		parts := strings.Fields(content)
+		if len(parts) < 7 {
+			return fmt.Errorf("SOA content requires at least 7 fields: mname rname serial refresh retry expire minimum")
+		}
+		return ValidateDomainName(strings.TrimSuffix(parts[0], "."))
+	case "SRV":
+		parts := strings.Fields(content)
+		if len(parts) < 4 {
+			return fmt.Errorf("SRV content must have at least 4 fields: priority weight port target")
+		}
+		return ValidateDomainName(parts[3])
+	case "CAA":
+		parts := strings.Fields(content)
+		if len(parts) < 3 {
+			return fmt.Errorf("CAA content must have exactly 3 fields: flags tag value")
+		}
+		return nil
+	case "TXT", "SPF":
+		return nil
+	default:
+		return nil
+	}
+}
