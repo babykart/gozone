@@ -258,12 +258,6 @@ func (c *Client) ListRecords(zoneID string) ([]models.RRSet, error) {
 		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
 	}
 
-	var zone models.Zone
-	if err := json.Unmarshal(body, &zone); err != nil {
-		return nil, fmt.Errorf("unmarshal zone for records: %w", err)
-	}
-
-	// The zone response in newer PowerDNS versions includes RRSets
 	var full struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
