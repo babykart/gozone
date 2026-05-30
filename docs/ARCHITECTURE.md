@@ -152,7 +152,8 @@ Client ──POST /api/v1/zones──► chi Router
 
 ## Authentication Flows
 
-GoZone implements two separate authentication channels:
+GoZone supports two authentication mechanisms, both using JWT-based sessions
+stored in the request context under `UserContextKey`:
 
 ### Web UI (JWT Cookies)
 
