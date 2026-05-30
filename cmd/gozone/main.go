@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"flag"
 	"fmt"
 	"html/template"
@@ -25,11 +24,8 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/pdns"
-	"github.com/babykart/gozone/web/static"
+	"github.com/babykart/gozone/web"
 )
-
-//go:embed templates/*.html
-var templateFS embed.FS
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "Path to YAML configuration file")
@@ -160,7 +156,7 @@ func main() {
 	})
 
 	// Static files (no CSRF)
-	fileServer(r, "/static", http.FS(static.FS))
+	fileServer(r, "/static", http.FS(web.FS))
 
 	// API routes (API key auth, no CSRF)
 	r.Route("/api/v1", func(r chi.Router) {
@@ -231,7 +227,7 @@ func parseTemplates() *template.Template {
 	tmpl, err := template.New("base").Funcs(template.FuncMap{
 		"eq": func(a, b interface{}) bool { return a == b },
 		"ne": func(a, b interface{}) bool { return a != b },
-	}).ParseFS(templateFS, "templates/*.html")
+	}).ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		logger.Fatal("failed to load embedded templates", "error", err)
 	}

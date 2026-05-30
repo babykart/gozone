@@ -92,7 +92,7 @@ database   ──► config
 3. **`database.New(cfg)`** — validate DSN, create directory, open SQLite connection (`SetMaxOpenConns(1)`), run inline migrations
 4. **`pdns.NewClient(cfg)`** — create HTTP client pointing to PowerDNS API
 5. **`seedAdminUser(db, cfg)`** — if `users` table is empty, insert admin/admin (or password from `GOZONE_ADMIN_PASSWORD`)
-6. **`parseTemplates()`** — load `cmd/gozone/templates/*.html` via `template.ParseFS` from embedded filesystem
+6. **`parseTemplates()`** — load `web/templates/*.html` via `template.ParseFS` from embedded filesystem (`web/embed.go`)
 7. **`handlers.New(db, pdns, cfg, tmpl)`** — wire handler with all dependencies
 8. **Register routes** on chi router with middleware chain
 9. **`http.ListenAndServe(addr, r)`** — start HTTP server with graceful shutdown on SIGINT/SIGTERM

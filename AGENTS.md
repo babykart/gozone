@@ -27,7 +27,7 @@ Write co-located `*_test.go` when adding code.
 - **Entrypoint**: `cmd/gozone/main.go` — wires chi router, loads config, seeds admin, starts server
 - **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *sql.DB`, `PDNS *pdns.Client`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
-- **Templates**: embedded via `//go:embed templates/*.html` in `cmd/gozone/main.go`, loaded with `template.ParseFS`
+- **Templates & static files**: embedded via `//go:embed *` in `web/embed.go`, loaded with `template.ParseFS`
 - **Database**: inline SQL migrations in `internal/database/database.go`. SQLite only, `SetMaxOpenConns(1)` — serialized writes
 - **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`)
 
