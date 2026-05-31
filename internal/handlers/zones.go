@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/babykart/gozone/internal/logger"
@@ -11,6 +12,38 @@ import (
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/validators"
 )
+
+// PageInfo holds pagination state for template rendering.
+type PageInfo struct {
+	Current    int
+	PerPage    int
+	TotalPages int
+	Total      int
+}
+
+// paginate slices a slice into a page and returns the pagination info.
+func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
+	total := len(items)
+	totalPages := 0
+	if perPage > 0 {
+		totalPages = (total + perPage - 1) / perPage
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages && totalPages > 0 {
+		page = totalPages
+	}
+	start := (page - 1) * perPage
+	if start >= total || perPage <= 0 {
+		return nil, PageInfo{Current: page, PerPage: perPage, TotalPages: totalPages, Total: total}
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return items[start:end], PageInfo{Current: page, PerPage: perPage, TotalPages: totalPages, Total: total}
+}
 
 // ListZones renders the zones listing page with record counts per zone (GET /zones).
 func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
@@ -27,11 +60,15 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 		zones = []models.ZoneWithInfo{}
 	}
 
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	paginated, pageInfo := paginate(zones, page, 10)
+
 	data := map[string]interface{}{
-		"Title":   "Zones - GoZone",
-		"User":    user,
-		"Zones":   zones,
-		"IsAdmin": user.IsAdmin(),
+		"Title":    "Zones - GoZone",
+		"User":     user,
+		"Zones":    paginated,
+		"PageInfo": pageInfo,
+		"IsAdmin":  user.IsAdmin(),
 	}
 	h.render(w, r, "zones.html", data)
 }
@@ -157,6 +194,9 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordPage, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	paginatedRecords, recordPageInfo := paginate(records, recordPage, 10)
+
 	// Get zone metadata
 	metadata, _ := h.PDNS.GetMetadata(zoneID)
 
@@ -171,16 +211,17 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":       zone.Name + " - GoZone",
-		"User":        user,
-		"Zone":        zone,
-		"Records":     records,
-		"MetaData":    metadata,
-		"Logs":        logs,
-		"PDNSVersion": pdnsVersion,
-		"RecordTypes": GetRecordTypes(),
-		"MetaKinds":   GetMetadataKinds(),
-		"IsAdmin":     user.IsAdmin(),
+		"Title":           zone.Name + " - GoZone",
+		"User":            user,
+		"Zone":            zone,
+		"Records":         paginatedRecords,
+		"RecordPageInfo":  recordPageInfo,
+		"MetaData":        metadata,
+		"Logs":            logs,
+		"PDNSVersion":     pdnsVersion,
+		"RecordTypes":     GetRecordTypes(),
+		"MetaKinds":       GetMetadataKinds(),
+		"IsAdmin":         user.IsAdmin(),
 	}
 	h.render(w, r, "zone_view.html", data)
 }

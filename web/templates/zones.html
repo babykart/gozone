@@ -38,6 +38,13 @@
         {{end}}
     </tbody>
 </table>
+{{if gt .PageInfo.TotalPages 1}}
+<div class="pagination">
+    <a href="?page={{sub .PageInfo.Current 1}}" class="btn btn-sm btn-secondary{{if eq .PageInfo.Current 1}} disabled{{end}}">← Previous</a>
+    <span class="page-info">Page {{.PageInfo.Current}} / {{.PageInfo.TotalPages}} ({{.PageInfo.Total}} zones)</span>
+    <a href="?page={{add .PageInfo.Current 1}}" class="btn btn-sm btn-secondary{{if eq .PageInfo.Current .PageInfo.TotalPages}} disabled{{end}}">Next →</a>
+</div>
+{{end}}
 {{else}}
 <div class="empty-state">
     <h3>No zones found</h3>

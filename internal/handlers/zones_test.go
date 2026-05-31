@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -576,5 +577,114 @@ func TestCreateMetadata_PDNSError(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Failed to set metadata") {
 		t.Error("expected 'Failed to set metadata' in error page")
+	}
+}
+
+func TestPaginate(t *testing.T) {
+	items := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+
+	// Page 1 of 10
+	paged, info := paginate(items, 1, 10)
+	if len(paged) != 10 || info.TotalPages != 2 || info.Current != 1 || info.Total != 15 {
+		t.Errorf("page 1: len=%d pages=%d current=%d total=%d", len(paged), info.TotalPages, info.Current, info.Total)
+	}
+	if paged[0] != 1 || paged[9] != 10 {
+		t.Errorf("page 1 items: got %v", paged)
+	}
+
+	// Page 2 of 10
+	paged, info = paginate(items, 2, 10)
+	if len(paged) != 5 || info.Current != 2 || info.TotalPages != 2 {
+		t.Errorf("page 2: len=%d pages=%d current=%d", len(paged), info.TotalPages, info.Current)
+	}
+	if paged[0] != 11 || paged[4] != 15 {
+		t.Errorf("page 2 items: got %v", paged)
+	}
+
+	// Page below 1 → clamped to 1
+	paged, info = paginate(items, 0, 10)
+	if info.Current != 1 || len(paged) != 10 {
+		t.Errorf("page 0 clamps to 1: current=%d len=%d", info.Current, len(paged))
+	}
+
+	// Page beyond total → clamped to last
+	paged, info = paginate(items, 99, 10)
+	if info.Current != 2 || len(paged) != 5 {
+		t.Errorf("page 99 clamps to 2: current=%d len=%d", info.Current, len(paged))
+	}
+
+	// Empty slice
+	paged, info = paginate([]int{}, 1, 10)
+	if len(paged) != 0 || info.TotalPages != 0 || info.Total != 0 {
+		t.Errorf("empty: len=%d pages=%d total=%d", len(paged), info.TotalPages, info.Total)
+	}
+
+	// Exact multiple
+	paged, info = paginate([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 1, 5)
+	if len(paged) != 5 || info.TotalPages != 2 || info.Current != 1 {
+		t.Errorf("exact multiple page 1: len=%d pages=%d", len(paged), info.TotalPages)
+	}
+
+	// perPage = 0 → all items
+	paged, info = paginate(items, 1, 0)
+	if len(paged) != 0 || info.TotalPages != 0 {
+		t.Errorf("perPage=0: len=%d pages=%d", len(paged), info.TotalPages)
+	}
+
+	// single item
+	paged, info = paginate([]int{42}, 1, 10)
+	if len(paged) != 1 || info.TotalPages != 1 || info.Total != 1 {
+		t.Errorf("single: len=%d pages=%d total=%d", len(paged), info.TotalPages, info.Total)
+	}
+}
+
+func TestListZones_Pagination(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/servers/localhost/zones" {
+			// Return 15 zones
+			zones := make([]models.Zone, 15)
+			for i := range zones {
+				zones[i] = models.Zone{
+					ID:   fmt.Sprintf("zone%d.com", i+1),
+					Name: fmt.Sprintf("zone%d.com", i+1),
+					Kind: "Native",
+				}
+			}
+			json.NewEncoder(w).Encode(zones)
+		} else {
+			w.Write([]byte(`[]`))
+		}
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Page 1
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones?page=1", nil)
+	r = r.WithContext(ctx)
+	h.ListZones(w, r)
+	if w.Code != http.StatusOK {
+		t.Errorf("page 1: expected 200, got %d", w.Code)
+	}
+
+	// Page 2
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet, "/zones?page=2", nil)
+	r2 = r2.WithContext(ctx)
+	h.ListZones(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Errorf("page 2: expected 200, got %d", w2.Code)
+	}
+
+	// Default page (no param) should be page 1
+	w3 := httptest.NewRecorder()
+	r3 := httptest.NewRequest(http.MethodGet, "/zones", nil)
+	r3 = r3.WithContext(ctx)
+	h.ListZones(w3, r3)
+	if w3.Code != http.StatusOK {
+		t.Errorf("default page: expected 200, got %d", w3.Code)
 	}
 }

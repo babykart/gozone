@@ -70,6 +70,13 @@
             {{end}}
         </tbody>
     </table>
+{{if gt .RecordPageInfo.TotalPages 1}}
+<div class="pagination">
+    <a href="?page={{sub .RecordPageInfo.Current 1}}" class="btn btn-sm btn-secondary{{if eq .RecordPageInfo.Current 1}} disabled{{end}}">← Previous</a>
+    <span class="page-info">Page {{.RecordPageInfo.Current}} / {{.RecordPageInfo.TotalPages}} ({{.RecordPageInfo.Total}} records)</span>
+    <a href="?page={{add .RecordPageInfo.Current 1}}" class="btn btn-sm btn-secondary{{if eq .RecordPageInfo.Current .RecordPageInfo.TotalPages}} disabled{{end}}">Next →</a>
+</div>
+{{end}}
 </div>
 {{else}}
 <div class="empty-state">
