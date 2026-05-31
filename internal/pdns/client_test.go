@@ -66,23 +66,47 @@ func TestGetServer(t *testing.T) {
 }
 
 func TestGetStatistics(t *testing.T) {
-	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]models.StatisticItem{
-			{Name: "udp-queries", Type: "StatisticItem", Value: "42"},
+	t.Run("string value", func(t *testing.T) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]models.StatisticItem{
+				{Name: "udp-queries", Type: "StatisticItem", Value: "42"},
+			})
 		})
+
+		stats, err := client.GetStatistics()
+		if err != nil {
+			t.Fatalf("GetStatistics failed: %v", err)
+		}
+		if len(stats) != 1 {
+			t.Fatalf("expected 1 stat, got %d", len(stats))
+		}
+		if stats[0].Name != "udp-queries" {
+			t.Errorf("expected udp-queries, got %s", stats[0].Name)
+		}
 	})
 
-	stats, err := client.GetStatistics()
-	if err != nil {
-		t.Fatalf("GetStatistics failed: %v", err)
-	}
-	if len(stats) != 1 {
-		t.Fatalf("expected 1 stat, got %d", len(stats))
-	}
-	if stats[0].Name != "udp-queries" {
-		t.Errorf("expected udp-queries, got %s", stats[0].Name)
-	}
+	t.Run("numeric value", func(t *testing.T) {
+		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"name":"uptime","type":"StatisticItem","value":3600}]`))
+		})
+
+		stats, err := client.GetStatistics()
+		if err != nil {
+			t.Fatalf("GetStatistics with numeric value failed: %v", err)
+		}
+		if len(stats) != 1 {
+			t.Fatalf("expected 1 stat, got %d", len(stats))
+		}
+		v, ok := stats[0].Value.(float64)
+		if !ok {
+			t.Fatalf("expected float64, got %T", stats[0].Value)
+		}
+		if v != 3600 {
+			t.Errorf("expected 3600, got %v", v)
+		}
+	})
 }
 
 func TestListZones(t *testing.T) {

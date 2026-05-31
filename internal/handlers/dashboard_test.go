@@ -84,3 +84,46 @@ func TestDashboard_GetStatisticsError(t *testing.T) {
 		t.Errorf("expected 200 even when PDNS statistics fail, got %d", w.Code)
 	}
 }
+
+func TestValToString(t *testing.T) {
+	tests := []struct {
+		input interface{}
+		want  string
+	}{
+		{nil, ""},
+		{"hello", "hello"},
+		{"", ""},
+		{float64(3600), "3600"},
+		{float64(3.14), "3.14"},
+		{float64(0), "0"},
+		{true, "true"},
+		{false, "false"},
+		{[]int{1, 2, 3}, "[1 2 3]"},
+	}
+	for _, tt := range tests {
+		got := valToString(tt.input)
+		if got != tt.want {
+			t.Errorf("valToString(%v): got %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestDashboard_NumericStats(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"name":"uptime","type":"StatisticItem","value":3600},{"name":"questions","type":"StatisticItem","value":12345}]`))
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r = r.WithContext(ctx)
+	h.Dashboard(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with numeric stats, got %d", w.Code)
+	}
+}

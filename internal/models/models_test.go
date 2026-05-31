@@ -378,6 +378,7 @@ func TestServerInfo_JSON(t *testing.T) {
 }
 
 func TestStatisticItem_JSON(t *testing.T) {
+	// String value
 	original := StatisticItem{Name: "udp-queries", Type: "StatisticItem", Value: "12345"}
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -385,10 +386,29 @@ func TestStatisticItem_JSON(t *testing.T) {
 	}
 	var decoded StatisticItem
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf("unmarshal string value: %v", err)
 	}
 	if decoded.Value != "12345" {
-		t.Errorf("Value: got %s, want 12345", decoded.Value)
+		t.Errorf("Value: got %v, want 12345", decoded.Value)
+	}
+
+	// Numeric value (PowerDNS sometimes returns numbers)
+	numJSON := `{"name":"uptime","type":"StatisticItem","value":3600}`
+	var numDecoded StatisticItem
+	if err := json.Unmarshal([]byte(numJSON), &numDecoded); err != nil {
+		t.Fatalf("unmarshal numeric value: %v", err)
+	}
+	if v, ok := numDecoded.Value.(float64); !ok {
+		t.Errorf("expected float64, got %T", numDecoded.Value)
+	} else if v != 3600 {
+		t.Errorf("Value: got %v, want 3600", v)
+	}
+
+	// Array value (some PowerDNS stats return arrays)
+	arrJSON := `{"name":"latency","type":"StatisticItem","value":[1,2,3]}`
+	var arrDecoded StatisticItem
+	if err := json.Unmarshal([]byte(arrJSON), &arrDecoded); err != nil {
+		t.Fatalf("unmarshal array value: %v", err)
 	}
 }
 

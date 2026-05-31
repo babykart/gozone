@@ -76,10 +76,11 @@ type ServerInfo struct {
 }
 
 // StatisticItem is a single statistic key-value pair.
+// Value can be a string, number, or array depending on the statistic type.
 type StatisticItem struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Name  string      `json:"name"`
+	Type  string      `json:"type"`
+	Value interface{} `json:"value"`
 }
 
 // ZoneStatistics holds statistics for a zone.

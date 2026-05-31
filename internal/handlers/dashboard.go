@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -57,14 +58,14 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		for _, s := range stats {
 			switch s.Name {
 			case "udp-queries", "udp-answers", "tcp-queries", "tcp-answers":
-				dashboardStats = append(dashboardStats, StatItem{Label: s.Name, Value: s.Value})
+				dashboardStats = append(dashboardStats, StatItem{Label: s.Name, Value: valToString(s.Value)})
 			}
 		}
 	}
 
 	serverStats := make(map[string]string)
 	for _, s := range stats {
-		serverStats[s.Name] = s.Value
+		serverStats[s.Name] = valToString(s.Value)
 	}
 
 	data := map[string]interface{}{
@@ -120,4 +121,22 @@ func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
 		logger.Error("rows iteration error for activity logs", "error", err)
 	}
 	return logs
+}
+
+// valToString converts a PDNS statistic value (string, number, bool, array, or nil)
+// to its string representation for display in the dashboard.
+func valToString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		return fmt.Sprintf("%v", t)
+	}
 }
