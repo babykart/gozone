@@ -44,6 +44,7 @@
 {{if .APIKeys}}
 <div class="card">
     <h3>Your API Keys</h3>
+    <div class="table-responsive">
     <table class="table">
         <thead>
             <tr>
@@ -70,6 +71,7 @@
             {{end}}
         </tbody>
     </table>
+    </div>
 </div>
 {{else}}
 {{if ne .Flash "created"}}

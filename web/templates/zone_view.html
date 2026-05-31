@@ -35,6 +35,7 @@
 
 {{if .Records}}
 <div class="card">
+    <div class="table-responsive">
     <table class="table records-table">
         <thead>
             <tr>
@@ -90,6 +91,7 @@
             {{end}}
         </tbody>
     </table>
+    </div>
 {{if gt .RecordPageInfo.TotalPages 1}}
 <div class="pagination">
     <a href="?page={{sub .RecordPageInfo.Current 1}}&perPage={{.RecordPageInfo.PerPage}}{{if $.Search}}&search={{$.Search | urlquery}}{{end}}" class="btn btn-sm btn-secondary{{if eq .RecordPageInfo.Current 1}} disabled{{end}}">← Previous</a>
@@ -131,6 +133,7 @@
 <div class="card" style="margin-top:2rem">
     <h3>Zone Metadata</h3>
     {{if .MetaData}}
+    <div class="table-responsive">
     <table class="table">
         <thead>
             <tr><th>Kind</th><th>Values</th><th>Actions</th></tr>
@@ -156,6 +159,7 @@
             {{end}}
         </tbody>
     </table>
+    </div>
     {{else}}
     <p class="empty-meta">No metadata set for this zone.</p>
     {{end}}
@@ -198,6 +202,7 @@
 {{if .Logs}}
 <div class="card" style="margin-top:2rem">
     <h3>Activity</h3>
+    <div class="table-responsive">
     <table class="table">
         <thead>
             <tr><th>Action</th><th>Details</th><th>Time</th></tr>
@@ -212,6 +217,7 @@
             {{end}}
         </tbody>
     </table>
+    </div>
 </div>
 {{end}}
         </div>

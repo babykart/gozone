@@ -17,6 +17,7 @@
 </div>
 
 {{if .Zones}}
+<div class="table-responsive">
 <table class="table">
     <thead>
         <tr>
@@ -43,6 +44,7 @@
         {{end}}
     </tbody>
 </table>
+</div>
 {{if gt .PageInfo.TotalPages 1}}
 <div class="pagination">
     <a href="?page={{sub .PageInfo.Current 1}}&perPage={{.PageInfo.PerPage}}{{if .Search}}&search={{.Search | urlquery}}{{end}}" class="btn btn-sm btn-secondary{{if eq .PageInfo.Current 1}} disabled{{end}}">← Previous</a>
