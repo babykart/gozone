@@ -175,6 +175,13 @@ func main() {
 				r.Post("/groups/{group_id}/remove-member", h.RemoveMemberFromGroup)
 				r.Post("/groups/{group_id}/add-zone", h.AddZoneToGroup)
 				r.Post("/groups/{group_id}/remove-zone", h.RemoveZoneFromGroup)
+
+				r.Get("/tsigkeys", h.ListTSIGKeys)
+				r.Get("/tsigkeys/new", h.CreateTSIGKeyPage)
+				r.Post("/tsigkeys/create", h.CreateTSIGKey)
+				r.Get("/tsigkeys/{key_id}/edit", h.EditTSIGKeyPage)
+				r.Post("/tsigkeys/{key_id}/update", h.UpdateTSIGKey)
+				r.Post("/tsigkeys/delete", h.DeleteTSIGKey)
 			})
 		})
 	})

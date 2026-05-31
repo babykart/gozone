@@ -521,3 +521,141 @@ func TestDeleteMetadata_Error(t *testing.T) {
 		t.Error("expected error for 404 response")
 	}
 }
+
+func TestListTSIGKeys(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.TSIGKey{
+			{Name: "key1.", ID: "key1.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
+			{Name: "key2.", ID: "key2.", Algorithm: "hmac-sha512", Type: "TSIGKey"},
+		})
+	})
+
+	keys, err := client.ListTSIGKeys()
+	if err != nil {
+		t.Fatalf("ListTSIGKeys failed: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(keys))
+	}
+	if keys[0].Name != "key1." {
+		t.Errorf("expected key1., got %s", keys[0].Name)
+	}
+}
+
+func TestListTSIGKeys_Empty(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	})
+
+	keys, err := client.ListTSIGKeys()
+	if err != nil {
+		t.Fatalf("ListTSIGKeys failed: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys, got %d", len(keys))
+	}
+}
+
+func TestGetTSIGKey(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(models.TSIGKey{
+			Name: "my-key.", ID: "my-key.", Algorithm: "hmac-sha256", Key: "secret", Type: "TSIGKey",
+		})
+	})
+
+	key, err := client.GetTSIGKey("my-key.")
+	if err != nil {
+		t.Fatalf("GetTSIGKey failed: %v", err)
+	}
+	if key.Algorithm != "hmac-sha256" {
+		t.Errorf("expected hmac-sha256, got %s", key.Algorithm)
+	}
+}
+
+func TestCreateTSIGKey(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		var req models.TSIGKey
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("bad request: %v", err)
+		}
+		if req.Algorithm != "hmac-sha256" {
+			t.Errorf("expected hmac-sha256, got %s", req.Algorithm)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(req)
+	})
+
+	key, err := client.CreateTSIGKey(models.TSIGKey{
+		Name:      "new-key.",
+		Algorithm: "hmac-sha256",
+		Key:       "base64secret",
+		Type:      "TSIGKey",
+	})
+	if err != nil {
+		t.Fatalf("CreateTSIGKey failed: %v", err)
+	}
+	if key.Name != "new-key." {
+		t.Errorf("expected new-key., got %s", key.Name)
+	}
+}
+
+func TestUpdateTSIGKey(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("expected PUT, got %s", r.Method)
+		}
+		var req models.TSIGKey
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.Algorithm != "hmac-sha512" {
+			t.Errorf("expected hmac-sha512, got %s", req.Algorithm)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	err := client.UpdateTSIGKey("my-key.", models.TSIGKey{
+		Name:      "my-key.",
+		Algorithm: "hmac-sha512",
+		Key:       "updated-secret",
+		Type:      "TSIGKey",
+	})
+	if err != nil {
+		t.Fatalf("UpdateTSIGKey failed: %v", err)
+	}
+}
+
+func TestDeleteTSIGKey(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := client.DeleteTSIGKey("my-key."); err != nil {
+		t.Fatalf("DeleteTSIGKey failed: %v", err)
+	}
+}
+
+func TestDeleteTSIGKey_Error(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	err := client.DeleteTSIGKey("nonexistent.")
+	if err == nil {
+		t.Error("expected error for 404 response")
+	}
+}

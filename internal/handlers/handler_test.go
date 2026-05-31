@@ -41,6 +41,9 @@ func newTestHandler(t *testing.T) *Handler {
 		{{define "profile.html"}}Profile{{end}}
 		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
 		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}{{end}}
+		{{define "tsigkeys.html"}}TSIG Keys{{end}}
+		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
+		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
 	`))
 
 	return &Handler{
@@ -71,6 +74,9 @@ func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Ha
 		{{define "profile.html"}}Profile{{end}}
 		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
 		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}{{end}}
+		{{define "tsigkeys.html"}}TSIG Keys{{end}}
+		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
+		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
 	`))
 
 	return &Handler{
@@ -119,6 +125,27 @@ func TestGetMetadataKinds(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("expected metadata kind %s not found", want)
+		}
+	}
+}
+
+func TestTSIGAlgorithms(t *testing.T) {
+	algs := tsigAlgorithms()
+	if len(algs) == 0 {
+		t.Fatal("expected non-empty tsig algorithms")
+	}
+
+	expected := []string{"hmac-md5", "hmac-sha1", "hmac-sha256", "hmac-sha512"}
+	for _, want := range expected {
+		found := false
+		for _, got := range algs {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected algorithm %s not found", want)
 		}
 	}
 }

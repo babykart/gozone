@@ -488,6 +488,17 @@ details summary {
     color: var(--text);
 }
 
+.mono {
+    font-family: monospace;
+}
+
+.form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
 /* Badges */
 .badge {
     display: inline-block;

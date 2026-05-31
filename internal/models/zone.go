@@ -104,3 +104,13 @@ type Metadata struct {
 	Metadata []string `json:"metadata"`
 	TTL      int64    `json:"ttl,omitempty"`
 }
+
+// TSIGKey represents a TSIG (Transaction SIGnature) key used for secured DNS
+// operations such as zone transfers and dynamic updates.
+type TSIGKey struct {
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+	Algorithm string `json:"algorithm"`
+	Key       string `json:"key"`
+	Type      string `json:"type"`
+}

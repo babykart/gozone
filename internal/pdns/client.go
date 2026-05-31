@@ -376,3 +376,78 @@ func (c *Client) DeleteMetadata(zoneID string, kind string) error {
 func (c *Client) ServerID() string {
 	return c.serverID
 }
+
+// ListTSIGKeys returns all TSIG keys for the server.
+func (c *Client) ListTSIGKeys() ([]models.TSIGKey, error) {
+	body, status, err := c.do("GET", "/servers/"+c.serverID+"/tsigkeys", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+	}
+
+	var keys []models.TSIGKey
+	if err := json.Unmarshal(body, &keys); err != nil {
+		return nil, fmt.Errorf("unmarshal tsigkeys: %w", err)
+	}
+	return keys, nil
+}
+
+// GetTSIGKey returns a single TSIG key.
+func (c *Client) GetTSIGKey(id string) (*models.TSIGKey, error) {
+	body, status, err := c.do("GET", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+	}
+
+	var key models.TSIGKey
+	if err := json.Unmarshal(body, &key); err != nil {
+		return nil, fmt.Errorf("unmarshal tsigkey: %w", err)
+	}
+	return &key, nil
+}
+
+// CreateTSIGKey creates a new TSIG key.
+func (c *Client) CreateTSIGKey(key models.TSIGKey) (*models.TSIGKey, error) {
+	body, status, err := c.do("POST", "/servers/"+c.serverID+"/tsigkeys", key)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+	}
+
+	var created models.TSIGKey
+	if err := json.Unmarshal(body, &created); err != nil {
+		return nil, fmt.Errorf("unmarshal tsigkey: %w", err)
+	}
+	return &created, nil
+}
+
+// UpdateTSIGKey updates an existing TSIG key.
+func (c *Client) UpdateTSIGKey(id string, key models.TSIGKey) error {
+	_, status, err := c.do("PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("unexpected status %d", status)
+	}
+	return nil
+}
+
+// DeleteTSIGKey deletes a TSIG key.
+func (c *Client) DeleteTSIGKey(id string) error {
+	_, status, err := c.do("DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("unexpected status %d", status)
+	}
+	return nil
+}

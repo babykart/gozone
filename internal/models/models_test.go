@@ -472,3 +472,57 @@ func TestMetadata_JSON_EmptyMetadata(t *testing.T) {
 		t.Errorf("expected 0 metadata values, got %d", len(decoded.Metadata))
 	}
 }
+
+func TestTSIGKey_JSON(t *testing.T) {
+	original := TSIGKey{
+		Name:      "my-key.",
+		ID:        "my-key.",
+		Algorithm: "hmac-sha256",
+		Key:       "c2VjcmV0LWtleS1tYXRlcmlhbA==",
+		Type:      "TSIGKey",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded TSIGKey
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.Name != "my-key." {
+		t.Errorf("Name: got %s, want my-key.", decoded.Name)
+	}
+	if decoded.Algorithm != "hmac-sha256" {
+		t.Errorf("Algorithm: got %s, want hmac-sha256", decoded.Algorithm)
+	}
+	if decoded.Type != "TSIGKey" {
+		t.Errorf("Type: got %s, want TSIGKey", decoded.Type)
+	}
+}
+
+func TestTSIGKey_JSON_List(t *testing.T) {
+	original := []TSIGKey{
+		{Name: "key1.", ID: "key1.", Algorithm: "hmac-sha256", Key: "data1", Type: "TSIGKey"},
+		{Name: "key2.", ID: "key2.", Algorithm: "hmac-sha512", Key: "data2", Type: "TSIGKey"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded []TSIGKey
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(decoded))
+	}
+	if decoded[1].Algorithm != "hmac-sha512" {
+		t.Errorf("Algorithm[1]: got %s, want hmac-sha512", decoded[1].Algorithm)
+	}
+}

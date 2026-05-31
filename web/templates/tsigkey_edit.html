@@ -1,0 +1,39 @@
+{{define "tsigkey_edit.html"}}
+{{template "head" .}}
+<div class="app-layout">
+    {{template "sidebar" .}}
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <div>
+                    <a href="/tsigkeys" class="breadcrumb">TSIG Keys</a> / <h2>Edit {{.Key.Name}}</h2>
+                </div>
+            </div>
+
+            <div class="card">
+                <form method="POST" action="/tsigkeys/{{.Key.ID}}/update">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
+                    <div class="form-group">
+                        <label>Key Name</label>
+                        <input type="text" value="{{.Key.Name}}" disabled class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="algorithm">Algorithm</label>
+                        <select name="algorithm" id="algorithm" class="form-control" required>
+                            {{range .Algorithms}}
+                            <option value="{{.}}" {{if eq . $.Key.Algorithm}}selected{{end}}>{{.}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="key">Key Material (Base64)</label>
+                        <textarea name="key" id="key" class="form-control mono" rows="4" required>{{.Key.Key}}</textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Update Key</button>
+                </form>
+            </div>
+        </div>
+    </main>
+</div>
+{{template "tail" .}}
+{{end}}

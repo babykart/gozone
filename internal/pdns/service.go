@@ -34,6 +34,13 @@ type ZoneService interface {
 	GetMetadata(zoneID string) ([]models.Metadata, error)
 	SetMetadata(zoneID string, meta models.Metadata) error
 	DeleteMetadata(zoneID string, kind string) error
+
+	// TSIG Keys
+	ListTSIGKeys() ([]models.TSIGKey, error)
+	GetTSIGKey(id string) (*models.TSIGKey, error)
+	CreateTSIGKey(key models.TSIGKey) (*models.TSIGKey, error)
+	UpdateTSIGKey(id string, key models.TSIGKey) error
+	DeleteTSIGKey(id string) error
 }
 
 // Compile-time check that Client implements ZoneService.

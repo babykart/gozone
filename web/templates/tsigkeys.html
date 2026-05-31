@@ -1,0 +1,49 @@
+{{define "tsigkeys.html"}}
+{{template "head" .}}
+<div class="app-layout">
+    {{template "sidebar" .}}
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h2>TSIG Keys</h2>
+                <div class="header-actions">
+                    <a href="/tsigkeys/new" class="btn btn-primary">Add Key</a>
+                </div>
+            </div>
+
+            {{if .Keys}}
+            <div class="card">
+                <table class="table">
+                    <thead>
+                        <tr><th>Name</th><th>Algorithm</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        {{range .Keys}}
+                        <tr>
+                            <td><code>{{.Name}}</code></td>
+                            <td><span class="badge badge-type badge-type-tsig">{{.Algorithm}}</span></td>
+                            <td class="actions-cell">
+                                <a href="/tsigkeys/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
+                                <form method="POST" action="/tsigkeys/delete" style="display:inline" onsubmit="return confirm('Delete TSIG key {{.Name}}?')">
+                                    <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                                    <input type="hidden" name="key_id" value="{{.ID}}">
+                                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <div class="empty-state">
+                <h3>No TSIG keys</h3>
+                <p>Create a TSIG key to secure zone transfers and dynamic updates.</p>
+                <a href="/tsigkeys/new" class="btn btn-primary">Add Key</a>
+            </div>
+            {{end}}
+        </div>
+    </main>
+</div>
+{{template "tail" .}}
+{{end}}

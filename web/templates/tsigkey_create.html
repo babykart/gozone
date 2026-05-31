@@ -1,0 +1,41 @@
+{{define "tsigkey_create.html"}}
+{{template "head" .}}
+<div class="app-layout">
+    {{template "sidebar" .}}
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <div>
+                    <a href="/tsigkeys" class="breadcrumb">TSIG Keys</a> / <h2>Create TSIG Key</h2>
+                </div>
+            </div>
+
+            <div class="card">
+                <form method="POST" action="/tsigkeys/create">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
+                    <div class="form-group">
+                        <label for="name">Key Name</label>
+                        <input type="text" id="name" name="name" class="form-control" placeholder="my-key." required>
+                        <small class="form-hint">Must end with a dot (FQDN convention)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="algorithm">Algorithm</label>
+                        <select name="algorithm" id="algorithm" class="form-control" required>
+                            <option value="">Select algorithm...</option>
+                            {{range .Algorithms}}
+                            <option value="{{.}}">{{.}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="key">Key Material (Base64)</label>
+                        <textarea name="key" id="key" class="form-control mono" rows="4" placeholder="Base64-encoded key material" required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Key</button>
+                </form>
+            </div>
+        </div>
+    </main>
+</div>
+{{template "tail" .}}
+{{end}}
