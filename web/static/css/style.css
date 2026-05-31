@@ -187,6 +187,12 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-decoration: none;
+    color: inherit;
+}
+
+.sidebar-footer .username:hover {
+    color: var(--primary);
 }
 
 .sidebar-footer .btn-logout {
