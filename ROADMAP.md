@@ -23,6 +23,31 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - PowerDNS statistics cache (TTL 30 sec)
   - Invalidate cache on create/update/delete
 
+## DNSSEC
+
+- [ ] **Zone DNSSEC management**
+  - Enable/disable DNSSEC per zone
+  - View DNSSEC status (signed/unsigned) on zone page
+  - Display active and inactive keys (KSK/ZSK) with metadata (algorithm, size, DS)
+  - Activate/deactivate keys via PowerDNS API
+
+- [ ] **Key operations**
+  - Create new KSK and ZSK keys per zone
+  - Delete deactivated keys
+  - Set key active/inactive state
+  - Export DS/DNSKEY records for parent zone configuration
+
+- [ ] **DNSSEC algorithms**
+  - Support for common algorithms (ECDSAP256SHA256, RSASHA256, etc.)
+  - Display algorithm details in key table
+  - Algorithm selection when creating new keys
+
+- [ ] **Zone metadata for DNSSEC**
+  - `NSEC3PARAM` metadata configuration (opt-out, iterations, salt)
+  - `NSEC3NARROW` enable/disable via checkbox
+  - `PRESIGNED` flag for externally signed zones
+  - `PUBLISH-CDS` / `PUBLISH-CDNSKEY` controls
+
 ## Code Quality
 
 ### Cleanup
@@ -56,7 +81,15 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 ## Notes
 
 ### Known SQLite Limitations
+- No multi-writer support (hence `SetMaxOpenConns(1)`)
+- No native replication
+- No clustering
+- Limited to ~100 writes/second under load
+- Recommended only for development and small installations
+
+### Useful References
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [Go Security Checklist](https://github.com/guardrailsio/awesome-golang-security)
 - [PowerDNS API Documentation](https://doc.powerdns.com/authoritative/http-api/)
 - [RFC 1035 - Domain Names](https://tools.ietf.org/html/rfc1035)
+- [PowerDNS DNSSEC Guide](https://doc.powerdns.com/authoritative/dnssec/)
