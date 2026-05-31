@@ -14,10 +14,6 @@
         </form>
         <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
         {{if .IsAdmin}}
-        <form method="POST" action="/zones/{{.Zone.ID}}/rectify" style="display:inline">
-            <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
-            <button type="submit" class="btn btn-secondary">Rectify</button>
-        </form>
         <form method="POST" action="/zones/{{.Zone.ID}}/notify" style="display:inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Notify</button>
