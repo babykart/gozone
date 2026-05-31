@@ -34,23 +34,17 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 // CreateTSIGKeyPage renders the TSIG key creation form (GET /tsigkeys/new).
 func (h *Handler) CreateTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-
-	secret, err := generateTSIGSecret()
-	if err != nil {
-		h.renderError(w, r, "Failed to generate TSIG secret: "+err.Error())
-		return
-	}
-
 	data := map[string]interface{}{
-		"Title":        "Create TSIG Key - GoZone",
-		"User":         user,
-		"Algorithms":   tsigAlgorithms(),
-		"GeneratedKey": secret,
+		"Title":      "Create TSIG Key - GoZone",
+		"User":       user,
+		"Algorithms": tsigAlgorithms(),
 	}
 	h.render(w, r, "tsigkey_create.html", data)
 }
 
 // CreateTSIGKey creates a new TSIG key (POST /tsigkeys/create).
+// If the key material is left empty, a random 64-byte secret is
+// generated server-side before sending to PowerDNS.
 func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
@@ -72,8 +66,12 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if key == "" {
-		h.renderError(w, r, "Key material is required")
-		return
+		var err error
+		key, err = generateTSIGSecret()
+		if err != nil {
+			h.renderError(w, r, "Failed to generate TSIG secret: "+err.Error())
+			return
+		}
 	}
 
 	tsigKey, err := h.PDNS.CreateTSIGKey(models.TSIGKey{

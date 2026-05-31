@@ -27,13 +27,15 @@
                             {{end}}
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label for="key">Key Material (Base64)</label>
-                        <div class="input-row">
-                            <textarea name="key" id="key" class="form-control mono" rows="4" required>{{.GeneratedKey}}</textarea>
-                            <button type="button" class="btn btn-secondary" onclick="generateTSIGSecret()" style="align-self:flex-end">Regenerate</button>
+                    <details style="margin-top:1rem">
+                        <summary style="cursor:pointer;font-weight:600">Key Material (Base64) — optional</summary>
+                        <div class="form-group" style="margin-top:0.75rem">
+                            <div class="input-row">
+                                <textarea name="key" id="key" class="form-control mono" rows="4" placeholder="Leave empty to auto-generate"></textarea>
+                                <button type="button" class="btn btn-secondary" onclick="generateTSIGSecret()" style="align-self:flex-end">Generate</button>
+                            </div>
                         </div>
-                    </div>
+                    </details>
                     <button type="submit" class="btn btn-primary">Create Key</button>
                 </form>
             </div>

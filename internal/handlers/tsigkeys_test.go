@@ -70,31 +70,6 @@ func TestCreateTSIGKeyPage(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, "Create TSIG Key: ") {
-		t.Error("expected rendered template prefix")
-	}
-
-	// Extract the generated key from the response
-	key := strings.TrimPrefix(body, "Create TSIG Key: ")
-	key = strings.TrimSpace(key)
-	if len(key) == 0 {
-		t.Fatal("generated key should not be empty")
-	}
-	// html/template may have HTML-escaped + and / characters
-	key = strings.ReplaceAll(key, "&#43;", "+")
-	key = strings.ReplaceAll(key, "&#47;", "/")
-	key = strings.ReplaceAll(key, "&#61;", "=")
-
-	// Verify it's valid base64
-	decoded, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		t.Fatalf("generated key is not valid base64: %v\nraw key: %q", err, key)
-	}
-	if len(decoded) != 64 {
-		t.Errorf("expected 64-byte key, got %d bytes", len(decoded))
-	}
 }
 
 func TestCreateTSIGKey_Success(t *testing.T) {
@@ -172,7 +147,18 @@ func TestCreateTSIGKey_EmptyAlgorithm(t *testing.T) {
 }
 
 func TestCreateTSIGKey_EmptyKey(t *testing.T) {
-	h := newTestHandler(t)
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var req models.TSIGKey
+			json.NewDecoder(r.Body).Decode(&req)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(req)
+		}
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -183,8 +169,15 @@ func TestCreateTSIGKey_EmptyKey(t *testing.T) {
 	r = r.WithContext(ctx)
 	h.CreateTSIGKey(w, r)
 
-	if !strings.Contains(w.Body.String(), "Key material is required") {
-		t.Error("expected 'Key material is required' in error page")
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	// Verify activity log was created
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_tsigkey'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 activity log, got %d", count)
 	}
 }
 
