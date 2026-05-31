@@ -82,13 +82,15 @@ func TestCreateTSIGKeyPage(t *testing.T) {
 	if len(key) == 0 {
 		t.Fatal("generated key should not be empty")
 	}
-	if len(key) < 64 {
-		t.Errorf("expected base64 key of at least 64 chars, got %d chars: %q", len(key), key)
-	}
+	// html/template may have HTML-escaped + and / characters
+	key = strings.ReplaceAll(key, "&#43;", "+")
+	key = strings.ReplaceAll(key, "&#47;", "/")
+	key = strings.ReplaceAll(key, "&#61;", "=")
+
 	// Verify it's valid base64
 	decoded, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		t.Errorf("generated key is not valid base64: %v", err)
+		t.Fatalf("generated key is not valid base64: %v\nraw key: %q", err, key)
 	}
 	if len(decoded) != 64 {
 		t.Errorf("expected 64-byte key, got %d bytes", len(decoded))
