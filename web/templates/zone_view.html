@@ -51,11 +51,11 @@
             {{range .Records}}
             <tr>
                 <td>{{$rrset.Name}}</td>
-                <td><span class="badge badge-type badge-type-{{$rrset.Type}}">{{$rrset.Type}}</span></td>
+                <td class="nowrap"><span class="badge badge-type badge-type-{{$rrset.Type}}">{{$rrset.Type}}</span></td>
                 <td>{{.Content}}</td>
-                <td>{{$rrset.TTL}}</td>
-                <td>{{if .Priority}}{{.Priority}}{{else}}-{{end}}</td>
-                <td>{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</td>
+                <td class="nowrap">{{$rrset.TTL}}</td>
+                <td class="nowrap">{{if .Priority}}{{.Priority}}{{else}}-{{end}}</td>
+                <td class="nowrap">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</td>
                 <td class="actions-cell">
                     <a href="/zones/{{$zoneID}}/records/edit?name={{$rrset.Name}}&type={{$rrset.Type}}" class="btn btn-sm btn-secondary">Edit</a>
                     <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" onsubmit="return confirm('Delete record {{$rrset.Name}}?')">
