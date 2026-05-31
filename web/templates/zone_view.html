@@ -35,7 +35,7 @@
 
 {{if .Records}}
 <div class="card">
-    <table class="table">
+    <table class="table records-table">
         <thead>
             <tr>
                 <th>Name</th>
@@ -49,18 +49,35 @@
         </thead>
         <tbody>
             {{$zoneID := .Zone.ID}}
+            {{$csrf := .CSRFToken}}
             {{range .Records}}
             {{$rrset := .}}
             {{range .Records}}
-            <tr>
-                <td>{{$rrset.Name}}</td>
+            <tr data-name="{{$rrset.Name}}" data-type="{{$rrset.Type}}" data-disabled="{{.Disabled}}">
+                <td><span class="rv rv-name">{{$rrset.Name}}</span></td>
                 <td class="nowrap"><span class="badge badge-type badge-type-{{$rrset.Type}}">{{$rrset.Type}}</span></td>
-                <td>{{.Content}}</td>
-                <td class="nowrap">{{$rrset.TTL}}</td>
-                <td class="nowrap">{{if .Priority}}{{.Priority}}{{else}}-{{end}}</td>
-                <td class="nowrap">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</td>
+                <td>
+                    <span class="rv rv-content">{{.Content}}</span>
+                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
+                </td>
+                <td class="nowrap">
+                    <span class="rv rv-ttl">{{$rrset.TTL}}</span>
+                    <input type="number" class="ev ev-ttl form-control-inline" style="display:none" value="{{$rrset.TTL}}" min="0">
+                </td>
+                <td class="nowrap">
+                    <span class="rv rv-prio">{{if .Priority}}{{.Priority}}{{else}}-{{end}}</span>
+                    <input type="number" class="ev ev-prio form-control-inline" style="display:none" value="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" min="0">
+                </td>
+                <td class="nowrap">
+                    <span class="rv rv-status">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>
+                    <label class="ev ev-status" style="display:none"><input type="checkbox" class="ev-disabled" {{if .Disabled}}checked{{end}}> Disabled</label>
+                </td>
                 <td class="actions-cell">
-                    <a href="/zones/{{$zoneID}}/records/edit?name={{$rrset.Name}}&type={{$rrset.Type}}" class="btn btn-sm btn-secondary">Edit</a>
+                    <span class="rv"><button type="button" class="btn btn-sm btn-secondary" onclick="editRecordRow(this)">Edit</button></span>
+                    <span class="ev" style="display:none">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="saveRecordRow(this, '{{$zoneID}}', '{{$csrf}}')">Save</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="cancelEditRow(this)">Cancel</button>
+                    </span>
                     <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" onsubmit="return confirm('Delete record {{$rrset.Name}}?')">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="name" value="{{$rrset.Name}}">
@@ -113,7 +130,6 @@
 {{if .IsAdmin}}
 <div class="card" style="margin-top:2rem">
     <h3>Zone Metadata</h3>
-
     {{if .MetaData}}
     <table class="table">
         <thead>
@@ -143,7 +159,6 @@
     {{else}}
     <p class="empty-meta">No metadata set for this zone.</p>
     {{end}}
-
     <details style="margin-top:1rem">
         <summary style="cursor:pointer;font-weight:600">Add Metadata</summary>
         <form method="POST" action="/zones/{{.Zone.ID}}/metadata/create" style="margin-top:0.75rem">

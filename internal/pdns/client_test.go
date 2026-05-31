@@ -286,6 +286,30 @@ func TestCreateRecord(t *testing.T) {
 	}
 }
 
+func TestCreateRecords(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		var payload map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&payload)
+		rrsets, ok := payload["rrsets"].([]interface{})
+		if !ok || len(rrsets) != 2 {
+			t.Errorf("expected 2 rrsets in payload, got %v", payload)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	err := client.CreateRecords("example.com", []models.RRSet{
+		{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+		{Name: "mail.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.5"}}},
+	})
+	if err != nil {
+		t.Fatalf("CreateRecords failed: %v", err)
+	}
+}
+
 func TestDeleteRecord(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {

@@ -289,6 +289,17 @@ func (c *Client) DeleteRecord(zoneID string, name, recordType string) error {
 	return c.patchZone(zoneID, []models.RRSet{rrset})
 }
 
+// CreateRecords creates multiple RRSets in a zone in a single PATCH call.
+func (c *Client) CreateRecords(zoneID string, rrsets []models.RRSet) error {
+	if len(rrsets) == 0 {
+		return nil
+	}
+	for i := range rrsets {
+		rrsets[i].ChangeType = "REPLACE"
+	}
+	return c.patchZone(zoneID, rrsets)
+}
+
 func (c *Client) patchZone(zoneID string, rrsets []models.RRSet) error {
 	payload := map[string]interface{}{
 		"rrsets": rrsets,

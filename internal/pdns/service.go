@@ -23,6 +23,7 @@ type ZoneService interface {
 	// Records
 	ListRecords(zoneID string) ([]models.RRSet, error)
 	CreateRecord(zoneID string, rrset models.RRSet) error
+	CreateRecords(zoneID string, rrsets []models.RRSet) error
 	UpdateRecord(zoneID string, rrset models.RRSet) error
 	DeleteRecord(zoneID string, name, recordType string) error
 

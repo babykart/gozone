@@ -137,8 +137,10 @@ func main() {
 
 				r.Get("/zones/{zone_id}/records/new", h.CreateRecordPage)
 				r.Post("/zones/{zone_id}/records/create", h.CreateRecord)
+				r.Post("/zones/{zone_id}/records/batch-create", h.BatchCreateRecords)
 				r.Get("/zones/{zone_id}/records/edit", h.EditRecordPage)
 				r.Post("/zones/{zone_id}/records/update", h.UpdateRecord)
+				r.Post("/zones/{zone_id}/records/inline-update", h.InlineUpdateRecord)
 				r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
 			})
 

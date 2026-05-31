@@ -701,6 +701,26 @@ details summary {
     color: var(--text-muted);
 }
 
+.form-control-inline {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.form-control-inline:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.records-table td {
+    vertical-align: top;
+}
+
 .form-actions {
     display: flex;
     gap: 0.5rem;
