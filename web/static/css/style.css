@@ -431,6 +431,8 @@ body.sidebar-collapsed .main-content {
     padding: 0.75rem 1rem;
     text-align: left;
     border-bottom: 1px solid var(--border);
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .table th {
@@ -457,6 +459,10 @@ body.sidebar-collapsed .main-content {
 
 .table a:hover {
     text-decoration: underline;
+}
+
+.table .actions-cell {
+    white-space: nowrap;
 }
 
 /* Badges */
