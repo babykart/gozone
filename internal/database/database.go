@@ -119,11 +119,58 @@ func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 // migrate creates the initial schema using dialect-specific SQL.
+// It tracks applied migrations in the schema_migrations table to ensure
+// idempotent execution across restarts.
 func (db *DB) migrate() error {
-	for _, m := range db.dialect.Migrations() {
+	// Create the migration tracking table first (safe across all dialects)
+	if _, err := db.Conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+
+	// Detect upgrade from pre-migration-tracking version: if schema_migrations
+	// is empty but tables already exist, mark all current migrations as applied
+	// so they are not re-executed (which would fail on MySQL CREATE INDEX).
+	var recorded int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&recorded); err != nil {
+		return fmt.Errorf("check migration count: %w", err)
+	}
+	if recorded == 0 {
+		var exists int
+		if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&exists); err == nil && exists > 0 {
+			for i := range db.dialect.Migrations() {
+				version := fmt.Sprintf("v%03d", i)
+				if _, err := db.Conn.Exec(db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
+					return fmt.Errorf("record migration %s: %w", version, err)
+				}
+			}
+			logger.Info("existing database detected, marking all migrations as applied")
+			return nil
+		}
+	}
+
+	for i, m := range db.dialect.Migrations() {
+		version := fmt.Sprintf("v%03d", i)
+
+		var applied int
+		if err := db.Conn.QueryRow(db.dialect.Rebind("SELECT COUNT(*) FROM schema_migrations WHERE version = ?"), version).Scan(&applied); err != nil {
+			return fmt.Errorf("check migration %s: %w", version, err)
+		}
+		if applied > 0 {
+			continue
+		}
+
 		if _, err := db.Conn.Exec(m); err != nil {
 			return fmt.Errorf("migration failed: %w\nSQL: %s", err, m)
 		}
+
+		if _, err := db.Conn.Exec(db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
+			return fmt.Errorf("record migration %s: %w", version, err)
+		}
+
+		logger.Info("applied migration", "version", version)
 	}
 	logger.Info("migrations completed")
 	return nil

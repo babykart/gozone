@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -43,7 +44,7 @@ func TestNewInMemory(t *testing.T) {
 	}
 
 	// Verify tables exist
-	tables := []string{"users", "settings", "activity_logs", "api_keys"}
+	tables := []string{"users", "settings", "activity_logs", "api_keys", "schema_migrations"}
 	for _, table := range tables {
 		var name string
 		err := db.Conn.QueryRow(
@@ -80,9 +81,94 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Running migrate again should succeed
+	// Verify migration tracking table has recorded all migrations
+	var migrationCount int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		t.Fatalf("failed to query schema_migrations: %v", err)
+	}
+	expected := len(db.dialect.Migrations())
+	if migrationCount != expected {
+		t.Errorf("expected %d recorded migrations, got %d", expected, migrationCount)
+	}
+
+	// Running migrate again should succeed and not re-apply anything
 	if err := db.migrate(); err != nil {
 		t.Fatalf("second migrate failed: %v", err)
+	}
+
+	// Verify count hasn't changed
+	var afterCount int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&afterCount); err != nil {
+		t.Fatalf("failed to query schema_migrations: %v", err)
+	}
+	if afterCount != migrationCount {
+		t.Errorf("migration count changed after re-run: %d -> %d", migrationCount, afterCount)
+	}
+}
+
+func TestMigrate_UpgradeDetection(t *testing.T) {
+	// Simulate an existing database (pre-migration-tracking) by creating tables
+	// directly and then calling migrate() with the new code.
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	}
+
+	dialect := &sqliteDialect{}
+	dsn := dialect.DSN(cfg.DSN)
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	// Create the baseline tables manually (as if from old migration code)
+	baseline := []string{
+		`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, first_name TEXT NOT NULL DEFAULT '', last_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'user', enabled INTEGER NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
+		`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE IF NOT EXISTS activity_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, zone_id TEXT, action TEXT NOT NULL, details TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL)`,
+	}
+	for _, m := range baseline {
+		if _, err := conn.Exec(m); err != nil {
+			t.Fatalf("create baseline: %v", err)
+		}
+	}
+
+	// Wrap the raw conn in our DB type (bypassing New to avoid auto-migrate)
+	db := &DB{
+		Conn:    conn,
+		dialect: dialect,
+	}
+
+	// This should detect the existing database and pre-fill schema_migrations
+	if err := db.migrate(); err != nil {
+		t.Fatalf("migrate on existing database failed: %v", err)
+	}
+
+	var migrationCount int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		t.Fatalf("failed to query schema_migrations: %v", err)
+	}
+	expected := len(dialect.Migrations())
+	if migrationCount != expected {
+		t.Errorf("expected %d recorded migrations, got %d", expected, migrationCount)
+	}
+
+	// Verify all tables exist (should have been created during baseline)
+	tables := []string{"users", "settings", "activity_logs", "schema_migrations"}
+	for _, table := range tables {
+		var name string
+		err := db.Conn.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("table %s not found after upgrade migration: %v", table, err)
+		}
+	}
+
+	// Calling migrate again should be a no-op
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate on existing database failed: %v", err)
 	}
 }
 
