@@ -28,10 +28,10 @@
     <nav class="sidebar-nav">
         <a href="/dashboard" title="Dashboard" class="{{if eq $.Section "dashboard"}}active{{end}}"><span class="nav-icon">◈</span><span class="nav-text">Dashboard</span></a>
         <a href="/zones" title="Zones" class="{{if eq $.Section "zones"}}active{{end}}"><span class="nav-icon">⊙</span><span class="nav-text">Zones</span></a>
+        {{if .IsAdmin}}<a href="/tsigkeys" title="TSIG Keys" class="{{if eq $.Section "tsigkeys"}}active{{end}}"><span class="nav-icon">⊕</span><span class="nav-text">TSIG Keys</span></a>{{end}}
         <a href="/profile/api-keys" title="API Keys" class="{{if eq $.Section "apikeys"}}active{{end}}"><span class="nav-icon">⚷</span><span class="nav-text">API Keys</span></a>
         {{if .IsAdmin}}<a href="/users" title="Users" class="{{if eq $.Section "users"}}active{{end}}"><span class="nav-icon">⊞</span><span class="nav-text">Users</span></a>{{end}}
         {{if .IsAdmin}}<a href="/groups" title="Groups" class="{{if eq $.Section "groups"}}active{{end}}"><span class="nav-icon">⊡</span><span class="nav-text">Groups</span></a>{{end}}
-        {{if .IsAdmin}}<a href="/tsigkeys" title="TSIG Keys" class="{{if eq $.Section "tsigkeys"}}active{{end}}"><span class="nav-icon">⊕</span><span class="nav-text">TSIG Keys</span></a>{{end}}
     </nav>
     <div class="sidebar-footer">
         <a href="/profile" class="username">{{.User.Username}}</a>
