@@ -103,7 +103,18 @@ make vet   # go vet ./...
 
 ### Linting
 
-Currently the project runs `go vet`. Static analysis with `staticcheck`, `golangci-lint`, or `gosec` is also encouraged:
+Run `go vet` and `gosec` after every code change. All issues must be resolved before submitting a PR:
+
+```bash
+make vet     # or: just vet
+make gosec   # or: just gosec
+```
+
+- **`gosec` is mandatory** — every reported HIGH or MEDIUM severity issue must be fixed.
+- Use `// #nosec Gxxx` annotations only for intentional suppressions (e.g., HTTP response writes, timing side-channel mitigation) and document the reason inline.
+- Failures from `just test` or `just gosec` block a PR from being merged.
+
+Static analysis with `staticcheck` or `golangci-lint` is also encouraged but not required:
 
 ```bash
 # Install and run gosec (recommended)
@@ -291,6 +302,7 @@ refactor(pdns): [gozone] extract zone service interface
 make fmt
 make vet
 make test
+make gosec
 ```
 
 5. **Update documentation** if your change affects user-facing behavior:
@@ -322,7 +334,8 @@ Why is this needed? Link related issues.
 - [ ] godoc comments added for exported symbols
 - [ ] No hardcoded secrets or credentials
 - [ ] `go fmt ./... && go vet ./...` passes
-- [ ] `gosec ./...` passes with no HIGH/MEDIUM issues
+- [ ] `go test ./...` passes
+- [ ] `gosec ./...` passes with **zero** issues (use `// #nosec Gxxx` only with inline justification)
 ```
 
 ## Review Process
@@ -340,7 +353,7 @@ Why is this needed? Link related issues.
 - Ensure new functionality has corresponding tests
 - Confirm no secrets, hardcoded credentials, or sensitive data are present
 - Validate SQL queries use parameterized placeholders (no string concatenation)
-- Approve only when `go fmt ./... && go vet ./... && gosec ./...` and all tests pass
+- Approve only when `go fmt`, `go vet`, `go test ./...`, and `gosec ./...` pass with zero issues
 
 ### After Merge
 

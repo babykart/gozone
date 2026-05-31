@@ -23,6 +23,12 @@
 
 Write co-located `*_test.go` when adding code.
 
+## Security Analysis
+
+After any code change, run `just gosec` (or `make gosec`) and fix every issue reported before
+considering the task complete. Use `// #nosec Gxxx` annotations only for intentional suppressions
+(e.g. HTTP response writes, timing side-channel mitigation) and document the reason inline.
+
 ## Architecture
 
 - **Entrypoint**: `cmd/gozone/main.go` — wires chi router, loads config, seeds admin, starts server
