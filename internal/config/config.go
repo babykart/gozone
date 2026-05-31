@@ -26,6 +26,7 @@ type Config struct {
 	PowerDNS PowerDNSConfig `yaml:"powerdns"`
 	Auth     AuthConfig     `yaml:"auth"`
 	Logging  LoggingConfig  `yaml:"logging"`
+	Admin    AdminConfig    `yaml:"admin"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -68,6 +69,15 @@ type LoggingConfig struct {
 	Level string `yaml:"level"`
 }
 
+// AdminConfig holds default admin user settings used during database seeding.
+type AdminConfig struct {
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"`
+	Email     string `yaml:"email"`
+	FirstName string `yaml:"first_name"`
+	LastName  string `yaml:"last_name"`
+}
+
 // DefaultConfig returns a Config populated with sensible development defaults.
 //
 // The default admin credentials are admin/admin. Override via the YAML config
@@ -95,6 +105,13 @@ func DefaultConfig() *Config {
 		},
 		Logging: LoggingConfig{
 			Level: "info",
+		},
+		Admin: AdminConfig{
+			Username:  "admin",
+			Password:  "admin",
+			Email:     "admin@gozone.local",
+			FirstName: "Admin",
+			LastName:  "User",
 		},
 	}
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
@@ -204,6 +221,21 @@ func applyEnvOverrides(cfg *Config) {
 		} else {
 			cfg.Auth.SessionDurationHours = n
 		}
+	}
+	if v := os.Getenv("GOZONE_ADMIN_USERNAME"); v != "" {
+		cfg.Admin.Username = v
+	}
+	if v := os.Getenv("GOZONE_ADMIN_PASSWORD"); v != "" {
+		cfg.Admin.Password = v
+	}
+	if v := os.Getenv("GOZONE_ADMIN_EMAIL"); v != "" {
+		cfg.Admin.Email = v
+	}
+	if v := os.Getenv("GOZONE_ADMIN_FIRST_NAME"); v != "" {
+		cfg.Admin.FirstName = v
+	}
+	if v := os.Getenv("GOZONE_ADMIN_LAST_NAME"); v != "" {
+		cfg.Admin.LastName = v
 	}
 }
 

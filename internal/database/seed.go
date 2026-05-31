@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"os"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -12,8 +11,9 @@ import (
 
 // SeedAdminUser creates an admin user if no users exist in the database.
 //
-// The default credentials are admin/admin. The password can be overridden
-// via the GOZONE_ADMIN_PASSWORD environment variable.
+// The admin credentials are taken from cfg.Admin (username, password, email,
+// first_name, last_name). These can be configured via config.yaml or the
+// GOZONE_ADMIN_* environment variables.
 //
 // The bcrypt cost is taken from cfg.Auth.BcryptCost.
 //
@@ -27,12 +27,7 @@ func SeedAdminUser(db *DB, cfg *config.Config) error {
 		return nil
 	}
 
-	password := os.Getenv("GOZONE_ADMIN_PASSWORD")
-	if password == "" {
-		password = "admin"
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), cfg.Auth.BcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(cfg.Admin.Password), cfg.Auth.BcryptCost)
 	if err != nil {
 		return fmt.Errorf("seed admin: hash password: %w", err)
 	}
@@ -40,13 +35,14 @@ func SeedAdminUser(db *DB, cfg *config.Config) error {
 	_, err = db.Exec(
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		"admin", "admin@gozone.local", string(hash), "Admin", "User", "admin",
+		cfg.Admin.Username, cfg.Admin.Email, string(hash),
+		cfg.Admin.FirstName, cfg.Admin.LastName, "admin",
 	)
 	if err != nil {
 		return fmt.Errorf("seed admin: insert user: %w", err)
 	}
 
-	logger.Info("seeded admin user", "username", "admin")
+	logger.Info("seeded admin user", "username", cfg.Admin.Username)
 	logger.Warn("CHANGE THE DEFAULT ADMIN PASSWORD IMMEDIATELY")
 	return nil
 }

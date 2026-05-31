@@ -30,15 +30,24 @@ func TestSeedAdminUser_FirstStartup(t *testing.T) {
 		t.Errorf("expected 1 user, got %d", count)
 	}
 
-	var username, role string
+	var username, email, firstName, lastName, role string
 	var passwordHash string
 	if err := db.QueryRow(
-		"SELECT username, password_hash, role FROM users WHERE id=1",
-	).Scan(&username, &passwordHash, &role); err != nil {
+		"SELECT username, email, first_name, last_name, password_hash, role FROM users WHERE id=1",
+	).Scan(&username, &email, &firstName, &lastName, &passwordHash, &role); err != nil {
 		t.Fatal(err)
 	}
 	if username != "admin" {
 		t.Errorf("expected admin, got %s", username)
+	}
+	if email != "admin@gozone.local" {
+		t.Errorf("expected admin@gozone.local, got %s", email)
+	}
+	if firstName != "Admin" {
+		t.Errorf("expected Admin, got %s", firstName)
+	}
+	if lastName != "User" {
+		t.Errorf("expected User, got %s", lastName)
 	}
 	if role != "admin" {
 		t.Errorf("expected admin role, got %s", role)
@@ -88,7 +97,10 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 	os.Setenv("GOZONE_ADMIN_PASSWORD", "custom-secret")
 	defer os.Unsetenv("GOZONE_ADMIN_PASSWORD")
 
-	cfg := config.DefaultConfig()
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.Auth.BcryptCost = 4
 
 	if err := SeedAdminUser(db, cfg); err != nil {
@@ -108,5 +120,55 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("admin")); err == nil {
 		t.Error("default password should NOT match when env var is set")
+	}
+}
+
+func TestSeedAdminUser_CustomConfig(t *testing.T) {
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+	cfg.Admin.Username = "root"
+	cfg.Admin.Password = "custom-pass"
+	cfg.Admin.Email = "root@example.com"
+	cfg.Admin.FirstName = "Super"
+	cfg.Admin.LastName = "Admin"
+
+	if err := SeedAdminUser(db, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var username, email, firstName, lastName, role string
+	var passwordHash string
+	if err := db.QueryRow(
+		"SELECT username, email, first_name, last_name, password_hash, role FROM users WHERE id=1",
+	).Scan(&username, &email, &firstName, &lastName, &passwordHash, &role); err != nil {
+		t.Fatal(err)
+	}
+
+	if username != "root" {
+		t.Errorf("expected root, got %s", username)
+	}
+	if email != "root@example.com" {
+		t.Errorf("expected root@example.com, got %s", email)
+	}
+	if firstName != "Super" {
+		t.Errorf("expected Super, got %s", firstName)
+	}
+	if lastName != "Admin" {
+		t.Errorf("expected Admin, got %s", lastName)
+	}
+	if role != "admin" {
+		t.Errorf("expected admin role, got %s", role)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("custom-pass")); err != nil {
+		t.Errorf("password should match custom-pass: %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("admin")); err == nil {
+		t.Error("default password should NOT match when custom is set")
 	}
 }

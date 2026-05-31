@@ -25,6 +25,21 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Logging.Level != "info" {
 		t.Errorf("expected info, got %s", cfg.Logging.Level)
 	}
+	if cfg.Admin.Username != "admin" {
+		t.Errorf("expected admin, got %s", cfg.Admin.Username)
+	}
+	if cfg.Admin.Password != "admin" {
+		t.Errorf("expected admin, got %s", cfg.Admin.Password)
+	}
+	if cfg.Admin.Email != "admin@gozone.local" {
+		t.Errorf("expected admin@gozone.local, got %s", cfg.Admin.Email)
+	}
+	if cfg.Admin.FirstName != "Admin" {
+		t.Errorf("expected Admin, got %s", cfg.Admin.FirstName)
+	}
+	if cfg.Admin.LastName != "User" {
+		t.Errorf("expected User, got %s", cfg.Admin.LastName)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -36,6 +51,11 @@ database:
   dsn: "/tmp/test.db"
 auth:
   bcrypt_cost: 10
+admin:
+  username: "root"
+  email: "root@example.com"
+  first_name: "Root"
+  last_name: "Admin"
 `
 	tmpFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {
@@ -64,6 +84,18 @@ auth:
 	if cfg.Auth.BcryptCost != 10 {
 		t.Errorf("expected 10, got %d", cfg.Auth.BcryptCost)
 	}
+	if cfg.Admin.Username != "root" {
+		t.Errorf("expected root, got %s", cfg.Admin.Username)
+	}
+	if cfg.Admin.Email != "root@example.com" {
+		t.Errorf("expected root@example.com, got %s", cfg.Admin.Email)
+	}
+	if cfg.Admin.FirstName != "Root" {
+		t.Errorf("expected Root, got %s", cfg.Admin.FirstName)
+	}
+	if cfg.Admin.LastName != "Admin" {
+		t.Errorf("expected Admin, got %s", cfg.Admin.LastName)
+	}
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
@@ -75,6 +107,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_PDNS_API_KEY", "testkey")
 	t.Setenv("GOZONE_PDNS_SERVER_ID", "test-server")
 	t.Setenv("GOZONE_SESSION_DURATION", "48")
+	t.Setenv("GOZONE_ADMIN_USERNAME", "root")
+	t.Setenv("GOZONE_ADMIN_PASSWORD", "secret")
+	t.Setenv("GOZONE_ADMIN_EMAIL", "root@example.com")
+	t.Setenv("GOZONE_ADMIN_FIRST_NAME", "Root")
+	t.Setenv("GOZONE_ADMIN_LAST_NAME", "Admin")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -104,6 +141,21 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Auth.SessionDurationHours != 48 {
 		t.Errorf("expected 48, got %d", cfg.Auth.SessionDurationHours)
+	}
+	if cfg.Admin.Username != "root" {
+		t.Errorf("expected root, got %s", cfg.Admin.Username)
+	}
+	if cfg.Admin.Password != "secret" {
+		t.Errorf("expected secret, got %s", cfg.Admin.Password)
+	}
+	if cfg.Admin.Email != "root@example.com" {
+		t.Errorf("expected root@example.com, got %s", cfg.Admin.Email)
+	}
+	if cfg.Admin.FirstName != "Root" {
+		t.Errorf("expected Root, got %s", cfg.Admin.FirstName)
+	}
+	if cfg.Admin.LastName != "Admin" {
+		t.Errorf("expected Admin, got %s", cfg.Admin.LastName)
 	}
 }
 
