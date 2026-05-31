@@ -48,6 +48,68 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - `PRESIGNED` flag for externally signed zones
   - `PUBLISH-CDS` / `PUBLISH-CDNSKEY` controls
 
+## Export / Import
+
+- [ ] **Zone export in BIND format**
+  - Generate RFC 1035-compliant zone file from PowerDNS records
+  - Include `$ORIGIN`, `$TTL`, and SOA record header
+  - Support all record types (A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, etc.)
+  - Download as `.zone` file via button on zone view page
+  - Server-side generation in Go (no external tools)
+
+- [ ] **Zone export in CSV format**
+  - Export records as comma-separated values (name, type, content, ttl, priority, disabled)
+  - Download as `.csv` file via button on zone view page
+  - UTF-8 with BOM for Excel compatibility
+  - Optional filter by record type
+
+- [ ] **Import zone from BIND zone file**
+  - Parse RFC 1035 zone file with `$ORIGIN`, `$TTL`, `$INCLUDE` directives
+  - Validate all records before creation
+  - Create new zone or add records to existing zone via PowerDNS API
+  - Drag-and-drop or file picker in WebUI
+  - Support for multi-record RRsets
+
+- [ ] **Import zone from CSV file**
+  - Parse CSV with columns: name, type, content, ttl, priority, disabled
+  - Preview parsed records before import
+  - Create new zone or add records to existing zone
+  - Template download for CSV format reference
+
+- [ ] **Export / Import API endpoints**
+  - `GET /api/v1/servers/{server}/zones/{zone}/export?format=bind`
+  - `GET /api/v1/servers/{server}/zones/{zone}/export?format=csv`
+  - `POST /api/v1/servers/{server}/zones/{zone}/import?format=bind|csv`
+  - `POST /api/v1/servers/{server}/zones/import?format=bind|csv` (create new zone)
+  - Respect zone-level authorization (group access control)
+  - Set appropriate `Content-Type` headers (`text/plain`, `text/csv`)
+
+## Zone Templates
+
+- [ ] **Define reusable zone templates**
+  - Pre-populated record sets for common zone types (standard, mail, web, redirect)
+  - Custom templates with user-defined records
+  - Template variables (e.g. `{{IP}}`, `{{MX_HOST}}`, `{{TTL}}`)
+  - Template storage in local database (not PowerDNS)
+
+- [ ] **Template management UI**
+  - CRUD pages for templates (list, create, edit, delete)
+  - Visual record editor within template
+  - Preview records before applying template
+  - Clone existing zone as new template
+
+- [ ] **Apply template on zone creation**
+  - Select template from dropdown on zone create page
+  - Replace variables with user-provided values
+  - Batch-create all template records via PowerDNS API
+  - Option to apply template to existing zone
+
+- [ ] **Built-in templates**
+  - `standard` — SOA + NS records only
+  - `mail` — SOA + NS + MX + SPF + DKIM placeholders
+  - `web` — SOA + NS + A/AAAA + CNAME www
+  - `redirect` — SOA + NS + A + URL redirect record
+
 ## Code Quality
 
 ### Cleanup
