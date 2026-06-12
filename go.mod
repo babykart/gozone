@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/csrf v1.7.3
 	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.45
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 )
