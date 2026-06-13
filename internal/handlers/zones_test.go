@@ -967,3 +967,70 @@ func TestViewZone_SortOrder(t *testing.T) {
 		t.Error("apex MX should appear before admin/www (alpha subdomains)")
 	}
 }
+
+func TestSortZoneRecords(t *testing.T) {
+	zoneName := "example.com."
+	records := []models.RRSet{
+		{Name: "www.example.com.", Type: "A"},
+		{Name: "example.com.", Type: "NS"},
+		{Name: "example.com.", Type: "SOA"},
+		{Name: "example.com.", Type: "A"},
+		{Name: "ns1.example.com.", Type: "NS"},
+		{Name: "example.com.", Type: "MX"},
+	}
+
+	sortZoneRecords(records, zoneName)
+
+	expected := []struct {
+		name string
+		typ  string
+	}{
+		{"example.com.", "SOA"},
+		{"example.com.", "NS"},
+		{"ns1.example.com.", "NS"},
+		{"example.com.", "A"},
+		{"example.com.", "MX"},
+		{"www.example.com.", "A"},
+	}
+
+	if len(records) != len(expected) {
+		t.Fatalf("expected %d records, got %d", len(expected), len(records))
+	}
+	for i, want := range expected {
+		if records[i].Name != want.name || records[i].Type != want.typ {
+			t.Errorf("record %d: expected %s %s, got %s %s",
+				i, want.name, want.typ, records[i].Name, records[i].Type)
+		}
+	}
+}
+
+func TestSortZoneRecords_TwoNS(t *testing.T) {
+	// Regression for the strict-weak-ordering bug: comparing two NS records
+	// must not return true in both directions.
+	zoneName := "example.com."
+	records := []models.RRSet{
+		{Name: "ns2.example.com.", Type: "NS"},
+		{Name: "ns1.example.com.", Type: "NS"},
+	}
+
+	sortZoneRecords(records, zoneName)
+
+	if records[0].Name != "ns1.example.com." || records[1].Name != "ns2.example.com." {
+		t.Errorf("expected ns1 before ns2, got %v", records)
+	}
+}
+
+func TestSortZoneRecords_TwoSOA(t *testing.T) {
+	zoneName := "example.com."
+	records := []models.RRSet{
+		{Name: "example.com.", Type: "SOA"},
+		{Name: "example.com.", Type: "SOA"},
+	}
+
+	// Should not panic from invalid comparator.
+	sortZoneRecords(records, zoneName)
+
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+}

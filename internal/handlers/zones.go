@@ -306,34 +306,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sort records: SOA first, NS second, zone apex next, then alpha by name+type.
-	sort.SliceStable(records, func(i, j int) bool {
-		a, b := records[i], records[j]
-
-		if a.Type == "SOA" {
-			return true
-		}
-		if b.Type == "SOA" {
-			return false
-		}
-		if a.Type == "NS" {
-			return true
-		}
-		if b.Type == "NS" {
-			return false
-		}
-		aIsApex := a.Name == zone.Name
-		bIsApex := b.Name == zone.Name
-		if aIsApex && !bIsApex {
-			return true
-		}
-		if !aIsApex && bIsApex {
-			return false
-		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		return a.Type < b.Type
-	})
+	sortZoneRecords(records, zone.Name)
 
 	recordPage, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	recordPerPage := 10
@@ -542,6 +515,41 @@ func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, stat
 		"Message": msg,
 	}
 	h.render(w, r, "error.html", data)
+}
+
+// sortZoneRecords orders RRSets for display: SOA first, NS second, zone apex
+// next, then alphabetically by name and finally by type. The comparator is a
+// strict weak ordering: two records of the same priority are resolved by
+// name+type, never by returning true in both directions.
+func sortZoneRecords(records []models.RRSet, zoneName string) {
+	sort.SliceStable(records, func(i, j int) bool {
+		a, b := records[i], records[j]
+
+		if a.Type == "SOA" && b.Type != "SOA" {
+			return true
+		}
+		if b.Type == "SOA" && a.Type != "SOA" {
+			return false
+		}
+		if a.Type == "NS" && b.Type != "NS" {
+			return true
+		}
+		if b.Type == "NS" && a.Type != "NS" {
+			return false
+		}
+		aIsApex := a.Name == zoneName
+		bIsApex := b.Name == zoneName
+		if aIsApex && !bIsApex {
+			return true
+		}
+		if !aIsApex && bIsApex {
+			return false
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.Type < b.Type
+	})
 }
 
 // GetRecordTypes returns the list of common DNS record types.
