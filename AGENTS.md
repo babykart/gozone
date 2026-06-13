@@ -3,7 +3,7 @@
 ## Language & Framework
 
 - Go 1.26, chi v5 router, `html/template` server-side rendering
-- SQLite via mattn/go-sqlite3 — **CGO required** (`CGO_ENABLED=1`)
+- Multi-dialect SQL layer: SQLite (mattn/go-sqlite3), MySQL (go-sql-driver/mysql), PostgreSQL (lib/pq)
 - JWT (golang-jwt/jwt v5) + bcrypt for auth
 
 ## Build & Test
@@ -21,7 +21,7 @@
 | `make gosec` | `just gosec` | Run security static analysis |
 | `make update` | `just update` | Update all dependencies |
 
-Write co-located `*_test.go` when adding code.
+Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete.
 
 ## Security Analysis
 
@@ -31,22 +31,30 @@ considering the task complete. Use `// #nosec Gxxx` annotations only for intenti
 
 ## Architecture
 
-- **Entrypoint**: `cmd/gozone/main.go` — wires chi router, loads config, seeds admin, starts server
-- **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *sql.DB`, `PDNS *pdns.Client`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
+- **Entrypoint**: `cmd/gozone/main.go` — wires chi router, loads config, seeds admin, starts server via `run() error`
+- **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *database.DB`, `PDNS pdns.ZoneService`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
-- **Templates & static files**: embedded via `//go:embed *` in `web/embed.go`, loaded with `template.ParseFS`
-- **Database**: inline SQL migrations in `internal/database/database.go`. SQLite only, `SetMaxOpenConns(1)` — serialized writes
+- **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/gozone/main.go` and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`
+- **Database**: migrations in `internal/database/database.go` and dialect files; content-hash versioning with `Dialect.LockMigrations` for multi-instance safety; exposed via `*database.DB` with raw SQL and context-aware methods (`ExecContext`, `QueryContext`, `QueryRowContext`, `BeginTx`)
 - **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`)
+- **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface; generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
+- **Caching**: generic TTL cache in `internal/cache/cache.go`; `cachedClient` wraps `ZoneService` and caches zone lists, zone info, stats and server info; record mutations invalidate affected caches
+- **Errors**: `internal/errors.AppError` carries an HTTP status code and supports `Unwrap()` for compatibility with `errors.Is/As`
 
 ## Auth Patterns
 
 | Layer | Auth Method |
+|-------|-------------|
+| Web session | JWT cookie validated against DB on every request |
+| API | API key SHA-256 hash in `Authorization: Bearer <key>` header |
+| Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` |
 
 ## Key Constraints
 
-- **CGO must be enabled** for sqlite3 driver — cross-compilation needs `CGO_ENABLED=1` + C compiler
-- SQLite connection uses `SetMaxOpenConns(1)` — concurrent writes are serialized
+- **CGO must be enabled** for SQLite builds (`CGO_ENABLED=1`); MySQL/PostgreSQL builds can run with `CGO_ENABLED=0`
+- SQLite connection uses `SetMaxOpenConns(1)` — concurrent writes are serialized; not required for MySQL/PostgreSQL
 - No ORM — raw SQL queries throughout
+- All database methods support `context.Context`; legacy methods without context wrap `context.Background()`
 
 ## Commit convention
 
