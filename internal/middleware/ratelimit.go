@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
@@ -90,7 +92,7 @@ func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 			}
 
 			if !rl.allow(key) {
-				logger.Warn("rate limit exceeded", "key", key)
+				logger.Warn("rate limit exceeded", "key", maskKey(key))
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
@@ -101,6 +103,21 @@ func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// maskKey returns a non-reversible truncated SHA-256 hex hash of key.
+// It avoids logging raw API keys or IP addresses, matching the pattern
+// used in auth.go for key_hash logging.
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(key))
+	hash := hex.EncodeToString(h[:])
+	if len(hash) > 8 {
+		return hash[:8] + "..."
+	}
+	return hash
 }
 
 // ExtractIP returns the client IP from the request.

@@ -154,6 +154,19 @@ func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestMaskKey(t *testing.T) {
+	got := maskKey("secret-api-key")
+	if got == "secret-api-key" {
+		t.Error("maskKey must not return the raw key")
+	}
+	if len(got) != 11 {
+		t.Errorf("expected masked key length 11, got %d (%s)", len(got), got)
+	}
+	if got == maskKey("different-key") {
+		t.Error("maskKey should produce different outputs for different inputs")
+	}
+}
+
 func TestExtractIP(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "192.168.1.1:12345"
