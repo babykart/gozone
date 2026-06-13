@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -57,8 +57,23 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flash := r.URL.Query().Get("flash")
-	newKey := r.URL.Query().Get("new_key")
+	newKey := ""
 	errorMsg := r.URL.Query().Get("error")
+
+	if c, err := r.Cookie(constants.NewAPIKeyCookieName); err == nil && c.Value != "" {
+		newKey = c.Value
+		// Clear the one-time flash cookie immediately after reading it.
+		// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+		http.SetCookie(w, &http.Cookie{
+			Name:     constants.NewAPIKeyCookieName,
+			Value:    "",
+			Path:     "/profile/api-keys",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   isSecure(r),
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 
 	data := map[string]interface{}{
 		"Title":   "API Keys - GoZone",
@@ -115,7 +130,18 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/profile/api-keys?flash=created&new_key="+url.QueryEscape(rawKey), http.StatusSeeOther)
+	// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.NewAPIKeyCookieName,
+		Value:    rawKey,
+		Path:     "/profile/api-keys",
+		MaxAge:   60,
+		HttpOnly: true,
+		Secure:   isSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	http.Redirect(w, r, "/profile/api-keys?flash=created", http.StatusSeeOther)
 }
 
 func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {

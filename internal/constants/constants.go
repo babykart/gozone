@@ -3,7 +3,8 @@
 package constants
 
 const (
-	SessionCookieName = "gozone_session"
+	SessionCookieName   = "gozone_session"
+	NewAPIKeyCookieName = "gozone_new_api_key" // #nosec G101 -- cookie name, not a secret
 )
 
 const (

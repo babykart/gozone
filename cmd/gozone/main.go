@@ -351,9 +351,8 @@ func parseTemplates() *template.Template {
 	return tmpl
 }
 
-// requestLogger logs each HTTP request using r.RequestURI instead of
-// r.URL.String() to avoid logging absolute http:// URLs when behind a
-// reverse proxy that forwards requests with the original target.
+// requestLogger logs each HTTP request. It uses r.URL.Path instead of
+// r.RequestURI to avoid leaking query-string secrets (e.g., API keys) into logs.
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -361,7 +360,7 @@ func requestLogger(next http.Handler) http.Handler {
 		next.ServeHTTP(wr, r)
 		logger.Info("request",
 			"method", r.Method,
-			"path", r.RequestURI,
+			"path", r.URL.Path,
 			"status", wr.Status(),
 			"duration", time.Since(start).String(),
 			"remote", r.RemoteAddr,
