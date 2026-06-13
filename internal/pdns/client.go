@@ -94,36 +94,46 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}) 
 	return respBody, resp.StatusCode, nil
 }
 
-// GetServers returns the list of PowerDNS servers.
-func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
-	body, status, err := c.do(ctx, "GET", "/servers", nil)
+// doOK executes an HTTP request and checks only that the status is 2xx.
+// It is used for endpoints that return an empty body on success.
+func doOK(c *Client, ctx context.Context, method, path string, body interface{}) error {
+	respBody, status, err := c.do(ctx, method, path, body)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
+		return httpError(status, respBody)
 	}
+	return nil
+}
 
-	var servers []models.ServerInfo
-	if err := json.Unmarshal(body, &servers); err != nil {
-		return nil, fmt.Errorf("unmarshal servers: %w", err)
+// doUnmarshal executes an HTTP request, checks for a 2xx status, and
+// unmarshals the JSON response into a value of type T.
+func doUnmarshal[T any](c *Client, ctx context.Context, method, path string, body interface{}, desc string) (T, error) {
+	var zero T
+	respBody, status, err := c.do(ctx, method, path, body)
+	if err != nil {
+		return zero, err
 	}
-	return servers, nil
+	if status < 200 || status >= 300 {
+		return zero, httpError(status, respBody)
+	}
+	if err := json.Unmarshal(respBody, &zero); err != nil {
+		return zero, fmt.Errorf("unmarshal %s: %w", desc, err)
+	}
+	return zero, nil
+}
+
+// GetServers returns the list of PowerDNS servers.
+func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
+	return doUnmarshal[[]models.ServerInfo](c, ctx, "GET", "/servers", nil, "servers")
 }
 
 // GetServer returns a single server's info.
 func (c *Client) GetServer(ctx context.Context) (*models.ServerInfo, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID, nil)
+	server, err := doUnmarshal[models.ServerInfo](c, ctx, "GET", "/servers/"+c.serverID, nil, "server")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var server models.ServerInfo
-	if err := json.Unmarshal(body, &server); err != nil {
-		return nil, fmt.Errorf("unmarshal server: %w", err)
 	}
 	return &server, nil
 }
@@ -137,19 +147,7 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 
 // GetStatistics returns global PowerDNS statistics.
 func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/statistics", nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var stats []models.StatisticItem
-	if err := json.Unmarshal(body, &stats); err != nil {
-		return nil, fmt.Errorf("unmarshal statistics: %w", err)
-	}
-	return stats, nil
+	return doUnmarshal[[]models.StatisticItem](c, ctx, "GET", "/servers/"+c.serverID+"/statistics", nil, "statistics")
 }
 
 // ListZones returns all zones without their rrsets.
@@ -157,19 +155,7 @@ func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, err
 // ?rrsets=false prevents PowerDNS from including record sets in the response,
 // keeping the payload small regardless of zone size.
 func (c *Client) ListZones(ctx context.Context) ([]models.Zone, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/zones?rrsets=false", nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var zones []models.Zone
-	if err := json.Unmarshal(body, &zones); err != nil {
-		return nil, fmt.Errorf("unmarshal zones: %w", err)
-	}
-	return zones, nil
+	return doUnmarshal[[]models.Zone](c, ctx, "GET", "/servers/"+c.serverID+"/zones?rrsets=false", nil, "zones")
 }
 
 // ListZonesWithInfo returns all zones in a single request.
@@ -191,17 +177,9 @@ func (c *Client) ListZonesWithInfo(ctx context.Context) ([]models.ZoneWithInfo, 
 
 // GetZone returns a specific zone.
 func (c *Client) GetZone(ctx context.Context, zoneID string) (*models.Zone, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
+	zone, err := doUnmarshal[models.Zone](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil, "zone")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var zone models.Zone
-	if err := json.Unmarshal(body, &zone); err != nil {
-		return nil, fmt.Errorf("unmarshal zone: %w", err)
 	}
 	return &zone, nil
 }
@@ -215,48 +193,25 @@ func (c *Client) CreateZone(ctx context.Context, req models.ZoneCreateRequest) (
 		req.Nameservers = []string{}
 	}
 
-	body, status, err := c.do(ctx, "POST", "/servers/"+c.serverID+"/zones", req)
+	zone, err := doUnmarshal[models.Zone](c, ctx, "POST", "/servers/"+c.serverID+"/zones", req, "zone")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var zone models.Zone
-	if err := json.Unmarshal(body, &zone); err != nil {
-		return nil, fmt.Errorf("unmarshal zone: %w", err)
 	}
 	return &zone, nil
 }
 
 // DeleteZone deletes a zone.
 func (c *Client) DeleteZone(ctx context.Context, zoneID string) error {
-	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
 }
 
 // ListRecords returns all records (RRSets) for a zone.
 func (c *Client) ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
+	full, err := doUnmarshal[struct {
+		RRSets []models.RRSet `json:"rrsets"`
+	}](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil, "rrsets")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var full struct {
-		RRSets []models.RRSet `json:"rrsets"`
-	}
-	if err := json.Unmarshal(body, &full); err != nil {
-		return nil, fmt.Errorf("unmarshal rrsets: %w", err)
 	}
 	for i := range full.RRSets {
 		for j := range full.RRSets[i].Records {
@@ -307,56 +262,22 @@ func (c *Client) patchZone(ctx context.Context, zoneID string, rrsets []models.R
 	payload := map[string]interface{}{
 		"rrsets": rrsets,
 	}
-
-	body, status, err := c.do(ctx, "PATCH", "/servers/"+c.serverID+"/zones/"+zoneID, payload)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PATCH", "/servers/"+c.serverID+"/zones/"+zoneID, payload)
 }
 
 // RectifyZone triggers DNSSEC rectification for a zone.
 func (c *Client) RectifyZone(ctx context.Context, zoneID string) error {
-	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/rectify", nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/rectify", nil)
 }
 
 // NotifySlaves sends NOTIFY to slave servers for a zone.
 func (c *Client) NotifySlaves(ctx context.Context, zoneID string) error {
-	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/notify", nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/notify", nil)
 }
 
 // GetMetadata returns all zone metadata entries.
 func (c *Client) GetMetadata(ctx context.Context, zoneID string) ([]models.Metadata, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata", nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var metadata []models.Metadata
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, fmt.Errorf("unmarshal metadata: %w", err)
-	}
-	return metadata, nil
+	return doUnmarshal[[]models.Metadata](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata", nil, "metadata")
 }
 
 // SetMetadata creates or replaces a zone metadata entry.
@@ -367,26 +288,12 @@ func (c *Client) SetMetadata(ctx context.Context, zoneID string, meta models.Met
 		meta.Metadata = []string{}
 	}
 	payload := map[string][]string{"metadata": meta.Metadata}
-	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+meta.Kind, payload)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+meta.Kind, payload)
 }
 
 // DeleteMetadata removes a zone metadata entry by kind.
 func (c *Client) DeleteMetadata(ctx context.Context, zoneID string, kind string) error {
-	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+kind, nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+kind, nil)
 }
 
 // ServerID returns the configured server ID.
@@ -396,77 +303,35 @@ func (c *Client) ServerID() string {
 
 // ListTSIGKeys returns all TSIG keys for the server.
 func (c *Client) ListTSIGKeys(ctx context.Context) ([]models.TSIGKey, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/tsigkeys", nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var keys []models.TSIGKey
-	if err := json.Unmarshal(body, &keys); err != nil {
-		return nil, fmt.Errorf("unmarshal tsigkeys: %w", err)
-	}
-	return keys, nil
+	return doUnmarshal[[]models.TSIGKey](c, ctx, "GET", "/servers/"+c.serverID+"/tsigkeys", nil, "tsigkeys")
 }
 
 // GetTSIGKey returns a single TSIG key.
 func (c *Client) GetTSIGKey(ctx context.Context, id string) (*models.TSIGKey, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
+	key, err := doUnmarshal[models.TSIGKey](c, ctx, "GET", "/servers/"+c.serverID+"/tsigkeys/"+id, nil, "tsigkey")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var key models.TSIGKey
-	if err := json.Unmarshal(body, &key); err != nil {
-		return nil, fmt.Errorf("unmarshal tsigkey: %w", err)
 	}
 	return &key, nil
 }
 
 // CreateTSIGKey creates a new TSIG key.
 func (c *Client) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models.TSIGKey, error) {
-	body, status, err := c.do(ctx, "POST", "/servers/"+c.serverID+"/tsigkeys", key)
+	created, err := doUnmarshal[models.TSIGKey](c, ctx, "POST", "/servers/"+c.serverID+"/tsigkeys", key, "tsigkey")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var created models.TSIGKey
-	if err := json.Unmarshal(body, &created); err != nil {
-		return nil, fmt.Errorf("unmarshal tsigkey: %w", err)
 	}
 	return &created, nil
 }
 
 // UpdateTSIGKey updates an existing TSIG key.
 func (c *Client) UpdateTSIGKey(ctx context.Context, id string, key models.TSIGKey) error {
-	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
 }
 
 // DeleteTSIGKey deletes a TSIG key.
 func (c *Client) DeleteTSIGKey(ctx context.Context, id string) error {
-	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
 }
 
 // --- DNSSEC Cryptokeys ---
@@ -479,19 +344,7 @@ type createCryptoRequest struct {
 
 // ListCryptokeys returns all DNSSEC keys for a zone.
 func (c *Client) ListCryptokeys(ctx context.Context, zoneID string) ([]models.Cryptokey, error) {
-	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var keys []models.Cryptokey
-	if err := json.Unmarshal(body, &keys); err != nil {
-		return nil, fmt.Errorf("unmarshal cryptokeys: %w", err)
-	}
-	return keys, nil
+	return doUnmarshal[[]models.Cryptokey](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", nil, "cryptokeys")
 }
 
 // CreateCryptokey creates a new DNSSEC key for a zone.
@@ -501,17 +354,9 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 		Active:    active,
 		Algorithm: algorithm,
 	}
-	body, status, err := c.do(ctx, "POST", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", req)
+	key, err := doUnmarshal[models.Cryptokey](c, ctx, "POST", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", req, "cryptokey")
 	if err != nil {
 		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(status, body)
-	}
-
-	var key models.Cryptokey
-	if err := json.Unmarshal(body, &key); err != nil {
-		return nil, fmt.Errorf("unmarshal cryptokey: %w", err)
 	}
 	return &key, nil
 }
@@ -519,26 +364,12 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 // ToggleCryptokey activates or deactivates a DNSSEC key.
 func (c *Client) ToggleCryptokey(ctx context.Context, zoneID string, keyID int, active bool) error {
 	payload := map[string]interface{}{"active": active}
-	body, status, err := c.do(ctx, "PUT", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), payload)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "PUT", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), payload)
 }
 
 // DeleteCryptokey deletes a DNSSEC key from a zone.
 func (c *Client) DeleteCryptokey(ctx context.Context, zoneID string, keyID int) error {
-	body, status, err := c.do(ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status >= 300 {
-		return httpError(status, body)
-	}
-	return nil
+	return doOK(c, ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
 }
 
 // InvalidateZoneCache is a no-op on the bare Client (no cache layer).

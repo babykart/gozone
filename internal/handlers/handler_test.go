@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,54 @@ func newTestDB(t *testing.T) *database.DB {
 	return testutil.NewTestDB(t)
 }
 
+// testTemplateSet returns a minimal shared template set for unit tests. It
+// defines every template used by the handlers so tests don't need to parse the
+// real embedded templates.
+func testTemplateSet() *template.Template {
+	funcMap := template.FuncMap{
+		"add":      func(a, b int) int { return a + b },
+		"sub":      func(a, b int) int { return a - b },
+		"urlquery": func(s string) string { return s },
+		"dict": func(values ...interface{}) (map[string]interface{}, error) {
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("dict expects an even number of arguments")
+			}
+			dict := make(map[string]interface{}, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict keys must be strings")
+				}
+				dict[key] = values[i+1]
+			}
+			return dict, nil
+		},
+	}
+	return template.Must(template.New("test").Funcs(funcMap).Parse(`
+		{{define "error.html"}}Error: {{.Message}}{{end}}
+		{{define "login.html"}}Login{{end}}
+		{{define "dashboard.html"}}Dashboard{{end}}
+		{{define "zones.html"}}Zones{{end}}
+		{{define "zone_create.html"}}Create Zone{{end}}
+		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{range .Records}}{{.Content}} {{end}}{{end}}{{end}}
+		{{define "record_create.html"}}Create Record{{end}}
+		{{define "record_edit.html"}}Edit Record{{end}}
+		{{define "users.html"}}Users{{end}}
+		{{define "user_create.html"}}Create User{{end}}
+		{{define "user_edit.html"}}Edit User{{end}}
+		{{define "profile.html"}}Profile{{end}}
+		{{define "api_keys.html"}}API Keys{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{end}}
+		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
+		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}
+		{{define "tsigkeys.html"}}TSIG Keys{{end}}
+		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
+		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
+		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{end}}
+		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
+		{{define "dnssec.html"}}DNSSEC: {{.Zone.Name}} Keys: {{range .Keys}}{{.ID}}:{{.Active}}:{{.KeyType}} {{end}}{{end}}
+	`))
+}
+
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
 	_, pdnsClient := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -26,34 +75,11 @@ func newTestHandler(t *testing.T) *Handler {
 	})
 	db := newTestDB(t)
 
-	tmpl := template.Must(template.New("test").Parse(`
-		{{define "error.html"}}Error: {{.Message}}{{end}}
-		{{define "login.html"}}Login{{end}}
-		{{define "dashboard.html"}}Dashboard{{end}}
-		{{define "zones.html"}}Zones{{end}}
-		{{define "zone_create.html"}}Create Zone{{end}}
-		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{range .Records}}{{.Content}} {{end}}{{end}}{{end}}
-		{{define "record_create.html"}}Create Record{{end}}
-		{{define "record_edit.html"}}Edit Record{{end}}
-		{{define "users.html"}}Users{{end}}
-		{{define "user_create.html"}}Create User{{end}}
-		{{define "user_edit.html"}}Edit User{{end}}
-		{{define "profile.html"}}Profile{{end}}
-		{{define "api_keys.html"}}API Keys{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{end}}
-		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
-		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}
-		{{define "tsigkeys.html"}}TSIG Keys{{end}}
-		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
-		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
-		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{end}}
-		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
-	`))
-
 	return &Handler{
 		DB:   db,
 		PDNS: pdnsClient,
 		Cfg:  config.DefaultConfig(),
-		Tmpl: tmpl,
+		Tmpl: testTemplateSet(),
 	}
 }
 
@@ -62,34 +88,11 @@ func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Ha
 	srv, client := testutil.NewTestPDNSServer(t, handler)
 	db := newTestDB(t)
 
-	tmpl := template.Must(template.New("test").Parse(`
-		{{define "error.html"}}Error: {{.Message}}{{end}}
-		{{define "login.html"}}Login{{end}}
-		{{define "dashboard.html"}}Dashboard{{end}}
-		{{define "zones.html"}}Zones{{end}}
-		{{define "zone_create.html"}}Create Zone{{end}}
-		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{range .Records}}{{.Content}} {{end}}{{end}}{{end}}
-		{{define "record_create.html"}}Create Record{{end}}
-		{{define "record_edit.html"}}Edit Record{{end}}
-		{{define "users.html"}}Users{{end}}
-		{{define "user_create.html"}}Create User{{end}}
-		{{define "user_edit.html"}}Edit User{{end}}
-		{{define "profile.html"}}Profile{{end}}
-		{{define "api_keys.html"}}API Keys{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{end}}
-		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
-		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}
-		{{define "tsigkeys.html"}}TSIG Keys{{end}}
-		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
-		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
-		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{end}}
-		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
-	`))
-
 	return &Handler{
 		DB:   db,
 		PDNS: client,
 		Cfg:  config.DefaultConfig(),
-		Tmpl: tmpl,
+		Tmpl: testTemplateSet(),
 	}, srv
 }
 

@@ -355,6 +355,20 @@ func parseTemplates() (*template.Template, error) {
 		"sub":          func(a, b int) int { return a - b },
 		"urlquery":     url.QueryEscape,
 		"relativeName": relativeName,
+		"dict": func(values ...interface{}) (map[string]interface{}, error) {
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("dict expects an even number of arguments")
+			}
+			dict := make(map[string]interface{}, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict keys must be strings")
+				}
+				dict[key] = values[i+1]
+			}
+			return dict, nil
+		},
 	}
 	tmpl, err := template.New("base").Funcs(funcMap).ParseFS(web.FS, "templates/*.html")
 	if err != nil {

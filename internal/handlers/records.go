@@ -183,71 +183,18 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
-	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
+	rrset, err := h.updateRecordFromForm(r)
 	if err != nil {
-		h.renderInternalError(w, r, "Invalid record form", err)
-		return
-	}
-	if name == "" || recordType == "" || content == "" {
-		h.renderError(w, r, "Name, type, and content are required")
-		return
-	}
-
-	originalContent := strings.TrimSpace(r.FormValue("original_content"))
-	originalPriority, _ := strconv.Atoi(r.FormValue("original_priority"))
-
-	name = normalizeRecordName(name, zoneID)
-
-	if err := validators.ValidateRecordName(name); err != nil {
-		h.renderError(w, r, "Invalid record name: "+err.Error())
-		return
-	}
-
-	if err := validators.ValidateRecordType(recordType); err != nil {
-		h.renderError(w, r, "Invalid record type: "+err.Error())
-		return
-	}
-
-	if err := validators.ValidateRecordContent(recordType, content); err != nil {
-		h.renderError(w, r, "Invalid record content: "+err.Error())
-		return
-	}
-
-	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
-	if err != nil {
-		h.renderInternalError(w, r, "Failed to fetch existing records", err)
-		return
-	}
-
-	var existingRRSet *models.RRSet
-	for _, rr := range allRecords {
-		if rr.Name == name && rr.Type == recordType {
-			existingRRSet = &rr
-			break
+		switch e := err.(type) {
+		case *recordValidationError:
+			h.renderError(w, r, e.Message)
+		default:
+			h.renderInternalError(w, r, "Failed to update record", err)
 		}
+		return
 	}
 
-	var updatedRecords []models.RecordInfo
-	if existingRRSet != nil {
-		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
-			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
-	} else {
-		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
-	}
-
-	for i := range updatedRecords {
-		updatedRecords[i].Content, updatedRecords[i].Priority =
-			prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
-	}
-
-	rrset := models.RRSet{
-		Name:    name,
-		Type:    recordType,
-		TTL:     ttl,
-		Records: updatedRecords,
-	}
-
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
+	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
 		h.renderInternalError(w, r, "Failed to update record", err)
 		return
 	}
@@ -255,7 +202,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	if _, err := h.DB.Exec(
 		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
-		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", recordType, name),
+		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
 	); err != nil {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
@@ -272,14 +219,56 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
-	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
+	rrset, err := h.updateRecordFromForm(r)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		switch e := err.(type) {
+		case *recordValidationError:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.Message})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
+		}
 		return
 	}
-	if name == "" || recordType == "" || content == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Name, type, and content are required"})
+
+	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 		return
+	}
+
+	user := middleware.GetUser(r)
+	if _, err := h.DB.Exec(
+		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
+		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
+	); err != nil {
+		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"record":  rrset,
+	})
+}
+
+// recordValidationError marks an input validation failure so callers can
+// choose the appropriate response format (HTML page vs JSON).
+type recordValidationError struct {
+	Message string
+}
+
+func (e *recordValidationError) Error() string { return e.Message }
+
+// updateRecordFromForm parses and validates a record update request, builds the
+// merged RRSet and returns it. It is shared by UpdateRecord and
+// InlineUpdateRecord.
+func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, error) {
+	zoneID := r.PathValue("zone_id")
+
+	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
+	if err != nil {
+		return nil, fmt.Errorf("invalid record form: %w", err)
+	}
+	if name == "" || recordType == "" || content == "" {
+		return nil, &recordValidationError{Message: "Name, type, and content are required"}
 	}
 
 	originalContent := strings.TrimSpace(r.FormValue("original_content"))
@@ -288,24 +277,20 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	name = normalizeRecordName(name, zoneID)
 
 	if err := validators.ValidateRecordName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record name: " + err.Error()})
-		return
+		return nil, &recordValidationError{Message: "Invalid record name: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record type: " + err.Error()})
-		return
+		return nil, &recordValidationError{Message: "Invalid record type: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordContent(recordType, content); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record content: " + err.Error()})
-		return
+		return nil, &recordValidationError{Message: "Invalid record content: " + err.Error()}
 	}
 
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to fetch existing records"})
-		return
+		return nil, err
 	}
 
 	var existingRRSet *models.RRSet
@@ -329,30 +314,12 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 			prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
 	}
 
-	rrset := models.RRSet{
+	return &models.RRSet{
 		Name:    name,
 		Type:    recordType,
 		TTL:     ttl,
 		Records: updatedRecords,
-	}
-
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
-		return
-	}
-
-	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
-		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", recordType, name),
-	); err != nil {
-		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"record":  rrset,
-	})
+	}, nil
 }
 
 // BatchCreateRecords creates multiple DNS records in a zone (POST /zones/{zone_id}/records/batch-create).

@@ -53,6 +53,23 @@ func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
 	return items[start:end], PageInfo{Current: page, PerPage: perPage, TotalPages: totalPages, Total: total}
 }
 
+// parsePaginationParams extracts the page and perPage query parameters.
+// page defaults to 1 if missing or invalid; perPage uses the provided default
+// unless a valid non-negative value is supplied.
+func parsePaginationParams(r *http.Request, defaultPerPage int) (page, perPage int) {
+	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage = defaultPerPage
+	if pp := r.URL.Query().Get("perPage"); pp != "" {
+		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
+			perPage = n
+		}
+	}
+	return page, perPage
+}
+
 // ListZones renders the zones listing page with record counts per zone (GET /zones).
 func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
@@ -83,13 +100,7 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	perPage := 10
-	if pp := r.URL.Query().Get("perPage"); pp != "" {
-		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
-			perPage = n
-		}
-	}
+	page, perPage := parsePaginationParams(r, 10)
 	paginated, pageInfo := paginate(zones, page, perPage)
 
 	data := map[string]interface{}{
@@ -308,13 +319,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	// Sort records: SOA first, NS second, zone apex next, then alpha by name+type.
 	sortZoneRecords(records, zone.Name)
 
-	recordPage, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	recordPerPage := 10
-	if pp := r.URL.Query().Get("perPage"); pp != "" {
-		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
-			recordPerPage = n
-		}
-	}
+	recordPage, recordPerPage := parsePaginationParams(r, 10)
 	paginatedRecords, recordPageInfo := paginate(records, recordPage, recordPerPage)
 
 	logs := h.getZoneActivityLogs(zoneID)

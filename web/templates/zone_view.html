@@ -85,33 +85,8 @@
         </tbody>
     </table>
     </div>
-{{if gt .RecordPageInfo.TotalPages 1}}
-<div class="pagination">
-    <a href="?page={{sub .RecordPageInfo.Current 1}}&perPage={{.RecordPageInfo.PerPage}}{{if $.Search}}&search={{$.Search | urlquery}}{{end}}" class="btn btn-sm btn-secondary{{if eq .RecordPageInfo.Current 1}} disabled{{end}}">← Previous</a>
-    <span class="page-info">Page {{.RecordPageInfo.Current}} / {{.RecordPageInfo.TotalPages}} ({{.RecordPageInfo.Total}} records)</span>
-    <a href="?page={{add .RecordPageInfo.Current 1}}&perPage={{.RecordPageInfo.PerPage}}{{if $.Search}}&search={{$.Search | urlquery}}{{end}}" class="btn btn-sm btn-secondary{{if eq .RecordPageInfo.Current .RecordPageInfo.TotalPages}} disabled{{end}}">Next →</a>
-    <select class="per-page-select" onchange="var s=document.querySelector('input[name=search]');var q='?perPage='+this.value;if(s&&s.value)q+='&search='+encodeURIComponent(s.value);window.location.href=q">
-        <option value="10" {{if eq .RecordPageInfo.PerPage 10}}selected{{end}}>10</option>
-        <option value="20" {{if eq .RecordPageInfo.PerPage 20}}selected{{end}}>20</option>
-        <option value="30" {{if eq .RecordPageInfo.PerPage 30}}selected{{end}}>30</option>
-        <option value="40" {{if eq .RecordPageInfo.PerPage 40}}selected{{end}}>40</option>
-        <option value="50" {{if eq .RecordPageInfo.PerPage 50}}selected{{end}}>50</option>
-        <option value="0" {{if eq .RecordPageInfo.PerPage 0}}selected{{end}}>All</option>
-    </select>
-</div>
-{{else}}
 {{if .Records}}
-<div class="pagination">
-    <select class="per-page-select" onchange="var s=document.querySelector('input[name=search]');var q='?perPage='+this.value;if(s&&s.value)q+='&search='+encodeURIComponent(s.value);window.location.href=q">
-        <option value="10" {{if eq .RecordPageInfo.PerPage 10}}selected{{end}}>10</option>
-        <option value="20" {{if eq .RecordPageInfo.PerPage 20}}selected{{end}}>20</option>
-        <option value="30" {{if eq .RecordPageInfo.PerPage 30}}selected{{end}}>30</option>
-        <option value="40" {{if eq .RecordPageInfo.PerPage 40}}selected{{end}}>40</option>
-        <option value="50" {{if eq .RecordPageInfo.PerPage 50}}selected{{end}}>50</option>
-        <option value="0" {{if eq .RecordPageInfo.PerPage 0}}selected{{end}}>All</option>
-    </select>
-</div>
-{{end}}
+{{template "pagination.html" dict "PageInfo" .RecordPageInfo "Search" .Search "Label" "records"}}
 {{end}}
 </div>
 {{else}}
