@@ -16,14 +16,14 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 ## Component Diagram
 
 ```
-                         Client
-                           │
-         ┌─────────────────┴─────────────────┐
-         │                                   │
-   Web Browser                         REST Client
-   (JWT cookie)                      (X-API-Key)
-         │                                   │
-         ▼                                   ▼
+                          Client
+                            │
+          ┌─────────────────┴─────────────────┐
+          │                                   │
+    Web Browser                         REST Client
+    (JWT cookie)            (X-API-Key or Authorization: Bearer)
+          │                                   │
+          ▼                                   ▼
 ┌────────────────────────────────────────────────────┐
 │                chi Router (chi v5)                 │
 │                                                    │
@@ -31,22 +31,23 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 │  │ Public   │  │  Web UI Group │  │ API v1 Group│  │
 │  │ routes   │  │  (Auth MW)    │  │(APIKey MW)  │  │
 │  └──────────┘  └───────────────┘  └─────────────┘  │
-└──────────────────────┬─────────────────────────────┘
-                       │
-                ┌──────▼───────┐
-                │   Handlers   │
-                │(Handler str.)│
-                └──┬-─────┬─-──┘
-                   │      │
-     ┌─────────────▼─┐ ┌──▼──────────────┐
-     │  SQLite DB    │ │  PowerDNS API   │
-     │ (internal/db) │ │  (internal/pdns)│
-     └───────────────┘ └──┬──────────────┘
-                          │
-                   ┌──────▼───────┐
-                   │  PowerDNS    │
-                   │ Authoritative│
-                   └──────────────┘
+└──────────────────────-┬────────────────────────────┘
+                        │
+                 ┌──────▼───────┐
+                 │   Handlers   │
+                 │(Handler str.)│
+                 └──┬-─────┬─-──┘
+                    │      │
+      ┌─────────────▼─┐ ┌──▼──────────────┐
+      │  Configured   │ │  PowerDNS API   │
+      │  SQL Database │ │  (internal/pdns)│
+      │(internal/db)  │ │                 │
+      └───────────────┘ └──┬──────────────┘
+                           │
+                    ┌──────▼───────┐
+                    │  PowerDNS    │
+                    │ Authoritative│
+                    └──────────────┘
 ```
 
 ## Package Overview
@@ -55,21 +56,25 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 cmd/gozone/       Application entry point, wiring, and route registration
 
 internal/
+  cache/          Generic TTL cache with background eviction
   config/         YAML configuration loading with GOZONE_ env var overrides
-  database/       SQLite connection management and schema migrations
+  constants/      Application constants
+  database/       Multi-dialect SQL layer (SQLite/MySQL/PostgreSQL), migrations, seeding
+  errors/         HTTP-aware application errors with Unwrap support
   handlers/       HTTP handlers for Web UI, REST API, and health checks
-  middleware/     JWT authentication, API key auth, admin guard, user context
+  middleware/     JWT authentication, API key auth, admin guard, user context, rate limiting
   models/         Shared data structures and JSON serialization
-  pdns/           PowerDNS Authoritative Server REST API client
+  pdns/           PowerDNS Authoritative Server REST API client and ZoneService interface
+  validators/     DNS and input validation helpers
 ```
 
 ### Dependency Graph
 
 ```
 cmd/gozone ──► config, database, handlers, middleware, pdns
-handlers   ──► middleware, models, pdns
-middleware ──► models
-pdns       ──► config, models
+handlers   ──► middleware, models, pdns, cache, validators, errors
+middleware ──► models, database
+pdns       ──► config, models, errors
 database   ──► config
 ```
 
@@ -77,25 +82,29 @@ database   ──► config
 
 | Layer | Role |
 |-------|------|
-| `cmd/gozone` | Application bootstrap: load config, open DB, create PDNS client, seed admin user, parse templates, register routes, start HTTP server |
+| `cmd/gozone` | Application bootstrap: load config, open DB, create PDNS client, seed admin user, parse templates, register routes, start HTTP server via `run() error` |
 | `handlers` | Business logic for each endpoint: parse input, call PDNS client, log activity, render templates or write JSON |
-| `pdns` | HTTP client for PowerDNS REST API: zone CRUD, record management, DNSSEC rectification, statistics |
-| `middleware` | Request pipeline: extract JWT/API key, load user from DB, inject into context, enforce admin role |
-| `database` | Connection factory with DSN validation, schema migrations, connection pool config |
+| `pdns` | HTTP client for PowerDNS REST API: zone CRUD, record management, DNSSEC rectification, statistics; typed errors map to HTTP status codes |
+| `middleware` | Request pipeline: extract JWT/API key, load user from DB, inject into context, enforce admin role, rate limiting, security headers |
+| `database` | Multi-dialect connection factory with DSN validation, content-hash migrations with multi-instance locks, context-aware query methods |
 | `models` | Pure data structures — no behavior, just struct tags for JSON and SQL |
 | `config` | Hierarchical config merging: defaults → YAML file → env vars |
+| `cache` | Generic TTL cache used by `cachedClient` to reduce PowerDNS API calls |
+| `validators` | DNS name, record content, SOA numeric fields, and zone kind validation |
+| `errors` | `AppError` with HTTP status code and `Unwrap()` support for `errors.Is/As` |
 
 ## Startup Sequence
 
 1. Parse `-config` flag (default: `config.yaml`)
 2. **`config.Load(path)`** — start with `DefaultConfig()`, overlay YAML file, apply `GOZONE_*` env vars
-3. **`database.New(cfg)`** — validate DSN, create directory, open SQLite connection (`SetMaxOpenConns(1)`), run inline migrations
+3. **`database.New(cfg)`** — validate DSN, create directory if needed, open SQL connection (SQLite uses `SetMaxOpenConns(1)`), run content-hash migrations with `Dialect.LockMigrations`
 4. **`pdns.NewClient(cfg)`** — create HTTP client pointing to PowerDNS API
-5. **`seedAdminUser(db, cfg)`** — if `users` table is empty, insert admin/admin (or password from `GOZONE_ADMIN_PASSWORD`)
+5. **`seedAdminUser(ctx, db, cfg)`** — if `users` table is empty, insert admin/admin (or password from `GOZONE_ADMIN_PASSWORD`)
 6. **`parseTemplates()`** — load `web/templates/*.html` via `template.ParseFS` from embedded filesystem (`web/embed.go`)
 7. **`handlers.New(db, pdns, cfg, tmpl)`** — wire handler with all dependencies
 8. **Register routes** on chi router with middleware chain
 9. **`http.ListenAndServe(addr, r)`** — start HTTP server with graceful shutdown on SIGINT/SIGTERM
+10. **`run() error`** returns errors so `defer db.Close()` always executes before `logger.Fatal` in `main`
 
 ## Data Flow
 
@@ -112,17 +121,17 @@ Browser ──GET /zones──► chi Router
                      │ Store in ctx   │
                      └───────┬────────┘
                              ▼
-                     ListZones handler
-                     ┌────────────────┐
-                     │ PDNS.ListZones │── HTTP ──► PowerDNS ──► [Zone...]
-                     │ PDNS.ListRecs  │── HTTP ──► PowerDNS ──► [RRSet...]
-                     │ getLogs (DB)   │── SQL  ──► SQLite   ──► [ActivityLog...]
-                     └───────┬────────┘
-                             ▼
-                    render("zones.html", data)
-                             │
-                             ▼
-                      HTML Response ──► Browser
+                      ListZones handler
+                      ┌────────────────┐
+                      │ PDNS.ListZones │── HTTP ──► PowerDNS ──► [Zone...]
+                      │ PDNS.ListRecs  │── HTTP ──► PowerDNS ──► [RRSet...]
+                      │ getLogs (DB)   │── SQL  ──► Database ──► [ActivityLog...]
+                      └───────┬────────┘
+                              ▼
+                     render("zones.html", data)
+                              │
+                              ▼
+                       HTML Response ──► Browser
 ```
 
 ### REST API: Create a Zone
@@ -198,57 +207,57 @@ middleware.APIKeyAuth middleware
 
 ## Database Schema
 
-GoZone uses SQLite with 4 tables:
+GoZone uses a configured SQL database (SQLite by default, MySQL and PostgreSQL supported) with 4 tables:
 
 ```
 users
-├── id              INTEGER PK AUTOINCREMENT
-├── username        TEXT UNIQUE NOT NULL
-├── email           TEXT UNIQUE NOT NULL
-├── password_hash   TEXT NOT NULL                ← bcrypt hash, json:"-"
-├── first_name      TEXT DEFAULT ''
-├── last_name       TEXT DEFAULT ''
-├── role            TEXT DEFAULT 'user'          ← 'admin' or 'user'
-├── enabled         INTEGER DEFAULT 1
-├── created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-└── updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+├── id              INTEGER PK AUTOINCREMENT (SQLite) / SERIAL (Postgres) / AUTO_INCREMENT (MySQL)
+├── username        TEXT/ VARCHAR UNIQUE NOT NULL
+├── email           TEXT/ VARCHAR UNIQUE NOT NULL
+├── password_hash   TEXT/ VARCHAR NOT NULL                ← bcrypt hash, json:"-"
+├── first_name      TEXT/ VARCHAR DEFAULT ''
+├── last_name       TEXT/ VARCHAR DEFAULT ''
+├── role            TEXT/ VARCHAR DEFAULT 'user'          ← 'admin' or 'user'
+├── enabled         INTEGER/ BOOLEAN DEFAULT 1
+├── created_at      DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+└── updated_at      DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
 activity_logs
-├── id              INTEGER PK AUTOINCREMENT
+├── id              INTEGER PK AUTOINCREMENT / SERIAL / AUTO_INCREMENT
 ├── user_id         INTEGER FK → users(id) ON DELETE SET NULL
-├── zone_id         TEXT                         ← PowerDNS zone ID
-├── action          TEXT NOT NULL                ← login, create_zone, delete_record, etc.
-├── details         TEXT DEFAULT ''
-└── created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+├── zone_id         TEXT/ VARCHAR                         ← PowerDNS zone ID
+├── action          TEXT/ VARCHAR NOT NULL                ← login, create_zone, delete_record, etc.
+├── details         TEXT/ VARCHAR DEFAULT ''
+└── created_at      DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
 api_keys
-├── id              INTEGER PK AUTOINCREMENT
+├── id              INTEGER PK AUTOINCREMENT / SERIAL / AUTO_INCREMENT
 ├── user_id         INTEGER FK → users(id) ON DELETE CASCADE
-├── key_hash        TEXT UNIQUE NOT NULL         ← json:"-"
-├── description     TEXT DEFAULT ''
-├── last_used_at    DATETIME
-├── created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-└── expires_at      DATETIME
+├── key_hash        TEXT/ VARCHAR UNIQUE NOT NULL         ← json:"-"
+├── description     TEXT/ VARCHAR DEFAULT ''
+├── last_used_at    DATETIME/ TIMESTAMP
+├── created_at      DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+└── expires_at      DATETIME/ TIMESTAMP
 
 settings
-├── id              INTEGER PK AUTOINCREMENT
-├── key             TEXT UNIQUE NOT NULL
-└── value           TEXT DEFAULT ''
+├── id              INTEGER PK AUTOINCREMENT / SERIAL / AUTO_INCREMENT
+├── key             TEXT/ VARCHAR UNIQUE NOT NULL
+└── value           TEXT/ VARCHAR DEFAULT ''
 ```
 
 **Indexes**: `activity_logs(user_id)`, `activity_logs(zone_id)`, `activity_logs(created_at)`, `api_keys(key_hash)`
 
-**PowerDNS data** (zones, records, statistics) is not stored locally — it is fetched live from the PowerDNS REST API and passed through as-is. GoZone is a stateless proxy for PowerDNS data.
+**PowerDNS data** (zones, records, statistics) is not stored locally — it is fetched live from the PowerDNS REST API and passed through as-is. GoZone is a stateless proxy for PowerDNS data. A local TTL cache (`internal/cache`) reduces repeated API calls and is invalidated on record mutations.
 
 ## Design Decisions
 
-### SQLite Instead of PostgreSQL
+### Multi-Database Support
 
-GoZone targets single-node deployments and small installations. SQLite eliminates the need for a separate database server, simplifies deployment (single binary + one file), and performs well for the expected load (~100 users, <1000 zones). The `SetMaxOpenConns(1)` constraint serializes writes to prevent SQLITE_BUSY errors.
+GoZone supports SQLite (default for single-node deployments), MySQL, and PostgreSQL. The `database.Dialect` interface abstracts driver-specific behavior: DSN parsing, parameter rebinding (e.g., `?` → `$n` for PostgreSQL), and migration locking (`GET_LOCK` for MySQL, `pg_advisory_lock` for PostgreSQL, no-op for SQLite). Migrations are identified by a truncated SHA-256 hash of their SQL content, making reordering safe, and are protected by a dialect-specific lock for multi-instance deployments.
 
 ### No ORM
 
-All SQL queries are hand-written and inlined in handler methods. This avoids ORM complexity, makes queries auditable, and keeps the dependency tree small. The trade-off is more boilerplate and no compile-time query validation.
+All SQL queries are hand-written and inlined in handler/database methods. This avoids ORM complexity, makes queries auditable, and keeps the dependency tree small. The trade-off is more boilerplate and no compile-time query validation.
 
 ### Single Handler Struct
 
@@ -256,7 +265,7 @@ All HTTP handlers are methods on a single `Handler` struct holding shared depend
 
 ### html/template (Embedded with //go:embed)
 
-Templates are embedded in the binary at compile time via `//go:embed` and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required.
+Templates are embedded in the binary at compile time via `//go:embed` and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required. The template FuncMap includes `add`, `sub`, `urlquery`, `relativeName`, and `dict`.
 
 ### JWT for Web Sessions
 
@@ -264,26 +273,34 @@ The web UI uses JWT cookies (HttpOnly, SameSite=Lax) rather than server-side ses
 
 ### PowerDNS as Source of Truth
 
-GoZone never caches or stores DNS zones/records locally. All zone data is fetched live from the PowerDNS API. This means if PowerDNS is unreachable, the web UI shows errors. The health check endpoint (`/health/ready`) verifies this connectivity.
+GoZone never stores DNS zones/records locally. All zone data is fetched live from the PowerDNS API. A generic TTL cache (`internal/cache`) wrapped around the PDNS client reduces repeated API calls for zone lists, zone info, statistics, and server info; record mutations invalidate affected cache entries. If PowerDNS is unreachable, the web UI shows errors. The health check endpoint (`/health/ready`) verifies this connectivity directly, bypassing the cache.
 
-### Activity Logging in SQLite
+### Activity Logging
 
-All user actions (login, zone creation, record updates) are logged to the `activity_logs` table. This provides an audit trail without external infrastructure. Logs reference the user and zone by ID, with a human-readable `details` column.
+All user actions (login, zone creation, record updates) are logged to the `activity_logs` table in the configured database. This provides an audit trail without external infrastructure. Logs reference the user and zone by ID, with a human-readable `details` column.
+
+### Input Validation
+
+DNS record names, record content, SOA numeric fields, and zone kinds are validated in `internal/validators` before being sent to PowerDNS. This prevents invalid data from reaching the backend and provides meaningful error messages to users and API clients.
 
 ## Known Limitations
 
-### SQLite Constraints
+### Database-Specific Constraints
+
+When using SQLite:
 
 - **Single writer**: `SetMaxOpenConns(1)` serializes all writes. Under heavy write load (>100 writes/second), latency increases linearly.
-- **No replication**: SQLite does not support master-slave or multi-primary replication. For high-availability deployments, consider migrating to PostgreSQL.
+- **No replication**: SQLite does not support master-slave or multi-primary replication.
 - **No clustering**: A single SQLite file cannot be shared across multiple application instances. Horizontal scaling is not supported.
 - **File-based**: The database is a single file on disk. Network file systems (NFS, CIFS) should not be used with SQLite.
+
+MySQL and PostgreSQL deployments do not have these constraints and can use a normal connection pool.
 
 ### PowerDNS Dependency
 
 - GoZone requires a running PowerDNS Authoritative Server with the REST API enabled. There is no offline or read-only mode.
 - The PDNS client has a 30-second HTTP timeout. Slow or overloaded PowerDNS instances will cause request failures.
-- All zone and record data is proxied — GoZone does not validate DNS record content (e.g., valid IP, correct FQDN format) before sending to PowerDNS.
+- DNS record content is validated in `internal/validators` before being sent to PowerDNS, but PowerDNS remains the authoritative source and may enforce additional rules.
 
 ### Authentication
 
@@ -299,18 +316,6 @@ All user actions (login, zone creation, record updates) are logged to the `activ
 
 ### Deployment
 
-- **CGO required**: The `mattn/go-sqlite3` driver requires a C compiler. Cross-compilation from macOS to Linux requires `CGO_ENABLED=1` and a cross-compilation toolchain.
+- **CGO required for SQLite**: The `mattn/go-sqlite3` driver requires a C compiler. Cross-compilation from macOS to Linux requires `CGO_ENABLED=1` and a cross-compilation toolchain. MySQL and PostgreSQL builds can use `CGO_ENABLED=0`.
 - **CI/CD**: A GitHub Actions workflow (`.github/workflows/release.yml`) builds and publishes multi-architecture Docker images to GHCR on tag pushes matching `v*`.
-- **Single process**: There is no support for multiple worker processes or load-balanced deployments.
-
-### Future Database Migration
-
-The schema and codebase are designed for SQLite. Migrating to PostgreSQL or MySQL would require:
-
-1. Updating the `database/database.go` driver and DSN handling
-2. Replacing SQLite-specific SQL syntax (`INTEGER PRIMARY KEY AUTOINCREMENT` → `SERIAL`, `CURRENT_TIMESTAMP` → `NOW()`)
-3. Removing `SetMaxOpenConns(1)` and implementing a connection pool
-4. Adding a migration framework for version-controlled schema changes
-5. Rewriting tests that rely on `:memory:` SQLite
-
-These are tracked in the [ROADMAP.md](../ROADMAP.md#-future-database-migration).
+- **Single process**: There is no support for multiple worker processes or load-balanced deployments with SQLite. MySQL/PostgreSQL deployments can be scaled horizontally behind a load balancer.
