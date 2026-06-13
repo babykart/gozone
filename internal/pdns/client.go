@@ -128,6 +128,13 @@ func (c *Client) GetServer(ctx context.Context) (*models.ServerInfo, error) {
 	return &server, nil
 }
 
+// HealthCheck performs a lightweight, uncached connectivity check against the
+// PowerDNS API. It is used by readiness probes and must not rely on caching.
+func (c *Client) HealthCheck(ctx context.Context) error {
+	_, err := c.GetServer(ctx)
+	return err
+}
+
 // GetStatistics returns global PowerDNS statistics.
 func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, error) {
 	body, status, err := c.do(ctx, "GET", "/servers/"+c.serverID+"/statistics", nil)

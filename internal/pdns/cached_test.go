@@ -230,6 +230,60 @@ func TestCachedClientImplementsZoneService(t *testing.T) {
 	}
 }
 
+func TestCachedHealthCheck_BypassesCache(t *testing.T) {
+	var calls atomic.Int64
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		isServerInfo := r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/servers/localhost") && !strings.Contains(r.URL.Path, "/statistics")
+		if !isServerInfo {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		calls.Add(1)
+		if calls.Load() == 1 {
+			w.Write([]byte(`{"server_id":"localhost","daemon_type":"authoritative","version":"4.8.0"}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"powerdns down"}`))
+	})
+
+	ctx := context.Background()
+
+	// First call populates the 5-minute server cache
+	info, err := cached.GetServer(ctx)
+	if err != nil {
+		t.Fatalf("first GetServer: %v", err)
+	}
+	if info.Version != "4.8.0" {
+		t.Errorf("unexpected version: %q", info.Version)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected 1 API call, got %d", calls.Load())
+	}
+
+	// HealthCheck must bypass the cache and see the current failure
+	err = cached.HealthCheck(ctx)
+	if err == nil {
+		t.Fatal("expected HealthCheck to fail after PDNS went down")
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected 2 API calls (cache bypass), got %d", calls.Load())
+	}
+
+	// GetServer should still return the cached value
+	info, err = cached.GetServer(ctx)
+	if err != nil {
+		t.Fatalf("cached GetServer after HealthCheck: %v", err)
+	}
+	if info.Version != "4.8.0" {
+		t.Errorf("expected cached version 4.8.0, got %q", info.Version)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected still 2 API calls (cache hit), got %d", calls.Load())
+	}
+}
+
 func TestCached_UncachedPassthrough(t *testing.T) {
 	var recordCalls atomic.Int64
 	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {

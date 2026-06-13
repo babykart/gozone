@@ -15,6 +15,7 @@ type ZoneService interface {
 	GetServers(ctx context.Context) ([]models.ServerInfo, error)
 	GetServer(ctx context.Context) (*models.ServerInfo, error)
 	GetStatistics(ctx context.Context) ([]models.StatisticItem, error)
+	HealthCheck(ctx context.Context) error
 	ServerID() string
 
 	// Zones

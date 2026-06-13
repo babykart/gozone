@@ -68,6 +68,13 @@ func (c *cachedClient) GetServer(ctx context.Context) (*models.ServerInfo, error
 	return s, nil
 }
 
+// HealthCheck bypasses the server cache so readiness probes reflect the
+// current availability of PowerDNS rather than a stale cached response.
+func (c *cachedClient) HealthCheck(ctx context.Context) error {
+	_, err := c.client.GetServer(ctx)
+	return err
+}
+
 func (c *cachedClient) GetStatistics(ctx context.Context) ([]models.StatisticItem, error) {
 	if v, ok := c.stats.Get(cacheKeyStats); ok {
 		return v, nil
