@@ -1,7 +1,11 @@
 package database
 
 import (
+	"database/sql"
+	"fmt"
 	"strings"
+
+	"github.com/babykart/gozone/internal/logger"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -31,6 +35,21 @@ func (m *mysqlDialect) DSN(dsn string) string {
 func (m *mysqlDialect) MaxOpenConns() int { return 25 }
 
 func (m *mysqlDialect) Rebind(query string) string { return query }
+
+// LockMigrations acquires a named MySQL lock so only one instance runs
+// migrations at a time. The lock is released by the returned function.
+func (m *mysqlDialect) LockMigrations(conn *sql.DB) (func(), error) {
+	_, err := conn.Exec("SELECT GET_LOCK('gozone_migrations', -1)")
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	}
+	release := func() {
+		if _, err := conn.Exec("SELECT RELEASE_LOCK('gozone_migrations')"); err != nil {
+			logger.Error("failed to release mysql migration lock", "error", err)
+		}
+	}
+	return release, nil
+}
 
 func (m *mysqlDialect) Migrations() []string {
 	return []string{
@@ -70,11 +89,11 @@ func (m *mysqlDialect) Migrations() []string {
 			expires_at DATETIME,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE INDEX idx_activity_logs_user_id ON activity_logs(user_id)`,
-		`CREATE INDEX idx_activity_logs_zone_id ON activity_logs(zone_id)`,
-		`CREATE INDEX idx_activity_logs_zone_created ON activity_logs(zone_id, created_at)`,
-		`CREATE INDEX idx_activity_logs_created_at ON activity_logs(created_at)`,
-		`CREATE INDEX idx_api_keys_key_hash ON api_keys(key_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_id ON activity_logs(zone_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_created ON activity_logs(zone_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
 		`CREATE TABLE IF NOT EXISTS zone_groups (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL UNIQUE,
@@ -94,9 +113,9 @@ func (m *mysqlDialect) Migrations() []string {
 			PRIMARY KEY (group_id, zone_id),
 			FOREIGN KEY (group_id) REFERENCES zone_groups(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE INDEX idx_zone_group_members_user ON zone_group_members(user_id)`,
-		`CREATE INDEX idx_zone_group_zones_group ON zone_group_zones(group_id)`,
-		`CREATE INDEX idx_zone_group_zones_zone ON zone_group_zones(zone_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_zone_group_members_user ON zone_group_members(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_zone_group_zones_group ON zone_group_zones(group_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_zone_group_zones_zone ON zone_group_zones(zone_id)`,
 		`CREATE TABLE IF NOT EXISTS zone_templates (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL UNIQUE,

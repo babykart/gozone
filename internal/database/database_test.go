@@ -352,6 +352,140 @@ func TestSanitizeDSN_NoCredentials(t *testing.T) {
 	}
 }
 
+func TestMigrationVersion_Stability(t *testing.T) {
+	v1 := migrationVersion("CREATE TABLE t (id INTEGER)")
+	v2 := migrationVersion("CREATE TABLE t (id INTEGER)")
+	if v1 != v2 {
+		t.Errorf("migrationVersion should be stable: %q vs %q", v1, v2)
+	}
+	if v1 == migrationVersion("CREATE TABLE t (id TEXT)") {
+		t.Error("different SQL should produce different versions")
+	}
+}
+
+func TestMigrate_ReorderSafe(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	}
+	dialect := &sqliteDialect{}
+	dsn := dialect.DSN(cfg.DSN)
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	db := &DB{Conn: conn, dialect: dialect}
+	if err := db.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var countAfterFirst int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&countAfterFirst); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	// Simulate slice reordering by creating a new dialect whose Migrations()
+	// returns a copy of the original slice in reverse order. The content-based
+	// version identifiers must remain stable, so no new migrations run.
+	reversed := &reversedSQLiteDialect{sqliteDialect{}}
+	db2 := &DB{Conn: conn, dialect: reversed}
+	if err := db2.migrate(); err != nil {
+		t.Fatalf("migrate after reorder: %v", err)
+	}
+
+	var countAfterReorder int
+	if err := db2.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&countAfterReorder); err != nil {
+		t.Fatalf("count after reorder: %v", err)
+	}
+	if countAfterReorder != countAfterFirst {
+		t.Errorf("reordering migrations changed count: %d -> %d", countAfterFirst, countAfterReorder)
+	}
+}
+
+func TestMigrate_LegacyVersionsMigrated(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	}
+	dialect := &sqliteDialect{}
+	dsn := dialect.DSN(cfg.DSN)
+	conn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	// Simulate a database where the first three table-creating migrations were
+	// applied under the old index-based scheme. Execute the actual migration SQL
+	// so the schema matches what the versions claim.
+	migrations := dialect.Migrations()
+	for i := 0; i < 3 && i < len(migrations); i++ {
+		if _, err := conn.Exec(migrations[i]); err != nil {
+			t.Fatalf("apply baseline migration %d: %v", i, err)
+		}
+	}
+
+	// Create tracking table with legacy index-based versions.
+	if _, err := conn.Exec(`CREATE TABLE schema_migrations (version VARCHAR(255) PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	for _, v := range []string{"v000", "v001", "v002"} {
+		if _, err := conn.Exec("INSERT INTO schema_migrations (version) VALUES (?)", v); err != nil {
+			t.Fatalf("insert legacy %s: %v", v, err)
+		}
+	}
+
+	db := &DB{Conn: conn, dialect: dialect}
+	if err := db.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	rows, err := db.Conn.Query("SELECT version FROM schema_migrations")
+	if err != nil {
+		t.Fatalf("query versions: %v", err)
+	}
+	defer rows.Close()
+
+	var legacyCount int
+	var hashCount int
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if oldVersionRegex.MatchString(v) {
+			legacyCount++
+		}
+		if strings.HasPrefix(v, "mig_") {
+			hashCount++
+		}
+	}
+	if legacyCount != 0 {
+		t.Errorf("expected no legacy versions remaining, got %d", legacyCount)
+	}
+	expected := len(dialect.Migrations())
+	if hashCount != expected {
+		t.Errorf("expected %d hash versions, got %d", expected, hashCount)
+	}
+}
+
+// reversedSQLiteDialect returns migrations in reverse order to test that
+// content-based versioning survives slice reordering.
+type reversedSQLiteDialect struct {
+	sqliteDialect
+}
+
+func (r *reversedSQLiteDialect) Migrations() []string {
+	orig := r.sqliteDialect.Migrations()
+	rev := make([]string, len(orig))
+	for i := range orig {
+		rev[len(orig)-1-i] = orig[i]
+	}
+	return rev
+}
+
 type spyDialect struct {
 	sqliteDialect
 	rebinds []string

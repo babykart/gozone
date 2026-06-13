@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -11,6 +12,10 @@ type Dialect interface {
 	Migrations() []string
 	MaxOpenConns() int
 	Rebind(query string) string
+	// LockMigrations acquires a cluster-wide lock so that only one instance
+	// runs migrations at a time. The returned release function must be called
+	// when migrations are finished.
+	LockMigrations(conn *sql.DB) (release func(), err error)
 }
 
 func selectDialect(driver string) (Dialect, error) {

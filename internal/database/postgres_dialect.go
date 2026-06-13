@@ -1,5 +1,12 @@
 package database
 
+import (
+	"database/sql"
+	"fmt"
+
+	"github.com/babykart/gozone/internal/logger"
+)
+
 type postgresDialect struct{}
 
 func (p *postgresDialect) DriverName() string { return "postgres" }
@@ -9,6 +16,22 @@ func (p *postgresDialect) DSN(dsn string) string { return dsn }
 func (p *postgresDialect) MaxOpenConns() int { return 25 }
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
+
+// LockMigrations acquires a PostgreSQL advisory lock so only one instance
+// runs migrations at a time. The lock is released by the returned function.
+func (p *postgresDialect) LockMigrations(conn *sql.DB) (func(), error) {
+	const lockID = 42
+	_, err := conn.Exec("SELECT pg_advisory_lock($1)", lockID)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	}
+	release := func() {
+		if _, err := conn.Exec("SELECT pg_advisory_unlock($1)", lockID); err != nil {
+			logger.Error("failed to release postgres migration lock", "error", err)
+		}
+	}
+	return release, nil
+}
 
 func (p *postgresDialect) Migrations() []string {
 	return []string{

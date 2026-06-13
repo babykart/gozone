@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"net/url"
 
 	"github.com/babykart/gozone/internal/constants"
@@ -28,6 +29,14 @@ func (s *sqliteDialect) DSN(dsn string) string {
 func (s *sqliteDialect) MaxOpenConns() int { return constants.MaxOpenConns }
 
 func (s *sqliteDialect) Rebind(query string) string { return query }
+
+// LockMigrations is a no-op for SQLite. SQLite serializes writers at the
+// database-file level and MaxOpenConns is set to 1, so concurrent migration
+// races from a single process are impossible. Cross-process access is handled
+// by SQLite's own file locking.
+func (s *sqliteDialect) LockMigrations(conn *sql.DB) (func(), error) {
+	return func() {}, nil
+}
 
 func (s *sqliteDialect) Migrations() []string {
 	return []string{
