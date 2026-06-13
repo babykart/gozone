@@ -1,11 +1,31 @@
 package database
 
+import (
+	"strings"
+
+	"github.com/go-sql-driver/mysql"
+)
+
 type mysqlDialect struct{}
 
 func (m *mysqlDialect) DriverName() string { return "mysql" }
 
 func (m *mysqlDialect) DSN(dsn string) string {
-	return dsn + "?parseTime=true&multiStatements=true"
+	// ParseDSN preserves existing query parameters, avoids the double '?' bug
+	// when the DSN already contains options, and lets us set ParseTime cleanly.
+	// MultiStatements is intentionally left disabled for defense-in-depth.
+	cfg, err := mysql.ParseDSN(dsn)
+	if err == nil {
+		cfg.ParseTime = true
+		return cfg.FormatDSN()
+	}
+
+	// Fallback for unparseable DSNs: append parseTime without producing '??'.
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "parseTime=true"
 }
 
 func (m *mysqlDialect) MaxOpenConns() int { return 25 }
