@@ -32,15 +32,24 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "Path to YAML configuration file")
-	flag.Parse()
+	if err := run(os.Args[1:]); err != nil {
+		logger.Fatal("gozone failed", "error", err)
+	}
+}
+
+func run(args []string) error {
+	flags := flag.NewFlagSet("gozone", flag.ContinueOnError)
+	configPath := flags.String("config", "config.yaml", "Path to YAML configuration file")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
 
 	logger.Info("starting PowerDNS Admin interface")
 
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Fatal("failed to load configuration", "error", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	// Initialize structured logging with configured level
@@ -54,7 +63,7 @@ func main() {
 	// Open database
 	db, err := database.New(&cfg.Database)
 	if err != nil {
-		logger.Fatal("failed to open database", "error", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
@@ -64,18 +73,21 @@ func main() {
 
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(db, cfg); err != nil {
-		logger.Fatal("failed to seed admin user", "error", err)
+		return fmt.Errorf("seed admin user: %w", err)
 	}
 
 	// Parse templates
-	tmpl := parseTemplates()
+	tmpl, err := parseTemplates()
+	if err != nil {
+		return err
+	}
 
 	// Create handler
 	h := handlers.New(db, cachedClient, cfg, tmpl)
 
 	// Seed built-in zone templates
 	if err := h.SeedBuiltinTemplates(); err != nil {
-		logger.Fatal("failed to seed builtin templates", "error", err)
+		return fmt.Errorf("seed builtin templates: %w", err)
 	}
 
 	// Set up router
@@ -222,7 +234,7 @@ func main() {
 	// Static files (no CSRF)
 	staticFS, err := fs.Sub(web.FS, "static")
 	if err != nil {
-		logger.Fatal("failed to open embedded static files", "error", err)
+		return fmt.Errorf("open embedded static files: %w", err)
 	}
 	fileServer(r, "/static", http.FS(staticFS))
 
@@ -301,13 +313,14 @@ func main() {
 
 	logger.Info("server starting", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Fatal("server failed", "error", err)
+		return fmt.Errorf("server failed: %w", err)
 	}
 	// ListenAndServe returns ErrServerClosed as soon as Shutdown begins; wait
 	// for the drain to finish before returning so deferred cleanup (db.Close,
 	// etc.) does not run while in-flight requests are still being served.
 	<-shutdownDone
 	logger.Info("server stopped")
+	return nil
 }
 
 // fileServer serves static files with proper caching headers.
@@ -336,7 +349,7 @@ func relativeName(recordName, zoneName string) string {
 }
 
 // parseTemplates loads all HTML templates from the embedded filesystem.
-func parseTemplates() *template.Template {
+func parseTemplates() (*template.Template, error) {
 	funcMap := template.FuncMap{
 		"add":          func(a, b int) int { return a + b },
 		"sub":          func(a, b int) int { return a - b },
@@ -345,10 +358,10 @@ func parseTemplates() *template.Template {
 	}
 	tmpl, err := template.New("base").Funcs(funcMap).ParseFS(web.FS, "templates/*.html")
 	if err != nil {
-		logger.Fatal("failed to load embedded templates", "error", err)
+		return nil, fmt.Errorf("load embedded templates: %w", err)
 	}
 	logger.Info("templates loaded", "count", len(tmpl.Templates()))
-	return tmpl
+	return tmpl, nil
 }
 
 // requestLogger logs each HTTP request. It uses r.URL.Path instead of
