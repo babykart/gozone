@@ -6,8 +6,9 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 
 ## Features
 
-- **Zone Management**: List, create, edit, and delete DNS zones
-- **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges
+- **Zone Management**: List, create, edit, and delete DNS zones with pagination, search, and per-page controls
+- **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges and inline editing
+- **Multi-database Support**: SQLite (default), MySQL, and PostgreSQL are supported. Migrations are versioned by content hash with multi-instance locks.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
 - **Group-based Authorization**: Assign zones to groups, add users to groups — non-admin users see only their authorized zones
@@ -18,7 +19,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **PowerDNS Integration**: Communicates through the PowerDNS REST API
 - **DNSSEC Support**: Zone rectification (manual + auto after key ops), slave notification
 - **Dark/Light Theme**: Toggle with localStorage persistence
-- **Single Binary**: Compiled Go binary with embedded templates, static files, and SQLite database
+- **Single Binary**: Compiled Go binary with embedded templates and static files. Uses a local SQLite database by default; MySQL and PostgreSQL are also supported via configuration.
 - **Docker Support**: Ready-to-use Docker and docker-compose setup
 
 ## Quick Start
@@ -188,7 +189,7 @@ Users can generate personal API keys for programmatic access. Keys are SHA-256 h
 
 ## API
 
-All API endpoints require an API key passed via `X-API-Key` header.
+All API endpoints require an API key passed via the `X-API-Key` header or the `Authorization: Bearer <key>` header. Both forms are supported.
 
 ### Zones
 
@@ -234,7 +235,7 @@ GET    /api/v1/stats                      - Server statistics
 
 ## Building from Source
 
-Requirements: Go 1.26+, C compiler (gcc/clang) for SQLite CGO driver.
+Requirements: Go 1.26+. A C compiler (gcc/clang) is required only when building with the SQLite CGO driver; MySQL and PostgreSQL builds can use `CGO_ENABLED=0`.
 
 ```bash
 make build   # or: just build
