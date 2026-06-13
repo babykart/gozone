@@ -124,6 +124,15 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Kind == "" {
+		req.Kind = "Native"
+	}
+
+	if err := validators.ValidateZoneKind(req.Kind); err != nil {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
+		return
+	}
+
 	zone, err := h.PDNS.CreateZone(r.Context(), req)
 	if err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeZoneCreateError)
@@ -170,6 +179,9 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 // for a 400, or nil when the RRSet is valid.
 func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
+		return err
+	}
+	if err := validators.ValidateRecordName(rrset.Name); err != nil {
 		return err
 	}
 	for i := range rrset.Records {

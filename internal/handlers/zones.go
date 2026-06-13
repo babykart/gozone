@@ -142,6 +142,11 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		kind = "Native"
 	}
 
+	if err := validators.ValidateZoneKind(kind); err != nil {
+		h.renderError(w, r, "Invalid zone kind: "+err.Error())
+		return
+	}
+
 	req := models.ZoneCreateRequest{
 		Name: name,
 		Kind: kind,

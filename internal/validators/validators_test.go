@@ -262,3 +262,127 @@ func TestValidateRecordType_AllWhitelisted(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDNSName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"simple domain", "example.com", false},
+		{"subdomain", "www.example.com", false},
+		{"with trailing dot", "example.com.", false},
+		{"underscore label", "my_host.example.com", false},
+		{"dkim selector", "selector._domainkey.example.com", false},
+		{"dnslink", "_dnslink.example.com", false},
+		{"wildcard", "*.example.com", false},
+		{"single wildcard label", "*", false},
+		{"empty string", "", true},
+		{"empty label", "example..com", true},
+		{"label >63 chars", strings.Repeat("a", 64) + ".com", true},
+		{"domain >253 chars", strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".com", true},
+		{"label starts with hyphen", "-host.example.com", true},
+		{"label ends with hyphen", "host-.example.com", true},
+		{"space in label", "invalid label.example.com", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDNSName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSName(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRecordName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"apex", "@", false},
+		{"relative", "www", false},
+		{"relative underscore", "selector._domainkey", false},
+		{"fqdn", "www.example.com.", false},
+		{"wildcard", "*", false},
+		{"dkim", "selector._domainkey.example.com", false},
+		{"empty", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordName(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateZoneKind(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"Native", "Native", false},
+		{"Master", "Master", false},
+		{"Slave", "Slave", false},
+		{"Producer", "Producer", false},
+		{"Consumer", "Consumer", false},
+		{"empty", "", true},
+		{"invalid", "Forwarded", true},
+		{"lowercase", "native", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateZoneKind(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateZoneKind(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRecordContent_SOANumericFields(t *testing.T) {
+	base := "ns1.example.com admin.example.com"
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{"valid", base + " 2024010100 3600 900 604800 86400", false},
+		{"zero serial", base + " 0 3600 900 604800 86400", true},
+		{"negative serial", base + " -1 3600 900 604800 86400", true},
+		{"non-numeric refresh", base + " 2024010100 abc 900 604800 86400", true},
+		{"too large serial", base + " 4294967296 3600 900 604800 86400", true},
+		{"max serial", base + " 4294967295 3600 900 604800 86400", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordContent("SOA", tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordContent(SOA, %q) error = %v, wantErr = %v", tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRecordContent_UnderscoreTargets(t *testing.T) {
+	for _, rt := range []string{"CNAME", "ALIAS", "NS", "PTR", "MX", "SRV"} {
+		t.Run(rt, func(t *testing.T) {
+			var content string
+			switch rt {
+			case "SRV":
+				content = "0 5 5060 _sip._tcp.example.com"
+			case "MX":
+				content = "_mail.example.com"
+			default:
+				content = "_dnslink.example.com"
+			}
+			if err := ValidateRecordContent(rt, content); err != nil {
+				t.Errorf("ValidateRecordContent(%q, %q) should allow underscores in target: %v", rt, content, err)
+			}
+		})
+	}
+}

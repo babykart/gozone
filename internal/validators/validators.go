@@ -1,28 +1,45 @@
 // Package validators provides reusable input validation functions for
-// domain names, DNS record types, usernames, emails, and IP addresses.
+// domain names, DNS record names, DNS record types and contents, zone kinds,
+// usernames, emails, and IP addresses.
 package validators
 
 import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
-// rfc1035Label validates a single DNS label. RFC 1123 §2.1 relaxed the
-// original RFC 1035 restriction to allow labels starting with a digit,
-// which is required for reverse DNS zones (e.g. 192.in-addr.arpa).
-// Labels must start and end with a letter or digit, contain only letters,
-// digits, and hyphens, and be at most 63 characters long.
+// rfc1035Label validates a single DNS label for use in a zone name or other
+// strict-hostname context. RFC 1123 §2.1 relaxed the original RFC 1035
+// restriction to allow labels starting with a digit. Labels must start and end
+// with a letter or digit, contain only letters, digits, and hyphens, and be at
+// most 63 characters long.
 var rfc1035Label = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// dnsLabel validates a single DNS label allowing underscores and wildcards.
+// This is appropriate for record names (e.g. DKIM selectors like
+// "selector._domainkey") and record content targets where PowerDNS permits
+// underscores. Wildcard "*" is allowed as a standalone label.
+var dnsLabel = regexp.MustCompile(`^([a-zA-Z0-9_]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9_])?|\*)$`)
+
+// zoneKindWhitelist is the set of zone kinds accepted by the PowerDNS API.
+var zoneKindWhitelist = map[string]bool{
+	"Native":   true,
+	"Master":   true,
+	"Slave":    true,
+	"Producer": true,
+	"Consumer": true,
+}
 
 // ValidateDomainName checks that a domain name conforms to RFC 1035.
 //
 // Rules:
 //   - Non-empty, maximum 253 characters total
 //   - Dot-separated labels, each label ≤ 63 characters
-//   - Each label matches: ^[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
+//   - Each label matches: ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
 //   - Trailing dots are allowed (FQDN notation) and stripped before validation
 //
 // Returns nil if valid, an error describing the violation otherwise.
@@ -49,6 +66,64 @@ func ValidateDomainName(name string) error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateDNSName checks that a DNS name is structurally valid, allowing
+// underscores and wildcard labels. It is suitable for record names and record
+// targets (CNAME, MX, SRV, etc.) where underscores are permitted.
+func ValidateDNSName(name string) error {
+	name = strings.TrimSuffix(name, ".")
+
+	if len(name) == 0 {
+		return fmt.Errorf("DNS name must not be empty")
+	}
+	if len(name) > 253 {
+		return fmt.Errorf("DNS name exceeds 253 characters")
+	}
+
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if len(label) == 0 {
+			return fmt.Errorf("DNS name contains an empty label")
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("label %q exceeds 63 characters", label)
+		}
+		if !dnsLabel.MatchString(label) {
+			return fmt.Errorf("label %q contains invalid characters", label)
+		}
+	}
+
+	return nil
+}
+
+// ValidateRecordName checks that a record name is valid within a zone.
+//
+// It accepts:
+//   - "@" for the zone apex
+//   - Relative names (e.g. "www", "mail")
+//   - Absolute names ending with a dot (e.g. "www.example.com.")
+//   - Labels containing underscores (DKIM, _dnslink, etc.)
+//   - Wildcard "*" as a label
+func ValidateRecordName(name string) error {
+	if name == "" {
+		return fmt.Errorf("record name must not be empty")
+	}
+	if name == "@" {
+		return nil
+	}
+	return ValidateDNSName(name)
+}
+
+// ValidateZoneKind checks that the given zone kind is supported by PowerDNS.
+func ValidateZoneKind(kind string) error {
+	if kind == "" {
+		return fmt.Errorf("zone kind must not be empty")
+	}
+	if !zoneKindWhitelist[kind] {
+		return fmt.Errorf("unsupported zone kind %q", kind)
+	}
 	return nil
 }
 
@@ -185,9 +260,10 @@ func ValidateIPv6(ip string) error {
 //
 //   - A: IPv4 address
 //   - AAAA: IPv6 address
-//   - CNAME, ALIAS, NS, PTR: fully-qualified domain name
+//   - CNAME, ALIAS, NS, PTR: DNS name (underscores allowed)
 //   - MX: priority + FQDN, or just FQDN (priority handled separately)
 //   - TXT, SPF: free text (quoted strings allowed)
+//   - SOA: 7+ fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum
 //
 // Returns nil if valid, an error describing the violation otherwise.
 func ValidateRecordContent(recordType, content string) error {
@@ -201,23 +277,48 @@ func ValidateRecordContent(recordType, content string) error {
 	case "AAAA":
 		return ValidateIPv6(content)
 	case "CNAME", "ALIAS", "NS", "PTR":
-		return ValidateDomainName(content)
+		return ValidateDNSName(content)
 	case "MX":
 		// MX content can be "priority target" or just "target"
 		// The priority is handled as a separate field, so content is the FQDN
-		return ValidateDomainName(content)
+		return ValidateDNSName(content)
 	case "SOA":
 		parts := strings.Fields(content)
 		if len(parts) < 7 {
 			return fmt.Errorf("SOA content requires at least 7 fields: mname rname serial refresh retry expire minimum")
 		}
-		return ValidateDomainName(strings.TrimSuffix(parts[0], "."))
+		if err := ValidateDNSName(strings.TrimSuffix(parts[0], ".")); err != nil {
+			return fmt.Errorf("SOA mname: %w", err)
+		}
+		if err := ValidateDNSName(strings.TrimSuffix(parts[1], ".")); err != nil {
+			return fmt.Errorf("SOA rname: %w", err)
+		}
+		soaFields := []struct {
+			name  string
+			value string
+		}{
+			{"serial", parts[2]},
+			{"refresh", parts[3]},
+			{"retry", parts[4]},
+			{"expire", parts[5]},
+			{"minimum", parts[6]},
+		}
+		for _, f := range soaFields {
+			n, err := strconv.ParseUint(f.value, 10, 32)
+			if err != nil {
+				return fmt.Errorf("SOA %s %q is not a valid 32-bit unsigned integer", f.name, f.value)
+			}
+			if f.name == "serial" && n == 0 {
+				return fmt.Errorf("SOA serial must be greater than 0")
+			}
+		}
+		return nil
 	case "SRV":
 		parts := strings.Fields(content)
 		if len(parts) < 3 {
 			return fmt.Errorf("SRV content must have at least 3 fields: priority|weight port target")
 		}
-		return ValidateDomainName(parts[len(parts)-1])
+		return ValidateDNSName(parts[len(parts)-1])
 	case "CAA":
 		parts := strings.Fields(content)
 		if len(parts) < 3 {

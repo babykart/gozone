@@ -64,6 +64,11 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 
 	name = normalizeRecordName(name, zoneID)
 
+	if err := validators.ValidateRecordName(name); err != nil {
+		h.renderError(w, r, "Invalid record name: "+err.Error())
+		return
+	}
+
 	if err := validators.ValidateRecordType(recordType); err != nil {
 		h.renderError(w, r, "Invalid record type: "+err.Error())
 		return
@@ -193,6 +198,11 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	name = normalizeRecordName(name, zoneID)
 
+	if err := validators.ValidateRecordName(name); err != nil {
+		h.renderError(w, r, "Invalid record name: "+err.Error())
+		return
+	}
+
 	if err := validators.ValidateRecordType(recordType); err != nil {
 		h.renderError(w, r, "Invalid record type: "+err.Error())
 		return
@@ -276,6 +286,11 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	originalPriority, _ := strconv.Atoi(r.FormValue("original_priority"))
 
 	name = normalizeRecordName(name, zoneID)
+
+	if err := validators.ValidateRecordName(name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record name: " + err.Error()})
+		return
+	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record type: " + err.Error()})
@@ -384,6 +399,11 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		}
 
 		name = normalizeRecordName(name, zoneID)
+
+		if err := validators.ValidateRecordName(name); err != nil {
+			h.renderError(w, r, "Invalid record name '"+name+"': "+err.Error())
+			return
+		}
 
 		ttl := 3600
 		if i < len(ttls) {
