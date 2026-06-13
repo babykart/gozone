@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 )
@@ -9,6 +10,50 @@ func TestAppError_Error(t *testing.T) {
 	err := NotFound("zone not found")
 	if err.Error() != "zone not found" {
 		t.Errorf("expected 'zone not found', got %q", err.Error())
+	}
+}
+
+func TestWrap_Unwrap(t *testing.T) {
+	cause := errors.New("underlying failure")
+	appErr := Wrap(cause, http.StatusBadGateway, "BAD_GATEWAY", "gateway error")
+
+	if appErr.Cause != cause {
+		t.Errorf("expected cause %v, got %v", cause, appErr.Cause)
+	}
+	if !errors.Is(appErr, cause) {
+		t.Error("expected errors.Is to find the underlying cause")
+	}
+}
+
+func TestInternalWrap(t *testing.T) {
+	cause := errors.New("db connection lost")
+	err := InternalWrap(cause, "database error")
+
+	if err.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", err.Code)
+	}
+	if !errors.Is(err, cause) {
+		t.Error("expected errors.Is to find the wrapped database cause")
+	}
+}
+
+func TestUnwrap_NilCause(t *testing.T) {
+	err := NotFound("zone not found")
+	if err.Unwrap() != nil {
+		t.Errorf("expected nil cause, got %v", err.Unwrap())
+	}
+}
+
+func TestAs_TargetsAppError(t *testing.T) {
+	cause := errors.New("root cause")
+	wrapped := Wrap(cause, http.StatusConflict, "CONFLICT", "conflict")
+
+	var appErr *AppError
+	if !errors.As(wrapped, &appErr) {
+		t.Fatal("expected errors.As to match *AppError")
+	}
+	if appErr.Name != "CONFLICT" {
+		t.Errorf("expected CONFLICT, got %s", appErr.Name)
 	}
 }
 
