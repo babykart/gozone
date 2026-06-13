@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestSeedAdminUser_FirstStartup(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
 
-	if err := SeedAdminUser(db, cfg); err != nil {
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,12 +70,12 @@ func TestSeedAdminUser_ExistingUsers(t *testing.T) {
 	cfg.Auth.BcryptCost = 4
 
 	// First seed
-	if err := SeedAdminUser(db, cfg); err != nil {
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
 	// Second seed should be a no-op
-	if err := SeedAdminUser(db, cfg); err != nil {
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +104,7 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 	}
 	cfg.Auth.BcryptCost = 4
 
-	if err := SeedAdminUser(db, cfg); err != nil {
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,7 +139,7 @@ func TestSeedAdminUser_CustomConfig(t *testing.T) {
 	cfg.Admin.FirstName = "Super"
 	cfg.Admin.LastName = "Admin"
 
-	if err := SeedAdminUser(db, cfg); err != nil {
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
 		t.Fatal(err)
 	}
 

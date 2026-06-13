@@ -72,7 +72,7 @@ func run(args []string) error {
 	cachedClient := pdns.NewCachedClient(pdnsClient)
 
 	// Seed admin user if no users exist
-	if err := database.SeedAdminUser(db, cfg); err != nil {
+	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
 	}
 

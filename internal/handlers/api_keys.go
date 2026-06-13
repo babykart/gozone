@@ -31,9 +31,10 @@ func generateAPIKey() (string, string, error) {
 }
 
 func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	user := middleware.GetUser(r)
 
-	rows, err := h.DB.Query(
+	rows, err := h.DB.QueryContext(ctx,
 		`SELECT id, user_id, description, last_used_at, created_at, expires_at
 		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`, user.ID,
 	)
@@ -87,6 +88,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	user := middleware.GetUser(r)
 
 	description := strings.TrimSpace(r.FormValue("description"))
@@ -100,14 +102,14 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.DB.Begin()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, ?)",
 		user.ID, keyHash, description,
 	)
@@ -116,7 +118,7 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_api_key', ?)",
 		user.ID, fmt.Sprintf("Created API key: %s", description),
 	)
@@ -145,12 +147,13 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	user := middleware.GetUser(r)
 
 	keyID := strings.TrimSpace(r.FormValue("key_id"))
 
 	var keyUserID int64
-	err := h.DB.QueryRow("SELECT user_id FROM api_keys WHERE id = ?", keyID).Scan(&keyUserID)
+	err := h.DB.QueryRowContext(ctx, "SELECT user_id FROM api_keys WHERE id = ?", keyID).Scan(&keyUserID)
 	if err == sql.ErrNoRows {
 		http.Redirect(w, r, "/profile/api-keys?error=not_found", http.StatusSeeOther)
 		return
@@ -165,20 +168,20 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.DB.Begin()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("DELETE FROM api_keys WHERE id = ?", keyID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ?", keyID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete API key", err)
 		return
 	}
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_api_key', ?)",
 		user.ID, fmt.Sprintf("Deleted API key %s", keyID),
 	)

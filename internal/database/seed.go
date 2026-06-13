@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
@@ -18,9 +19,9 @@ import (
 // The bcrypt cost is taken from cfg.Auth.BcryptCost.
 //
 // Returns an error if the database query or user insertion fails.
-func SeedAdminUser(db *DB, cfg *config.Config) error {
+func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return fmt.Errorf("seed admin: count users: %w", err)
 	}
 	if count > 0 {
@@ -32,7 +33,8 @@ func SeedAdminUser(db *DB, cfg *config.Config) error {
 		return fmt.Errorf("seed admin: hash password: %w", err)
 	}
 
-	_, err = db.Exec(
+	_, err = db.ExecContext(
+		ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		cfg.Admin.Username, cfg.Admin.Email, string(hash),

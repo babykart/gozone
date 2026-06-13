@@ -5,6 +5,7 @@
 package testutil
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -69,6 +70,7 @@ func NewTestPDNSServer(t *testing.T, handler PDNSHandlerFunc) (*httptest.Server,
 // Returns the new user's ID.
 func SeedTestUser(t *testing.T, db *database.DB, username, password, role string, enabled bool) int64 {
 	t.Helper()
+	ctx := context.Background()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), 4)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +79,7 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 	if enabled {
 		enabledVal = 1
 	}
-	result, err := db.Exec(
+	result, err := db.ExecContext(ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username, username+"@test.local", string(hash), "Test", "User", role, enabledVal,
 	)
@@ -94,13 +96,14 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 // to create a non-expiring key.
 func SeedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time) {
 	t.Helper()
+	ctx := context.Background()
 	var expires interface{}
 	if expiresAt != nil {
 		expires = *expiresAt
 	}
 	h := sha256.Sum256([]byte(rawKey))
 	keyHash := hex.EncodeToString(h[:])
-	_, err := db.Exec(
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO api_keys (user_id, key_hash, description, expires_at) VALUES (?, ?, ?, ?)`,
 		userID, keyHash, "test key", expires,
 	)

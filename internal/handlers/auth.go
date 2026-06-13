@@ -40,13 +40,14 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 // On success, it generates a JWT stored in the "gozone_session" cookie and
 // redirects to /dashboard. On failure, redirects to /login?error=invalid_credentials.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
 	var user models.User
 	var enabled int
 	ensureDummyHash(h.Cfg.Auth.BcryptCost)
-	err := h.DB.QueryRow(
+	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at
 		 FROM users WHERE username = ? AND enabled = 1`, username,
 	).Scan(
@@ -90,7 +91,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Secure:   isSecure(r),
 	})
 
-	if _, err := h.DB.Exec(
+	if _, err := h.DB.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'login', ?)",
 		user.ID, fmt.Sprintf("User %s logged in", user.Username),
 	); err != nil {
@@ -102,9 +103,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 // Logout clears the session cookie and redirects to /login.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	user := middleware.GetUser(r)
 	if user != nil {
-		if _, err := h.DB.Exec(
+		if _, err := h.DB.ExecContext(ctx,
 			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'logout', ?)",
 			user.ID, fmt.Sprintf("User %s logged out", user.Username),
 		); err != nil {

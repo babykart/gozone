@@ -4,6 +4,7 @@
 package database
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -78,18 +79,36 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 
 // Exec executes a query with automatic placeholder rebinding.
 func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
-	return db.Conn.Exec(db.dialect.Rebind(query), args...)
+	return db.ExecContext(context.Background(), query, args...)
+}
+
+// ExecContext executes a query with automatic placeholder rebinding and
+// supports cancellation through the provided context.
+func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return db.Conn.ExecContext(ctx, db.dialect.Rebind(query), args...)
 }
 
 // Query executes a query that returns rows with automatic placeholder rebinding.
 func (db *DB) Query(query string, args ...any) (*sql.Rows, error) {
-	return db.Conn.Query(db.dialect.Rebind(query), args...)
+	return db.QueryContext(context.Background(), query, args...)
+}
+
+// QueryContext executes a query that returns rows with automatic placeholder
+// rebinding and supports cancellation through the provided context.
+func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return db.Conn.QueryContext(ctx, db.dialect.Rebind(query), args...)
 }
 
 // QueryRow executes a query that returns at most one row with automatic
 // placeholder rebinding.
 func (db *DB) QueryRow(query string, args ...any) *sql.Row {
-	return db.Conn.QueryRow(db.dialect.Rebind(query), args...)
+	return db.QueryRowContext(context.Background(), query, args...)
+}
+
+// QueryRowContext executes a query that returns at most one row with automatic
+// placeholder rebinding and supports cancellation through the provided context.
+func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return db.Conn.QueryRowContext(ctx, db.dialect.Rebind(query), args...)
 }
 
 // Ping verifies a connection to the database.
@@ -104,7 +123,14 @@ func (db *DB) Close() error {
 
 // Begin starts a transaction with automatic placeholder rebinding.
 func (db *DB) Begin() (*Tx, error) {
-	tx, err := db.Conn.Begin()
+	return db.BeginTx(context.Background(), nil)
+}
+
+// BeginTx starts a transaction with automatic placeholder rebinding and the
+// given transaction options. The context is used until the transaction is
+// committed or rolled back.
+func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
+	tx, err := db.Conn.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -120,19 +146,39 @@ type Tx struct {
 // Exec executes a query within the transaction with automatic placeholder
 // rebinding.
 func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
-	return tx.Tx.Exec(tx.dialect.Rebind(query), args...)
+	return tx.ExecContext(context.Background(), query, args...)
+}
+
+// ExecContext executes a query within the transaction with automatic placeholder
+// rebinding and supports cancellation through the provided context.
+func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return tx.Tx.ExecContext(ctx, tx.dialect.Rebind(query), args...)
 }
 
 // Query executes a query within the transaction that returns rows with
 // automatic placeholder rebinding.
 func (tx *Tx) Query(query string, args ...any) (*sql.Rows, error) {
-	return tx.Tx.Query(tx.dialect.Rebind(query), args...)
+	return tx.QueryContext(context.Background(), query, args...)
+}
+
+// QueryContext executes a query within the transaction that returns rows with
+// automatic placeholder rebinding and supports cancellation through the
+// provided context.
+func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return tx.Tx.QueryContext(ctx, tx.dialect.Rebind(query), args...)
 }
 
 // QueryRow executes a query within the transaction that returns at most one
 // row with automatic placeholder rebinding.
 func (tx *Tx) QueryRow(query string, args ...any) *sql.Row {
-	return tx.Tx.QueryRow(tx.dialect.Rebind(query), args...)
+	return tx.QueryRowContext(context.Background(), query, args...)
+}
+
+// QueryRowContext executes a query within the transaction that returns at most
+// one row with automatic placeholder rebinding and supports cancellation
+// through the provided context.
+func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return tx.Tx.QueryRowContext(ctx, tx.dialect.Rebind(query), args...)
 }
 
 // migrationVersion returns a stable identifier for a migration based on the

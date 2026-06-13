@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -486,16 +487,6 @@ func (r *reversedSQLiteDialect) Migrations() []string {
 	return rev
 }
 
-type spyDialect struct {
-	sqliteDialect
-	rebinds []string
-}
-
-func (d *spyDialect) Rebind(query string) string {
-	d.rebinds = append(d.rebinds, query)
-	return query
-}
-
 func TestTx_Rebind(t *testing.T) {
 	cfg := &config.DatabaseConfig{
 		Driver: "sqlite3",
@@ -566,5 +557,87 @@ func TestTx_Rebind(t *testing.T) {
 		if dialect.rebinds[i] != want {
 			t.Errorf("rebind call %d: expected %q, got %q", i, want, dialect.rebinds[i])
 		}
+	}
+}
+
+type spyDialect struct {
+	sqliteDialect
+	rebinds []string
+}
+
+func (d *spyDialect) Rebind(query string) string {
+	d.rebinds = append(d.rebinds, query)
+	return query
+}
+
+func TestContextMethods(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)"); err != nil {
+		t.Fatalf("ExecContext: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO t (name) VALUES (?)", "a"); err != nil {
+		t.Fatalf("ExecContext insert: %v", err)
+	}
+
+	rows, err := db.QueryContext(ctx, "SELECT id, name FROM t WHERE name = ?", "a")
+	if err != nil {
+		t.Fatalf("QueryContext: %v", err)
+	}
+	defer rows.Close()
+
+	var found bool
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected to find row via QueryContext")
+	}
+
+	var id int
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT id, name FROM t WHERE name = ?", "a").Scan(&id, &name); err != nil {
+		t.Fatalf("QueryRowContext: %v", err)
+	}
+	if name != "a" {
+		t.Errorf("expected name a, got %q", name)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "INSERT INTO t (name) VALUES (?)", "b"); err != nil {
+		t.Fatalf("Tx ExecContext: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM t").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 rows, got %d", count)
 	}
 }
