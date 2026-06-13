@@ -393,7 +393,10 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 }
 
 func TestAPIGetZone_NotFound(t *testing.T) {
-	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`))
+	})
 	defer pdnsSrv.Close()
 
 	w := httptest.NewRecorder()
@@ -408,6 +411,25 @@ func TestAPIGetZone_NotFound(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Code != ErrCodeZoneNotFound {
 		t.Errorf("expected code %s, got %s", ErrCodeZoneNotFound, resp.Code)
+	}
+}
+
+func TestAPIGetZone_PDNSError(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIGetZone(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeInternalError {
+		t.Errorf("expected code %s, got %s", ErrCodeInternalError, resp.Code)
 	}
 }
 
@@ -451,6 +473,28 @@ func TestAPIListRecords_PDNSError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestAPIListRecords_NotFound(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent/records", nil)
+	r.SetPathValue("zone_id", "nonexistent")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeRecordNotFound {
+		t.Errorf("expected code %s, got %s", ErrCodeRecordNotFound, resp.Code)
 	}
 }
 

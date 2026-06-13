@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/pdns"
 	"github.com/babykart/gozone/internal/validators"
 )
 
@@ -22,7 +24,27 @@ const (
 	ErrCodeRecordNotFound  = "RECORD_NOT_FOUND"
 	ErrCodeInternalError   = "INTERNAL_ERROR"
 	ErrCodeStatsError      = "STATS_ERROR"
+	ErrCodeConflict        = "CONFLICT"
+	ErrCodeUnauthorized    = "UNAUTHORIZED"
 )
+
+// pdnsErrorStatus maps a typed PowerDNS client error to the appropriate HTTP
+// status code and API error code. notFoundCode lets callers distinguish a
+// missing zone from a missing record.
+func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
+	switch {
+	case errors.Is(err, pdns.ErrNotFound):
+		return http.StatusNotFound, notFoundCode
+	case errors.Is(err, pdns.ErrValidation):
+		return http.StatusBadRequest, ErrCodeValidationError
+	case errors.Is(err, pdns.ErrConflict):
+		return http.StatusConflict, ErrCodeConflict
+	case errors.Is(err, pdns.ErrUnauthorized):
+		return http.StatusUnauthorized, ErrCodeUnauthorized
+	default:
+		return http.StatusInternalServerError, ErrCodeInternalError
+	}
+}
 
 // apiError is the standardized error response body.
 type apiError struct {
@@ -79,7 +101,8 @@ func (h *Handler) APIGetZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusNotFound, ErrCodeZoneNotFound, "zone not found", err)
+		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
+		h.writeAPIErrorWithCause(w, r, status, code, "zone not found", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, zone)
@@ -103,7 +126,8 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.CreateZone(r.Context(), req)
 	if err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeZoneCreateError, "failed to create zone", err)
+		status, code := pdnsErrorStatus(err, ErrCodeZoneCreateError)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to create zone", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, zone)
@@ -113,7 +137,8 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.DeleteZone(r.Context(), zoneID); err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeZoneDeleteError, "failed to delete zone", err)
+		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete zone", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "zone deleted"})
@@ -126,7 +151,8 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordNotFound, "failed to list records", err)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to list records", err)
 		return
 	}
 	if records == nil {
@@ -179,7 +205,8 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.CreateRecord(r.Context(), zoneID, rrset); err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to create record", err)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"message": "record created"})
@@ -203,7 +230,8 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to update record", err)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to update record", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record updated"})
@@ -230,7 +258,8 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, req.Name, req.Type); err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to delete record", err)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete record", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record deleted"})

@@ -101,7 +101,7 @@ func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var servers []models.ServerInfo
@@ -118,7 +118,7 @@ func (c *Client) GetServer(ctx context.Context) (*models.ServerInfo, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var server models.ServerInfo
@@ -142,7 +142,7 @@ func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, err
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var stats []models.StatisticItem
@@ -162,7 +162,7 @@ func (c *Client) ListZones(ctx context.Context) ([]models.Zone, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var zones []models.Zone
@@ -196,7 +196,7 @@ func (c *Client) GetZone(ctx context.Context, zoneID string) (*models.Zone, erro
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var zone models.Zone
@@ -220,7 +220,7 @@ func (c *Client) CreateZone(ctx context.Context, req models.ZoneCreateRequest) (
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var zone models.Zone
@@ -232,12 +232,12 @@ func (c *Client) CreateZone(ctx context.Context, req models.ZoneCreateRequest) (
 
 // DeleteZone deletes a zone.
 func (c *Client) DeleteZone(ctx context.Context, zoneID string) error {
-	_, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
+	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -249,7 +249,7 @@ func (c *Client) ListRecords(ctx context.Context, zoneID string) ([]models.RRSet
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var full struct {
@@ -313,31 +313,31 @@ func (c *Client) patchZone(ctx context.Context, zoneID string, rrsets []models.R
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return httpError(status, body)
 	}
 	return nil
 }
 
 // RectifyZone triggers DNSSEC rectification for a zone.
 func (c *Client) RectifyZone(ctx context.Context, zoneID string) error {
-	_, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/rectify", nil)
+	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/rectify", nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
 
 // NotifySlaves sends NOTIFY to slave servers for a zone.
 func (c *Client) NotifySlaves(ctx context.Context, zoneID string) error {
-	_, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/notify", nil)
+	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/notify", nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -349,7 +349,7 @@ func (c *Client) GetMetadata(ctx context.Context, zoneID string) ([]models.Metad
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var metadata []models.Metadata
@@ -367,24 +367,24 @@ func (c *Client) SetMetadata(ctx context.Context, zoneID string, meta models.Met
 		meta.Metadata = []string{}
 	}
 	payload := map[string][]string{"metadata": meta.Metadata}
-	_, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+meta.Kind, payload)
+	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+meta.Kind, payload)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
 
 // DeleteMetadata removes a zone metadata entry by kind.
 func (c *Client) DeleteMetadata(ctx context.Context, zoneID string, kind string) error {
-	_, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+kind, nil)
+	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+kind, nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -401,7 +401,7 @@ func (c *Client) ListTSIGKeys(ctx context.Context) ([]models.TSIGKey, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var keys []models.TSIGKey
@@ -418,7 +418,7 @@ func (c *Client) GetTSIGKey(ctx context.Context, id string) (*models.TSIGKey, er
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var key models.TSIGKey
@@ -435,7 +435,7 @@ func (c *Client) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var created models.TSIGKey
@@ -447,24 +447,24 @@ func (c *Client) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models
 
 // UpdateTSIGKey updates an existing TSIG key.
 func (c *Client) UpdateTSIGKey(ctx context.Context, id string, key models.TSIGKey) error {
-	_, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
+	body, status, err := c.do(ctx, "PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
 
 // DeleteTSIGKey deletes a TSIG key.
 func (c *Client) DeleteTSIGKey(ctx context.Context, id string) error {
-	_, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
+	body, status, err := c.do(ctx, "DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
@@ -484,7 +484,7 @@ func (c *Client) ListCryptokeys(ctx context.Context, zoneID string) ([]models.Cr
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var keys []models.Cryptokey
@@ -506,7 +506,7 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("unexpected status %d: %s", status, string(body))
+		return nil, httpError(status, body)
 	}
 
 	var key models.Cryptokey
@@ -519,24 +519,24 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 // ToggleCryptokey activates or deactivates a DNSSEC key.
 func (c *Client) ToggleCryptokey(ctx context.Context, zoneID string, keyID int, active bool) error {
 	payload := map[string]interface{}{"active": active}
-	_, status, err := c.do(ctx, "PUT", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), payload)
+	body, status, err := c.do(ctx, "PUT", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), payload)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
 
 // DeleteCryptokey deletes a DNSSEC key from a zone.
 func (c *Client) DeleteCryptokey(ctx context.Context, zoneID string, keyID int) error {
-	_, status, err := c.do(ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
+	body, status, err := c.do(ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("unexpected status %d", status)
+		return httpError(status, body)
 	}
 	return nil
 }
