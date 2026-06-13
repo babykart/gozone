@@ -10,7 +10,7 @@
     </div>
     <div class="header-actions">
         <form method="GET" class="search-form" style="display:inline">
-            <input type="search" name="search" value="{{.Search}}" placeholder="Filter records..." class="search-input">
+            <input type="search" name="search" value="{{.Search}}" placeholder="Filter records..." class="search-input" aria-label="Filter records">
         </form>
         <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
         <a href="/zones/{{.Zone.ID}}/export?format=bind" class="btn btn-secondary">BIND</a>

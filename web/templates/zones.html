@@ -8,7 +8,7 @@
     <h2>Zones</h2>
     <div class="header-actions">
         <form method="GET" action="/zones" class="search-form">
-            <input type="search" name="search" value="{{.Search}}" placeholder="Filter zones..." class="search-input">
+            <input type="search" name="search" value="{{.Search}}" placeholder="Filter zones..." class="search-input" aria-label="Filter zones">
         </form>
         {{if .IsAdmin}}
         <a href="/zones/new" class="btn btn-primary">Create Zone</a>

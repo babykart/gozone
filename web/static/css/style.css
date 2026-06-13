@@ -40,6 +40,33 @@
     --sidebar-hover: #1e293b;
 }
 
+.notification {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius);
+    color: #fff;
+    background-color: var(--danger);
+    box-shadow: var(--shadow);
+    max-width: 400px;
+    word-wrap: break-word;
+}
+
+.notification-success {
+    background-color: var(--success);
+}
+
+.notification-error {
+    background-color: var(--danger);
+}
+
+.notification-warning {
+    background-color: var(--warning);
+    color: #000;
+}
+
 * {
     margin: 0;
     padding: 0;

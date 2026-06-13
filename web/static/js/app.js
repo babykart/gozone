@@ -73,6 +73,22 @@ function resetRowValues(row) {
     if (editDisabled) editDisabled.checked = row.getAttribute('data-disabled') === 'true';
 }
 
+function showNotification(message, type) {
+    var el = document.getElementById('notification');
+    if (!el) {
+        // Fallback for pages without the notification container
+        console.error(message);
+        return;
+    }
+    el.textContent = message;
+    el.className = 'notification notification-' + (type || 'error');
+    el.style.display = 'block';
+    setTimeout(function() {
+        el.style.display = 'none';
+        el.textContent = '';
+    }, 5000);
+}
+
 function saveRecordRow(btn, zoneID, csrfToken) {
     var row = btn.closest('tr');
     var name = row.getAttribute('data-name');
@@ -82,7 +98,7 @@ function saveRecordRow(btn, zoneID, csrfToken) {
     var prio = row.querySelector('.ev-prio').value;
     var disabled = row.querySelector('.ev-disabled') ? row.querySelector('.ev-disabled').checked : false;
 
-    if (!content) { alert('Content is required'); return; }
+    if (!content) { showNotification('Content is required', 'error'); return; }
 
     var formData = new URLSearchParams();
     formData.append('gorilla.csrf.Token', csrfToken);
@@ -100,7 +116,14 @@ function saveRecordRow(btn, zoneID, csrfToken) {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formData.toString()
     })
-    .then(function(resp) { return resp.json(); })
+    .then(function(resp) {
+        if (!resp.ok) {
+            return resp.text().then(function(text) {
+                throw new Error('HTTP ' + resp.status + (text ? ': ' + text : ''));
+            });
+        }
+        return resp.json();
+    })
     .then(function(data) {
         if (data.success) {
             var r = data.record;
@@ -117,13 +140,16 @@ function saveRecordRow(btn, zoneID, csrfToken) {
                     row.setAttribute('data-disabled', 'false');
                 }
             }
+            row.setAttribute('data-original-content', content);
+            row.setAttribute('data-original-priority', prio);
             toggleEditMode(row, false);
+            showNotification('Record updated', 'success');
         } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
+            showNotification('Error: ' + (data.error || 'Unknown error'), 'error');
         }
     })
     .catch(function(err) {
-        alert('Request failed: ' + err.message);
+        showNotification('Request failed: ' + err.message, 'error');
     });
 }
 

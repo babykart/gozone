@@ -11,6 +11,7 @@
 {{end}}
 
 {{define "tail"}}
+    <div id="notification" class="notification" role="status" aria-live="polite" aria-atomic="true" style="display:none"></div>
     <script src="/static/js/app.js"></script>
 </body>
 </html>
@@ -19,7 +20,7 @@
 {{define "sidebar"}}
 <aside class="sidebar">
     <div class="sidebar-header">
-        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
+        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
         <div class="sidebar-brand">
             <a href="/dashboard">GoZone</a>
             <span class="nav-subtitle">PowerDNS Admin</span>
@@ -36,8 +37,8 @@
     </nav>
     <div class="sidebar-footer">
         <a href="/profile" class="username">{{.User.Username}}</a>
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌓</button>
-        <a href="/logout" class="btn-logout" title="Logout">⏻</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">🌓</button>
+        <a href="/logout" class="btn-logout" title="Logout" aria-label="Logout">⏻</a>
     </div>
 </aside>
 {{end}}
