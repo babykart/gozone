@@ -351,3 +351,86 @@ func TestSanitizeDSN_NoCredentials(t *testing.T) {
 		t.Errorf("Postgres DSN without password should remain unchanged: got %q", got)
 	}
 }
+
+type spyDialect struct {
+	sqliteDialect
+	rebinds []string
+}
+
+func (d *spyDialect) Rebind(query string) string {
+	d.rebinds = append(d.rebinds, query)
+	return query
+}
+
+func TestTx_Rebind(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    ":memory:",
+	}
+
+	dialect := &spyDialect{}
+	conn, err := sql.Open("sqlite3", cfg.DSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	db := &DB{Conn: conn, dialect: dialect}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)"); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if _, err := tx.Exec("INSERT INTO t (name) VALUES (?)", "a"); err != nil {
+		t.Fatalf("exec insert: %v", err)
+	}
+
+	rows, err := tx.Query("SELECT id, name FROM t WHERE name = ?", "a")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+
+	var found bool
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected to find row via tx.Query")
+	}
+
+	var id int
+	var name string
+	if err := tx.QueryRow("SELECT id, name FROM t WHERE name = ?", "a").Scan(&id, &name); err != nil {
+		t.Fatalf("query row: %v", err)
+	}
+	if name != "a" {
+		t.Errorf("expected name a, got %q", name)
+	}
+
+	expected := []string{
+		"CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)",
+		"INSERT INTO t (name) VALUES (?)",
+		"SELECT id, name FROM t WHERE name = ?",
+		"SELECT id, name FROM t WHERE name = ?",
+	}
+	if len(dialect.rebinds) != len(expected) {
+		t.Fatalf("expected %d Rebind calls, got %d", len(expected), len(dialect.rebinds))
+	}
+	for i, want := range expected {
+		if dialect.rebinds[i] != want {
+			t.Errorf("rebind call %d: expected %q, got %q", i, want, dialect.rebinds[i])
+		}
+	}
+}

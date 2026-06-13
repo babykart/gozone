@@ -120,6 +120,18 @@ func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
 	return tx.Tx.Exec(tx.dialect.Rebind(query), args...)
 }
 
+// Query executes a query within the transaction that returns rows with
+// automatic placeholder rebinding.
+func (tx *Tx) Query(query string, args ...any) (*sql.Rows, error) {
+	return tx.Tx.Query(tx.dialect.Rebind(query), args...)
+}
+
+// QueryRow executes a query within the transaction that returns at most one
+// row with automatic placeholder rebinding.
+func (tx *Tx) QueryRow(query string, args ...any) *sql.Row {
+	return tx.Tx.QueryRow(tx.dialect.Rebind(query), args...)
+}
+
 // migrate creates the initial schema using dialect-specific SQL.
 // It tracks applied migrations in the schema_migrations table to ensure
 // idempotent execution across restarts.
