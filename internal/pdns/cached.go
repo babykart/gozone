@@ -154,19 +154,35 @@ func (c *cachedClient) DeleteZone(ctx context.Context, zoneID string) error {
 }
 
 func (c *cachedClient) CreateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error {
-	return c.client.CreateRecord(ctx, zoneID, rrset)
+	if err := c.client.CreateRecord(ctx, zoneID, rrset); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) CreateRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error {
-	return c.client.CreateRecords(ctx, zoneID, rrsets)
+	if err := c.client.CreateRecords(ctx, zoneID, rrsets); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) UpdateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error {
-	return c.client.UpdateRecord(ctx, zoneID, rrset)
+	if err := c.client.UpdateRecord(ctx, zoneID, rrset); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) DeleteRecord(ctx context.Context, zoneID string, name, recordType string) error {
-	return c.client.DeleteRecord(ctx, zoneID, name, recordType)
+	if err := c.client.DeleteRecord(ctx, zoneID, name, recordType); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) RectifyZone(ctx context.Context, zoneID string) error {

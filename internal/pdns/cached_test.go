@@ -290,3 +290,114 @@ func TestCachedInvalidateZoneCache(t *testing.T) {
 		t.Errorf("expected 4 list calls after invalidation, got %d", listCalls.Load())
 	}
 }
+
+func TestCachedRecordMutations_InvalidateZonesAndStats(t *testing.T) {
+	var listCalls, statCalls, patchCalls atomic.Int64
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones"):
+			listCalls.Add(1)
+			w.Write([]byte(`[{"id":"test.","name":"test.","kind":"Native","serial":0}]`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "statistics"):
+			statCalls.Add(1)
+			w.Write([]byte(`[]`))
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/test."):
+			patchCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	ctx := context.Background()
+
+	// Populate caches
+	cached.ListZones(ctx)
+	cached.ListZonesWithInfo(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 2 || statCalls.Load() != 1 {
+		t.Fatalf("expected 2 list + 1 stat calls to populate caches, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// CreateRecord should invalidate zone list/info and stats caches
+	if err := cached.CreateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}}); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.ListZonesWithInfo(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 4 || statCalls.Load() != 2 {
+		t.Errorf("after CreateRecord expected list=4 stat=2, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// UpdateRecord should invalidate caches again
+	if err := cached.UpdateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.5"}}}); err != nil {
+		t.Fatalf("UpdateRecord: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 5 || statCalls.Load() != 3 {
+		t.Errorf("after UpdateRecord expected list=5 stat=3, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// DeleteRecord should invalidate caches again
+	if err := cached.DeleteRecord(ctx, "test.", "www.test.", "A"); err != nil {
+		t.Fatalf("DeleteRecord: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 6 || statCalls.Load() != 4 {
+		t.Errorf("after DeleteRecord expected list=6 stat=4, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// CreateRecords should invalidate caches again
+	if err := cached.CreateRecords(ctx, "test.", []models.RRSet{
+		{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+	}); err != nil {
+		t.Fatalf("CreateRecords: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 7 || statCalls.Load() != 5 {
+		t.Errorf("after CreateRecords expected list=7 stat=5, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	if patchCalls.Load() != 4 {
+		t.Errorf("expected 4 PATCH calls, got %d", patchCalls.Load())
+	}
+}
+
+func TestCachedRecordMutation_ErrorDoesNotInvalidateCache(t *testing.T) {
+	var listCalls, patchCalls atomic.Int64
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones"):
+			listCalls.Add(1)
+			w.Write([]byte(`[{"id":"test.","name":"test.","kind":"Native","serial":0}]`))
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/test."):
+			patchCalls.Add(1)
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"error":"invalid record"}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	ctx := context.Background()
+	cached.ListZones(ctx)
+	if listCalls.Load() != 1 {
+		t.Fatalf("expected 1 list call, got %d", listCalls.Load())
+	}
+
+	err := cached.CreateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "bad"}}})
+	if err == nil {
+		t.Fatal("expected CreateRecord to fail")
+	}
+
+	cached.ListZones(ctx)
+	if listCalls.Load() != 1 {
+		t.Errorf("cache should not be invalidated on error, got %d list calls", listCalls.Load())
+	}
+}
