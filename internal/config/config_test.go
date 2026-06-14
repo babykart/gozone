@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -333,5 +334,107 @@ func TestDeriveKeys_DifferentMaster(t *testing.T) {
 
 	if bytes.Equal(jwt1, jwt2) {
 		t.Error("different master secrets must produce different JWT keys")
+	}
+}
+
+func TestLoad_ValidatesPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		envName string
+		envVal  string
+		wantErr string
+	}{
+		{
+			name:    "zero port",
+			envName: "GOZONE_SERVER_PORT",
+			envVal:  "0",
+			wantErr: "must be a positive integer",
+		},
+		{
+			name:    "negative port",
+			envName: "GOZONE_SERVER_PORT",
+			envVal:  "-1",
+			wantErr: "must be a positive integer",
+		},
+		{
+			name:    "privileged port",
+			envName: "GOZONE_SERVER_PORT",
+			envVal:  "80",
+			wantErr: "privileged port",
+		},
+		{
+			name:    "port above range",
+			envName: "GOZONE_SERVER_PORT",
+			envVal:  "65536",
+			wantErr: "out of valid range",
+		},
+		{
+			name:    "bcrypt cost too low",
+			envName: "GOZONE_BCRYPT_COST",
+			envVal:  "3",
+			wantErr: "must be between 4 and 31",
+		},
+		{
+			name:    "bcrypt cost too high",
+			envName: "GOZONE_BCRYPT_COST",
+			envVal:  "32",
+			wantErr: "must be between 4 and 31",
+		},
+		{
+			name:    "session duration zero",
+			envName: "GOZONE_SESSION_DURATION",
+			envVal:  "0",
+			wantErr: "session_duration_hours",
+		},
+		{
+			name:    "session duration negative",
+			envName: "GOZONE_SESSION_DURATION",
+			envVal:  "-1",
+			wantErr: "session_duration_hours",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.envName, tt.envVal)
+			_, err := Load("")
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoad_ValidatesDriver(t *testing.T) {
+	t.Setenv("GOZONE_DB_DRIVER", "oracle")
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected error for unsupported driver, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported database driver") {
+		t.Errorf("expected unsupported database driver error, got %v", err)
+	}
+}
+
+func TestLoad_AcceptsValidBounds(t *testing.T) {
+	t.Setenv("GOZONE_SERVER_PORT", "1024")
+	t.Setenv("GOZONE_BCRYPT_COST", "4")
+	t.Setenv("GOZONE_SESSION_DURATION", "1")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("expected valid config, got error: %v", err)
+	}
+	if cfg.Server.Port != 1024 {
+		t.Errorf("expected port 1024, got %d", cfg.Server.Port)
+	}
+	if cfg.Auth.BcryptCost != 4 {
+		t.Errorf("expected bcrypt cost 4, got %d", cfg.Auth.BcryptCost)
+	}
+	if cfg.Auth.SessionDurationHours != 1 {
+		t.Errorf("expected session duration 1, got %d", cfg.Auth.SessionDurationHours)
 	}
 }

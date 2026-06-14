@@ -180,7 +180,50 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	if err := cfg.validate(); err != nil {
+		return cfg, err
+	}
+
 	return cfg, nil
+}
+
+// validate checks that the merged configuration is within safe, operable
+// bounds. It rejects nonsensical values such as privileged ports, bcrypt costs
+// outside the bcrypt library range, or negative session durations before the
+// server can start and silently behave unexpectedly or insecurely.
+func (cfg *Config) validate() error {
+	if cfg.Server.Port <= 0 {
+		return fmt.Errorf("invalid server port %d: must be a positive integer", cfg.Server.Port)
+	}
+
+	if cfg.Server.Port < 1024 {
+		return fmt.Errorf("server port %d is a privileged port; use 1024 or higher", cfg.Server.Port)
+	}
+
+	if cfg.Server.Port > 65535 {
+		return fmt.Errorf("server port %d is out of valid range (1-65535)", cfg.Server.Port)
+	}
+
+	if cfg.Auth.BcryptCost < 4 || cfg.Auth.BcryptCost > 31 {
+		return fmt.Errorf("invalid bcrypt_cost %d: must be between 4 and 31", cfg.Auth.BcryptCost)
+	}
+
+	if cfg.Auth.SessionDurationHours <= 0 {
+		return fmt.Errorf("invalid session_duration_hours %d: must be a positive integer", cfg.Auth.SessionDurationHours)
+	}
+
+	if cfg.Database.Driver == "" {
+		return fmt.Errorf("database driver is required")
+	}
+
+	switch cfg.Database.Driver {
+	case "sqlite3", "mysql", "postgres":
+		// supported
+	default:
+		return fmt.Errorf("unsupported database driver %q; choose one of sqlite3, mysql, postgres", cfg.Database.Driver)
+	}
+
+	return nil
 }
 
 func applyEnvOverrides(cfg *Config) {
@@ -220,6 +263,13 @@ func applyEnvOverrides(cfg *Config) {
 			logger.Warn("invalid GOZONE_SESSION_DURATION, using default", "value", v, "error", err)
 		} else {
 			cfg.Auth.SessionDurationHours = n
+		}
+	}
+	if v := os.Getenv("GOZONE_BCRYPT_COST"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_BCRYPT_COST, using default", "value", v, "error", err)
+		} else {
+			cfg.Auth.BcryptCost = n
 		}
 	}
 	if v := os.Getenv("GOZONE_ADMIN_USERNAME"); v != "" {

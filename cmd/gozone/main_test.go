@@ -33,8 +33,8 @@ database:
 	if err == nil {
 		t.Fatal("expected error for unsupported database driver")
 	}
-	if !strings.Contains(err.Error(), "open database") {
-		t.Errorf("expected 'open database' error, got: %v", err)
+	if !strings.Contains(err.Error(), "unsupported database driver") {
+		t.Errorf("expected unsupported database driver error, got: %v", err)
 	}
 }
 
