@@ -146,7 +146,7 @@ func run(args []string) error {
 				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			})
 			r.Get("/dashboard", h.Dashboard)
-			r.Get("/logout", h.Logout)
+			r.Post("/logout", h.Logout)
 			r.Get("/profile", h.ProfilePage)
 			r.Get("/profile/api-keys", h.ListAPIKeys)
 			r.Post("/profile/api-keys/create", h.CreateAPIKey)

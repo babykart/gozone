@@ -44,7 +44,10 @@
     <div class="topbar-actions">
         <a href="/profile" class="topbar-username">{{.User.Username}}</a>
         <button class="theme-toggle" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
-        <a href="/logout" class="btn-logout" title="Logout" aria-label="Logout">⏻</a>
+        <form method="POST" action="/logout" class="logout-form">
+            <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
+            <button type="submit" class="btn-logout" title="Logout" aria-label="Logout">⏻</button>
+        </form>
     </div>
 </header>
 {{end}}

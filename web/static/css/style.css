@@ -230,6 +230,12 @@ body {
     color: var(--primary);
 }
 
+.topbar .logout-form {
+    display: inline;
+    margin: 0;
+    padding: 0;
+}
+
 .topbar .btn-logout {
     background: none;
     border: 1px solid var(--danger);

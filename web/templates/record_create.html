@@ -23,7 +23,7 @@
                 </div>
                 <div class="form-group">
                     <label>Type</label>
-                    <select name="type" class="form-control" required>
+                    <select name="type" class="form-control" data-action="toggle-priority" required>
                         {{range .RecordTypes}}
                         <option value="{{.}}">{{.}}</option>
                         {{end}}
@@ -56,21 +56,6 @@
         <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
-
-<script>
-(function() {
-    function togglePriority(select) {
-        var t = select.value;
-        var row = select.closest('.record-row');
-        var grp = row.querySelector('.record-prio-group');
-        grp.style.display = (t === 'MX' || t === 'SRV') ? '' : 'none';
-    }
-    document.querySelector('#batch-form').addEventListener('change', function(e) {
-        if (e.target.name === 'type') togglePriority(e.target);
-    });
-    document.querySelectorAll('#batch-form select[name=type]').forEach(function(s) { togglePriority(s); });
-})();
-</script>
         </div>
     </main>
 </div>

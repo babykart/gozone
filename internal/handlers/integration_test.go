@@ -92,7 +92,7 @@ func TestIntegration_CompleteWebFlow(t *testing.T) {
 		ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/logout", nil)
+		r := httptest.NewRequest(http.MethodPost, "/logout", nil)
 		r = r.WithContext(ctx)
 		h.Logout(w, r)
 
