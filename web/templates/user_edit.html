@@ -39,16 +39,18 @@
     </div>
     <div class="form-group">
         <label for="role">Role</label>
-        <select id="role" name="role">
+        <select id="role" name="role" {{if .IsSelf}}disabled{{end}}>
             <option value="user" {{if eq .TargetUser.Role "user"}}selected{{end}}>User</option>
             <option value="admin" {{if eq .TargetUser.Role "admin"}}selected{{end}}>Admin</option>
         </select>
+        {{if .IsSelf}}<input type="hidden" name="role" value="{{.TargetUser.Role}}">{{end}}
     </div>
     <div class="form-group">
         <label>
-            <input type="checkbox" name="enabled" value="1" {{if .TargetUser.Enabled}}checked{{end}}>
+            <input type="checkbox" name="enabled" value="1" {{if .TargetUser.Enabled}}checked{{end}} {{if .IsSelf}}disabled{{end}}>
             Enabled
         </label>
+        {{if .IsSelf}}<input type="hidden" name="enabled" value="{{if .TargetUser.Enabled}}1{{else}}0{{end}}">{{end}}
     </div>
     <div class="form-actions">
         <button type="submit" class="btn btn-primary">Update User</button>

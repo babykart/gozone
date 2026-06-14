@@ -265,6 +265,114 @@ func TestDeleteUser_Success(t *testing.T) {
 	}
 }
 
+func TestUpdateUser_SelfRoleChangeBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Admin tries to demote themselves to user
+	body := "email=admin@test.local&first_name=&last_name=&role=user&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/1/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "1")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id=1").Scan(&role)
+	if role != "admin" {
+		t.Errorf("expected admin role to remain, got %s", role)
+	}
+}
+
+func TestUpdateUser_SelfDisableBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Admin tries to disable themselves; no enabled field means disabled
+	body := "email=admin@test.local&first_name=&last_name=&role=admin"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/1/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "1")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+
+	var enabled int
+	h.DB.QueryRow("SELECT enabled FROM users WHERE id=1").Scan(&enabled)
+	if enabled != 1 {
+		t.Errorf("expected admin to remain enabled")
+	}
+}
+
+func TestUpdateUser_LastEnabledAdminBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
+		"user2", "user2@example.com", "hash", "user", 0,
+	)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Try to disable the only enabled admin
+	body := "email=admin@test.local&first_name=&last_name=&role=admin"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/1/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "1")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+
+	var enabled int
+	h.DB.QueryRow("SELECT enabled FROM users WHERE id=1").Scan(&enabled)
+	if enabled != 1 {
+		t.Errorf("expected last admin to remain enabled")
+	}
+}
+
+func TestUpdateUser_SelfAllowedFields(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Admin may update their own email/name without changing role/enabled
+	body := "email=admin-new@test.local&first_name=New&last_name=Name&role=admin&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/1/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "1")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect 303, got %d", w.Code)
+	}
+
+	var email, firstName, lastName string
+	h.DB.QueryRow("SELECT email, first_name, last_name FROM users WHERE id=1").Scan(&email, &firstName, &lastName)
+	if email != "admin-new@test.local" || firstName != "New" || lastName != "Name" {
+		t.Errorf("expected email/name update, got %s %s %s", email, firstName, lastName)
+	}
+}
+
 func TestDeleteUser_Self(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)

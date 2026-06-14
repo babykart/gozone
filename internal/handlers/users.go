@@ -171,6 +171,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 		"Title":      "Edit User - GoZone",
 		"User":       admin,
 		"TargetUser": target,
+		"IsSelf":     target.ID == admin.ID,
 	}
 	h.render(w, r, "user_edit.html", data)
 }
@@ -179,6 +180,8 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 //
 // Admin-only. Updates email, first_name, last_name, role, and enabled status.
 // If a new password is provided, it is hashed and stored separately.
+// An admin cannot change their own role or enabled status, and the last
+// enabled admin cannot be demoted or disabled.
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
 
@@ -189,7 +192,8 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
 	lastName := strings.TrimSpace(r.FormValue("last_name"))
 	role := strings.TrimSpace(r.FormValue("role"))
-	enabled := r.FormValue("enabled") == "on"
+	enabledStr := strings.TrimSpace(r.FormValue("enabled"))
+	enabled := enabledStr == "1" || enabledStr == "on" || enabledStr == "true"
 	newPassword := strings.TrimSpace(r.FormValue("password"))
 
 	if role != "admin" && role != "user" {
@@ -203,8 +207,48 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch the target user to compare current role/enabled and enforce guards.
+	var target models.User
+	var targetEnabled int
+	err := h.DB.QueryRow(
+		`SELECT id, username, email, first_name, last_name, role, enabled
+		 FROM users WHERE id = ?`, userID,
+	).Scan(&target.ID, &target.Username, &target.Email, &target.FirstName, &target.LastName,
+		&target.Role, &targetEnabled)
+	if err != nil {
+		h.renderErrorStatus(w, r, http.StatusNotFound, "User not found")
+		return
+	}
+	target.Enabled = targetEnabled == 1
+
+	requestedRole := role
+	requestedEnabled := enabled
+
+	// Self-edit: role and enabled status are immutable.
+	if userID == admin.ID && (requestedRole != target.Role || requestedEnabled != target.Enabled) {
+		h.renderError(w, r, "You cannot change your own role or enabled status")
+		return
+	}
+
+	// Last enabled admin guard: refuse to demote or disable the only enabled admin.
+	if target.Role == "admin" && target.Enabled {
+		if requestedRole != "admin" || !requestedEnabled {
+			var adminCount int
+			if err := h.DB.QueryRow(
+				"SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1",
+			).Scan(&adminCount); err != nil {
+				h.renderInternalError(w, r, "Failed to count admins", err)
+				return
+			}
+			if adminCount <= 1 {
+				h.renderError(w, r, "Cannot demote or disable the last enabled admin")
+				return
+			}
+		}
+	}
+
 	enabledVal := 0
-	if enabled {
+	if requestedEnabled {
 		enabledVal = 1
 	}
 
@@ -218,7 +262,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.Exec(
 		`UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
-		email, firstName, lastName, role, enabledVal, userID,
+		email, firstName, lastName, requestedRole, enabledVal, userID,
 	)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to update user", err)
