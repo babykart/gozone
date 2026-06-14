@@ -77,7 +77,11 @@ func (m *mysqlDialect) Migrations() []string {
 			action VARCHAR(255) NOT NULL,
 			details TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+			KEY idx_activity_logs_user_id (user_id),
+			KEY idx_activity_logs_zone_id (zone_id),
+			KEY idx_activity_logs_zone_created (zone_id, created_at),
+			KEY idx_activity_logs_created_at (created_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -87,13 +91,9 @@ func (m *mysqlDialect) Migrations() []string {
 			last_used_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			expires_at DATETIME,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			KEY idx_api_keys_key_hash (key_hash)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_id ON activity_logs(zone_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_created ON activity_logs(zone_id, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
 		`CREATE TABLE IF NOT EXISTS zone_groups (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL UNIQUE,
@@ -105,17 +105,17 @@ func (m *mysqlDialect) Migrations() []string {
 			user_id INT NOT NULL,
 			PRIMARY KEY (group_id, user_id),
 			FOREIGN KEY (group_id) REFERENCES zone_groups(id) ON DELETE CASCADE,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			KEY idx_zone_group_members_user (user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS zone_group_zones (
 			group_id INT NOT NULL,
 			zone_id VARCHAR(255) NOT NULL,
 			PRIMARY KEY (group_id, zone_id),
-			FOREIGN KEY (group_id) REFERENCES zone_groups(id) ON DELETE CASCADE
+			FOREIGN KEY (group_id) REFERENCES zone_groups(id) ON DELETE CASCADE,
+			KEY idx_zone_group_zones_group (group_id),
+			KEY idx_zone_group_zones_zone (zone_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE INDEX IF NOT EXISTS idx_zone_group_members_user ON zone_group_members(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_zone_group_zones_group ON zone_group_zones(group_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_zone_group_zones_zone ON zone_group_zones(zone_id)`,
 		`CREATE TABLE IF NOT EXISTS zone_templates (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL UNIQUE,

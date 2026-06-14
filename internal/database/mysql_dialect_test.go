@@ -73,3 +73,31 @@ func TestMySQLDialect_Rebind(t *testing.T) {
 		t.Errorf("expected MySQL rebinding to be a no-op, got %s", got)
 	}
 }
+
+func TestMySQLDialect_Migrations_NoCreateIndexIfNotExists(t *testing.T) {
+	d := &mysqlDialect{}
+	for _, m := range d.Migrations() {
+		if strings.Contains(strings.ToUpper(m), "CREATE INDEX IF NOT EXISTS") {
+			t.Errorf("MySQL migration contains unsupported CREATE INDEX IF NOT EXISTS: %s", m)
+		}
+	}
+}
+
+func TestMySQLDialect_Migrations_ContainInlineIndexes(t *testing.T) {
+	d := &mysqlDialect{}
+	all := strings.Join(d.Migrations(), "\n")
+	for _, name := range []string{
+		"idx_activity_logs_user_id",
+		"idx_activity_logs_zone_id",
+		"idx_activity_logs_zone_created",
+		"idx_activity_logs_created_at",
+		"idx_api_keys_key_hash",
+		"idx_zone_group_members_user",
+		"idx_zone_group_zones_group",
+		"idx_zone_group_zones_zone",
+	} {
+		if !strings.Contains(all, name) {
+			t.Errorf("expected inline index %s to be present in migrations", name)
+		}
+	}
+}
