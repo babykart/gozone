@@ -1,10 +1,5 @@
 {{define "group_edit.html"}}
-{{template "head" .}}
-<div class="app-layout">
-    {{template "sidebar" .}}
-    {{template "topbar" .}}
-    <main class="main-content">
-        <div class="container">
+{{template "app_layout_start" .}}
 <div class="page-header">
     <div>
         <a href="/groups" class="breadcrumb">Groups</a> / <h2>{{.Group.Name}}</h2>
@@ -109,8 +104,5 @@
         <button type="submit" class="btn btn-secondary">Add</button>
     </form>
 </div>
-        </div>
-    </main>
-</div>
-{{template "tail" .}}
+{{template "app_layout_end" .}}
 {{end}}

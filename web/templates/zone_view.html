@@ -1,10 +1,5 @@
 {{define "zone_view.html"}}
-{{template "head" .}}
-<div class="app-layout">
-    {{template "sidebar" .}}
-    {{template "topbar" .}}
-    <main class="main-content">
-        <div class="container">
+{{template "app_layout_start" .}}
 <div class="page-header">
     <div>
         <a href="/zones" class="breadcrumb">Zones</a> / <h2>{{.Zone.Name}}</h2>
@@ -333,8 +328,5 @@
     <p class="empty-meta">No activity yet.</p>
     {{end}}
 </div>
-        </div>
-    </main>
- </div>
-{{template "tail" .}}
+{{template "app_layout_end" .}}
 {{end}}

@@ -1,10 +1,5 @@
 {{define "tsigkey_create.html"}}
-{{template "head" .}}
-<div class="app-layout">
-    {{template "sidebar" .}}
-    {{template "topbar" .}}
-    <main class="main-content">
-        <div class="container">
+{{template "app_layout_start" .}}
             <div class="page-header">
                 <div>
                     <a href="/tsigkeys" class="breadcrumb">TSIG Keys</a> / <h2>Create TSIG Key</h2>
@@ -40,8 +35,5 @@
                     <button type="submit" class="btn btn-primary">Create Key</button>
                 </form>
             </div>
-        </div>
-    </main>
-</div>
-{{template "tail" .}}
+{{template "app_layout_end" .}}
 {{end}}

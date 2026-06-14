@@ -1,10 +1,5 @@
 {{define "record_create.html"}}
-{{template "head" .}}
-<div class="app-layout">
-    {{template "sidebar" .}}
-    {{template "topbar" .}}
-    <main class="main-content">
-        <div class="container">
+{{template "app_layout_start" .}}
 <div class="page-header">
     <div>
         <a href="/zones" class="breadcrumb">Zones</a> / <a href="/zones/{{.Zone.ID}}" class="breadcrumb">{{.Zone.Name}}</a> / <h2>Add Records</h2>
@@ -56,8 +51,5 @@
         <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
-        </div>
-    </main>
-</div>
-{{template "tail" .}}
+{{template "app_layout_end" .}}
 {{end}}

@@ -1,0 +1,15 @@
+{{define "app_layout_start"}}
+{{template "head" .}}
+<div class="app-layout">
+    {{template "sidebar" .}}
+    {{template "topbar" .}}
+    <main class="main-content">
+        <div class="container">
+{{end}}
+
+{{define "app_layout_end"}}
+        </div>
+    </main>
+</div>
+{{template "tail" .}}
+{{end}}

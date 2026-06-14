@@ -1,10 +1,5 @@
 {{define "tsigkeys.html"}}
-{{template "head" .}}
-<div class="app-layout">
-    {{template "sidebar" .}}
-    {{template "topbar" .}}
-    <main class="main-content">
-        <div class="container">
+{{template "app_layout_start" .}}
             <div class="page-header">
                 <h2>TSIG Keys</h2>
                 <div class="header-actions">
@@ -45,8 +40,5 @@
                 <a href="/tsigkeys/new" class="btn btn-primary">Add Key</a>
             </div>
             {{end}}
-        </div>
-    </main>
-</div>
-{{template "tail" .}}
+{{template "app_layout_end" .}}
 {{end}}
