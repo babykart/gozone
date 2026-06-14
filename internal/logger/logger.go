@@ -17,6 +17,9 @@ import (
 
 var defaultLogger *slog.Logger
 
+// osExit is swapped in tests so Fatal can be exercised without terminating the process.
+var osExit = os.Exit
+
 func init() {
 	defaultLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -67,5 +70,5 @@ func Debug(msg string, args ...any) {
 // Fatal logs at level Error and then calls os.Exit(1).
 func Fatal(msg string, args ...any) {
 	defaultLogger.Error(msg, args...)
-	os.Exit(1)
+	osExit(1)
 }
