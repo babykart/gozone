@@ -58,7 +58,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Trace SQL queries
   - Export to Jaeger or Zipkin
 
-### Password Enforcement
+## Password Enforcement
 
 - [ ] **Password policy configuration**
   - Minimum length (default 8)
