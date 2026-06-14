@@ -26,7 +26,7 @@
                             <td class="actions-cell">
                                 <a href="/templates/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
                                 {{if not .IsBuiltin}}
-                                <form method="POST" action="/templates/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Delete template {{.Name}}?')">
+                                <form method="POST" action="/templates/{{.ID}}/delete" style="display:inline" data-confirm="Delete template {{.Name}}?">
                                     <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                                 </form>

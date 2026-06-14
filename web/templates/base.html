@@ -20,7 +20,7 @@
 {{define "sidebar"}}
 <aside class="sidebar">
     <div class="sidebar-header">
-        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
+        <button class="sidebar-toggle" data-action="toggle-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
         <div class="sidebar-brand">
             <a href="/dashboard">GoZone</a>
             <span class="nav-subtitle">PowerDNS Admin</span>
@@ -43,7 +43,7 @@
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
         <a href="/profile" class="topbar-username">{{.User.Username}}</a>
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
+        <button class="theme-toggle" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
         <a href="/logout" class="btn-logout" title="Logout" aria-label="Logout">⏻</a>
     </div>
 </header>

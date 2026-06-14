@@ -36,7 +36,7 @@
     <hr style="margin:1.5rem 0;border-color:var(--border)">
     <div class="form-group">
         <label for="template_id">Apply Template (optional)</label>
-        <select id="template_id" name="template_id" onchange="toggleTemplateVars(this.value)">
+        <select id="template_id" name="template_id" data-action="toggle-template-vars">
             <option value="">None</option>
             {{range .Templates}}
             <option value="{{.ID}}">{{.Name}} — {{.Description}}</option>
@@ -61,10 +61,5 @@
         </div>
     </main>
 </div>
-<script>
-function toggleTemplateVars(val) {
-    document.getElementById('template-vars').style.display = val ? 'block' : 'none';
-}
-</script>
 {{template "tail" .}}
 {{end}}

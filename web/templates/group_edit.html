@@ -39,7 +39,7 @@
                 <td>{{.Email}}</td>
                 <td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
                 <td>
-                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-member" style="display:inline" onsubmit="return confirm('Remove {{.Username}} from group?')">
+                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-member" style="display:inline" data-confirm="Remove {{.Username}} from group?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="user_id" value="{{.ID}}">
                         <button type="submit" class="btn btn-sm btn-danger">Remove</button>
@@ -81,7 +81,7 @@
             <tr>
                 <td><strong>{{.}}</strong></td>
                 <td>
-                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-zone" style="display:inline" onsubmit="return confirm('Remove zone {{.}} from group?')">
+                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-zone" style="display:inline" data-confirm="Remove zone {{.}} from group?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="zone_id" value="{{.}}">
                         <button type="submit" class="btn btn-sm btn-danger">Remove</button>

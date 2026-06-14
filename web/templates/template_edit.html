@@ -45,7 +45,7 @@
                             <td class="nowrap">{{.TTL}}</td>
                             <td class="nowrap">{{if and (or (eq .Type "MX") (eq .Type "SRV"))}}{{.Priority}}{{else}}-{{end}}</td>
                             <td class="actions-cell">
-                                <form method="POST" action="/templates/{{$.Template.ID}}/records/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Delete this record?')">
+                                <form method="POST" action="/templates/{{$.Template.ID}}/records/{{.ID}}/delete" style="display:inline" data-confirm="Delete this record?">
                                     <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                                 </form>

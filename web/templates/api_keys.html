@@ -15,7 +15,7 @@
     {{if .NewKey}}
     <div class="api-key-reveal" data-key="{{.NewKey}}">
         <pre><code>{{.NewKey}}</code></pre>
-        <button class="btn btn-sm btn-secondary" onclick="copyAPIKey()">Copy</button>
+        <button class="btn btn-sm btn-secondary" data-action="copy-api-key">Copy</button>
     </div>
     {{end}}
 </div>
@@ -62,7 +62,7 @@
                 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                 <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
                 <td>
-                    <form method="POST" action="/profile/api-keys/delete" style="display:inline" onsubmit="return confirm('Delete key {{.Description}}?')">
+                    <form method="POST" action="/profile/api-keys/delete" style="display:inline" data-confirm="Delete key {{.Description}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="key_id" value="{{.ID}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
@@ -85,24 +85,5 @@
         </div>
     </main>
 </div>
-<script>
-function copyAPIKey() {
-    var reveal = document.querySelector('.api-key-reveal');
-    if (!reveal) return;
-    var text = reveal.getAttribute('data-key');
-    if (!text) return;
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    var btn = reveal.querySelector('.btn');
-    if (btn) {
-        btn.textContent = 'Copied!';
-        setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
-    }
-}
-</script>
 {{template "tail" .}}
 {{end}}

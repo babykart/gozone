@@ -47,7 +47,8 @@ function generateTSIGSecret() {
         binary += String.fromCharCode(bytes[i]);
     }
     var base64 = btoa(binary);
-    document.getElementById('key').value = base64;
+    var keyEl = document.getElementById('key');
+    if (keyEl) keyEl.value = base64;
     var algo = document.getElementById('algorithm');
     if (algo) {
         algo.value = 'hmac-sha512';
@@ -104,8 +105,10 @@ function showNotification(message, type) {
     }, 5000);
 }
 
-function saveRecordRow(btn, zoneID, csrfToken) {
+function saveRecordRow(btn) {
     var row = btn.closest('tr');
+    var zoneID = row.getAttribute('data-zone-id');
+    var csrfToken = row.getAttribute('data-csrf');
     var name = row.getAttribute('data-name');
     var recordType = row.getAttribute('data-type');
     var content = row.querySelector('.ev-content').value.trim();
@@ -116,7 +119,7 @@ function saveRecordRow(btn, zoneID, csrfToken) {
     if (!content) { showNotification('Content is required', 'error'); return; }
 
     var formData = new URLSearchParams();
-    formData.append('gorilla.csrf.Token', csrfToken);
+    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
     formData.append('name', name);
     formData.append('type', recordType);
     formData.append('content', content);
@@ -187,4 +190,117 @@ function addRecordRow() {
     var prioGrp = template.querySelector('.record-prio-group');
     if (prioGrp) prioGrp.style.display = 'none';
     container.appendChild(template);
+}
+
+function copyAPIKey() {
+    var reveal = document.querySelector('.api-key-reveal');
+    if (!reveal) return;
+    var text = reveal.getAttribute('data-key');
+    if (!text) return;
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function() {
+            updateCopyButton(reveal);
+        });
+        return;
+    }
+    // Fallback for non-secure contexts (plain HTTP). #nosec G103 -- not used for exec of untrusted input
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    updateCopyButton(reveal);
+}
+
+function updateCopyButton(reveal) {
+    var btn = reveal.querySelector('.btn');
+    if (btn) {
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+    }
+}
+
+function toggleTemplateVars(select) {
+    var targetId = select.getAttribute('data-target') || 'template-vars';
+    var target = document.getElementById(targetId);
+    if (!target) return;
+    target.style.display = select.value ? 'block' : 'none';
+}
+
+function applyPerPage(select) {
+    var prefix = select.getAttribute('data-prefix') || '';
+    var searchInput = document.querySelector('input[name=search]');
+    var q = '?' + prefix + 'PerPage=' + select.value;
+    if (searchInput && searchInput.value) {
+        q += '&search=' + encodeURIComponent(searchInput.value);
+    }
+    window.location.href = q;
+}
+
+function initDelegatedListeners() {
+    document.addEventListener('click', function(e) {
+        var actionTarget = e.target.closest('[data-action]');
+        if (actionTarget) {
+            var action = actionTarget.getAttribute('data-action');
+            switch (action) {
+                case 'toggle-theme':
+                    e.preventDefault();
+                    toggleTheme();
+                    return;
+                case 'toggle-sidebar':
+                    e.preventDefault();
+                    toggleSidebar();
+                    return;
+                case 'generate-tsig':
+                    generateTSIGSecret();
+                    return;
+                case 'copy-api-key':
+                    e.preventDefault();
+                    copyAPIKey();
+                    return;
+                case 'add-record-row':
+                    addRecordRow();
+                    return;
+                case 'edit-record':
+                    e.preventDefault();
+                    editRecordRow(actionTarget);
+                    return;
+                case 'save-record':
+                    e.preventDefault();
+                    saveRecordRow(actionTarget);
+                    return;
+                case 'cancel-edit':
+                    e.preventDefault();
+                    cancelEditRow(actionTarget);
+                    return;
+            }
+        }
+
+        var confirmForm = e.target.closest('form[data-confirm]');
+        var confirmTrigger = e.target.closest('button, input[type=submit]');
+        if (confirmForm && confirmTrigger) {
+            var message = confirmForm.getAttribute('data-confirm');
+            if (!confirm(message)) {
+                e.preventDefault();
+            }
+        }
+    });
+
+    document.addEventListener('change', function(e) {
+        var actionTarget = e.target.closest('[data-action]');
+        if (!actionTarget) return;
+        var action = actionTarget.getAttribute('data-action');
+        if (action === 'toggle-template-vars' || action === 'toggle-apply-template-vars') {
+            toggleTemplateVars(actionTarget);
+        } else if (action === 'per-page') {
+            applyPerPage(actionTarget);
+        }
+    });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initDelegatedListeners);
+} else {
+    initDelegatedListeners();
 }

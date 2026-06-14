@@ -29,7 +29,7 @@
             <td>{{.CreatedAt}}</td>
             <td>
                 <a href="/groups/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
-                <form method="POST" action="/groups/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Delete group {{.Name}}?')">
+                <form method="POST" action="/groups/{{.ID}}/delete" style="display:inline" data-confirm="Delete group {{.Name}}?">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                 </form>

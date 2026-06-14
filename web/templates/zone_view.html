@@ -48,7 +48,7 @@
             {{range .Records}}
             {{$rrset := .}}
             {{range .Records}}
-            <tr data-name="{{$rrset.Name}}" data-type="{{$rrset.Type}}" data-original-content="{{.Content}}" data-original-priority="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" data-disabled="{{.Disabled}}">
+            <tr data-name="{{$rrset.Name}}" data-type="{{$rrset.Type}}" data-zone-id="{{$zoneID}}" data-csrf="{{$csrf}}" data-original-content="{{.Content}}" data-original-priority="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" data-disabled="{{.Disabled}}">
                 <td class="col-name"><span class="rv rv-name">{{relativeName $rrset.Name $zoneName}}</span><span class="ev ev-name" style="display:none">{{$rrset.Name}}</span></td>
                 <td class="nowrap"><span class="badge badge-type badge-type-{{$rrset.Type}}">{{$rrset.Type}}</span></td>
                 <td class="nowrap">
@@ -68,12 +68,12 @@
                     <label class="ev ev-status" style="display:none"><input type="checkbox" class="ev-disabled" {{if .Disabled}}checked{{end}}> Disabled</label>
                 </td>
                 <td class="actions-cell">
-                    <span class="rv"><button type="button" class="btn btn-sm btn-secondary" onclick="editRecordRow(this)">Edit</button></span>
+                    <span class="rv"><button type="button" class="btn btn-sm btn-secondary" data-action="edit-record">Edit</button></span>
                     <span class="ev" style="display:none">
-                        <button type="button" class="btn btn-sm btn-primary" onclick="saveRecordRow(this, '{{$zoneID}}', '{{$csrf}}')">Save</button>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="cancelEditRow(this)">Cancel</button>
+                        <button type="button" class="btn btn-sm btn-primary" data-action="save-record">Save</button>
+                        <button type="button" class="btn btn-sm btn-secondary" data-action="cancel-edit">Cancel</button>
                     </span>
-                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" onsubmit="return confirm('Delete record {{$rrset.Name}}?')">
+                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" data-confirm="Delete record {{$rrset.Name}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="name" value="{{$rrset.Name}}">
                         <input type="hidden" name="type" value="{{$rrset.Type}}">
@@ -118,7 +118,7 @@
                     {{end}}
                 </td>
                 <td class="actions-cell">
-                    <form method="POST" action="/zones/{{$zoneID}}/metadata/delete" style="display:inline" onsubmit="return confirm('Delete metadata {{.Kind}}?')">
+                    <form method="POST" action="/zones/{{$zoneID}}/metadata/delete" style="display:inline" data-confirm="Delete metadata {{.Kind}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="kind" value="{{.Kind}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
@@ -187,7 +187,7 @@
                         <button type="submit" class="btn btn-sm {{if .Active}}btn-secondary{{else}}btn-primary{{end}}">{{if .Active}}Deactivate{{else}}Activate{{end}}</button>
                     </form>
                     {{if $.IsAdmin}}
-                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Delete key {{.ID}}?')">
+                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/delete" style="display:inline" data-confirm="Delete key {{.ID}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                     </form>
@@ -240,7 +240,7 @@
             <div class="form-row" style="margin-bottom:1rem">
                 <div class="form-group" style="flex:1">
                     <label for="apply_template_id">Template</label>
-                    <select id="apply_template_id" name="template_id" class="form-control" onchange="toggleApplyVars(this.value)">
+                    <select id="apply_template_id" name="template_id" class="form-control" data-action="toggle-apply-template-vars">
                         <option value="">Select a template...</option>
                         {{range .Templates}}
                         <option value="{{.ID}}">{{.Name}} — {{.Description}}</option>
@@ -300,7 +300,7 @@
     </div>
     {{if .IsAdmin}}
     <hr style="margin:1rem 0">
-    <form method="POST" action="/zones/delete" onsubmit="return confirm('Delete zone {{.Zone.Name}}? This action cannot be undone.')">
+    <form method="POST" action="/zones/delete" data-confirm="Delete zone {{.Zone.Name}}? This action cannot be undone.">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
         <button type="submit" class="btn btn-danger">Delete Zone</button>
@@ -336,10 +336,5 @@
         </div>
     </main>
  </div>
-<script>
-function toggleApplyVars(val) {
-    document.getElementById('apply-template-vars').style.display = val ? 'block' : 'none';
-}
-</script>
 {{template "tail" .}}
 {{end}}

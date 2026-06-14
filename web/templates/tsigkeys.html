@@ -26,7 +26,7 @@
                             <td><span class="badge badge-type badge-type-tsig">{{.Algorithm}}</span></td>
                             <td class="actions-cell">
                                 <a href="/tsigkeys/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
-                                <form method="POST" action="/tsigkeys/delete" style="display:inline" onsubmit="return confirm('Delete TSIG key {{.Name}}?')">
+                                <form method="POST" action="/tsigkeys/delete" style="display:inline" data-confirm="Delete TSIG key {{.Name}}?">
                                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                                     <input type="hidden" name="key_id" value="{{.ID}}">
                                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
