@@ -70,6 +70,7 @@ func run(args []string) error {
 	// Create PowerDNS client with read-through cache
 	pdnsClient := pdns.NewClient(&cfg.PowerDNS)
 	cachedClient := pdns.NewCachedClient(pdnsClient)
+	defer cachedClient.Close()
 
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {

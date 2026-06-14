@@ -372,5 +372,8 @@ func (c *Client) DeleteCryptokey(ctx context.Context, zoneID string, keyID int) 
 	return doOK(c, ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
 }
 
+// Close is a no-op for the bare client, which holds no resources.
+func (c *Client) Close() {}
+
 // InvalidateZoneCache is a no-op on the bare Client (no cache layer).
 func (c *Client) InvalidateZoneCache(ctx context.Context, zoneID string) {}

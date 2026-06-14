@@ -56,6 +56,11 @@ type ZoneService interface {
 
 	// Cache
 	InvalidateZoneCache(ctx context.Context, zoneID string)
+
+	// Lifecycle
+	// Close releases resources held by the underlying implementation.
+	// For the cached client this stops the background sweep goroutines.
+	Close()
 }
 
 // Compile-time check that Client implements ZoneService.

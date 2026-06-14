@@ -290,5 +290,15 @@ func (c *cachedClient) DeleteCryptokey(ctx context.Context, zoneID string, keyID
 	return nil
 }
 
+// Close stops the background sweep goroutines of all internal caches.
+// It should be called once, typically via defer, during application shutdown.
+func (c *cachedClient) Close() {
+	c.zoneList.Stop()
+	c.zoneInfo.Stop()
+	c.server.Stop()
+	c.stats.Stop()
+	c.tsigKeys.Stop()
+}
+
 // Compile-time check that cachedClient implements ZoneService.
 var _ ZoneService = (*cachedClient)(nil)

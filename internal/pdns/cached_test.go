@@ -3,9 +3,11 @@ package pdns
 import (
 	"context"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/models"
 )
@@ -227,6 +229,25 @@ func TestCachedClientImplementsZoneService(t *testing.T) {
 	c = NewCachedClient(client)
 	if c.ServerID() != "localhost" {
 		t.Errorf("unexpected server ID: %q", c.ServerID())
+	}
+}
+
+func TestCachedClient_Close_StopsSweepGoroutines(t *testing.T) {
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	})
+	cached := NewCachedClient(client)
+
+	before := runtime.NumGoroutine()
+	cached.Close()
+
+	// Wait briefly for goroutines to exit.
+	time.Sleep(50 * time.Millisecond)
+
+	after := runtime.NumGoroutine()
+	if after >= before {
+		t.Errorf("expected goroutine count to decrease after Close, got before=%d after=%d", before, after)
 	}
 }
 
