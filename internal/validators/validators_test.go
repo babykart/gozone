@@ -233,7 +233,14 @@ func TestValidateRecordContent(t *testing.T) {
 		{"SRV invalid missing target", "SRV", "0 5", true},
 		{"TXT any content", "TXT", "arbitrary text here", false},
 		{"SPF any content", "SPF", "v=spf1 include:_spf.example.com ~all", false},
-		{"CAA valid", "CAA", "0 issue ca.example.com", false},
+		{"CAA valid issue", "CAA", "0 issue ca.example.com", false},
+		{"CAA valid issuewild", "CAA", "0 issuewild ca.example.com", false},
+		{"CAA valid iodef", "CAA", "0 iodef mailto:admin@example.com", false},
+		{"CAA valid critical flag", "CAA", "128 issue ca.example.com", false},
+		{"CAA invalid too few fields", "CAA", "0 issue", true},
+		{"CAA invalid too many fields", "CAA", "0 issue ca.example.com extra", true},
+		{"CAA invalid flag", "CAA", "1 issue ca.example.com", true},
+		{"CAA invalid tag", "CAA", "0 invalid ca.example.com", true},
 		{"empty content", "A", "", true},
 	}
 	for _, tt := range tests {

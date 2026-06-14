@@ -321,8 +321,24 @@ func ValidateRecordContent(recordType, content string) error {
 		return ValidateDNSName(parts[len(parts)-1])
 	case "CAA":
 		parts := strings.Fields(content)
-		if len(parts) < 3 {
+		if len(parts) != 3 {
 			return fmt.Errorf("CAA content must have exactly 3 fields: flags tag value")
+		}
+		flags, err := strconv.ParseUint(parts[0], 10, 8)
+		if err != nil {
+			return fmt.Errorf("CAA flags %q must be an 8-bit unsigned integer", parts[0])
+		}
+		if flags != 0 && flags != 128 {
+			return fmt.Errorf("CAA flags %d is not supported; use 0 or 128", flags)
+		}
+		switch parts[1] {
+		case "issue", "issuewild", "iodef":
+			// valid tags
+		default:
+			return fmt.Errorf("CAA tag %q is not valid; use issue, issuewild or iodef", parts[1])
+		}
+		if parts[2] == "" {
+			return fmt.Errorf("CAA value must not be empty")
 		}
 		return nil
 	case "TXT", "SPF":
