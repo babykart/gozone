@@ -193,7 +193,11 @@ func (c *cachedClient) DeleteRecord(ctx context.Context, zoneID string, name, re
 }
 
 func (c *cachedClient) RectifyZone(ctx context.Context, zoneID string) error {
-	return c.client.RectifyZone(ctx, zoneID)
+	if err := c.client.RectifyZone(ctx, zoneID); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) NotifySlaves(ctx context.Context, zoneID string) error {
@@ -201,11 +205,19 @@ func (c *cachedClient) NotifySlaves(ctx context.Context, zoneID string) error {
 }
 
 func (c *cachedClient) SetMetadata(ctx context.Context, zoneID string, meta models.Metadata) error {
-	return c.client.SetMetadata(ctx, zoneID, meta)
+	if err := c.client.SetMetadata(ctx, zoneID, meta); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) DeleteMetadata(ctx context.Context, zoneID string, kind string) error {
-	return c.client.DeleteMetadata(ctx, zoneID, kind)
+	if err := c.client.DeleteMetadata(ctx, zoneID, kind); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models.TSIGKey, error) {
@@ -247,22 +259,35 @@ func (c *cachedClient) InvalidateZoneCache(ctx context.Context, zoneID string) {
 	c.zoneInfo.Clear()
 }
 
-// --- DNSSEC Cryptokeys (passthrough, not cached) ---
+// --- DNSSEC Cryptokeys (reads passthrough, mutations invalidate zones) ---
 
 func (c *cachedClient) ListCryptokeys(ctx context.Context, zoneID string) ([]models.Cryptokey, error) {
 	return c.client.ListCryptokeys(ctx, zoneID)
 }
 
 func (c *cachedClient) CreateCryptokey(ctx context.Context, zoneID string, keyType string, active bool, algorithm string) (*models.Cryptokey, error) {
-	return c.client.CreateCryptokey(ctx, zoneID, keyType, active, algorithm)
+	k, err := c.client.CreateCryptokey(ctx, zoneID, keyType, active, algorithm)
+	if err != nil {
+		return nil, err
+	}
+	c.invalidateZones()
+	return k, nil
 }
 
 func (c *cachedClient) ToggleCryptokey(ctx context.Context, zoneID string, keyID int, active bool) error {
-	return c.client.ToggleCryptokey(ctx, zoneID, keyID, active)
+	if err := c.client.ToggleCryptokey(ctx, zoneID, keyID, active); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 func (c *cachedClient) DeleteCryptokey(ctx context.Context, zoneID string, keyID int) error {
-	return c.client.DeleteCryptokey(ctx, zoneID, keyID)
+	if err := c.client.DeleteCryptokey(ctx, zoneID, keyID); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
 }
 
 // Compile-time check that cachedClient implements ZoneService.

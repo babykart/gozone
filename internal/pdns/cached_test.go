@@ -455,3 +455,112 @@ func TestCachedRecordMutation_ErrorDoesNotInvalidateCache(t *testing.T) {
 		t.Errorf("cache should not be invalidated on error, got %d list calls", listCalls.Load())
 	}
 }
+
+func TestCachedZoneMutations_InvalidateZonesAndStats(t *testing.T) {
+	var listCalls, statCalls, requestCalls atomic.Int64
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones"):
+			listCalls.Add(1)
+			w.Write([]byte(`[{"id":"test.","name":"test.","kind":"Native","serial":0}]`))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "statistics"):
+			statCalls.Add(1)
+			w.Write([]byte(`[]`))
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/rectify"):
+			requestCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/metadata/"):
+			requestCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/metadata/"):
+			requestCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cryptokeys"):
+			requestCalls.Add(1)
+			w.Write([]byte(`{"id":1,"keytype":"ksk","active":true,"algorithm":"ECDSA256"}`))
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/cryptokeys/"):
+			requestCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/cryptokeys/"):
+			requestCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	ctx := context.Background()
+
+	// Populate caches
+	cached.ListZones(ctx)
+	cached.ListZonesWithInfo(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 2 || statCalls.Load() != 1 {
+		t.Fatalf("expected 2 list + 1 stat calls to populate caches, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// RectifyZone invalidates caches
+	if err := cached.RectifyZone(ctx, "test."); err != nil {
+		t.Fatalf("RectifyZone: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 3 || statCalls.Load() != 2 {
+		t.Errorf("after RectifyZone expected list=3 stat=2, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// SetMetadata invalidates caches
+	if err := cached.SetMetadata(ctx, "test.", models.Metadata{Kind: "PRESIGNED", Metadata: []string{"1"}}); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 4 || statCalls.Load() != 3 {
+		t.Errorf("after SetMetadata expected list=4 stat=3, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// DeleteMetadata invalidates caches
+	if err := cached.DeleteMetadata(ctx, "test.", "PRESIGNED"); err != nil {
+		t.Fatalf("DeleteMetadata: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 5 || statCalls.Load() != 4 {
+		t.Errorf("after DeleteMetadata expected list=5 stat=4, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// CreateCryptokey invalidates caches
+	if _, err := cached.CreateCryptokey(ctx, "test.", "ksk", true, "ECDSA256"); err != nil {
+		t.Fatalf("CreateCryptokey: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 6 || statCalls.Load() != 5 {
+		t.Errorf("after CreateCryptokey expected list=6 stat=5, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// ToggleCryptokey invalidates caches
+	if err := cached.ToggleCryptokey(ctx, "test.", 1, false); err != nil {
+		t.Fatalf("ToggleCryptokey: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 7 || statCalls.Load() != 6 {
+		t.Errorf("after ToggleCryptokey expected list=7 stat=6, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	// DeleteCryptokey invalidates caches
+	if err := cached.DeleteCryptokey(ctx, "test.", 1); err != nil {
+		t.Fatalf("DeleteCryptokey: %v", err)
+	}
+	cached.ListZones(ctx)
+	cached.GetStatistics(ctx)
+	if listCalls.Load() != 8 || statCalls.Load() != 7 {
+		t.Errorf("after DeleteCryptokey expected list=8 stat=7, got list=%d stat=%d", listCalls.Load(), statCalls.Load())
+	}
+
+	if requestCalls.Load() != 6 {
+		t.Errorf("expected 6 mutation calls, got %d", requestCalls.Load())
+	}
+}
