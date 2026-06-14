@@ -509,7 +509,8 @@ func mergeRecordIntoRRSet(existing []models.RecordInfo, originalContent string, 
 // relative to the zone. "@" is mapped to the zone name.
 func normalizeRecordName(name, zoneName string) string {
 	name = strings.TrimSpace(name)
-	zone := zoneName
+	name = strings.ToLower(name)
+	zone := strings.ToLower(zoneName)
 	if !strings.HasSuffix(zone, ".") {
 		zone += "."
 	}

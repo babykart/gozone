@@ -1047,6 +1047,9 @@ func TestNormalizeRecordName(t *testing.T) {
 		{"other.com.", zone, "other.com."},
 		{"other.com", zone, "other.com.example.com."},
 		{"localhost", zone, "localhost.example.com."},
+		{"WWW.Example.com", zone, "www.example.com."},
+		{"WWW", zone, "www.example.com."},
+		{"Example.Com", "EXAMPLE.COM.", "example.com."},
 	}
 
 	for _, tc := range tests {
