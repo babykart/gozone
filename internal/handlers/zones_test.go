@@ -821,9 +821,12 @@ func TestGetZoneActivityLogs_UsernamePopulated(t *testing.T) {
 		1, "example.com", "Created A record www -> 1.2.3.4",
 	)
 
-	logs := h.getZoneActivityLogs("example.com")
+	logs, total := h.getZoneActivityLogs("example.com", 1, 10)
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log entry, got %d", len(logs))
+	}
+	if total != 1 {
+		t.Errorf("expected total 1, got %d", total)
 	}
 	if logs[0].Username != "alice" {
 		t.Errorf("expected Username 'alice', got %q", logs[0].Username)

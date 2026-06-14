@@ -86,7 +86,7 @@
     </table>
     </div>
 {{if .Records}}
-{{template "pagination.html" dict "PageInfo" .RecordPageInfo "Search" .Search "Label" "records"}}
+{{template "pagination.html" dict "PageInfo" .RecordPageInfo "Search" .Search "Label" "records" "Prefix" ""}}
 {{end}}
 </div>
 {{else}}
@@ -307,9 +307,9 @@
     {{end}}
 </div>
 
-{{if .Logs}}
 <div class="card" style="margin-top:2rem">
     <h3>Activity</h3>
+    {{if .Logs}}
     <div class="table-responsive">
     <table class="table">
         <thead>
@@ -327,8 +327,11 @@
         </tbody>
     </table>
     </div>
+    {{template "pagination.html" dict "PageInfo" .LogPageInfo "Search" "" "Label" "entries" "Prefix" "log"}}
+    {{else}}
+    <p class="empty-meta">No activity yet.</p>
+    {{end}}
 </div>
-{{end}}
         </div>
     </main>
  </div>

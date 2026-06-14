@@ -30,9 +30,12 @@ func TestDashboard(t *testing.T) {
 func TestGetRecentActivityLogs_Empty(t *testing.T) {
 	h := newTestHandler(t)
 
-	logs := h.getRecentActivityLogs(10)
+	logs, total := h.getRecentActivityLogs(1, 10)
 	if len(logs) != 0 {
 		t.Errorf("expected 0 logs, got %d", len(logs))
+	}
+	if total != 0 {
+		t.Errorf("expected total 0, got %d", total)
 	}
 }
 

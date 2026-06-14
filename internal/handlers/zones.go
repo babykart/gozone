@@ -70,7 +70,21 @@ func parsePaginationParams(r *http.Request, defaultPerPage int) (page, perPage i
 	return page, perPage
 }
 
-// ListZones renders the zones listing page with record counts per zone (GET /zones).
+// parseLogPaginationParams extracts the logPage and logPerPage query parameters
+// for activity log pagination, independent of record pagination.
+func parseLogPaginationParams(r *http.Request, defaultPerPage int) (page, perPage int) {
+	page, _ = strconv.Atoi(r.URL.Query().Get("logPage"))
+	if page < 1 {
+		page = 1
+	}
+	perPage = defaultPerPage
+	if pp := r.URL.Query().Get("logPerPage"); pp != "" {
+		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
+			perPage = n
+		}
+	}
+	return page, perPage
+}
 func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
@@ -322,7 +336,21 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	recordPage, recordPerPage := parsePaginationParams(r, 10)
 	paginatedRecords, recordPageInfo := paginate(records, recordPage, recordPerPage)
 
-	logs := h.getZoneActivityLogs(zoneID)
+	logPage, logPerPage := parseLogPaginationParams(r, 10)
+	logs, logTotal := h.getZoneActivityLogs(zoneID, logPage, logPerPage)
+	logTotalPages := 0
+	if logPerPage > 0 {
+		logTotalPages = (logTotal + logPerPage - 1) / logPerPage
+	} else {
+		logTotalPages = 1
+	}
+	logPageInfo := PageInfo{
+		Current:    logPage,
+		PerPage:    logPerPage,
+		TotalPages: logTotalPages,
+		Total:      logTotal,
+	}
+
 	templates, _ := h.getAllTemplates()
 
 	pdnsVersion := "unknown"
@@ -339,6 +367,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		"Search":         search,
 		"MetaData":       metadata,
 		"Logs":           logs,
+		"LogPageInfo":    logPageInfo,
 		"PDNSVersion":    pdnsVersion,
 		"RecordTypes":    GetRecordTypes(),
 		"MetaKinds":      GetMetadataKinds(),
@@ -471,17 +500,47 @@ func (h *Handler) DeleteMetadata(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
-func (h *Handler) getZoneActivityLogs(zoneID string) []models.ActivityLog {
-	rows, err := h.DB.Query(
-		`SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.created_at, u.username
+func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]models.ActivityLog, int) {
+	var total int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM activity_logs WHERE zone_id = ?", zoneID,
+	).Scan(&total); err != nil {
+		logger.Error("failed to count zone activity logs", "zone_id", zoneID, "error", err)
+		return nil, 0
+	}
+
+	offset := 0
+	limit := perPage
+	if perPage > 0 {
+		if page < 1 {
+			page = 1
+		}
+		offset = (page - 1) * perPage
+		limit = perPage
+	}
+
+	var query string
+	var args []interface{}
+	if perPage > 0 {
+		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.created_at, u.username
 		 FROM activity_logs al
 		 LEFT JOIN users u ON al.user_id = u.id
 		 WHERE al.zone_id = ?
 		 ORDER BY al.created_at DESC
-		 LIMIT 50`, zoneID,
-	)
+		 LIMIT ? OFFSET ?`
+		args = append(args, zoneID, limit, offset)
+	} else {
+		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.created_at, u.username
+		 FROM activity_logs al
+		 LEFT JOIN users u ON al.user_id = u.id
+		 WHERE al.zone_id = ?
+		 ORDER BY al.created_at DESC`
+		args = append(args, zoneID)
+	}
+
+	rows, err := h.DB.Query(query, args...)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	defer rows.Close()
 
@@ -499,7 +558,7 @@ func (h *Handler) getZoneActivityLogs(zoneID string) []models.ActivityLog {
 	if err := rows.Err(); err != nil {
 		logger.Error("rows iteration error for zone activity logs", "zone_id", zoneID, "error", err)
 	}
-	return logs
+	return logs, total
 }
 
 // renderError shows the error page with HTTP 400 (Bad Request), the right

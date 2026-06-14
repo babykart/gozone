@@ -31,8 +31,21 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		zoneCount = len(zones)
 	}
 
-	// Get recent activity logs
-	logs := h.getRecentActivityLogs(20)
+	// Get recent activity logs with pagination
+	page, perPage := parsePaginationParams(r, 10)
+	logs, total := h.getRecentActivityLogs(page, perPage)
+	totalPages := 0
+	if perPage > 0 {
+		totalPages = (total + perPage - 1) / perPage
+	} else {
+		totalPages = 1
+	}
+	pageInfo := PageInfo{
+		Current:    page,
+		PerPage:    perPage,
+		TotalPages: totalPages,
+		Total:      total,
+	}
 
 	// Get user count
 	var userCount int
@@ -73,6 +86,8 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		"User":        user,
 		"Stats":       dashboardStats,
 		"Logs":        logs,
+		"PageInfo":    pageInfo,
+		"Search":      "",
 		"Zones":       zoneCount,
 		"Server":      server,
 		"ServerStats": serverStats,
@@ -81,16 +96,42 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "dashboard.html", data)
 }
 
-func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
-	rows, err := h.DB.Query(
-		`SELECT al.id, al.action, al.details, al.zone_id, al.created_at, u.username
+func (h *Handler) getRecentActivityLogs(page, perPage int) ([]map[string]interface{}, int) {
+	var total int
+	if err := h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs").Scan(&total); err != nil {
+		logger.Error("failed to count activity logs", "error", err)
+		return nil, 0
+	}
+
+	offset := 0
+	limit := perPage
+	if perPage > 0 {
+		if page < 1 {
+			page = 1
+		}
+		offset = (page - 1) * perPage
+		limit = perPage
+	}
+
+	var query string
+	var args []interface{}
+	if perPage > 0 {
+		query = `SELECT al.id, al.action, al.details, al.zone_id, al.created_at, u.username
 		 FROM activity_logs al
 		 LEFT JOIN users u ON al.user_id = u.id
 		 ORDER BY al.created_at DESC
-		 LIMIT ?`, limit,
-	)
+		 LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	} else {
+		query = `SELECT al.id, al.action, al.details, al.zone_id, al.created_at, u.username
+		 FROM activity_logs al
+		 LEFT JOIN users u ON al.user_id = u.id
+		 ORDER BY al.created_at DESC`
+	}
+
+	rows, err := h.DB.Query(query, args...)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	defer rows.Close()
 
@@ -120,7 +161,7 @@ func (h *Handler) getRecentActivityLogs(limit int) []map[string]interface{} {
 	if err := rows.Err(); err != nil {
 		logger.Error("rows iteration error for activity logs", "error", err)
 	}
-	return logs
+	return logs, total
 }
 
 // valToString converts a PDNS statistic value (string, number, bool, array, or nil)
