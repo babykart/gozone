@@ -130,6 +130,8 @@ func TestQuoteContent(t *testing.T) {
 		{"SPF unquoted", "SPF", "v=spf1 -all", `"v=spf1 -all"`},
 		{"TXT empty content", "TXT", "", ""},
 		{"non-quoted type unchanged", "A", "192.0.2.1", "192.0.2.1"},
+		{"TXT escapes internal quotes", "TXT", `foo"bar`, `"foo\"bar"`},
+		{"TXT escapes multiple internal quotes", "TXT", `a"b"c`, `"a\"b\"c"`},
 	}
 
 	for _, tt := range tests {
@@ -152,6 +154,8 @@ func TestUnquoteContent(t *testing.T) {
 		{"SPF quoted", "SPF", `"v=spf1 -all"`, "v=spf1 -all"},
 		{"non-quoted type unchanged", "A", `"192.0.2.1"`, `"192.0.2.1"`},
 		{"single quote char untouched", "TXT", `"`, `"`},
+		{"TXT unescapes internal quotes", "TXT", `"foo\"bar"`, `foo"bar`},
+		{"TXT unescapes multiple internal quotes", "TXT", `"a\"b\"c"`, `a"b"c`},
 	}
 
 	for _, tt := range tests {
@@ -166,9 +170,15 @@ func TestUnquoteContent(t *testing.T) {
 // TestQuoteRoundTrip checks quote then unquote returns the original content.
 func TestQuoteRoundTrip(t *testing.T) {
 	for _, rtype := range []string{"TXT", "SPF"} {
-		const original = "v=spf1 include:_spf.example.com ~all"
-		if got := UnquoteContent(rtype, QuoteContent(rtype, original)); got != original {
-			t.Errorf("round trip %q: got %q, want %q", rtype, got, original)
+		for _, original := range []string{
+			"v=spf1 include:_spf.example.com ~all",
+			`foo"bar`,
+			`a"b"c`,
+			`"leading`,
+		} {
+			if got := UnquoteContent(rtype, QuoteContent(rtype, original)); got != original {
+				t.Errorf("round trip %q %q: got %q, want %q", rtype, original, got, original)
+			}
 		}
 	}
 }
