@@ -241,6 +241,15 @@ body {
     color: #fff !important;
 }
 
+.sidebar-footer .theme-toggle {
+    color: var(--sidebar-text);
+    border-color: var(--sidebar-hover);
+}
+
+.sidebar-footer .theme-toggle:hover {
+    background: var(--sidebar-hover);
+}
+
 .main-content {
     margin-left: var(--sidebar-width);
     flex: 1;
@@ -311,12 +320,23 @@ body.sidebar-collapsed .main-content {
     background: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 0.15rem 0.4rem;
+    padding: 0.25rem;
     cursor: pointer;
-    font-size: 0.9rem;
-    line-height: 1;
     color: var(--text);
     transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.theme-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .theme-toggle:hover {
