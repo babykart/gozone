@@ -196,62 +196,61 @@ body {
     border-left-color: var(--primary);
 }
 
-.sidebar-footer {
-    padding: 0.75rem;
-    padding-left: calc(0.75rem + 28px + 0.5rem);
-    border-top: 1px solid var(--sidebar-hover);
-    font-size: 0.8rem;
-    color: var(--sidebar-text);
+.topbar {
+    position: fixed;
+    top: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: 56px;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    white-space: nowrap;
-    overflow: hidden;
+    justify-content: flex-end;
+    padding: 0 1rem;
+    z-index: 150;
+    transition: left 0.25s ease;
 }
 
-.sidebar-footer .username {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+.topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.topbar-username {
+    color: var(--text);
     text-decoration: none;
-    color: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: color 0.2s;
 }
 
-.sidebar-footer .username:hover {
+.topbar-username:hover {
     color: var(--primary);
 }
 
-.sidebar-footer .btn-logout {
+.topbar .btn-logout {
     background: none;
     border: 1px solid var(--danger);
     border-radius: var(--radius);
-    padding: 0.15rem 0.4rem;
+    padding: 0.2rem 0.5rem;
     cursor: pointer;
     font-size: 0.9rem;
     line-height: 1;
-    color: var(--danger) !important;
+    color: var(--danger);
     text-decoration: none;
-    flex-shrink: 0;
     transition: all 0.2s;
 }
 
-.sidebar-footer .btn-logout:hover {
+.topbar .btn-logout:hover {
     background: var(--danger);
-    color: #fff !important;
-}
-
-.sidebar-footer .theme-toggle {
-    color: var(--sidebar-text);
-    border-color: var(--sidebar-hover);
-}
-
-.sidebar-footer .theme-toggle:hover {
-    background: var(--sidebar-hover);
+    color: #fff;
 }
 
 .main-content {
     margin-left: var(--sidebar-width);
+    padding-top: 56px;
     flex: 1;
     min-height: 100vh;
     background: var(--bg);
@@ -300,16 +299,8 @@ body.sidebar-collapsed .sidebar-nav a:hover::after {
     box-shadow: var(--shadow);
 }
 
-body.sidebar-collapsed .sidebar-footer {
-    padding: 0.5rem;
-    justify-content: center;
-    padding-left: 0.5rem;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-body.sidebar-collapsed .sidebar-footer .username {
-    display: none;
+body.sidebar-collapsed .topbar {
+    left: var(--sidebar-collapsed-width);
 }
 
 body.sidebar-collapsed .main-content {

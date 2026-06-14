@@ -35,10 +35,16 @@
         {{if .IsAdmin}}<a href="/groups" title="Groups" class="{{if eq $.Section "groups"}}active{{end}}"><span class="nav-icon">⊡</span><span class="nav-text">Groups</span></a>{{end}}
         {{if .IsAdmin}}<a href="/templates" title="Templates" class="{{if eq $.Section "templates"}}active{{end}}"><span class="nav-icon">⊗</span><span class="nav-text">Templates</span></a>{{end}}
     </nav>
-    <div class="sidebar-footer">
-        <a href="/profile" class="username">{{.User.Username}}</a>
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">🌓</button>
+</aside>
+{{end}}
+
+{{define "topbar"}}
+<header class="topbar">
+    <div class="topbar-spacer"></div>
+    <div class="topbar-actions">
+        <a href="/profile" class="topbar-username">{{.User.Username}}</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
         <a href="/logout" class="btn-logout" title="Logout" aria-label="Logout">⏻</a>
     </div>
-</aside>
+</header>
 {{end}}
