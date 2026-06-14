@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,11 +102,32 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
-// Logout clears the session cookie and redirects to /login.
+// Logout clears the session cookie, revokes the current JWT, and redirects to /login.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
+
+	// Revoke the current session token so it cannot be reused after logout.
 	if user != nil {
+		tokenString := ""
+		if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
+			tokenString = cookie.Value
+		}
+		if tokenString == "" {
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+			}
+		}
+
+		if tokenString != "" {
+			if claims, err := middleware.ParseToken(tokenString, h.Cfg.Server.JWTKey); err == nil && claims.ID != "" {
+				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
+					logger.Error("failed to revoke token on logout", "user_id", user.ID, "error", err)
+				}
+			}
+		}
+
 		if _, err := h.DB.ExecContext(ctx,
 			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'logout', ?)",
 			user.ID, fmt.Sprintf("User %s logged out", user.Username),

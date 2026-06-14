@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -101,9 +102,15 @@ func TestLogout(t *testing.T) {
 	user := &models.User{ID: 1, Username: "testuser", Role: "user"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
+	token, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, time.Hour)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	r = r.WithContext(ctx)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
 	h.Logout(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -123,6 +130,19 @@ func TestLogout(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='logout'").Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 logout activity log, got %d", count)
+	}
+
+	// Token should be revoked
+	claims, err := middleware.ParseToken(token, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	revoked, err := h.DB.IsTokenRevoked(context.Background(), claims.ID)
+	if err != nil {
+		t.Fatalf("check revocation: %v", err)
+	}
+	if !revoked {
+		t.Error("expected token to be revoked after logout")
 	}
 }
 

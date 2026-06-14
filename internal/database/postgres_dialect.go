@@ -117,5 +117,12 @@ func (p *postgresDialect) Migrations() []string {
 			disabled SMALLINT NOT NULL DEFAULT 0,
 			FOREIGN KEY (template_id) REFERENCES zone_templates(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS revoked_tokens (
+			jti VARCHAR(255) PRIMARY KEY,
+			user_id INT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
 	}
 }

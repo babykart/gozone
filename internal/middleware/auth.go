@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/database"
@@ -37,8 +39,9 @@ type Claims struct {
 
 // GenerateToken creates a signed JWT token for the given user.
 //
-// It produces an HMAC-SHA256 token containing the user ID, username, and role.
-// The token expires after the given duration from the current time.
+// It produces an HMAC-SHA256 token containing the user ID, username, role, and
+// a unique JWT ID (jti). The token expires after the given duration from the
+// current time.
 //
 // Parameters:
 //   - user: the authenticated user to encode in the token
@@ -47,11 +50,17 @@ type Claims struct {
 //
 // Returns the encoded JWT string and any signing error.
 func GenerateToken(user *models.User, secret []byte, duration time.Duration) (string, error) {
+	jti, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
+
 	claims := Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		Role:     user.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "gozone",
@@ -132,6 +141,33 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			claims, err := ParseToken(tokenString, secret)
 			if err != nil {
 				// Clear invalid cookie
+				// #nosec G124 -- clearing cookie on HTTP, Secure set dynamically
+				http.SetCookie(w, &http.Cookie{
+					Name:     constants.SessionCookieName,
+					Value:    "",
+					Path:     "/",
+					Expires:  time.Unix(0, 0),
+					HttpOnly: true,
+					SameSite: http.SameSiteStrictMode,
+					Secure:   r.TLS != nil,
+				})
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			if claims.ID == "" {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			revoked, err := db.IsTokenRevoked(r.Context(), claims.ID)
+			if err != nil {
+				logger.Error("failed to check token revocation", "error", err)
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			if revoked {
+				// Clear revoked cookie
 				// #nosec G124 -- clearing cookie on HTTP, Secure set dynamically
 				http.SetCookie(w, &http.Cookie{
 					Name:     constants.SessionCookieName,

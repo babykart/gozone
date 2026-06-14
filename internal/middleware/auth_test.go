@@ -48,6 +48,43 @@ func TestGenerateAndParseToken(t *testing.T) {
 	if claims.Role != "admin" {
 		t.Errorf("expected Role admin, got %s", claims.Role)
 	}
+	if claims.ID == "" {
+		t.Error("expected non-empty jti claim")
+	}
+}
+
+func TestParseToken_Revoked(t *testing.T) {
+	db := newTestAuthDB(t)
+	user := &models.User{ID: 1, Username: "revoked", Role: "user"}
+
+	token, err := GenerateToken(user, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claims, err := ParseToken(token, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.RevokeToken(context.Background(), claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
+		t.Fatalf("revoke token: %v", err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for revoked token")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect 303 for revoked token, got %d", w.Code)
+	}
 }
 
 func TestParseToken_InvalidSignature(t *testing.T) {

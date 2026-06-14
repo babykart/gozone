@@ -122,5 +122,12 @@ func (s *sqliteDialect) Migrations() []string {
 			disabled INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY (template_id) REFERENCES zone_templates(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS revoked_tokens (
+			jti TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			expires_at DATETIME NOT NULL,
+			revoked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
 	}
 }

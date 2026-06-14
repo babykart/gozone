@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/logger"
@@ -119,6 +120,39 @@ func (db *DB) Ping() error {
 // Close closes the database connection pool.
 func (db *DB) Close() error {
 	return db.Conn.Close()
+}
+
+// RevokeToken records a JWT ID (jti) in the revocation list so that the
+// corresponding token can no longer be used, even if it has not expired.
+func (db *DB) RevokeToken(ctx context.Context, jti string, userID int64, expiresAt time.Time) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO revoked_tokens (jti, user_id, expires_at) VALUES (?, ?, ?) ON CONFLICT(jti) DO NOTHING",
+		jti, userID, expiresAt,
+	)
+	return err
+}
+
+// IsTokenRevoked reports whether the given JWT ID has been revoked.
+func (db *DB) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM revoked_tokens WHERE jti = ?",
+		jti,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// CleanupRevokedTokens removes revocation entries that have already expired,
+// preventing the table from growing indefinitely.
+func (db *DB) CleanupRevokedTokens(ctx context.Context) error {
+	_, err := db.ExecContext(ctx,
+		"DELETE FROM revoked_tokens WHERE expires_at <= ?",
+		time.Now(),
+	)
+	return err
 }
 
 // Begin starts a transaction with automatic placeholder rebinding.

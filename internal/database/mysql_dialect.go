@@ -135,5 +135,12 @@ func (m *mysqlDialect) Migrations() []string {
 			disabled TINYINT NOT NULL DEFAULT 0,
 			FOREIGN KEY (template_id) REFERENCES zone_templates(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS revoked_tokens (
+			jti VARCHAR(255) PRIMARY KEY,
+			user_id INT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			revoked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			KEY idx_revoked_tokens_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
