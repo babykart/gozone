@@ -665,7 +665,7 @@ func TestListZones_Pagination(t *testing.T) {
 
 	// Page 1
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/zones?page=1", nil)
+	r := httptest.NewRequest(http.MethodGet, "/zones?Page=1", nil)
 	r = r.WithContext(ctx)
 	h.ListZones(w, r)
 	if w.Code != http.StatusOK {
@@ -674,7 +674,7 @@ func TestListZones_Pagination(t *testing.T) {
 
 	// Page 2
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/zones?page=2", nil)
+	r2 := httptest.NewRequest(http.MethodGet, "/zones?Page=2", nil)
 	r2 = r2.WithContext(ctx)
 	h.ListZones(w2, r2)
 	if w2.Code != http.StatusOK {
@@ -688,6 +688,35 @@ func TestListZones_Pagination(t *testing.T) {
 	h.ListZones(w3, r3)
 	if w3.Code != http.StatusOK {
 		t.Errorf("default page: expected 200, got %d", w3.Code)
+	}
+}
+
+// TestParsePaginationParams_QueryNames guards the query-parameter names against
+// the case-mismatch bug where the template/JS emit "Page"/"PerPage" (and
+// "logPage"/"logPerPage") but the parser read lower-case names, so changing the
+// per-page selector only refreshed the page with no effect.
+func TestParsePaginationParams_QueryNames(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/zones?Page=3&PerPage=25", nil)
+	if page, perPage := parsePaginationParams(r, 10); page != 3 || perPage != 25 {
+		t.Errorf("records: got page=%d perPage=%d, want 3 and 25", page, perPage)
+	}
+
+	// PerPage=0 means "All" and must be honored (not replaced by the default).
+	rAll := httptest.NewRequest(http.MethodGet, "/zones?PerPage=0", nil)
+	if _, perPage := parsePaginationParams(rAll, 10); perPage != 0 {
+		t.Errorf("records PerPage=0: got perPage=%d, want 0", perPage)
+	}
+
+	// Missing params fall back to defaults.
+	rDefault := httptest.NewRequest(http.MethodGet, "/zones", nil)
+	if page, perPage := parsePaginationParams(rDefault, 10); page != 1 || perPage != 10 {
+		t.Errorf("records default: got page=%d perPage=%d, want 1 and 10", page, perPage)
+	}
+
+	// Activity-log params are independent and use the "log" prefix.
+	rLog := httptest.NewRequest(http.MethodGet, "/zones/x?logPage=4&logPerPage=50", nil)
+	if page, perPage := parseLogPaginationParams(rLog, 10); page != 4 || perPage != 50 {
+		t.Errorf("log: got page=%d perPage=%d, want 4 and 50", page, perPage)
 	}
 }
 
