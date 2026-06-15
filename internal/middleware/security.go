@@ -11,7 +11,7 @@ import (
 //   - X-Frame-Options: DENY
 //   - X-XSS-Protection: 1; mode=block
 //   - Referrer-Policy: strict-origin-when-cross-origin
-//   - Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'
+//   - Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'
 //   - Strict-Transport-Security: max-age=31536000; includeSubDomains (only over HTTPS)
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
