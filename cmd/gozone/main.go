@@ -72,6 +72,34 @@ func run(args []string) error {
 	cachedClient := pdns.NewCachedClient(pdnsClient)
 	defer cachedClient.Close()
 
+	// Periodically purge expired JWT revocation entries so the revoked_tokens
+	// table does not grow without bound. Runs once at startup, then hourly until
+	// shutdown. The deferred cancel runs before db.Close (defers are LIFO), so
+	// the goroutine stops before the connection pool is closed.
+	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
+	defer stopCleanup()
+	go func() {
+		purge := func() {
+			ctx, cancel := context.WithTimeout(cleanupCtx, 30*time.Second)
+			defer cancel()
+			// Suppress the error when it stems from shutdown cancellation.
+			if err := db.CleanupRevokedTokens(ctx); err != nil && cleanupCtx.Err() == nil {
+				logger.Error("failed to clean up revoked tokens", "error", err)
+			}
+		}
+		purge()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cleanupCtx.Done():
+				return
+			case <-ticker.C:
+				purge()
+			}
+		}
+	}()
+
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
