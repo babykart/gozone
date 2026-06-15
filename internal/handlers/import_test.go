@@ -166,6 +166,34 @@ func TestImportZone_PDNSValidationError(t *testing.T) {
 	}
 }
 
+func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	csvContent := "name,type,content\nwww,A,192.0.2.1"
+	body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.csv\"\r\nContent-Type: text/csv\r\n\r\n%s\r\n--boundary--\r\n", csvContent)
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	h.ImportZone(w, r)
+	// Must match the JSON API mapping (401), not the previous divergent 403.
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for unauthorized error, got %d", w.Code)
+	}
+}
+
 func assertImportRedirect(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if w.Code != http.StatusSeeOther {
