@@ -230,12 +230,21 @@ function toggleTemplateVars(select) {
 
 function applyPerPage(select) {
     var prefix = select.getAttribute('data-prefix') || '';
+    // Merge into the current query so the other section's pagination (and any
+    // search) is preserved; only this section's page size changes and its page
+    // resets to 1.
+    var params = new URLSearchParams(window.location.search);
+    params.set(prefix + 'PerPage', select.value);
+    params.delete(prefix + 'Page');
     var searchInput = document.querySelector('input[name=search]');
-    var q = '?' + prefix + 'PerPage=' + select.value;
-    if (searchInput && searchInput.value) {
-        q += '&search=' + encodeURIComponent(searchInput.value);
+    if (searchInput) {
+        if (searchInput.value) {
+            params.set('search', searchInput.value);
+        } else {
+            params.delete('search');
+        }
     }
-    window.location.href = q;
+    window.location.href = '?' + params.toString();
 }
 
 function togglePriority(select) {

@@ -82,7 +82,7 @@
     </table>
     </div>
 {{if .Records}}
-{{template "pagination.html" dict "PageInfo" .RecordPageInfo "Search" .Search "Label" "records" "Prefix" ""}}
+{{template "pagination.html" dict "PageInfo" .RecordPageInfo "Search" .Search "Label" "records" "Prefix" "" "HasOther" true "OtherPrefix" "log" "OtherPage" .LogPageInfo.Current "OtherPerPage" .LogPageInfo.PerPage}}
 {{end}}
 </div>
 {{else}}
@@ -323,7 +323,7 @@
         </tbody>
     </table>
     </div>
-    {{template "pagination.html" dict "PageInfo" .LogPageInfo "Search" "" "Label" "entries" "Prefix" "log"}}
+    {{template "pagination.html" dict "PageInfo" .LogPageInfo "Search" .Search "Label" "entries" "Prefix" "log" "HasOther" true "OtherPrefix" "" "OtherPage" .RecordPageInfo.Current "OtherPerPage" .RecordPageInfo.PerPage}}
     {{else}}
     <p class="empty-meta">No activity yet.</p>
     {{end}}

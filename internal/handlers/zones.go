@@ -53,16 +53,18 @@ func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
 	return items[start:end], PageInfo{Current: page, PerPage: perPage, TotalPages: totalPages, Total: total}
 }
 
-// parsePaginationParams extracts the page and perPage query parameters.
-// page defaults to 1 if missing or invalid; perPage uses the provided default
-// unless a valid non-negative value is supplied.
+// parsePaginationParams extracts the Page and PerPage query parameters.
+// Page defaults to 1 if missing or invalid; PerPage uses the provided default
+// unless a valid non-negative value is supplied. The names match the
+// "<prefix>Page"/"<prefix>PerPage" scheme emitted by pagination.html (with an
+// empty prefix here), consistent with logPage/logPerPage for the activity log.
 func parsePaginationParams(r *http.Request, defaultPerPage int) (page, perPage int) {
-	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	page, _ = strconv.Atoi(r.URL.Query().Get("Page"))
 	if page < 1 {
 		page = 1
 	}
 	perPage = defaultPerPage
-	if pp := r.URL.Query().Get("perPage"); pp != "" {
+	if pp := r.URL.Query().Get("PerPage"); pp != "" {
 		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
 			perPage = n
 		}
