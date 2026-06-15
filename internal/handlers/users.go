@@ -322,6 +322,33 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// Fetch the target user and verify they exist.
+	var target models.User
+	var targetEnabled int
+	if err := tx.QueryRow(
+		`SELECT id, username, role, enabled FROM users WHERE id = ?`,
+		userID,
+	).Scan(&target.ID, &target.Username, &target.Role, &targetEnabled); err != nil {
+		h.renderErrorStatus(w, r, http.StatusNotFound, "User not found")
+		return
+	}
+	target.Enabled = targetEnabled == 1
+
+	// Last enabled admin guard: refuse to delete the only enabled admin.
+	if target.Role == "admin" && target.Enabled {
+		var adminCount int
+		if err := tx.QueryRow(
+			"SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1",
+		).Scan(&adminCount); err != nil {
+			h.renderInternalError(w, r, "Failed to count admins", err)
+			return
+		}
+		if adminCount <= 1 {
+			h.renderError(w, r, "Cannot delete the last enabled admin")
+			return
+		}
+	}
+
 	_, err = tx.Exec("DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete user", err)

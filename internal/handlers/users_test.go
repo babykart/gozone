@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -394,5 +395,67 @@ func TestDeleteUser_Self(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=1").Scan(&count)
 	if count != 1 {
 		t.Errorf("admin user should not be deleted")
+	}
+}
+
+func TestDeleteUser_LastEnabledAdminBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	// Add a second admin, but disabled. Disabled admins still reach the handler,
+	// so this tests that the last *enabled* admin cannot be deleted.
+	disabledAdminID := testutil.SeedTestUser(t, h.DB, "admin2", "adminpass", "admin", false)
+	actor := &models.User{ID: disabledAdminID, Username: "admin2", Role: "admin"}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, actor)
+
+	body := fmt.Sprintf("user_id=%d", admin.ID)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+
+	var userCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", admin.ID).Scan(&userCount)
+	if userCount != 1 {
+		t.Errorf("last enabled admin should not be deleted")
+	}
+}
+
+func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	// Insert a second enabled admin.
+	res, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
+		"admin2", "admin2@test.local", "hash", "admin", 1,
+	)
+	if err != nil {
+		t.Fatalf("insert second admin: %v", err)
+	}
+	secondAdminID, _ := res.LastInsertId()
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader(fmt.Sprintf("user_id=%d", secondAdminID)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect 303, got %d", w.Code)
+	}
+
+	var count int
+	h.DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM users WHERE id=%d", secondAdminID)).Scan(&count)
+	if count != 0 {
+		t.Errorf("second admin should have been deleted")
 	}
 }
