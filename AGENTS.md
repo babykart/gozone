@@ -56,6 +56,14 @@ considering the task complete. Use `// #nosec Gxxx` annotations only for intenti
 - No ORM — raw SQL queries throughout
 - All database methods support `context.Context`; legacy methods without context wrap `context.Background()`
 
+## Frontend Conventions
+
+- **No inline event handlers**: never add `onclick=`, `onchange=`, or `onsubmit=` to templates — they violate the Content-Security-Policy. Instead, use `data-action="action-name"` (and optionally `data-confirm="message"`) on the element, then handle via `initDelegatedListeners()` in `web/static/js/app.js`.
+- **CSP**: `script-src 'self'` only (no `'unsafe-inline'`). Only `app.js` is loaded. `style-src` allows `'unsafe-inline'` for dynamic styles.
+- **Layout partials**: use `{{template "app_layout_start" .}}` at the top and `{{template "app_layout_end" .}}` at the bottom of every authenticated page template. Never duplicate the `head`/`sidebar`/`topbar`/`main` wrapper directly.
+- **User feedback**: use `showNotification(message, type)` (from `app.js`) for flash-style alerts. `alert()` is not used.
+- **`dict` helper**: use `dict "key1" val1 "key2" val2` to pass parameters to template partials.
+
 ## Commit convention
 
 Commits must always respect the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification).
