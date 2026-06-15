@@ -12,7 +12,6 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
-	"github.com/babykart/gozone/internal/pdns"
 )
 
 // ImportZone handles file upload for zone import (BIND or CSV).
@@ -81,17 +80,9 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
 		logger.Error("ImportZone: CreateRecords failed", "zone", zoneID, "error", err)
-		status := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, pdns.ErrValidation):
-			status = http.StatusBadRequest
-		case errors.Is(err, pdns.ErrConflict):
-			status = http.StatusConflict
-		case errors.Is(err, pdns.ErrNotFound):
-			status = http.StatusNotFound
-		case errors.Is(err, pdns.ErrUnauthorized):
-			status = http.StatusForbidden
-		}
+		// Reuse the shared PowerDNS error→HTTP status mapping (the JSON API code
+		// is unused here since this path renders an HTML error page).
+		status, _ := pdnsErrorStatus(err, "")
 		w.WriteHeader(status)
 		h.renderError(w, r, "Failed to create records: "+err.Error())
 		return
