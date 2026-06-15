@@ -1,33 +1,35 @@
 
-## [v0.10.0] - 2026-06-14
+## [v0.10.1] - 2026-06-15
 
-### 🚀 Features
+### 💼 Other
 
-- **(auth)** ([5108e0d](https://github.com/babykart/gozone/commit/5108e0d798969c2812b7bc888a4ab222f02cf95b)) - [gozone] revoke JWTs on logout using jti denylist - ([babykart](https://github.com/babykart))
+- ([b626fd6](https://github.com/babykart/gozone/commit/b626fd6a0673ad37408e2a6ed505f83cf9a7bac5)) - Merge pull request #22 from smalinet/fix/pagination-per-page
+
+fix(web): [gozone] fix and decouple per-page pagination for zone records and logs - ([babykart](https://github.com/babykart))
+- ([56be2a0](https://github.com/babykart/gozone/commit/56be2a0577c475669ab054d38913906fec697d6c)) - Merge pull request #23 from smalinet/fix/revoked-tokens-cleanup
+
+fix(auth): [gozone] purge expired JWT revocation entries periodically - ([babykart](https://github.com/babykart))
+- ([afce6d3](https://github.com/babykart/gozone/commit/afce6d34e0080d9e72ef621870dbdb44b133a237)) - Merge pull request #24 from smalinet/fix/pdns-error-mapping-dup
+
+refactor(import): [gozone] reuse shared PowerDNS error-to-status mapping - ([babykart](https://github.com/babykart))
 
 ### 🐛 Bug Fixes
 
-- **(auth)** ([36c6a81](https://github.com/babykart/gozone/commit/36c6a81f790be310a5acb5f1c7e8b591700e3bd8)) - [gozone] prevent admin self-demotion, self-disable, and last-admin lockout - ([babykart](https://github.com/babykart))
-- **(config)** ([23fe421](https://github.com/babykart/gozone/commit/23fe421c991e9d5fee2a4bd8b8115a769391dd31)) - [gozone] validate configuration bounds at load time - ([babykart](https://github.com/babykart))
-- **(database)** ([6d617db](https://github.com/babykart/gozone/commit/6d617db179a138f5a0d5e16ab7659813d3954921)) - [gozone] inline MySQL indexes to support MySQL 8.x migrations - ([babykart](https://github.com/babykart))
-- **(docker)** ([a9d8917](https://github.com/babykart/gozone/commit/a9d89178af6b744a31c3baaf737a01c5fb341eb4)) - [gozone] remove useless go mod download - ([babykart](https://github.com/babykart))
-- **(frontend)** ([289898b](https://github.com/babykart/gozone/commit/289898b0f8ef2b419fe1a8839f6de0c8638dbf56)) - [gozone] remove unsafe-inline from script-src CSP - ([babykart](https://github.com/babykart))
-- **(import)** ([87224f8](https://github.com/babykart/gozone/commit/87224f8a2810fbb51038895c3b19d4ad0bc4fed0)) - [gozone] map PowerDNS errors to correct HTTP status codes - ([babykart](https://github.com/babykart))
-- **(models)** ([f7c1e57](https://github.com/babykart/gozone/commit/f7c1e57c1dec0b200b31ef6c8ffdd6692ae77b61)) - [gozone] escape internal quotes in TXT/SPF QuoteContent - ([babykart](https://github.com/babykart))
-- **(pdns)** ([7de143c](https://github.com/babykart/gozone/commit/7de143cd95fa191b4e29d69225a628fa297e061b)) - [gozone] invalidate zone caches after DNSSEC/rectify/metadata mutations - ([babykart](https://github.com/babykart))
-- **(pdns)** ([268943a](https://github.com/babykart/gozone/commit/268943a0fbe81573aecbfc6933f6a7a4c3b67c4b)) - [gozone] stop cache sweep goroutines on shutdown - ([babykart](https://github.com/babykart))
-- **(records)** ([589ee15](https://github.com/babykart/gozone/commit/589ee1518d033da23992991cd8d3f2215129bc4b)) - make normalizeRecordName case-insensitive - ([babykart](https://github.com/babykart))
-- **(templates)** ([574a57c](https://github.com/babykart/gozone/commit/574a57ce516ed9efcc8d24f1a1aa58f85f1064e0)) - [gozone] remove dead emoji from theme toggle buttons - ([babykart](https://github.com/babykart))
-- **(validators)** ([f210521](https://github.com/babykart/gozone/commit/f21052182f04c501cab3707a9dc6bf3eb025e9a9)) - [gozone] strengthen CAA record validation - ([babykart](https://github.com/babykart))
-- **(web)** ([82ffdc6](https://github.com/babykart/gozone/commit/82ffdc6cf5b8557f31ab1622065a0dea46e6998b)) - [gozone] require POST with CSRF token for /logout - ([babykart](https://github.com/babykart))
+- **(auth)** ([0bae8a9](https://github.com/babykart/gozone/commit/0bae8a9c5b21fd77f8145a449c8f1323e94cb5fa)) - [gozone] purge expired JWT revocation entries periodically - ([smalinet](https://github.com/smalinet))
+- **(security)** ([c755276](https://github.com/babykart/gozone/commit/c7552761960b414a0e01a99231833b9073bfd597)) - [gozone] update obsolete CSP comment in SecurityHeaders - ([babykart](https://github.com/babykart))
+- **(users)** ([c0fe38c](https://github.com/babykart/gozone/commit/c0fe38c6ebfa3513fb7be0363d318238a4b222db)) - [gozone] prevent deletion of the last enabled admin - ([babykart](https://github.com/babykart))
+- **(web)** ([c8dc4b7](https://github.com/babykart/gozone/commit/c8dc4b72af7337f7db40accb7050b2ef1528d601)) - [gozone] fix and decouple per-page pagination for zone records and logs - ([smalinet](https://github.com/smalinet))
 
 ### 🚜 Refactor
 
-- **(web)** ([185eb8a](https://github.com/babykart/gozone/commit/185eb8a86bcd99497f2267f471338ed6b0d57385)) - [gozone] extract shared app layout partial - ([babykart](https://github.com/babykart))
+- **(import)** ([ccdb42f](https://github.com/babykart/gozone/commit/ccdb42fd462ba82411f437528c991622c8f04ebb)) - [gozone] reuse shared PowerDNS error-to-status mapping - ([smalinet](https://github.com/smalinet))
 
-### 🧪 Testing
+### 📚 Documentation
 
-- **(database)** ([54c7313](https://github.com/babykart/gozone/commit/54c7313355e53febac9ffb5032b417aa9d9f3baa)) - [gozone] add unit tests for postgres dialect - ([babykart](https://github.com/babykart))
-- ([fae26ba](https://github.com/babykart/gozone/commit/fae26ba2bf71503722a4339d69658b5589f3ee51)) - add missing unit tests to constant & logger - ([babykart](https://github.com/babykart))
+- **(ai)** ([4b7fc4c](https://github.com/babykart/gozone/commit/4b7fc4c9e9c03b106c34580ae42f4b4ad00b55b3)) - [gozone] document frontend conventions for CSP compliance - ([babykart](https://github.com/babykart))
+
+### 🌀 Miscellaneous Tasks
+
+- **(pr)** ([af12907](https://github.com/babykart/gozone/commit/af12907a6e9463bc33eb09d356c105e54bd2dbda)) - [gozone] exclude vendored code from the gofmt formatting check - ([smalinet](https://github.com/smalinet))
 
 <!-- generated by git-cliff -->
