@@ -20,7 +20,9 @@ jobs:
           go-version: '1.26'
 
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        # Exclude vendored third-party code, which we don't reformat (the gosec
+        # step likewise excludes vendor).
+        run: test -z "$(git ls-files '*.go' | grep -v '^vendor/' | xargs -r gofmt -l)"
 
       - name: Vet
         run: go vet ./...
