@@ -42,11 +42,6 @@ vet:
 gosec:
     gosec -exclude-dir='\.cache|vendor|bin' -no-fail ./...
 
-# download and tidy dependencies
-deps:
-    go mod download
-    go mod tidy
-
 # run update
 update:
     go get -u ./...

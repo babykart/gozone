@@ -16,7 +16,6 @@
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
-| `make deps` | `just deps` | Download and tidy dependencies |
 | `make clean` | `just clean` | Remove build artifacts and database |
 | `make gosec` | `just gosec` | Run security static analysis |
 | `make update` | `just update` | Update all dependencies |

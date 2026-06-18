@@ -26,10 +26,9 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 
 ### Local Development
 
-```bash
-# Download dependencies
-make deps   # or: just deps
+Dependencies are vendored — no download step required.
 
+```bash
 # Build and run
 make run    # or: just run
 ```
@@ -227,11 +226,10 @@ GET    /api/v1/stats                      - Server statistics
 | `make fmt` | `just fmt` | Format all source files |
 | `make vet` | `just vet` | Run vet on all packages |
 | `make gosec` | `just gosec` | Run security static analysis |
-| `make deps` | `just deps` | Download and tidy dependencies |
+| `make update` | `just update` | Update all dependencies |
 | `make docker-build` | `just docker-build` | Build Docker image |
 | `make docker-up` | `just docker-up` | Start services with docker-compose |
 | `make docker-down` | `just docker-down` | Stop services |
-| `make update` | `just update` | Update all dependencies |
 
 ## Building from Source
 

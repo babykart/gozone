@@ -61,7 +61,6 @@ For security vulnerabilities, **do not open a public issue**. Contact the mainta
 ```bash
 git clone https://github.com/babykart/gozone.git
 cd gozone
-make deps   # or: just deps
 make run    # or: just run
 # Open http://localhost:8080 — admin / admin
 ```
@@ -84,7 +83,6 @@ make run    # or: just run
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
-| `make deps` | `just deps` | Download and tidy dependencies |
 | `make clean` | `just clean` | Remove build artifacts and database |
 | `make gosec` | `just gosec` | Run security static analysis |
 | `make docker-up` | `just docker-up` | Start services with docker-compose |

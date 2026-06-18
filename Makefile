@@ -1,7 +1,7 @@
 APP_NAME := gozone
 BIN_DIR := ./bin
 
-.PHONY: default build run test test-verbose clean fmt vet gosec deps update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
+.PHONY: default build run test test-verbose clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
 
 default: help
 
@@ -40,11 +40,6 @@ gosec:
 	else \
 		echo "gosec not installed. Run: go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
 	fi
-
-# download and tidy dependencies
-deps:
-	go mod download
-	go mod tidy
 
 # run update
 update:
@@ -95,7 +90,6 @@ help:
 	@echo "  fmt             Format all source files"
 	@echo "  vet             Run vet on all packages"
 	@echo "  gosec           Run gosec security analysis"
-	@echo "  deps            Download and tidy dependencies"
 	@echo "  update          Update all dependencies"
 	@echo "  docker-build    Build Docker image"
 	@echo "  docker-up       Start services with docker-compose"
