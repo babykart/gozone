@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +42,32 @@ func TestActivityPage(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestActivityPage_DefaultPaginationPerPage10(t *testing.T) {
+	h := newTestHandler(t)
+
+	for i := 0; i < 12; i++ {
+		if _, err := h.DB.Exec("INSERT INTO activity_logs (action, details) VALUES ('test', ?)", fmt.Sprintf("log %d", i)); err != nil {
+			t.Fatalf("insert activity log: %v", err)
+		}
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/activity", nil)
+	r = r.WithContext(ctx)
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "PerPage=10") {
+		t.Errorf("expected default PerPage=10 in pagination links, got: %s", body)
 	}
 }
 

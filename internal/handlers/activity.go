@@ -18,7 +18,7 @@ import (
 func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
-	page, perPage := parsePaginationParams(r, 25)
+	page, perPage := parsePaginationParams(r, 10)
 	search := strings.TrimSpace(r.URL.Query().Get("search"))
 	action := strings.TrimSpace(r.URL.Query().Get("action"))
 	fromDate := strings.TrimSpace(r.URL.Query().Get("from"))
