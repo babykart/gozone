@@ -1,35 +1,44 @@
 
-## [v0.10.1] - 2026-06-15
+## [v0.11.0] - 2026-06-20
+
+### 🚀 Features
+
+- **(activity)** ([355ccd0](https://github.com/babykart/gozone/commit/355ccd024690bfaa0c6e59f107c42d829c7a3e21)) - [gozone] add dedicatrd page for activity, parametrize activity retention and add structured before/after diff snapshots for record changes - ([babykart](https://github.com/babykart))
+- **(config)** ([f69afb2](https://github.com/babykart/gozone/commit/f69afb21cbc0303e01e7135c9271a79f984201e4)) - [gozone] make application name configurable - ([babykart](https://github.com/babykart))
+- **(ui)** ([58fbf09](https://github.com/babykart/gozone/commit/58fbf092044fb53b4f533b816ae4a38d8f4c605d)) - [gozone] add search and pagination to listing pages - ([babykart](https://github.com/babykart))
 
 ### 💼 Other
 
-- ([b626fd6](https://github.com/babykart/gozone/commit/b626fd6a0673ad37408e2a6ed505f83cf9a7bac5)) - Merge pull request #22 from smalinet/fix/pagination-per-page
+- ([089bb41](https://github.com/babykart/gozone/commit/089bb415b2e7dd39fb05783c3f561b1156c47ac4)) - Merge pull request #26 from smalinet/fix/admin-password-warning
 
-fix(web): [gozone] fix and decouple per-page pagination for zone records and logs - ([babykart](https://github.com/babykart))
-- ([56be2a0](https://github.com/babykart/gozone/commit/56be2a0577c475669ab054d38913906fec697d6c)) - Merge pull request #23 from smalinet/fix/revoked-tokens-cleanup
-
-fix(auth): [gozone] purge expired JWT revocation entries periodically - ([babykart](https://github.com/babykart))
-- ([afce6d3](https://github.com/babykart/gozone/commit/afce6d34e0080d9e72ef621870dbdb44b133a237)) - Merge pull request #24 from smalinet/fix/pdns-error-mapping-dup
-
-refactor(import): [gozone] reuse shared PowerDNS error-to-status mapping - ([babykart](https://github.com/babykart))
+fix(auth): [gozone] only warn about default admin password when it has not been changed - ([babykart](https://github.com/babykart))
 
 ### 🐛 Bug Fixes
 
-- **(auth)** ([0bae8a9](https://github.com/babykart/gozone/commit/0bae8a9c5b21fd77f8145a449c8f1323e94cb5fa)) - [gozone] purge expired JWT revocation entries periodically - ([smalinet](https://github.com/smalinet))
-- **(security)** ([c755276](https://github.com/babykart/gozone/commit/c7552761960b414a0e01a99231833b9073bfd597)) - [gozone] update obsolete CSP comment in SecurityHeaders - ([babykart](https://github.com/babykart))
-- **(users)** ([c0fe38c](https://github.com/babykart/gozone/commit/c0fe38c6ebfa3513fb7be0363d318238a4b222db)) - [gozone] prevent deletion of the last enabled admin - ([babykart](https://github.com/babykart))
-- **(web)** ([c8dc4b7](https://github.com/babykart/gozone/commit/c8dc4b72af7337f7db40accb7050b2ef1528d601)) - [gozone] fix and decouple per-page pagination for zone records and logs - ([smalinet](https://github.com/smalinet))
+- **(activity)** ([f490a9f](https://github.com/babykart/gozone/commit/f490a9fbd6c58217666a5e35c1a64cbe6af9f2a6)) - [gozone] wrap non-admin visibility filter in parentheses - ([babykart](https://github.com/babykart))
+- **(activity)** ([e9dd319](https://github.com/babykart/gozone/commit/e9dd3195134787453a02709d527b7d74c44eecf2)) - [gozone] include before/after snapshot in batch record creation logs - ([babykart](https://github.com/babykart))
+- **(activity)** ([da668de](https://github.com/babykart/gozone/commit/da668de40ee0353e94ff831b198545cf29a51fe1)) - [gozone] url-escape date filters in pagination links - ([babykart](https://github.com/babykart))
+- **(activity)** ([7bfac98](https://github.com/babykart/gozone/commit/7bfac98ea70b560cbf4065b9fb28e498c234e163)) - [gozone] scope action dropdown to the user's visible logs - ([babykart](https://github.com/babykart))
+- **(auth)** ([1400010](https://github.com/babykart/gozone/commit/1400010301638f5d2c97f77f59b5c99bfc41e020)) - [gozone] only warn about default admin password when it has not been changed - ([smalinet](https://github.com/smalinet))
+- **(database)** ([6c0cb9f](https://github.com/babykart/gozone/commit/6c0cb9f1437e41f1f0352196a03c53240a424fc6)) - [gozone] avoid MySQL error 1093 in activity log retention purge - ([babykart](https://github.com/babykart))
+- **(groups)** ([7e71417](https://github.com/babykart/gozone/commit/7e71417262befa291344eb29a54bb7a5c62109f3)) - use correct form action when creating a group - ([babykart](https://github.com/babykart))
+- **(import)** ([dafb0ac](https://github.com/babykart/gozone/commit/dafb0ac6995923db0b40ef7cf7ef870673fcb550)) - [gozone] centralize PDNS error status mapping in ImportZone - ([babykart](https://github.com/babykart))
+- **(users)** ([56f31ae](https://github.com/babykart/gozone/commit/56f31aed9f8a14e7a0a95f69c3bd4d3458679c74)) - [gozone] lock enabled admin rows during delete to prevent TOCTOU race - ([babykart](https://github.com/babykart))
+- **(validators)** ([3133e82](https://github.com/babykart/gozone/commit/3133e82d8aecdc77d1fba4506072accb36884b67)) - [gozone] allow periods in usernames - ([babykart](https://github.com/babykart))
 
 ### 🚜 Refactor
 
-- **(import)** ([ccdb42f](https://github.com/babykart/gozone/commit/ccdb42fd462ba82411f437528c991622c8f04ebb)) - [gozone] reuse shared PowerDNS error-to-status mapping - ([smalinet](https://github.com/smalinet))
+- **(handlers)** ([abc1701](https://github.com/babykart/gozone/commit/abc17018a22f7025e9515bb53ad12dd6fd6515ef)) - [gozone] push search and pagination down to SQL for list handlers - ([babykart](https://github.com/babykart))
+- **(main)** ([00d0eb8](https://github.com/babykart/gozone/commit/00d0eb8b3f83333b9a579c4eb4ae8f96009b372a)) - extract startPeriodicJob helper for background purge goroutines - ([babykart](https://github.com/babykart))
 
 ### 📚 Documentation
 
-- **(ai)** ([4b7fc4c](https://github.com/babykart/gozone/commit/4b7fc4c9e9c03b106c34580ae42f4b4ad00b55b3)) - [gozone] document frontend conventions for CSP compliance - ([babykart](https://github.com/babykart))
+- **(readme)** ([4d36612](https://github.com/babykart/gozone/commit/4d36612692401071e787b31df83b9f37a8291afd)) - [gozone] add server.app_name configuration - ([babykart](https://github.com/babykart))
+- **(readme)** ([978a1c7](https://github.com/babykart/gozone/commit/978a1c7f739e2c6d48341154eefdcfdca6ca022a)) - [gozone] expand API section with usage examples and schemas - ([babykart](https://github.com/babykart))
+- **(roadmap)** ([cd318ae](https://github.com/babykart/gozone/commit/cd318ae721182ac1e9bf3f6e43d760f3cf044e29)) - [gozone] remove Activity Page and Retention - ([babykart](https://github.com/babykart))
 
 ### 🌀 Miscellaneous Tasks
 
-- **(pr)** ([af12907](https://github.com/babykart/gozone/commit/af12907a6e9463bc33eb09d356c105e54bd2dbda)) - [gozone] exclude vendored code from the gofmt formatting check - ([smalinet](https://github.com/smalinet))
+- **(build)** ([8fff5c8](https://github.com/babykart/gozone/commit/8fff5c84f9669618c82337f4feb93bce0b799c55)) - [gozone] remove obsolete deps target - ([babykart](https://github.com/babykart))
 
 <!-- generated by git-cliff -->
