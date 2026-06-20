@@ -108,7 +108,7 @@ func DefaultConfig() *Config {
 		},
 		Admin: AdminConfig{
 			Username:  "admin",
-			Password:  "admin",
+			Password:  DefaultAdminPassword,
 			Email:     "admin@gozone.local",
 			FirstName: "Admin",
 			LastName:  "User",
@@ -291,6 +291,11 @@ func applyEnvOverrides(cfg *Config) {
 
 // defaultSecretKey is the placeholder value baked into DefaultConfig.
 const defaultSecretKey = "change-me-to-a-random-secret"
+
+// DefaultAdminPassword is the placeholder admin password baked into
+// DefaultConfig. Seeding the admin user with this value warrants a warning to
+// change it; a custom password configured via YAML/env does not.
+const DefaultAdminPassword = "admin"
 
 // placeholderSecrets lists the well-known placeholder secret keys that must
 // never be used as a real signing key. Any of these triggers auto-generation
