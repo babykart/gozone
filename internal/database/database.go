@@ -170,10 +170,12 @@ func (db *DB) PurgeActivityLogs(ctx context.Context, retentionDays, batchSize in
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	const query = `DELETE FROM activity_logs
 	WHERE id IN (
-		SELECT id FROM activity_logs
-		WHERE created_at < ?
-		ORDER BY id
-		LIMIT ?
+		SELECT id FROM (
+			SELECT id FROM activity_logs
+			WHERE created_at < ?
+			ORDER BY id
+			LIMIT ?
+		) AS _batch
 	)`
 
 	var totalDeleted int64
