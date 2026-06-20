@@ -74,70 +74,38 @@ func run(args []string) error {
 
 	// Periodically purge expired JWT revocation entries so the revoked_tokens
 	// table does not grow without bound. Runs once at startup, then hourly until
-	// shutdown. The deferred cancel runs before db.Close (defers are LIFO), so
-	// the goroutine stops before the connection pool is closed.
-	cleanupCtx, stopCleanup := context.WithCancel(context.Background())
-	defer stopCleanup()
-	go func() {
-		purge := func() {
-			ctx, cancel := context.WithTimeout(cleanupCtx, 30*time.Second)
-			defer cancel()
-			// Suppress the error when it stems from shutdown cancellation.
-			if err := db.CleanupRevokedTokens(ctx); err != nil && cleanupCtx.Err() == nil {
-				logger.Error("failed to clean up revoked tokens", "error", err)
-			}
-		}
-		purge()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cleanupCtx.Done():
-				return
-			case <-ticker.C:
-				purge()
-			}
-		}
-	}()
+	// shutdown.
+	defer startPeriodicJob(context.Background(), "cleanup revoked tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
+		return db.CleanupRevokedTokens(ctx)
+	})()
 
 	// Periodically purge old activity logs based on the configured retention
 	// period (default 90 days). Runs once at startup, then daily. A retention
 	// period of 0 means "keep forever" and skips the background job entirely.
+	var stopActivityPurge func()
 	if cfg.Activity.RetentionDays > 0 {
-		retentionCtx, stopRetention := context.WithCancel(context.Background())
-		defer stopRetention()
-		go func() {
-			purge := func() {
-				start := time.Now()
-				ctx, cancel := context.WithTimeout(retentionCtx, 5*time.Minute)
-				defer cancel()
-				n, err := db.PurgeActivityLogs(ctx, cfg.Activity.RetentionDays, cfg.Activity.BatchSize)
-				if err != nil && retentionCtx.Err() == nil {
-					logger.Error("failed to purge old activity logs", "error", err)
-					return
-				}
-				logger.Info("activity log retention purge completed",
-					"deleted", n,
-					"duration", time.Since(start).String(),
-				)
+		stopActivityPurge = startPeriodicJob(context.Background(), "purge activity logs", 24*time.Hour, 5*time.Minute, func(ctx context.Context) error {
+			start := time.Now()
+			n, err := db.PurgeActivityLogs(ctx, cfg.Activity.RetentionDays, cfg.Activity.BatchSize)
+			if err != nil {
+				return err
 			}
-			purge()
-			ticker := time.NewTicker(24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-retentionCtx.Done():
-					return
-				case <-ticker.C:
-					purge()
-				}
-			}
-		}()
+			logger.Info("activity log retention purge completed",
+				"deleted", n,
+				"duration", time.Since(start).String(),
+			)
+			return nil
+		})
 	}
 
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
+	}
+
+	// Stop the activity log purge goroutine on exit if it was started.
+	if stopActivityPurge != nil {
+		defer stopActivityPurge()
 	}
 
 	// Parse templates
@@ -386,6 +354,36 @@ func run(args []string) error {
 	<-shutdownDone
 	logger.Info("server stopped")
 	return nil
+}
+
+// startPeriodicJob starts a goroutine that runs job immediately, then again on
+// every tick of interval. Each invocation gets a fresh context with the
+// provided timeout and runs in the given parent context. The returned stop
+// function cancels the periodic job and stops the goroutine; it is safe to call
+// multiple times.
+func startPeriodicJob(ctx context.Context, name string, interval, timeout time.Duration, job func(context.Context) error) func() {
+	ctx, stop := context.WithCancel(ctx)
+	go func() {
+		run := func() {
+			c, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := job(c); err != nil && ctx.Err() == nil {
+				logger.Error(name+" failed", "error", err)
+			}
+		}
+		run()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
+	return stop
 }
 
 // fileServer serves static files with proper caching headers.
