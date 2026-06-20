@@ -357,10 +357,8 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Last enabled admin guard: refuse to delete the only enabled admin.
 	if target.Role == "admin" && target.Enabled {
-		var adminCount int
-		if err := tx.QueryRow(
-			"SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1",
-		).Scan(&adminCount); err != nil {
+		adminCount, err := tx.CountEnabledAdmins(r.Context())
+		if err != nil {
 			h.renderInternalError(w, r, "Failed to count admins", err)
 			return
 		}

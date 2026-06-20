@@ -204,6 +204,31 @@ func (db *DB) Begin() (*Tx, error) {
 	return db.BeginTx(context.Background(), nil)
 }
 
+// CountEnabledAdmins returns the number of enabled admin users. On MySQL and
+// PostgreSQL it appends FOR UPDATE so the count is protected against concurrent
+// deletions inside a transaction. SQLite omits the locking clause because its
+// single-writer mode (MaxOpenConns=1) already serializes writers.
+func (tx *Tx) CountEnabledAdmins(ctx context.Context) (int, error) {
+	query := "SELECT id FROM users WHERE role = 'admin' AND enabled = 1"
+	if tx.dialect.DriverName() != "sqlite3" {
+		query += " FOR UPDATE"
+	}
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // BeginTx starts a transaction with automatic placeholder rebinding and the
 // given transaction options. The context is used until the transaction is
 // committed or rolled back.
