@@ -86,6 +86,9 @@ func TestValidateUsername(t *testing.T) {
 		{"valid username", "john_doe", false},
 		{"shortest valid", "abc", false},
 		{"with hyphen", "john-doe", false},
+		{"with underscore", "john_doe", false},
+		{"with period", "john.doe", false},
+		{"with period hyphen underscore", "john.doe-2_test", false},
 		{"with digits", "user123", false},
 		{"max length", strings.Repeat("a", 32), false},
 		{"start with letter", "a123", false},
@@ -95,6 +98,7 @@ func TestValidateUsername(t *testing.T) {
 		{"starts with digit", "123abc", true},
 		{"starts with hyphen", "-john", true},
 		{"starts with underscore", "_john", true},
+		{"starts with period", ".john", true},
 		{"contains space", "john doe", true},
 		{"contains special char", "john@doe", true},
 	}

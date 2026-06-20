@@ -155,14 +155,14 @@ func ValidateRecordType(recordType string) error {
 
 // usernameRegex requires 3 to 32 characters: alphanumeric, underscores,
 // and hyphens. Must start with a letter.
-var usernameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{2,31}$`)
+var usernameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]{2,31}$`)
 
 // ValidateUsername checks that a username meets the application rules.
 //
 // Rules:
 //   - 3 to 32 characters
 //   - Must start with a letter
-//   - May contain letters, digits, underscores, and hyphens
+//   - May contain letters, digits, periods, underscores, and hyphens
 //
 // Returns nil if valid, an error describing the violation otherwise.
 func ValidateUsername(username string) error {
@@ -170,7 +170,7 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username must not be empty")
 	}
 	if !usernameRegex.MatchString(username) {
-		return fmt.Errorf("username %q is invalid: must be 3-32 characters, start with a letter, and contain only letters, digits, underscores, and hyphens", username)
+		return fmt.Errorf("username %q is invalid: must be 3-32 characters, start with a letter, and contain only letters, digits, periods, underscores, and hyphens", username)
 	}
 	return nil
 }
