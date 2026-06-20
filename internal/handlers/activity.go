@@ -24,7 +24,7 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 	fromDate := strings.TrimSpace(r.URL.Query().Get("from"))
 	toDate := strings.TrimSpace(r.URL.Query().Get("to"))
 
-	actions, err := h.getDistinctActivityActions()
+	actions, err := h.getDistinctActivityActions(user)
 	if err != nil {
 		logger.Error("failed to fetch activity actions", "error", err)
 	}
@@ -72,10 +72,20 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "activity.html", data)
 }
 
-// getDistinctActivityActions returns all distinct action values stored in the
-// activity logs, ordered alphabetically, so the filter dropdown can be built.
-func (h *Handler) getDistinctActivityActions() ([]string, error) {
-	rows, err := h.DB.Query("SELECT DISTINCT action FROM activity_logs ORDER BY action")
+// getDistinctActivityActions returns the distinct action values visible to the
+// given user, ordered alphabetically, so the filter dropdown can be built.
+// Admin users see all actions; non-admin users see only actions from logs they
+// are allowed to view.
+func (h *Handler) getDistinctActivityActions(user *models.User) ([]string, error) {
+	query := "SELECT DISTINCT action FROM activity_logs AS al"
+	var args []interface{}
+	if clause, clauseArgs := activityLogVisibilityClause(user); clause != "" {
+		query += " WHERE " + clause
+		args = clauseArgs
+	}
+	query += " ORDER BY action"
+
+	rows, err := h.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +104,17 @@ func (h *Handler) getDistinctActivityActions() ([]string, error) {
 		return nil, err
 	}
 	return actions, nil
+}
+
+// activityLogVisibilityClause returns the SQL WHERE clause (and args) that
+// restricts activity logs to the ones visible to the given user. Admins see
+// everything; non-admins see zone-scoped logs for zones in their groups plus
+// their own non-zone logs.
+func activityLogVisibilityClause(user *models.User) (string, []interface{}) {
+	if user.IsAdmin() {
+		return "", nil
+	}
+	return "((al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?))", []interface{}{user.ID, user.ID}
 }
 
 // getActivityLogs returns activity logs visible to the given user, after
@@ -188,9 +209,9 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 	}
 
 	if !user.IsAdmin() {
-		filters = append(filters,
-			"((al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?))")
-		args = append(args, user.ID, user.ID)
+		clause, clauseArgs := activityLogVisibilityClause(user)
+		filters = append(filters, clause)
+		args = append(args, clauseArgs...)
 	}
 
 	where := ""

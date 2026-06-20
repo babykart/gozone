@@ -156,6 +156,50 @@ func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
 	}
 }
 
+func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
+	h := newTestHandler(t)
+
+	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	userID := testutil.SeedTestUser(t, h.DB, "member", "member", "user", true)
+
+	res, err := h.DB.Exec("INSERT INTO zone_groups (name) VALUES ('test-group')")
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	groupID, _ := res.LastInsertId()
+	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "visible.example.com."); err != nil {
+		t.Fatalf("insert group zone: %v", err)
+	}
+
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (user_id, zone_id, action) VALUES (?, ?, 'visible_action')", adminID, "visible.example.com."); err != nil {
+		t.Fatalf("insert visible log: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (user_id, zone_id, action) VALUES (?, ?, 'hidden_action')", adminID, "hidden.example.com."); err != nil {
+		t.Fatalf("insert hidden log: %v", err)
+	}
+
+	admin := &models.User{ID: adminID, Username: "admin", Role: "admin"}
+	adminActions, err := h.getDistinctActivityActions(admin)
+	if err != nil {
+		t.Fatalf("fetch admin actions: %v", err)
+	}
+	if len(adminActions) != 2 {
+		t.Errorf("expected admin to see 2 actions, got %d", len(adminActions))
+	}
+
+	member := &models.User{ID: userID, Username: "member", Role: "user"}
+	memberActions, err := h.getDistinctActivityActions(member)
+	if err != nil {
+		t.Fatalf("fetch member actions: %v", err)
+	}
+	if len(memberActions) != 1 || memberActions[0] != "visible_action" {
+		t.Errorf("expected member to see only 'visible_action', got %v", memberActions)
+	}
+}
+
 func TestDashboard_ServerStats(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
