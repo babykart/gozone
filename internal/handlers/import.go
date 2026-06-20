@@ -80,9 +80,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
 		logger.Error("ImportZone: CreateRecords failed", "zone", zoneID, "error", err)
-		// Reuse the shared PowerDNS error→HTTP status mapping (the JSON API code
-		// is unused here since this path renders an HTML error page).
-		status, _ := pdnsErrorStatus(err, "")
+		status := pdnsErrorHTTPStatus(err)
 		w.WriteHeader(status)
 		h.renderError(w, r, "Failed to create records: "+err.Error())
 		return
