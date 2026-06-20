@@ -2,6 +2,11 @@
 {{template "app_layout_start" .}}
 <div class="page-header">
     <h2>API Keys</h2>
+    <div class="header-actions">
+        <form method="GET" action="/profile/api-keys" class="search-form">
+            <input type="search" name="search" value="{{.Search}}" placeholder="Filter keys..." class="search-input" aria-label="Filter API keys">
+        </form>
+    </div>
 </div>
 
 {{if eq .Flash "created"}}
@@ -69,11 +74,14 @@
     </table>
     </div>
 </div>
+{{if .PageInfo.TotalPages}}
+{{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "keys" "Prefix" ""}}
+{{end}}
 {{else}}
 {{if ne .Flash "created"}}
 <div class="empty-state">
     <h3>No API Keys</h3>
-    <p>You haven't created any API keys yet. Use the form above to generate one.</p>
+    <p>{{if .Search}}No keys match your search.{{else}}You haven't created any API keys yet. Use the form above to generate one.{{end}}</p>
 </div>
 {{end}}
 {{end}}

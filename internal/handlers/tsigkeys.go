@@ -22,11 +22,28 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		var filtered []models.TSIGKey
+		for _, k := range keys {
+			if strings.Contains(strings.ToLower(k.Name), searchLower) {
+				filtered = append(filtered, k)
+			}
+		}
+		keys = filtered
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	paginated, pageInfo := paginate(keys, page, perPage)
+
 	data := map[string]interface{}{
-		"Title":   "TSIG Keys - GoZone",
-		"User":    user,
-		"Keys":    keys,
-		"IsAdmin": user.IsAdmin(),
+		"Title":    "TSIG Keys - GoZone",
+		"User":     user,
+		"Keys":     paginated,
+		"PageInfo": pageInfo,
+		"Search":   search,
+		"IsAdmin":  user.IsAdmin(),
 	}
 	h.render(w, r, "tsigkeys.html", data)
 }

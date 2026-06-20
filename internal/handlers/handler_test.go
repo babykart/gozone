@@ -50,17 +50,17 @@ func testTemplateSet() *template.Template {
 		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{range .Records}}{{.Content}} {{end}}{{end}}{{end}}
 		{{define "record_create.html"}}Create Record{{end}}
 		{{define "record_edit.html"}}Edit Record{{end}}
-		{{define "users.html"}}Users{{end}}
+		{{define "users.html"}}Users{{range .Users}} {{.Username}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "user_create.html"}}Create User{{end}}
 		{{define "user_edit.html"}}Edit User{{end}}
 		{{define "profile.html"}}Profile{{end}}
-		{{define "api_keys.html"}}API Keys{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{end}}
-		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{end}}
+		{{define "api_keys.html"}}API Keys{{range .APIKeys}} {{.Description}}{{end}}{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
+		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}
-		{{define "tsigkeys.html"}}TSIG Keys{{end}}
+		{{define "tsigkeys.html"}}TSIG Keys{{range .Keys}} {{.Name}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
 		{{define "tsigkey_edit.html"}}Edit TSIG Key{{end}}
-		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{end}}
+		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
 		{{define "dnssec.html"}}DNSSEC: {{.Zone.Name}} Keys: {{range .Keys}}{{.ID}}:{{.Active}}:{{.KeyType}} {{end}}{{end}}
 	`))

@@ -2,7 +2,12 @@
 {{template "app_layout_start" .}}
             <div class="page-header">
                 <h2>Templates</h2>
-                <a href="/templates/new" class="btn btn-primary">New Template</a>
+                <div class="header-actions">
+                    <form method="GET" action="/templates" class="search-form">
+                        <input type="search" name="search" value="{{.Search}}" placeholder="Filter templates..." class="search-input" aria-label="Filter templates">
+                    </form>
+                    <a href="/templates/new" class="btn btn-primary">New Template</a>
+                </div>
             </div>
 
             {{if .Templates}}
@@ -33,10 +38,13 @@
                 </table>
                 </div>
             </div>
+            {{if .PageInfo.TotalPages}}
+            {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "templates" "Prefix" ""}}
+            {{end}}
             {{else}}
             <div class="empty-state">
                 <h3>No templates</h3>
-                <p>Create a template to pre-fill records when creating new zones.</p>
+                <p>{{if .Search}}No templates match your search.{{else}}Create a template to pre-fill records when creating new zones.{{end}}</p>
                 <a href="/templates/new" class="btn btn-primary">New Template</a>
             </div>
             {{end}}

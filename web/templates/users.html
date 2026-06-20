@@ -2,7 +2,12 @@
 {{template "app_layout_start" .}}
 <div class="page-header">
     <h2>Users</h2>
-    <a href="/users/new" class="btn btn-primary">Create User</a>
+    <div class="header-actions">
+        <form method="GET" action="/users" class="search-form">
+            <input type="search" name="search" value="{{.Search}}" placeholder="Filter users..." class="search-input" aria-label="Filter users">
+        </form>
+        <a href="/users/new" class="btn btn-primary">Create User</a>
+    </div>
 </div>
 
 {{if .Users}}
@@ -39,11 +44,16 @@
         </tr>
         {{end}}
     </tbody>
-</table>
+    </table>
 </div>
+{{if .PageInfo.TotalPages}}
+{{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "users" "Prefix" ""}}
+{{end}}
 {{else}}
 <div class="empty-state">
     <h3>No users</h3>
+    <p>{{if .Search}}No users match your search.{{else}}Create your first user to get started.{{end}}</p>
+    <a href="/users/new" class="btn btn-primary">Create User</a>
 </div>
 {{end}}
 {{template "app_layout_end" .}}

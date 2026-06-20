@@ -56,6 +56,45 @@ func TestListTSIGKeys_Empty(t *testing.T) {
 	}
 }
 
+func TestListTSIGKeys_PaginationAndSearch(t *testing.T) {
+	keys := []models.TSIGKey{
+		{Name: "alpha-key.", ID: "alpha-key.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
+		{Name: "beta-key.", ID: "beta-key.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
+		{Name: "gamma-other.", ID: "gamma-other.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(keys)
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/tsigkeys?search=key&PerPage=1&Page=2", nil)
+	r = r.WithContext(ctx)
+	h.ListTSIGKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "beta-key.") {
+		t.Errorf("expected page 2 to contain beta-key, body: %s", body)
+	}
+	if strings.Contains(body, "alpha-key.") {
+		t.Errorf("did not expect alpha-key on page 2, body: %s", body)
+	}
+	if strings.Contains(body, "gamma-other") {
+		t.Errorf("did not expect gamma-other after filtering by 'key', body: %s", body)
+	}
+	if !strings.Contains(body, "PageInfo=") || !strings.Contains(body, "Search=key") {
+		t.Errorf("expected pagination info in response, body: %s", body)
+	}
+}
+
 func TestCreateTSIGKeyPage(t *testing.T) {
 	h := newTestHandler(t)
 

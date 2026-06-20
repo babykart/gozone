@@ -40,11 +40,29 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		groups = append(groups, g)
 	}
 
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		var filtered []groupInfo
+		for _, g := range groups {
+			if strings.Contains(strings.ToLower(g.Name), searchLower) ||
+				strings.Contains(strings.ToLower(g.Description), searchLower) {
+				filtered = append(filtered, g)
+			}
+		}
+		groups = filtered
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	paginated, pageInfo := paginate(groups, page, perPage)
+
 	data := map[string]interface{}{
-		"Title":   "Groups - GoZone",
-		"User":    user,
-		"Groups":  groups,
-		"IsAdmin": user.IsAdmin(),
+		"Title":    "Groups - GoZone",
+		"User":     user,
+		"Groups":   paginated,
+		"PageInfo": pageInfo,
+		"Search":   search,
+		"IsAdmin":  user.IsAdmin(),
 	}
 	h.render(w, r, "groups.html", data)
 }

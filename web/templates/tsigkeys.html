@@ -3,6 +3,9 @@
             <div class="page-header">
                 <h2>TSIG Keys</h2>
                 <div class="header-actions">
+                    <form method="GET" action="/tsigkeys" class="search-form">
+                        <input type="search" name="search" value="{{.Search}}" placeholder="Filter keys..." class="search-input" aria-label="Filter TSIG keys">
+                    </form>
                     <a href="/tsigkeys/new" class="btn btn-primary">Add Key</a>
                 </div>
             </div>
@@ -33,10 +36,13 @@
                 </table>
                 </div>
             </div>
+            {{if .PageInfo.TotalPages}}
+            {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "keys" "Prefix" ""}}
+            {{end}}
             {{else}}
             <div class="empty-state">
                 <h3>No TSIG keys</h3>
-                <p>Create a TSIG key to secure zone transfers and dynamic updates.</p>
+                <p>{{if .Search}}No keys match your search.{{else}}Create a TSIG key to secure zone transfers and dynamic updates.{{end}}</p>
                 <a href="/tsigkeys/new" class="btn btn-primary">Add Key</a>
             </div>
             {{end}}

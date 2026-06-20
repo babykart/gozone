@@ -46,10 +46,31 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		logger.Error("rows iteration error for users list", "error", err)
 	}
 
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		var filtered []models.User
+		for _, u := range users {
+			if strings.Contains(strings.ToLower(u.Username), searchLower) ||
+				strings.Contains(strings.ToLower(u.Email), searchLower) ||
+				strings.Contains(strings.ToLower(u.FirstName+" "+u.LastName), searchLower) ||
+				strings.Contains(strings.ToLower(u.FirstName), searchLower) ||
+				strings.Contains(strings.ToLower(u.LastName), searchLower) {
+				filtered = append(filtered, u)
+			}
+		}
+		users = filtered
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	paginated, pageInfo := paginate(users, page, perPage)
+
 	data := map[string]interface{}{
-		"Title": "Users - GoZone",
-		"User":  user,
-		"Users": users,
+		"Title":    "Users - GoZone",
+		"User":     user,
+		"Users":    paginated,
+		"PageInfo": pageInfo,
+		"Search":   search,
 	}
 	h.render(w, r, "users.html", data)
 }

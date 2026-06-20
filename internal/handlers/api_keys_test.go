@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,5 +93,46 @@ func TestListAPIKeys_ReadsAndClearsFlashCookie(t *testing.T) {
 	}
 	if !cleared {
 		t.Error("expected new_api_key cookie to be cleared")
+	}
+}
+
+func TestListAPIKeys_PaginationAndSearch(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	for i, desc := range []string{"alpha-key", "beta-key", "gamma-other"} {
+		_, err := h.DB.Exec(
+			`INSERT INTO api_keys (user_id, description, key_hash, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+			1, desc, fmt.Sprintf("hash%d", i),
+		)
+		if err != nil {
+			t.Fatalf("seed api key: %v", err)
+		}
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/profile/api-keys?search=key&PerPage=1&Page=2", nil)
+	r = r.WithContext(ctx)
+	h.ListAPIKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "beta-key") {
+		t.Errorf("expected page 2 to contain beta-key, body: %s", body)
+	}
+	if strings.Contains(body, "alpha-key") {
+		t.Errorf("did not expect alpha-key on page 2, body: %s", body)
+	}
+	if strings.Contains(body, "gamma-other") {
+		t.Errorf("did not expect gamma-other after filtering by 'key', body: %s", body)
+	}
+	if !strings.Contains(body, "PageInfo=") || !strings.Contains(body, "Search=key") {
+		t.Errorf("expected pagination info in response, body: %s", body)
 	}
 }

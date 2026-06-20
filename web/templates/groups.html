@@ -2,7 +2,12 @@
 {{template "app_layout_start" .}}
 <div class="page-header">
     <h2>Groups</h2>
-    <a href="/groups/new" class="btn btn-primary">Create Group</a>
+    <div class="header-actions">
+        <form method="GET" action="/groups" class="search-form">
+            <input type="search" name="search" value="{{.Search}}" placeholder="Filter groups..." class="search-input" aria-label="Filter groups">
+        </form>
+        <a href="/groups/new" class="btn btn-primary">Create Group</a>
+    </div>
 </div>
 
 {{if .Groups}}
@@ -32,12 +37,15 @@
         </tr>
         {{end}}
     </tbody>
-</table>
+    </table>
 </div>
+{{if .PageInfo.TotalPages}}
+{{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "groups" "Prefix" ""}}
+{{end}}
 {{else}}
 <div class="empty-state">
     <h3>No groups</h3>
-    <p>Create a zone group to manage access permissions.</p>
+    <p>{{if .Search}}No groups match your search.{{else}}Create a zone group to manage access permissions.{{end}}</p>
     <a href="/groups/new" class="btn btn-primary">Create Group</a>
 </div>
 {{end}}

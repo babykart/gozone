@@ -55,10 +55,28 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 		templates = append(templates, t)
 	}
 
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		var filtered []models.ZoneTemplate
+		for _, t := range templates {
+			if strings.Contains(strings.ToLower(t.Name), searchLower) ||
+				strings.Contains(strings.ToLower(t.Description), searchLower) {
+				filtered = append(filtered, t)
+			}
+		}
+		templates = filtered
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	paginated, pageInfo := paginate(templates, page, perPage)
+
 	data := map[string]interface{}{
 		"Title":     "Templates - GoZone",
 		"User":      user,
-		"Templates": templates,
+		"Templates": paginated,
+		"PageInfo":  pageInfo,
+		"Search":    search,
 		"IsAdmin":   user.IsAdmin(),
 	}
 	h.render(w, r, "templates.html", data)

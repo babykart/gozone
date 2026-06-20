@@ -57,6 +57,21 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		logger.Error("rows iteration error for API keys", "error", err)
 	}
 
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	if search != "" {
+		searchLower := strings.ToLower(search)
+		var filtered []models.APIKey
+		for _, k := range keys {
+			if strings.Contains(strings.ToLower(k.Description), searchLower) {
+				filtered = append(filtered, k)
+			}
+		}
+		keys = filtered
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	paginated, pageInfo := paginate(keys, page, perPage)
+
 	flash := r.URL.Query().Get("flash")
 	newKey := ""
 	errorMsg := r.URL.Query().Get("error")
@@ -77,12 +92,14 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":   "API Keys - GoZone",
-		"User":    user,
-		"APIKeys": keys,
-		"Flash":   flash,
-		"NewKey":  newKey,
-		"Error":   errorMsg,
+		"Title":    "API Keys - GoZone",
+		"User":     user,
+		"APIKeys":  paginated,
+		"PageInfo": pageInfo,
+		"Search":   search,
+		"Flash":    flash,
+		"NewKey":   newKey,
+		"Error":    errorMsg,
 	}
 	h.render(w, r, "api_keys.html", data)
 }

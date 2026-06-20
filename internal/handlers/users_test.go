@@ -49,6 +49,35 @@ func TestListUsers_NonAdmin(t *testing.T) {
 	}
 }
 
+func TestListUsers_PaginationAndSearch(t *testing.T) {
+	h := newTestHandler(t)
+	_ = seedAdminUser(t, h)
+	testutil.SeedTestUser(t, h.DB, "alice", "pass", "user", true)
+	testutil.SeedTestUser(t, h.DB, "bob", "pass", "user", true)
+	testutil.SeedTestUser(t, h.DB, "charlie", "pass", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/users?search=ali&PerPage=1&Page=1", nil)
+	r = r.WithContext(ctx)
+	h.ListUsers(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "alice") {
+		t.Errorf("expected search to return alice, body: %s", body)
+	}
+	if strings.Contains(body, "bob") || strings.Contains(body, "charlie") {
+		t.Errorf("did not expect bob or charlie in filtered results, body: %s", body)
+	}
+	if !strings.Contains(body, "PageInfo=") || !strings.Contains(body, "Search=ali") {
+		t.Errorf("expected pagination info in response, body: %s", body)
+	}
+}
+
 func TestCreateUserPage_Admin(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)

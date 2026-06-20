@@ -69,6 +69,38 @@ func TestListTemplates_Empty(t *testing.T) {
 	}
 }
 
+func TestListTemplates_PaginationAndSearch(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	seedTemplate(t, h, "alpha-template", "first")
+	seedTemplate(t, h, "beta-template", "second")
+	seedTemplate(t, h, "gamma-other", "third")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/templates?search=template&PerPage=1&Page=2", nil), user)
+	h.ListTemplates(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "beta-template") {
+		t.Errorf("expected page 2 to contain beta-template, body: %s", body)
+	}
+	if strings.Contains(body, "alpha-template") {
+		t.Errorf("did not expect alpha-template on page 2, body: %s", body)
+	}
+	if strings.Contains(body, "gamma-other") {
+		t.Errorf("did not expect gamma-other after filtering by 'template', body: %s", body)
+	}
+	if !strings.Contains(body, "PageInfo=") || !strings.Contains(body, "Search=template") {
+		t.Errorf("expected pagination info in response, body: %s", body)
+	}
+}
+
 func TestCreateTemplatePage(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()

@@ -89,6 +89,41 @@ func TestListGroups_Empty(t *testing.T) {
 	}
 }
 
+func TestListGroups_PaginationAndSearch(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	seedGroup(t, h, "alpha-group", "first")
+	seedGroup(t, h, "beta-group", "second")
+	seedGroup(t, h, "gamma-zone", "third")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/groups?search=group&PerPage=1&Page=2", nil), user)
+	h.ListGroups(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "beta-group") {
+		t.Errorf("expected page 2 to contain beta-group, body: %s", body)
+	}
+	if strings.Contains(body, "alpha-group") {
+		t.Errorf("did not expect alpha-group on page 2, body: %s", body)
+	}
+	if strings.Contains(body, "gamma-zone") {
+		t.Errorf("did not expect gamma-zone after filtering by 'group', body: %s", body)
+	}
+	if !strings.Contains(body, "PageInfo=") {
+		t.Errorf("expected pagination info in response, body: %s", body)
+	}
+	if !strings.Contains(body, "Search=group") {
+		t.Errorf("expected search term in pagination info, body: %s", body)
+	}
+}
+
 func TestCreateGroupPage(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
