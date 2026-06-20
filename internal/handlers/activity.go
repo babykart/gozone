@@ -48,10 +48,10 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 		extraParts = append(extraParts, "action="+url.QueryEscape(action))
 	}
 	if fromDate != "" {
-		extraParts = append(extraParts, "from="+fromDate)
+		extraParts = append(extraParts, "from="+url.QueryEscape(fromDate))
 	}
 	if toDate != "" {
-		extraParts = append(extraParts, "to="+toDate)
+		extraParts = append(extraParts, "to="+url.QueryEscape(toDate))
 	}
 	extra := strings.Join(extraParts, "&")
 

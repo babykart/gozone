@@ -44,6 +44,30 @@ func TestActivityPage(t *testing.T) {
 	}
 }
 
+func TestActivityPage_EscapesDateParams(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/activity?from=2024-01-01%26action%3Dfake&to=2024-01-02", nil)
+	r = r.WithContext(ctx)
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, "action=fake") {
+		t.Errorf("unescaped action parameter leaked into pagination links: %s", body)
+	}
+	if !strings.Contains(body, "from=2024-01-01%26action%3Dfake") {
+		t.Errorf("from date not properly escaped in pagination links: %s", body)
+	}
+}
+
 func TestGetActivityLogs_Admin(t *testing.T) {
 	h := newTestHandler(t)
 
