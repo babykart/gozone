@@ -81,10 +81,6 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Configurable bcrypt cost (currently hardcoded, make env-configurable)
   - Consider Argon2id support as future alternative
 
-## Activity Page and Retention
-
-Implemented. See `GET /activity`, `activity.retention_days` / `GOZONE_ACTIVITY_RETENTION_DAYS`, `activity.batch_size` / `GOZONE_ACTIVITY_BATCH_SIZE`, and the `old_value`/`new_value` diff snapshots on record changes.
-
 ## Performance Targets
 
 - [ ] Average response time < 100ms for API endpoints
