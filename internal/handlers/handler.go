@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"errors"
 	"html/template"
 	"net/http"
 	"strings"
@@ -64,10 +65,28 @@ func sectionFromTemplate(name string) string {
 }
 
 // renderInternalError logs the error server-side and shows a generic message to
-// the user with HTTP 500, since these are server-side failures.
+// the user with HTTP 500, since these are server-side failures. Known
+// non-transient PowerDNS configuration errors are surfaced as 400 with a
+// user-friendly message instead.
 func (h *Handler) renderInternalError(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	if status, message := pdnsUserFacingStatus(err); status != 0 {
+		logger.Warn(msg, "error", err, "user_message", message)
+		h.renderErrorStatus(w, r, status, msg+": "+message)
+		return
+	}
 	logger.Error(msg, "error", err)
 	h.renderErrorStatus(w, r, http.StatusInternalServerError, msg)
+}
+
+// pdnsUserFacingStatus returns the HTTP status and a user-facing message for
+// known PowerDNS errors that should be treated as validation/configuration
+// failures rather than internal server errors. It returns (0, "") for any
+// other error.
+func pdnsUserFacingStatus(err error) (int, string) {
+	if errors.Is(err, pdns.ErrLuaUpdatesDisabled) {
+		return http.StatusBadRequest, "LUA record updates are disabled on the PowerDNS server. Ask the administrator to set enable-lua-record-updates=yes."
+	}
+	return 0, ""
 }
 
 // render executes a template and automatically injects the CSRF token,

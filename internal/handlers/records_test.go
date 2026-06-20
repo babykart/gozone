@@ -925,6 +925,43 @@ func TestBatchCreateRecords_PDNSError_NoLogs(t *testing.T) {
 	}
 }
 
+func TestBatchCreateRecords_LuaUpdatesDisabled(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`))
+			return
+		}
+		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"Undefined but needed argument: 'enable-lua-record-updates'"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=localhosr&type=A&content=127.0.0.1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for LUA update disabled, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "enable-lua-record-updates") {
+		t.Errorf("expected user-facing message with enable-lua-record-updates, got %s", w.Body.String())
+	}
+}
+
 func TestBatchCreateRecords_EmptyRecords(t *testing.T) {
 	h := newTestHandler(t)
 

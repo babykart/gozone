@@ -15,17 +15,18 @@ import (
 
 // Standardized API error codes.
 const (
-	ErrCodeInvalidJSON     = "INVALID_JSON"
-	ErrCodeValidationError = "VALIDATION_ERROR"
-	ErrCodeZoneNotFound    = "ZONE_NOT_FOUND"
-	ErrCodeZoneCreateError = "ZONE_CREATE_ERROR"
-	ErrCodeZoneDeleteError = "ZONE_DELETE_ERROR"
-	ErrCodeRecordError     = "RECORD_ERROR"
-	ErrCodeRecordNotFound  = "RECORD_NOT_FOUND"
-	ErrCodeInternalError   = "INTERNAL_ERROR"
-	ErrCodeStatsError      = "STATS_ERROR"
-	ErrCodeConflict        = "CONFLICT"
-	ErrCodeUnauthorized    = "UNAUTHORIZED"
+	ErrCodeInvalidJSON        = "INVALID_JSON"
+	ErrCodeValidationError    = "VALIDATION_ERROR"
+	ErrCodeZoneNotFound       = "ZONE_NOT_FOUND"
+	ErrCodeZoneCreateError    = "ZONE_CREATE_ERROR"
+	ErrCodeZoneDeleteError    = "ZONE_DELETE_ERROR"
+	ErrCodeRecordError        = "RECORD_ERROR"
+	ErrCodeRecordNotFound     = "RECORD_NOT_FOUND"
+	ErrCodeInternalError      = "INTERNAL_ERROR"
+	ErrCodeStatsError         = "STATS_ERROR"
+	ErrCodeConflict           = "CONFLICT"
+	ErrCodeUnauthorized       = "UNAUTHORIZED"
+	ErrCodeLuaUpdatesDisabled = "LUA_UPDATES_DISABLED"
 )
 
 // pdnsErrorStatus maps a typed PowerDNS client error to the appropriate HTTP
@@ -41,6 +42,8 @@ func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 		return http.StatusConflict, ErrCodeConflict
 	case errors.Is(err, pdns.ErrUnauthorized):
 		return http.StatusUnauthorized, ErrCodeUnauthorized
+	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
+		return http.StatusBadRequest, ErrCodeLuaUpdatesDisabled
 	default:
 		return http.StatusInternalServerError, ErrCodeInternalError
 	}

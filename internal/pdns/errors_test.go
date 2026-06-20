@@ -45,6 +45,20 @@ func TestHTTPError_TypedSentinels(t *testing.T) {
 	}
 }
 
+func TestHTTPError_LuaUpdatesDisabled(t *testing.T) {
+	body := []byte(`{"error":"Undefined but needed argument: 'enable-lua-record-updates'"}`)
+	err := httpError(http.StatusInternalServerError, body)
+	if !errors.Is(err, ErrLuaUpdatesDisabled) {
+		t.Errorf("expected error to match ErrLuaUpdatesDisabled, got %v", err)
+	}
+
+	// A plain 500 without the magic string should stay a plain error.
+	err = httpError(http.StatusInternalServerError, []byte(`{"error":"database is down"}`))
+	if errors.Is(err, ErrLuaUpdatesDisabled) {
+		t.Errorf("expected plain 500 not to match ErrLuaUpdatesDisabled, got %v", err)
+	}
+}
+
 func TestClient_GetZone_TypedErrors(t *testing.T) {
 	tests := []struct {
 		name    string

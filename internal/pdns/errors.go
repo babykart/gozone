@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // Sentinel errors returned by the PowerDNS client so callers can distinguish
@@ -25,6 +26,11 @@ var (
 	// ErrUnauthorized indicates the request was rejected because of
 	// authentication or authorization issues (HTTP 401 or 403).
 	ErrUnauthorized = errors.New("unauthorized")
+
+	// ErrLuaUpdatesDisabled indicates that the PowerDNS server refused the
+	// operation because the enable-lua-record-updates configuration setting is
+	// not enabled (HTTP 500 with a specific message).
+	ErrLuaUpdatesDisabled = errors.New("LUA record updates disabled")
 )
 
 // httpError builds a typed sentinel error from a non-2xx HTTP status code and
@@ -45,6 +51,8 @@ func httpError(status int, body []byte) error {
 		return fmt.Errorf("%w: status %d: %s", ErrConflict, status, msg)
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, status, msg)
+	case status == http.StatusInternalServerError && strings.Contains(strings.ToLower(msg), "enable-lua-record-updates"):
+		return fmt.Errorf("%w: status %d: %s", ErrLuaUpdatesDisabled, status, msg)
 	default:
 		return fmt.Errorf("unexpected status %d: %s", status, msg)
 	}
