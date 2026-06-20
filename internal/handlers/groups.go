@@ -65,6 +65,7 @@ func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 		"AllUsers":   allUsers,
 		"AllZones":   allZones,
 		"IsAdmin":    user.IsAdmin(),
+		"FormAction": "/groups/create",
 	}
 	h.render(w, r, "group_edit.html", data)
 }
@@ -139,6 +140,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		"AllUsers":   allUsers,
 		"AllZones":   allZones,
 		"IsAdmin":    user.IsAdmin(),
+		"FormAction": "/groups/" + groupIDStr + "/update",
 	}
 	h.render(w, r, "group_edit.html", data)
 }

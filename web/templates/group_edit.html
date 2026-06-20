@@ -6,7 +6,7 @@
     </div>
 </div>
 
-<form method="POST" action="/groups/{{.Group.ID}}/update" style="margin-bottom:2rem">
+<form method="POST" action="{{.FormAction}}" style="margin-bottom:2rem">
     <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
     <div class="form-group">
         <label for="name">Name</label>
