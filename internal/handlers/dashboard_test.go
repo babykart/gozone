@@ -9,6 +9,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 func TestDashboard(t *testing.T) {
@@ -80,6 +81,54 @@ func TestGetActivityLogs_Search(t *testing.T) {
 	}
 	if logs[0].Action != "create_zone" {
 		t.Errorf("expected create_zone, got %s", logs[0].Action)
+	}
+}
+
+func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
+	h := newTestHandler(t)
+
+	// Seed two users: an admin and a regular member.
+	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	userID := testutil.SeedTestUser(t, h.DB, "member", "member", "user", true)
+
+	// Create a group and assign the regular user to zone "visible.example.com.".
+	res, err := h.DB.Exec("INSERT INTO zone_groups (name) VALUES ('test-group')")
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	groupID, _ := res.LastInsertId()
+	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "visible.example.com."); err != nil {
+		t.Fatalf("insert group zone: %v", err)
+	}
+
+	// Insert two zone logs: one the user can access, one they cannot.
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_record', 'visible marker')", adminID, "visible.example.com."); err != nil {
+		t.Fatalf("insert visible log: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_record', 'hidden marker')", adminID, "hidden.example.com."); err != nil {
+		t.Fatalf("insert hidden log: %v", err)
+	}
+
+	// The non-admin searches for a term that only appears in the hidden log.
+	user := &models.User{ID: userID, Username: "member", Role: "user"}
+	logs, total := h.getActivityLogs(user, "hidden", "", "", "", 1, 10)
+	if total != 0 {
+		t.Errorf("expected total 0, got %d", total)
+	}
+	if len(logs) != 0 {
+		t.Errorf("expected 0 logs for non-admin searching hidden zone, got %d", len(logs))
+	}
+
+	// Searching for the visible term returns the allowed log.
+	logs, total = h.getActivityLogs(user, "visible", "", "", "", 1, 10)
+	if total != 1 {
+		t.Errorf("expected total 1 for visible search, got %d", total)
+	}
+	if len(logs) != 1 {
+		t.Errorf("expected 1 log for visible search, got %d", len(logs))
 	}
 }
 

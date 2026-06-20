@@ -189,7 +189,7 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 
 	if !user.IsAdmin() {
 		filters = append(filters,
-			"(al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?)")
+			"((al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?))")
 		args = append(args, user.ID, user.ID)
 	}
 
