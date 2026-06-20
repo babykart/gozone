@@ -45,6 +45,10 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	}
 
 	logger.Info("seeded admin user", "username", cfg.Admin.Username)
-	logger.Warn("CHANGE THE DEFAULT ADMIN PASSWORD IMMEDIATELY")
+	// Only warn when the admin was seeded with the built-in default password;
+	// a custom password set via config.yaml or GOZONE_ADMIN_PASSWORD is fine.
+	if cfg.Admin.Password == config.DefaultAdminPassword {
+		logger.Warn("CHANGE THE DEFAULT ADMIN PASSWORD IMMEDIATELY")
+	}
 	return nil
 }

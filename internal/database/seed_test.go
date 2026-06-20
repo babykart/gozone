@@ -2,12 +2,81 @@ package database
 
 import (
 	"context"
+	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/logger"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// captureLog redirects os.Stderr to a pipe, reinitialises the logger to write
+// to that pipe, runs fn, then restores both. Returns the captured log output.
+// Must NOT be called from parallel tests — it mutates global logger state.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = pw
+	logger.Init("info")
+	fn()
+	pw.Close()
+	os.Stderr = oldStderr
+	logger.Init("info")
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	return string(out)
+}
+
+func TestSeedAdminUser_DefaultPasswordWarning(t *testing.T) {
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+
+	out := captureLog(t, func() {
+		if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if !strings.Contains(out, "CHANGE THE DEFAULT ADMIN PASSWORD IMMEDIATELY") {
+		t.Error("expected default-password warning in log output, got: " + out)
+	}
+}
+
+func TestSeedAdminUser_CustomPasswordNoWarning(t *testing.T) {
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+	cfg.Admin.Password = "my-secure-password-123"
+
+	out := captureLog(t, func() {
+		if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if strings.Contains(out, "CHANGE THE DEFAULT ADMIN PASSWORD IMMEDIATELY") {
+		t.Error("unexpected default-password warning when custom password is set")
+	}
+}
 
 func TestSeedAdminUser_FirstStartup(t *testing.T) {
 	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
