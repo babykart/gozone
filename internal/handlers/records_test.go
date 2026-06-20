@@ -604,6 +604,12 @@ func TestBatchCreateRecords_Success(t *testing.T) {
 	if count != 2 {
 		t.Errorf("expected 2 activity logs, got %d", count)
 	}
+
+	var emptyNew int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record' AND new_value = ''").Scan(&emptyNew)
+	if emptyNew != 0 {
+		t.Errorf("expected 0 logs with empty new_value, got %d", emptyNew)
+	}
 }
 
 func TestBatchCreateRecords_MX(t *testing.T) {

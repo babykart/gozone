@@ -464,9 +464,11 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, e := range logEntries {
+		key := e.name + "|" + e.recordType
 		if _, err := h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_record', ?)",
+			"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'create_record', ?, '', ?)",
 			user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", e.recordType, e.name, e.content),
+			rrsetSnapshot(mergedMap[key]),
 		); err != nil {
 			logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 		}
