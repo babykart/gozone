@@ -56,6 +56,7 @@ Configuration is via `config.yaml` or environment variables:
 |-----------|---------------------|---------|
 | `server.host` | `GOZONE_SERVER_HOST` | `0.0.0.0` |
 | `server.port` | `GOZONE_SERVER_PORT` | `8080` |
+| `server.app_name` | `GOZONE_APP_NAME` | `GoZone` |
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
 | `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
 
