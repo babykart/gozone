@@ -640,6 +640,50 @@ func TestPaginate(t *testing.T) {
 	}
 }
 
+func TestPageInfoFromTotal(t *testing.T) {
+	info := pageInfoFromTotal(15, 1, 10)
+	if info.Current != 1 || info.PerPage != 10 || info.TotalPages != 2 || info.Total != 15 {
+		t.Errorf("pageInfoFromTotal(15,1,10) = %+v", info)
+	}
+
+	info = pageInfoFromTotal(15, 2, 10)
+	if info.Current != 2 || info.TotalPages != 2 {
+		t.Errorf("pageInfoFromTotal(15,2,10) = %+v", info)
+	}
+
+	// Page clamped below / above.
+	info = pageInfoFromTotal(5, 0, 2)
+	if info.Current != 1 {
+		t.Errorf("pageInfoFromTotal clamps below 1: %+v", info)
+	}
+
+	info = pageInfoFromTotal(5, 99, 2)
+	if info.Current != 3 {
+		t.Errorf("pageInfoFromTotal clamps above total: %+v", info)
+	}
+
+	// perPage 0 means one page.
+	info = pageInfoFromTotal(100, 5, 0)
+	if info.PerPage != 0 || info.TotalPages != 1 {
+		t.Errorf("pageInfoFromTotal(100,5,0) = %+v", info)
+	}
+}
+
+func TestBuildSearchLikeWhere(t *testing.T) {
+	clause, args := buildSearchLikeWhere("  ", "name")
+	if clause != "" || len(args) != 0 {
+		t.Errorf("empty search should return empty clause, got %q %v", clause, args)
+	}
+
+	clause, args = buildSearchLikeWhere("Foo", "name", "description")
+	if !strings.Contains(clause, "LOWER(name) LIKE ?") || !strings.Contains(clause, "LOWER(description) LIKE ?") {
+		t.Errorf("expected LIKE clauses, got %q", clause)
+	}
+	if len(args) != 2 || args[0] != "%foo%" || args[1] != "%foo%" {
+		t.Errorf("expected two lower-case wildcard args, got %v", args)
+	}
+}
+
 func TestListZones_Pagination(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

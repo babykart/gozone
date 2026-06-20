@@ -22,8 +22,37 @@ type groupInfo struct {
 // ListGroups renders the zone groups management page (GET /groups).
 func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-	rows, err := h.DB.Query(`SELECT id, name, description, created_at FROM zone_groups ORDER BY name`)
+	where, args := buildSearchLikeWhere(search, "name", "description")
+
+	countQuery := "SELECT COUNT(*) FROM zone_groups"
+	selectQuery := "SELECT id, name, description, created_at FROM zone_groups"
+	if where != "" {
+		countQuery += " WHERE " + where
+		selectQuery += " WHERE " + where
+	}
+	selectQuery += " ORDER BY name"
+
+	var total int
+	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		h.renderInternalError(w, r, "Failed to count groups", err)
+		return
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	var rows *sql.Rows
+	var err error
+	if perPage > 0 {
+		offset := (pageInfo.Current - 1) * perPage
+		selectArgs := append([]any(nil), args...)
+		selectArgs = append(selectArgs, perPage, offset)
+		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+	} else {
+		rows, err = h.DB.Query(selectQuery, args...)
+	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch groups", err)
 		return
@@ -39,27 +68,18 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		groups = append(groups, g)
 	}
-
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if search != "" {
-		searchLower := strings.ToLower(search)
-		var filtered []groupInfo
-		for _, g := range groups {
-			if strings.Contains(strings.ToLower(g.Name), searchLower) ||
-				strings.Contains(strings.ToLower(g.Description), searchLower) {
-				filtered = append(filtered, g)
-			}
-		}
-		groups = filtered
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for groups list", "error", err)
 	}
 
-	page, perPage := parsePaginationParams(r, 10)
-	paginated, pageInfo := paginate(groups, page, perPage)
+	if groups == nil {
+		groups = []groupInfo{}
+	}
 
 	data := map[string]interface{}{
 		"Title":    "Groups - " + h.Cfg.Server.AppName,
 		"User":     user,
-		"Groups":   paginated,
+		"Groups":   groups,
 		"PageInfo": pageInfo,
 		"Search":   search,
 		"IsAdmin":  user.IsAdmin(),

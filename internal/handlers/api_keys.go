@@ -33,11 +33,39 @@ func generateAPIKey() (string, string, error) {
 func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-	rows, err := h.DB.QueryContext(ctx,
-		`SELECT id, user_id, description, last_used_at, created_at, expires_at
-		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`, user.ID,
-	)
+	where := "user_id = ?"
+	args := []any{user.ID}
+	if search != "" {
+		searchWhere, searchArgs := buildSearchLikeWhere(search, "description")
+		where = where + " AND " + searchWhere
+		args = append(args, searchArgs...)
+	}
+
+	countQuery := "SELECT COUNT(*) FROM api_keys WHERE " + where
+	selectQuery := `SELECT id, user_id, description, last_used_at, created_at, expires_at
+		FROM api_keys WHERE ` + where + " ORDER BY created_at DESC"
+
+	var total int
+	if err := h.DB.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		h.renderInternalError(w, r, "Failed to count API keys", err)
+		return
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	var rows *sql.Rows
+	var err error
+	if perPage > 0 {
+		offset := (pageInfo.Current - 1) * perPage
+		selectArgs := append([]any(nil), args...)
+		selectArgs = append(selectArgs, perPage, offset)
+		rows, err = h.DB.QueryContext(ctx, selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+	} else {
+		rows, err = h.DB.QueryContext(ctx, selectQuery, args...)
+	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch API keys", err)
 		return
@@ -57,20 +85,9 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		logger.Error("rows iteration error for API keys", "error", err)
 	}
 
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if search != "" {
-		searchLower := strings.ToLower(search)
-		var filtered []models.APIKey
-		for _, k := range keys {
-			if strings.Contains(strings.ToLower(k.Description), searchLower) {
-				filtered = append(filtered, k)
-			}
-		}
-		keys = filtered
+	if keys == nil {
+		keys = []models.APIKey{}
 	}
-
-	page, perPage := parsePaginationParams(r, 10)
-	paginated, pageInfo := paginate(keys, page, perPage)
 
 	flash := r.URL.Query().Get("flash")
 	newKey := ""
@@ -94,7 +111,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
 		"Title":    "API Keys - " + h.Cfg.Server.AppName,
 		"User":     user,
-		"APIKeys":  paginated,
+		"APIKeys":  keys,
 		"PageInfo": pageInfo,
 		"Search":   search,
 		"Flash":    flash,

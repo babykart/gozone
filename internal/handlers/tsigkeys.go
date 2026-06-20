@@ -15,6 +15,7 @@ import (
 // ListTSIGKeys renders the TSIG keys listing page (GET /tsigkeys).
 func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
 	keys, err := h.PDNS.ListTSIGKeys(r.Context())
 	if err != nil {
@@ -22,20 +23,37 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if search != "" {
-		searchLower := strings.ToLower(search)
-		var filtered []models.TSIGKey
-		for _, k := range keys {
-			if strings.Contains(strings.ToLower(k.Name), searchLower) {
-				filtered = append(filtered, k)
-			}
+	searchLower := strings.ToLower(search)
+	var total int
+	for _, k := range keys {
+		if search == "" || strings.Contains(strings.ToLower(k.Name), searchLower) {
+			total++
 		}
-		keys = filtered
 	}
 
 	page, perPage := parsePaginationParams(r, 10)
-	paginated, pageInfo := paginate(keys, page, perPage)
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	var paginated []models.TSIGKey
+	var idx int
+	for _, k := range keys {
+		if search != "" && !strings.Contains(strings.ToLower(k.Name), searchLower) {
+			continue
+		}
+		start := (pageInfo.Current - 1) * pageInfo.PerPage
+		end := pageInfo.Current * pageInfo.PerPage
+		if perPage <= 0 || (idx >= start && idx < end) {
+			paginated = append(paginated, k)
+		}
+		idx++
+		if perPage > 0 && idx >= end {
+			break
+		}
+	}
+
+	if paginated == nil {
+		paginated = []models.TSIGKey{}
+	}
 
 	data := map[string]interface{}{
 		"Title":    "TSIG Keys - " + h.Cfg.Server.AppName,

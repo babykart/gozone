@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -16,14 +17,42 @@ import (
 
 // ListUsers renders the user management page (GET /users).
 //
-// Admin-only. Lists all users ordered by username.
+// Admin-only. Lists users ordered by username with optional search, pagination,
+// and per-page sizing pushed to the database.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-	rows, err := h.DB.Query(
-		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at
-		 FROM users ORDER BY username`,
-	)
+	where, args := buildSearchLikeWhere(search, "username", "email", "first_name", "last_name")
+
+	countQuery := "SELECT COUNT(*) FROM users"
+	selectQuery := `SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at
+		FROM users`
+	if where != "" {
+		countQuery += " WHERE " + where
+		selectQuery += " WHERE " + where
+	}
+	selectQuery += " ORDER BY username"
+
+	var total int
+	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		h.renderInternalError(w, r, "Failed to count users", err)
+		return
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	var rows *sql.Rows
+	var err error
+	if perPage > 0 {
+		offset := (pageInfo.Current - 1) * perPage
+		selectArgs := append([]any(nil), args...)
+		selectArgs = append(selectArgs, perPage, offset)
+		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+	} else {
+		rows, err = h.DB.Query(selectQuery, args...)
+	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch users", err)
 		return
@@ -46,29 +75,14 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		logger.Error("rows iteration error for users list", "error", err)
 	}
 
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if search != "" {
-		searchLower := strings.ToLower(search)
-		var filtered []models.User
-		for _, u := range users {
-			if strings.Contains(strings.ToLower(u.Username), searchLower) ||
-				strings.Contains(strings.ToLower(u.Email), searchLower) ||
-				strings.Contains(strings.ToLower(u.FirstName+" "+u.LastName), searchLower) ||
-				strings.Contains(strings.ToLower(u.FirstName), searchLower) ||
-				strings.Contains(strings.ToLower(u.LastName), searchLower) {
-				filtered = append(filtered, u)
-			}
-		}
-		users = filtered
+	if users == nil {
+		users = []models.User{}
 	}
-
-	page, perPage := parsePaginationParams(r, 10)
-	paginated, pageInfo := paginate(users, page, perPage)
 
 	data := map[string]interface{}{
 		"Title":    "Users - " + h.Cfg.Server.AppName,
 		"User":     user,
-		"Users":    paginated,
+		"Users":    users,
 		"PageInfo": pageInfo,
 		"Search":   search,
 	}

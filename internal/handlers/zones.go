@@ -87,6 +87,55 @@ func parseLogPaginationParams(r *http.Request, defaultPerPage int) (page, perPag
 	}
 	return page, perPage
 }
+
+// pageInfoFromTotal computes the PageInfo for an already-filtered result set of
+// the given total size. It mirrors the normalization and page clamping done
+// by paginate without holding the full slice in memory.
+func pageInfoFromTotal(total, page, perPage int) PageInfo {
+	totalPages := 0
+	if perPage > 0 {
+		totalPages = (total + perPage - 1) / perPage
+	} else {
+		perPage = 0
+		totalPages = 1
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages && totalPages > 0 {
+		page = totalPages
+	}
+	return PageInfo{
+		Current:    page,
+		PerPage:    perPage,
+		TotalPages: totalPages,
+		Total:      total,
+	}
+}
+
+// buildSearchLikeWhere builds a SQL WHERE fragment that matches a search term
+// against one or more columns using case-insensitive LIKE. Column names must be
+// chosen by the caller and are never derived from user input. Returns an empty
+// string when search is empty.
+func buildSearchLikeWhere(search string, columns ...string) (string, []any) {
+	search = strings.TrimSpace(search)
+	if search == "" || len(columns) == 0 {
+		return "", nil
+	}
+	pattern := "%" + strings.ToLower(search) + "%"
+	params := make([]any, 0, len(columns))
+	var b strings.Builder
+	b.WriteString("(")
+	for i, col := range columns {
+		if i > 0 {
+			b.WriteString(" OR ")
+		}
+		b.WriteString("LOWER(" + col + ") LIKE ?")
+		params = append(params, pattern)
+	}
+	b.WriteString(")")
+	return b.String(), params
+}
 func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 

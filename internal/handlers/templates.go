@@ -35,10 +35,37 @@ var unsubstitutedVar = regexp.MustCompile(`\{\{[A-Z0-9_]+\}\}`)
 // ListTemplates renders the template management page.
 func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-	rows, err := h.DB.Query(
-		"SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates ORDER BY name",
-	)
+	where, args := buildSearchLikeWhere(search, "name", "description")
+
+	countQuery := "SELECT COUNT(*) FROM zone_templates"
+	selectQuery := "SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates"
+	if where != "" {
+		countQuery += " WHERE " + where
+		selectQuery += " WHERE " + where
+	}
+	selectQuery += " ORDER BY name"
+
+	var total int
+	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		h.renderInternalError(w, r, "Failed to count templates", err)
+		return
+	}
+
+	page, perPage := parsePaginationParams(r, 10)
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	var rows *sql.Rows
+	var err error
+	if perPage > 0 {
+		offset := (pageInfo.Current - 1) * perPage
+		selectArgs := append([]any(nil), args...)
+		selectArgs = append(selectArgs, perPage, offset)
+		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+	} else {
+		rows, err = h.DB.Query(selectQuery, args...)
+	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch templates", err)
 		return
@@ -54,27 +81,18 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 		}
 		templates = append(templates, t)
 	}
-
-	search := strings.TrimSpace(r.URL.Query().Get("search"))
-	if search != "" {
-		searchLower := strings.ToLower(search)
-		var filtered []models.ZoneTemplate
-		for _, t := range templates {
-			if strings.Contains(strings.ToLower(t.Name), searchLower) ||
-				strings.Contains(strings.ToLower(t.Description), searchLower) {
-				filtered = append(filtered, t)
-			}
-		}
-		templates = filtered
+	if err := rows.Err(); err != nil {
+		logger.Error("rows iteration error for templates list", "error", err)
 	}
 
-	page, perPage := parsePaginationParams(r, 10)
-	paginated, pageInfo := paginate(templates, page, perPage)
+	if templates == nil {
+		templates = []models.ZoneTemplate{}
+	}
 
 	data := map[string]interface{}{
 		"Title":     "Templates - " + h.Cfg.Server.AppName,
 		"User":      user,
-		"Templates": paginated,
+		"Templates": templates,
 		"PageInfo":  pageInfo,
 		"Search":    search,
 		"IsAdmin":   user.IsAdmin(),
