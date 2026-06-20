@@ -120,7 +120,7 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 	paginated, pageInfo := paginate(zones, page, perPage)
 
 	data := map[string]interface{}{
-		"Title":    "Zones - GoZone",
+		"Title":    "Zones - " + h.Cfg.Server.AppName,
 		"User":     user,
 		"Zones":    paginated,
 		"PageInfo": pageInfo,
@@ -135,7 +135,7 @@ func (h *Handler) CreateZonePage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	templates, _ := h.getAllTemplates()
 	data := map[string]interface{}{
-		"Title":        "Create Zone - GoZone",
+		"Title":        "Create Zone - " + h.Cfg.Server.AppName,
 		"User":         user,
 		"DNSTypes":     []string{"Native", "Master", "Slave"},
 		"Templates":    templates,
@@ -361,7 +361,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":          zone.Name + " - GoZone",
+		"Title":          zone.Name + " - " + h.Cfg.Server.AppName,
 		"User":           user,
 		"Zone":           zone,
 		"Records":        paginatedRecords,
@@ -577,7 +577,7 @@ func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, stat
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	data := map[string]interface{}{
-		"Title":   "Error - GoZone",
+		"Title":   "Error - " + h.Cfg.Server.AppName,
 		"Message": msg,
 	}
 	h.render(w, r, "error.html", data)

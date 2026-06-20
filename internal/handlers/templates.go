@@ -72,7 +72,7 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	paginated, pageInfo := paginate(templates, page, perPage)
 
 	data := map[string]interface{}{
-		"Title":     "Templates - GoZone",
+		"Title":     "Templates - " + h.Cfg.Server.AppName,
 		"User":      user,
 		"Templates": paginated,
 		"PageInfo":  pageInfo,
@@ -86,7 +86,7 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateTemplatePage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	data := map[string]interface{}{
-		"Title":        "Create Template - GoZone",
+		"Title":        "Create Template - " + h.Cfg.Server.AppName,
 		"User":         user,
 		"IsAdmin":      user.IsAdmin(),
 		"RecordTypes":  GetRecordTypes(),
@@ -154,7 +154,7 @@ func (h *Handler) EditTemplatePage(w http.ResponseWriter, r *http.Request) {
 	records := h.getTemplateRecords(templateID)
 
 	data := map[string]interface{}{
-		"Title":        t.Name + " - GoZone",
+		"Title":        t.Name + " - " + h.Cfg.Server.AppName,
 		"User":         user,
 		"IsAdmin":      user.IsAdmin(),
 		"RecordTypes":  GetRecordTypes(),

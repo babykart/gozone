@@ -82,7 +82,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":       "Dashboard - GoZone",
+		"Title":       "Dashboard - " + h.Cfg.Server.AppName,
 		"User":        user,
 		"Stats":       dashboardStats,
 		"Logs":        logs,

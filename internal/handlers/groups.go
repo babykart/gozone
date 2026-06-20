@@ -57,7 +57,7 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	paginated, pageInfo := paginate(groups, page, perPage)
 
 	data := map[string]interface{}{
-		"Title":    "Groups - GoZone",
+		"Title":    "Groups - " + h.Cfg.Server.AppName,
 		"User":     user,
 		"Groups":   paginated,
 		"PageInfo": pageInfo,
@@ -75,7 +75,7 @@ func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 	allZones, _ := h.PDNS.ListZonesWithInfo(r.Context())
 
 	data := map[string]interface{}{
-		"Title":      "Create Group - GoZone",
+		"Title":      "Create Group - " + h.Cfg.Server.AppName,
 		"User":       user,
 		"Group":      groupInfo{},
 		"Members":    []models.User{},
@@ -150,7 +150,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	allZones, _ := h.PDNS.ListZonesWithInfo(r.Context())
 
 	data := map[string]interface{}{
-		"Title":      g.Name + " - GoZone",
+		"Title":      g.Name + " - " + h.Cfg.Server.AppName,
 		"User":       user,
 		"Group":      g,
 		"Members":    members,

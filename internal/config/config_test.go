@@ -17,6 +17,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Port != 8080 {
 		t.Errorf("expected 8080, got %d", cfg.Server.Port)
 	}
+	if cfg.Server.AppName != "GoZone" {
+		t.Errorf("expected GoZone, got %s", cfg.Server.AppName)
+	}
 	if cfg.Database.Driver != "sqlite3" {
 		t.Errorf("expected sqlite3, got %s", cfg.Database.Driver)
 	}
@@ -48,6 +51,7 @@ func TestLoadFromFile(t *testing.T) {
 server:
   host: "127.0.0.1"
   port: 9090
+  app_name: "MyDNS"
 database:
   dsn: "/tmp/test.db"
 auth:
@@ -79,6 +83,9 @@ admin:
 	if cfg.Server.Port != 9090 {
 		t.Errorf("expected 9090, got %d", cfg.Server.Port)
 	}
+	if cfg.Server.AppName != "MyDNS" {
+		t.Errorf("expected MyDNS, got %s", cfg.Server.AppName)
+	}
 	if cfg.Database.DSN != "/tmp/test.db" {
 		t.Errorf("expected /tmp/test.db, got %s", cfg.Database.DSN)
 	}
@@ -102,6 +109,7 @@ admin:
 func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_SERVER_HOST", "192.168.1.1")
 	t.Setenv("GOZONE_SERVER_PORT", "3000")
+	t.Setenv("GOZONE_APP_NAME", "CustomApp")
 	t.Setenv("GOZONE_SECRET_KEY", "mysecret")
 	t.Setenv("GOZONE_DB_DSN", "/custom/path.db")
 	t.Setenv("GOZONE_PDNS_API_URL", "http://pdns:8081")
@@ -127,6 +135,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Server.SecretKey != "mysecret" {
 		t.Errorf("expected mysecret, got %s", cfg.Server.SecretKey)
+	}
+	if cfg.Server.AppName != "CustomApp" {
+		t.Errorf("expected CustomApp, got %s", cfg.Server.AppName)
 	}
 	if cfg.Database.DSN != "/custom/path.db" {
 		t.Errorf("expected /custom/path.db, got %s", cfg.Database.DSN)

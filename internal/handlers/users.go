@@ -66,7 +66,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	paginated, pageInfo := paginate(users, page, perPage)
 
 	data := map[string]interface{}{
-		"Title":    "Users - GoZone",
+		"Title":    "Users - " + h.Cfg.Server.AppName,
 		"User":     user,
 		"Users":    paginated,
 		"PageInfo": pageInfo,
@@ -82,7 +82,7 @@ func (h *Handler) CreateUserPage(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
 
 	data := map[string]interface{}{
-		"Title": "Create User - GoZone",
+		"Title": "Create User - " + h.Cfg.Server.AppName,
 		"User":  admin,
 	}
 	h.render(w, r, "user_create.html", data)
@@ -189,7 +189,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":      "Edit User - GoZone",
+		"Title":      "Edit User - " + h.Cfg.Server.AppName,
 		"User":       admin,
 		"TargetUser": target,
 		"IsSelf":     target.ID == admin.ID,

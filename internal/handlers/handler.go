@@ -82,6 +82,9 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 		user, _ := data["User"].(*models.User)
 		data["IsAdmin"] = user != nil && user.IsAdmin()
 	}
+	if _, ok := data["AppName"]; !ok {
+		data["AppName"] = h.Cfg.Server.AppName
+	}
 	if _, ok := data["Section"]; !ok {
 		data["Section"] = sectionFromTemplate(name)
 	}

@@ -13,6 +13,9 @@
 server:
   host: "0.0.0.0"
   port: 8080
+  # Application name displayed in the web UI, page titles, and login page.
+  # Defaults to "GoZone" if unset.
+  app_name: "GoZone"
   # Placeholder: left as-is, a random key is auto-generated at startup (and
   # changes on every restart). Set a persistent value here or via
   # GOZONE_SECRET_KEY in production. Generate one with: openssl rand -hex 32

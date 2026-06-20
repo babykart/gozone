@@ -30,7 +30,7 @@ func ensureDummyHash(cost int) {
 // LoginPage renders the login form (GET /login).
 func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
-		"Title": "Login - GoZone",
+		"Title": "Login - " + h.Cfg.Server.AppName,
 		"Error": r.URL.Query().Get("error"),
 	}
 	h.render(w, r, "login.html", data)
@@ -154,7 +154,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ProfilePage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	data := map[string]interface{}{
-		"Title": "Profile - GoZone",
+		"Title": "Profile - " + h.Cfg.Server.AppName,
 		"User":  user,
 	}
 	h.render(w, r, "profile.html", data)

@@ -34,6 +34,8 @@ type ServerConfig struct {
 	Host      string `yaml:"host"`
 	Port      int    `yaml:"port"`
 	SecretKey string `yaml:"secret_key"`
+	// AppName is the human-readable application name displayed in the web UI.
+	AppName string `yaml:"app_name"`
 	// SecureCookies marks the CSRF cookie with the Secure flag so browsers only
 	// send it over HTTPS. Enable it when GoZone is served over HTTPS (directly
 	// or behind a TLS-terminating reverse proxy). Leave it false for plain-HTTP
@@ -88,6 +90,7 @@ func DefaultConfig() *Config {
 			Host:          "0.0.0.0",
 			Port:          8080,
 			SecretKey:     defaultSecretKey,
+			AppName:       "GoZone",
 			SecureCookies: false,
 		},
 		Database: DatabaseConfig{
@@ -126,9 +129,9 @@ func DefaultConfig() *Config {
 //  3. Apply environment variable overrides using the GOZONE_ prefix
 //
 // Supported environment variables: GOZONE_SERVER_HOST, GOZONE_SERVER_PORT,
-// GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_DB_DRIVER, GOZONE_DB_DSN,
-// GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID,
-// GOZONE_SESSION_DURATION.
+// GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_DB_DRIVER,
+// GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
+// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION.
 //
 // Parameters:
 //   - path: filesystem path to the YAML configuration file
@@ -236,6 +239,9 @@ func applyEnvOverrides(cfg *Config) {
 		} else {
 			cfg.Server.Port = n
 		}
+	}
+	if v := os.Getenv("GOZONE_APP_NAME"); v != "" {
+		cfg.Server.AppName = v
 	}
 	if v := os.Getenv("GOZONE_SECRET_KEY"); v != "" {
 		cfg.Server.SecretKey = v

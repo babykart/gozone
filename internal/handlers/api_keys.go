@@ -92,7 +92,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":    "API Keys - GoZone",
+		"Title":    "API Keys - " + h.Cfg.Server.AppName,
 		"User":     user,
 		"APIKeys":  paginated,
 		"PageInfo": pageInfo,

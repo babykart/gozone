@@ -38,7 +38,7 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 	paginated, pageInfo := paginate(keys, page, perPage)
 
 	data := map[string]interface{}{
-		"Title":    "TSIG Keys - GoZone",
+		"Title":    "TSIG Keys - " + h.Cfg.Server.AppName,
 		"User":     user,
 		"Keys":     paginated,
 		"PageInfo": pageInfo,
@@ -52,7 +52,7 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	data := map[string]interface{}{
-		"Title":      "Create TSIG Key - GoZone",
+		"Title":      "Create TSIG Key - " + h.Cfg.Server.AppName,
 		"User":       user,
 		"Algorithms": tsigAlgorithms(),
 	}
@@ -119,7 +119,7 @@ func (h *Handler) EditTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":      "Edit TSIG Key - GoZone",
+		"Title":      "Edit TSIG Key - " + h.Cfg.Server.AppName,
 		"User":       user,
 		"Key":        tsigKey,
 		"Algorithms": tsigAlgorithms(),
