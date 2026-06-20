@@ -33,7 +33,7 @@ github.com/lib/pq/internal/proto
 github.com/lib/pq/oid
 github.com/lib/pq/pqerror
 github.com/lib/pq/scram
-# github.com/mattn/go-sqlite3 v1.14.45
+# github.com/mattn/go-sqlite3 v1.14.46
 ## explicit; go 1.21
 github.com/mattn/go-sqlite3
 # golang.org/x/crypto v0.53.0
