@@ -41,6 +41,13 @@ auth:
 logging:
   level: "info"
 
+# Activity log retention. Logs older than retention_days are automatically
+# purged once per day by a background job. Set retention_days to 0 to keep
+# logs indefinitely. batch_size controls how many rows are deleted per pass.
+activity:
+  retention_days: 90
+  batch_size: 1000
+
 admin:
   username: "admin"
   password: "admin"

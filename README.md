@@ -100,6 +100,15 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 |-----------|---------------------|---------|
 | `logging.level` | — | `info` |
 
+### Activity Log Retention
+
+| YAML Path | Environment Variable | Default |
+|-----------|---------------------|---------|
+| `activity.retention_days` | `GOZONE_ACTIVITY_RETENTION_DAYS` | `90` |
+| `activity.batch_size` | `GOZONE_ACTIVITY_BATCH_SIZE` | `1000` |
+
+Set `activity.retention_days` to `0` to keep activity logs indefinitely.
+
 ### Secret Key
 
 **Important**: If no `server.secret_key` is set in the config file or via `GOZONE_SECRET_KEY`, a random 32-byte key is auto-generated at startup. For security the generated key is **not** written to the logs, so it cannot be recovered after startup — the key changes on every restart, invalidating all sessions and CSRF tokens. Always set `GOZONE_SECRET_KEY` or add `server.secret_key` to `config.yaml` for a stable key.

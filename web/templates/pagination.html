@@ -7,11 +7,12 @@
 {{$op := .OtherPrefix}}
 {{$opg := .OtherPage}}
 {{$opp := .OtherPerPage}}
+{{$extra := .Extra}}
 {{if gt $info.TotalPages 1}}
 <div class="pagination">
-    <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
+    <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
     <span class="page-info">Page {{$info.Current}} / {{$info.TotalPages}} ({{$info.Total}} {{$label}})</span>
-    <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
+    <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
     <select class="per-page-select" data-action="per-page" data-prefix="{{$prefix}}">
         <option value="10" {{if eq $info.PerPage 10}}selected{{end}}>10</option>
         <option value="20" {{if eq $info.PerPage 20}}selected{{end}}>20</option>

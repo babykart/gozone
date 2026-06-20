@@ -83,34 +83,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## Activity Page and Retention
 
-- [ ] **Dedicated activity page**
-  - New route `GET /activity` with full-page view of all activity logs
-  - Search field filtering by action, username, zone ID, and details text
-  - Pagination (reuse existing `pagination.html` partial with `Prefix`)
-  - Column sorting by date (default: most recent first)
-  - Filter by action type (create_record, update_record, delete_record, etc.)
-  - Filter by date range (from/to date pickers)
-
-- [ ] **BIND-format diff display**
-  - When an activity log involves record changes (create, update, delete), show a colorized BIND-format diff
-  - Green for added records, red for removed records, yellow for modified records
-  - Syntax highlighting for record types (A, AAAA, MX, CNAME, etc.), TTL, and content
-  - Expandable diff rows inline in the activity table or on a detail page
-  - Store before/after state in activity_logs for record mutations (add `old_value`/`new_value` JSON columns)
-
-- [ ] **Automatic retention policy**
-  - Configurable retention period via `config.yaml` + env vars (`GOZONE_ACTIVITY_RETENTION_DAYS`, default 90)
-  - Background goroutine running daily to purge expired logs
-  - `DELETE FROM activity_logs WHERE created_at < NOW() - INTERVAL ? DAY`
-  - Retention job respects database dialect (SQLite `datetime`, PostgreSQL `NOW()`, MySQL `DATE_SUB`)
-  - Configurable batch size to avoid locking the database on large purges (default 1000 rows per batch)
-  - Log retention job execution (purged count, duration) via the logger
-  - Admin UI setting to view current retention config and trigger manual purge
-
-- [ ] **Activity page access control**
-  - All authenticated users can view activity for zones they have access to
-  - Admin users can view all activity across all zones
-  - Zone-scoped filtering respects group-based zone authorization
+Implemented. See `GET /activity`, `activity.retention_days` / `GOZONE_ACTIVITY_RETENTION_DAYS`, `activity.batch_size` / `GOZONE_ACTIVITY_BATCH_SIZE`, and the `old_value`/`new_value` diff snapshots on record changes.
 
 ## Performance Targets
 

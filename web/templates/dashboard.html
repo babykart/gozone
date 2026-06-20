@@ -58,30 +58,5 @@
                 </div>
             </div>
             {{end}}
-
-            {{if .Logs}}
-            <div class="card">
-                <h3>Recent Activity</h3>
-                <div class="table-responsive">
-                <table class="table">
-                    <thead>
-                        <tr><th>Action</th><th>Details</th><th>Zone</th><th>User</th><th>Time</th></tr>
-                    </thead>
-                    <tbody>
-                        {{range .Logs}}
-                        <tr>
-                            <td><span class="badge badge-{{.action}}">{{.action}}</span></td>
-                            <td>{{.details}}</td>
-                            <td>{{if .zone_id}}<code>{{.zone_id}}</code>{{end}}</td>
-                            <td>{{.username}}</td>
-                            <td>{{.created_at}}</td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-                </div>
-                {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "entries" "Prefix" ""}}
-            </div>
-            {{end}}
 {{template "app_layout_end" .}}
 {{end}}

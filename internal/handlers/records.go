@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -119,8 +120,9 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_record', ?)",
+		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'create_record', ?, ?, ?)",
 		user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", recordType, name, content),
+		rrsetSnapshot(existingRRSet), rrsetSnapshot(&rrset),
 	); err != nil {
 		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 	}
@@ -183,7 +185,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
-	rrset, err := h.updateRecordFromForm(r)
+	rrset, oldRRSet, err := h.updateRecordFromForm(r)
 	if err != nil {
 		switch e := err.(type) {
 		case *recordValidationError:
@@ -201,8 +203,9 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	user := middleware.GetUser(r)
 	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
+		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'update_record', ?, ?, ?)",
 		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
+		rrsetSnapshot(oldRRSet), rrsetSnapshot(rrset),
 	); err != nil {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
@@ -219,7 +222,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
-	rrset, err := h.updateRecordFromForm(r)
+	rrset, oldRRSet, err := h.updateRecordFromForm(r)
 	if err != nil {
 		switch e := err.(type) {
 		case *recordValidationError:
@@ -237,8 +240,9 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	user := middleware.GetUser(r)
 	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'update_record', ?)",
+		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'update_record', ?, ?, ?)",
 		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
+		rrsetSnapshot(oldRRSet), rrsetSnapshot(rrset),
 	); err != nil {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
@@ -258,17 +262,17 @@ type recordValidationError struct {
 func (e *recordValidationError) Error() string { return e.Message }
 
 // updateRecordFromForm parses and validates a record update request, builds the
-// merged RRSet and returns it. It is shared by UpdateRecord and
-// InlineUpdateRecord.
-func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, error) {
+// merged RRSet and returns it along with the original RRSet (if any). It is
+// shared by UpdateRecord and InlineUpdateRecord.
+func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.RRSet, error) {
 	zoneID := r.PathValue("zone_id")
 
 	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
 	if err != nil {
-		return nil, fmt.Errorf("invalid record form: %w", err)
+		return nil, nil, fmt.Errorf("invalid record form: %w", err)
 	}
 	if name == "" || recordType == "" || content == "" {
-		return nil, &recordValidationError{Message: "Name, type, and content are required"}
+		return nil, nil, &recordValidationError{Message: "Name, type, and content are required"}
 	}
 
 	originalContent := strings.TrimSpace(r.FormValue("original_content"))
@@ -277,20 +281,20 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, error) {
 	name = normalizeRecordName(name, zoneID)
 
 	if err := validators.ValidateRecordName(name); err != nil {
-		return nil, &recordValidationError{Message: "Invalid record name: " + err.Error()}
+		return nil, nil, &recordValidationError{Message: "Invalid record name: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		return nil, &recordValidationError{Message: "Invalid record type: " + err.Error()}
+		return nil, nil, &recordValidationError{Message: "Invalid record type: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordContent(recordType, content); err != nil {
-		return nil, &recordValidationError{Message: "Invalid record content: " + err.Error()}
+		return nil, nil, &recordValidationError{Message: "Invalid record content: " + err.Error()}
 	}
 
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var existingRRSet *models.RRSet
@@ -319,7 +323,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, error) {
 		Type:    recordType,
 		TTL:     ttl,
 		Records: updatedRecords,
-	}, nil
+	}, existingRRSet, nil
 }
 
 // BatchCreateRecords creates multiple DNS records in a zone (POST /zones/{zone_id}/records/batch-create).
@@ -472,6 +476,20 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
+// rrsetSnapshot serialises an RRSet to JSON for storage in activity_logs.
+// It returns an empty string for a nil RRSet (e.g. create on a new RRSet or
+// delete when the RRSet could not be fetched).
+func rrsetSnapshot(rrset *models.RRSet) string {
+	if rrset == nil {
+		return ""
+	}
+	b, err := json.Marshal(rrset)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // prepareRecordContent normalises record content for the PDNS PATCH API,
 // returning the wire content and the value to store in RecordInfo.Priority.
 // MX/SRV priority is embedded in the content (and the separate Priority element
@@ -568,14 +586,26 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	recordName := r.FormValue("name")
 	recordType := r.FormValue("type")
 
+	var oldRRSet *models.RRSet
+	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	if err == nil {
+		for _, rr := range allRecords {
+			if rr.Name == recordName && rr.Type == recordType {
+				oldRRSet = &rr
+				break
+			}
+		}
+	}
+
 	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, recordName, recordType); err != nil {
 		h.renderInternalError(w, r, "Failed to delete record", err)
 		return
 	}
 
 	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_record', ?)",
+		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'delete_record', ?, ?, '')",
 		user.ID, zoneID, fmt.Sprintf("Deleted %s record %s", recordType, recordName),
+		rrsetSnapshot(oldRRSet),
 	); err != nil {
 		logger.Error("failed to log delete_record activity", "zone_id", zoneID, "error", err)
 	}

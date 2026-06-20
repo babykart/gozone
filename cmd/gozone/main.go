@@ -100,6 +100,41 @@ func run(args []string) error {
 		}
 	}()
 
+	// Periodically purge old activity logs based on the configured retention
+	// period (default 90 days). Runs once at startup, then daily. A retention
+	// period of 0 means "keep forever" and skips the background job entirely.
+	if cfg.Activity.RetentionDays > 0 {
+		retentionCtx, stopRetention := context.WithCancel(context.Background())
+		defer stopRetention()
+		go func() {
+			purge := func() {
+				start := time.Now()
+				ctx, cancel := context.WithTimeout(retentionCtx, 5*time.Minute)
+				defer cancel()
+				n, err := db.PurgeActivityLogs(ctx, cfg.Activity.RetentionDays, cfg.Activity.BatchSize)
+				if err != nil && retentionCtx.Err() == nil {
+					logger.Error("failed to purge old activity logs", "error", err)
+					return
+				}
+				logger.Info("activity log retention purge completed",
+					"deleted", n,
+					"duration", time.Since(start).String(),
+				)
+			}
+			purge()
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-retentionCtx.Done():
+					return
+				case <-ticker.C:
+					purge()
+				}
+			}
+		}()
+	}
+
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
@@ -174,6 +209,7 @@ func run(args []string) error {
 				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			})
 			r.Get("/dashboard", h.Dashboard)
+			r.Get("/activity", h.ActivityPage)
 			r.Post("/logout", h.Logout)
 			r.Get("/profile", h.ProfilePage)
 			r.Get("/profile/api-keys", h.ListAPIKeys)

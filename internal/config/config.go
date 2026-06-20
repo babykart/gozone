@@ -27,6 +27,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Admin    AdminConfig    `yaml:"admin"`
+	Activity ActivityConfig `yaml:"activity"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -69,6 +70,12 @@ type AuthConfig struct {
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
 	Level string `yaml:"level"`
+}
+
+// ActivityConfig holds activity log settings.
+type ActivityConfig struct {
+	RetentionDays int `yaml:"retention_days"`
+	BatchSize     int `yaml:"batch_size"`
 }
 
 // AdminConfig holds default admin user settings used during database seeding.
@@ -116,6 +123,10 @@ func DefaultConfig() *Config {
 			FirstName: "Admin",
 			LastName:  "User",
 		},
+		Activity: ActivityConfig{
+			RetentionDays: 90,
+			BatchSize:     1000,
+		},
 	}
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
 	return cfg
@@ -131,7 +142,8 @@ func DefaultConfig() *Config {
 // Supported environment variables: GOZONE_SERVER_HOST, GOZONE_SERVER_PORT,
 // GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
-// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION.
+// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
+// GOZONE_ACTIVITY_BATCH_SIZE.
 //
 // Parameters:
 //   - path: filesystem path to the YAML configuration file
@@ -226,6 +238,14 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("unsupported database driver %q; choose one of sqlite3, mysql, postgres", cfg.Database.Driver)
 	}
 
+	if cfg.Activity.RetentionDays < 0 {
+		return fmt.Errorf("invalid activity retention_days %d: must be non-negative", cfg.Activity.RetentionDays)
+	}
+
+	if cfg.Activity.BatchSize <= 0 {
+		return fmt.Errorf("invalid activity batch_size %d: must be positive", cfg.Activity.BatchSize)
+	}
+
 	return nil
 }
 
@@ -292,6 +312,20 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GOZONE_ADMIN_LAST_NAME"); v != "" {
 		cfg.Admin.LastName = v
+	}
+	if v := os.Getenv("GOZONE_ACTIVITY_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_ACTIVITY_RETENTION_DAYS, using default", "value", v, "error", err)
+		} else {
+			cfg.Activity.RetentionDays = n
+		}
+	}
+	if v := os.Getenv("GOZONE_ACTIVITY_BATCH_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_ACTIVITY_BATCH_SIZE, using default", "value", v, "error", err)
+		} else {
+			cfg.Activity.BatchSize = n
+		}
 	}
 }
 

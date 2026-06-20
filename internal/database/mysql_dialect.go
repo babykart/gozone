@@ -142,5 +142,6 @@ func (m *mysqlDialect) Migrations() []string {
 			revoked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			KEY idx_revoked_tokens_expires_at (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE activity_logs ADD COLUMN old_value TEXT NOT NULL DEFAULT '', ADD COLUMN new_value TEXT NOT NULL DEFAULT ''`,
 	}
 }

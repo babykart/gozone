@@ -33,6 +33,8 @@ type ActivityLog struct {
 	ZoneID    *string   `json:"zone_id"`
 	Action    string    `json:"action"`
 	Details   string    `json:"details"`
+	OldValue  string    `json:"old_value"`
+	NewValue  string    `json:"new_value"`
 	CreatedAt time.Time `json:"created_at"`
 	Username  string    `json:"username"`
 }

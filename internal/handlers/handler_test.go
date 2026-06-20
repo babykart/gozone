@@ -63,6 +63,7 @@ func testTemplateSet() *template.Template {
 		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
 		{{define "dnssec.html"}}DNSSEC: {{.Zone.Name}} Keys: {{range .Keys}}{{.ID}}:{{.Active}}:{{.KeyType}} {{end}}{{end}}
+		{{define "activity.html"}}Activity: {{range .Logs}}{{.Action}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 	`))
 }
 

@@ -155,6 +155,48 @@ func (db *DB) CleanupRevokedTokens(ctx context.Context) error {
 	return err
 }
 
+// PurgeActivityLogs deletes activity log entries older than the configured
+// retention period. The operation is executed in batches of batchSize rows to
+// avoid locking the database on large purges. A retentionDays value of zero
+// keeps all logs and returns 0 deleted rows without running any query.
+func (db *DB) PurgeActivityLogs(ctx context.Context, retentionDays, batchSize int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	const query = `DELETE FROM activity_logs
+	WHERE id IN (
+		SELECT id FROM activity_logs
+		WHERE created_at < ?
+		ORDER BY id
+		LIMIT ?
+	)`
+
+	var totalDeleted int64
+	for {
+		res, err := db.ExecContext(ctx, query, cutoff, batchSize)
+		if err != nil {
+			return totalDeleted, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += n
+		if n < int64(batchSize) {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, err
+		}
+	}
+	return totalDeleted, nil
+}
+
 // Begin starts a transaction with automatic placeholder rebinding.
 func (db *DB) Begin() (*Tx, error) {
 	return db.BeginTx(context.Background(), nil)

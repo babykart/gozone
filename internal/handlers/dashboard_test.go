@@ -27,15 +27,59 @@ func TestDashboard(t *testing.T) {
 	}
 }
 
-func TestGetRecentActivityLogs_Empty(t *testing.T) {
+func TestActivityPage(t *testing.T) {
 	h := newTestHandler(t)
 
-	logs, total := h.getRecentActivityLogs(1, 10)
-	if len(logs) != 0 {
-		t.Errorf("expected 0 logs, got %d", len(logs))
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/activity", nil)
+	r = r.WithContext(ctx)
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	if total != 0 {
-		t.Errorf("expected total 0, got %d", total)
+}
+
+func TestGetActivityLogs_Admin(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (zone_id, action, details) VALUES (?, 'create_zone', 'test')", "example.com."); err != nil {
+		t.Fatalf("insert activity log: %v", err)
+	}
+
+	logs, total := h.getActivityLogs(user, "", "", "", "", 1, 10)
+	if total != 1 {
+		t.Errorf("expected total 1, got %d", total)
+	}
+	if len(logs) != 1 {
+		t.Errorf("expected 1 log, got %d", len(logs))
+	}
+}
+
+func TestGetActivityLogs_Search(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (zone_id, action, details) VALUES (?, 'create_zone', 'test zone')", "example.com."); err != nil {
+		t.Fatalf("insert activity log: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO activity_logs (action, details) VALUES ('create_user', 'test user')"); err != nil {
+		t.Fatalf("insert activity log: %v", err)
+	}
+
+	logs, total := h.getActivityLogs(user, "create_zone", "", "", "", 1, 10)
+	if total != 1 {
+		t.Errorf("expected total 1 for search, got %d", total)
+	}
+	if len(logs) != 1 {
+		t.Errorf("expected 1 log for search, got %d", len(logs))
+	}
+	if logs[0].Action != "create_zone" {
+		t.Errorf("expected create_zone, got %s", logs[0].Action)
 	}
 }
 

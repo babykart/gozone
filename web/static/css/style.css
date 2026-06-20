@@ -1063,3 +1063,52 @@ details summary {
         gap: 0.75rem;
     }
 }
+
+/* Activity log diff display (not BIND format) */
+.activity-diff {
+    margin-top: 0.5rem;
+}
+.activity-diff summary {
+    cursor: pointer;
+    color: var(--primary);
+    font-size: 0.875rem;
+}
+.diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+.diff-panel {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+}
+.diff-panel h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.875rem;
+}
+.diff-panel pre {
+    margin: 0;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.diff-removed {
+    border-left: 4px solid var(--danger);
+}
+.diff-removed h4 {
+    color: var(--danger);
+}
+.diff-added {
+    border-left: 4px solid var(--success);
+}
+.diff-added h4 {
+    color: var(--success);
+}
+@media (max-width: 768px) {
+    .diff-grid {
+        grid-template-columns: 1fr;
+    }
+}

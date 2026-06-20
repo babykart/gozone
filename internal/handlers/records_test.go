@@ -94,7 +94,7 @@ func TestCreateRecord_Success(t *testing.T) {
 	}
 }
 
-func TestCreateRecord_EmptyFields(t *testing.T) {
+func TestCreateRecord_LogsOldNewSnapshot(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{

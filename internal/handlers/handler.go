@@ -43,6 +43,8 @@ func sectionFromTemplate(name string) string {
 		return ""
 	case name == "dashboard":
 		return "dashboard"
+	case name == "activity":
+		return "activity"
 	case name == "zones", strings.HasPrefix(name, "zone_"), strings.HasPrefix(name, "record_"):
 		return "zones"
 	case name == "users", strings.HasPrefix(name, "user_"):

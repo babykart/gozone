@@ -524,7 +524,7 @@ func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]model
 	var query string
 	var args []interface{}
 	if perPage > 0 {
-		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.created_at, u.username
+		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.old_value, al.new_value, al.created_at, u.username
 		 FROM activity_logs al
 		 LEFT JOIN users u ON al.user_id = u.id
 		 WHERE al.zone_id = ?
@@ -532,7 +532,7 @@ func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]model
 		 LIMIT ? OFFSET ?`
 		args = append(args, zoneID, limit, offset)
 	} else {
-		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.created_at, u.username
+		query = `SELECT al.id, al.user_id, al.zone_id, al.action, al.details, al.old_value, al.new_value, al.created_at, u.username
 		 FROM activity_logs al
 		 LEFT JOIN users u ON al.user_id = u.id
 		 WHERE al.zone_id = ?
@@ -550,7 +550,7 @@ func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]model
 	for rows.Next() {
 		var log models.ActivityLog
 		var username sql.NullString
-		if err := rows.Scan(&log.ID, &log.UserID, &log.ZoneID, &log.Action, &log.Details, &log.CreatedAt, &username); err != nil {
+		if err := rows.Scan(&log.ID, &log.UserID, &log.ZoneID, &log.Action, &log.Details, &log.OldValue, &log.NewValue, &log.CreatedAt, &username); err != nil {
 			logger.Error("failed to scan activity log row", "zone_id", zoneID, "error", err)
 			continue
 		}

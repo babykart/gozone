@@ -1,0 +1,86 @@
+{{define "activity.html"}}
+{{template "app_layout_start" .}}
+            <div class="page-header">
+                <h2>Activity</h2>
+            </div>
+
+            <div class="card">
+                <form method="GET" action="/activity" class="form-row">
+                    <div class="form-group">
+                        <label for="search">Search</label>
+                        <input type="text" id="search" name="search" value="{{.Search}}" placeholder="action, user, zone, details">
+                    </div>
+                    <div class="form-group">
+                        <label for="action">Action</label>
+                        <select id="action" name="action">
+                            <option value="">All</option>
+                            {{range .Actions}}
+                            <option value="{{.}}" {{if eq $.Action .}}selected{{end}}>{{.}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="from">From</label>
+                        <input type="date" id="from" name="from" value="{{.From}}">
+                    </div>
+                    <div class="form-group">
+                        <label for="to">To</label>
+                        <input type="date" id="to" name="to" value="{{.To}}">
+                    </div>
+                    <div class="form-group form-actions">
+                        <button type="submit" class="btn btn-primary">Filter</button>
+                        <a href="/activity" class="btn btn-secondary">Reset</a>
+                    </div>
+                </form>
+            </div>
+
+            {{if .Logs}}
+            <div class="card">
+                <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr><th>Action</th><th>Details</th><th>Zone</th><th>User</th><th>Time</th></tr>
+                    </thead>
+                    <tbody>
+                        {{range .Logs}}
+                        <tr>
+                            <td><span class="badge badge-{{.Action}}">{{.Action}}</span></td>
+                            <td>
+                                {{.Details}}
+                                {{if or .OldValue .NewValue}}
+                                <details class="activity-diff">
+                                    <summary>View change</summary>
+                                    <div class="diff-grid">
+                                        {{if .OldValue}}
+                                        <div class="diff-panel diff-removed">
+                                            <h4>Before</h4>
+                                            <pre>{{.OldValue}}</pre>
+                                        </div>
+                                        {{end}}
+                                        {{if .NewValue}}
+                                        <div class="diff-panel diff-added">
+                                            <h4>After</h4>
+                                            <pre>{{.NewValue}}</pre>
+                                        </div>
+                                        {{end}}
+                                    </div>
+                                </details>
+                                {{end}}
+                            </td>
+                            <td>{{if .ZoneID}}<code>{{.ZoneID}}</code>{{end}}</td>
+                            <td>{{.Username}}</td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+                </div>
+                {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "entries" "Prefix" "" "Extra" .Extra}}
+            </div>
+            {{else}}
+            <div class="card">
+                <p class="empty-state">No activity logs found.</p>
+            </div>
+            {{end}}
+{{template "app_layout_end" .}}
+{{end}}

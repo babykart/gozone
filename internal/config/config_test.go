@@ -29,6 +29,12 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Logging.Level != "info" {
 		t.Errorf("expected info, got %s", cfg.Logging.Level)
 	}
+	if cfg.Activity.RetentionDays != 90 {
+		t.Errorf("expected activity retention days 90, got %d", cfg.Activity.RetentionDays)
+	}
+	if cfg.Activity.BatchSize != 1000 {
+		t.Errorf("expected activity batch size 1000, got %d", cfg.Activity.BatchSize)
+	}
 	if cfg.Admin.Username != "admin" {
 		t.Errorf("expected admin, got %s", cfg.Admin.Username)
 	}
@@ -61,6 +67,9 @@ admin:
   email: "root@example.com"
   first_name: "Root"
   last_name: "Admin"
+activity:
+  retention_days: 30
+  batch_size: 500
 `
 	tmpFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {
@@ -104,6 +113,12 @@ admin:
 	if cfg.Admin.LastName != "Admin" {
 		t.Errorf("expected Admin, got %s", cfg.Admin.LastName)
 	}
+	if cfg.Activity.RetentionDays != 30 {
+		t.Errorf("expected activity retention days 30, got %d", cfg.Activity.RetentionDays)
+	}
+	if cfg.Activity.BatchSize != 500 {
+		t.Errorf("expected activity batch size 500, got %d", cfg.Activity.BatchSize)
+	}
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
@@ -121,6 +136,8 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_ADMIN_EMAIL", "root@example.com")
 	t.Setenv("GOZONE_ADMIN_FIRST_NAME", "Root")
 	t.Setenv("GOZONE_ADMIN_LAST_NAME", "Admin")
+	t.Setenv("GOZONE_ACTIVITY_RETENTION_DAYS", "60")
+	t.Setenv("GOZONE_ACTIVITY_BATCH_SIZE", "2500")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -168,6 +185,12 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Admin.LastName != "Admin" {
 		t.Errorf("expected Admin, got %s", cfg.Admin.LastName)
+	}
+	if cfg.Activity.RetentionDays != 60 {
+		t.Errorf("expected activity retention days 60, got %d", cfg.Activity.RetentionDays)
+	}
+	if cfg.Activity.BatchSize != 2500 {
+		t.Errorf("expected activity batch size 2500, got %d", cfg.Activity.BatchSize)
 	}
 }
 
@@ -402,6 +425,18 @@ func TestLoad_ValidatesPort(t *testing.T) {
 			envName: "GOZONE_SESSION_DURATION",
 			envVal:  "-1",
 			wantErr: "session_duration_hours",
+		},
+		{
+			name:    "activity retention negative",
+			envName: "GOZONE_ACTIVITY_RETENTION_DAYS",
+			envVal:  "-1",
+			wantErr: "retention_days",
+		},
+		{
+			name:    "activity batch size zero",
+			envName: "GOZONE_ACTIVITY_BATCH_SIZE",
+			envVal:  "0",
+			wantErr: "batch_size",
 		},
 	}
 

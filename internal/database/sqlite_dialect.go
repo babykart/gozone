@@ -129,5 +129,7 @@ func (s *sqliteDialect) Migrations() []string {
 			revoked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
+		`ALTER TABLE activity_logs ADD COLUMN old_value TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE activity_logs ADD COLUMN new_value TEXT NOT NULL DEFAULT ''`,
 	}
 }
