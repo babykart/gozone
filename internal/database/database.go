@@ -112,6 +112,14 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	return db.Conn.QueryRowContext(ctx, db.dialect.Rebind(query), args...)
 }
 
+// InsertIgnore inserts a row into table, silently skipping rows that violate a
+// unique constraint. The exact SQL syntax is chosen by the active dialect so it
+// works on SQLite, MySQL/MariaDB and PostgreSQL.
+func (db *DB) InsertIgnore(ctx context.Context, table string, columns []string, values ...any) (sql.Result, error) {
+	query := db.dialect.InsertIgnore(table, columns)
+	return db.ExecContext(ctx, query, values...)
+}
+
 // Ping verifies a connection to the database.
 func (db *DB) Ping() error {
 	return db.Conn.Ping()

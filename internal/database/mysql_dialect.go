@@ -36,6 +36,10 @@ func (m *mysqlDialect) MaxOpenConns() int { return 25 }
 
 func (m *mysqlDialect) Rebind(query string) string { return query }
 
+func (m *mysqlDialect) InsertIgnore(table string, columns []string) string {
+	return fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
+}
+
 // LockMigrations acquires a named MySQL lock so only one instance runs
 // migrations at a time. The lock is released by the returned function.
 func (m *mysqlDialect) LockMigrations(conn *sql.DB) (func(), error) {

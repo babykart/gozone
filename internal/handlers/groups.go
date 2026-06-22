@@ -234,10 +234,7 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	userIDStr := r.FormValue("user_id")
 
-	if _, err := h.DB.Exec(
-		"INSERT OR IGNORE INTO zone_group_members (group_id, user_id) VALUES (?, ?)",
-		groupID, userIDStr,
-	); err != nil {
+	if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members", []string{"group_id", "user_id"}, groupID, userIDStr); err != nil {
 		logger.Error("failed to add member to group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
@@ -273,10 +270,7 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 	zoneID := strings.TrimSpace(r.FormValue("zone_id"))
 
 	if zoneID != "" {
-		if _, err := h.DB.Exec(
-			"INSERT OR IGNORE INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)",
-			groupID, zoneID,
-		); err != nil {
+		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_zones", []string{"group_id", "zone_id"}, groupID, zoneID); err != nil {
 			logger.Error("failed to add zone to group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
 		}
 	}

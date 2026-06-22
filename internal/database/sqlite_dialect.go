@@ -2,7 +2,9 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/babykart/gozone/internal/constants"
 )
@@ -29,6 +31,10 @@ func (s *sqliteDialect) DSN(dsn string) string {
 func (s *sqliteDialect) MaxOpenConns() int { return constants.MaxOpenConns }
 
 func (s *sqliteDialect) Rebind(query string) string { return query }
+
+func (s *sqliteDialect) InsertIgnore(table string, columns []string) string {
+	return fmt.Sprintf("INSERT OR IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
+}
 
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
 // database-file level and MaxOpenConns is set to 1, so concurrent migration

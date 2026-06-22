@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/babykart/gozone/internal/logger"
 )
@@ -16,6 +17,11 @@ func (p *postgresDialect) DSN(dsn string) string { return dsn }
 func (p *postgresDialect) MaxOpenConns() int { return 25 }
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
+
+func (p *postgresDialect) InsertIgnore(table string, columns []string) string {
+	cols := strings.Join(columns, ", ")
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING", table, cols, placeholders(len(columns)), cols)
+}
 
 // LockMigrations acquires a PostgreSQL advisory lock so only one instance
 // runs migrations at a time. The lock is released by the returned function.
