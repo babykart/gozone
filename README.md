@@ -46,6 +46,17 @@ make docker-build   # or: just docker-build
 docker run -d -p 8080:8080 gozone
 ```
 
+### Kubernetes (Helm)
+
+A Helm chart is available for deploying GoZone on Kubernetes:
+
+```bash
+helm repo add babykart https://babykart.github.io/helm-charts
+helm install gozone babykart/gozone
+```
+
+See the [helm-charts repository](https://github.com/babykart/helm-charts) for configuration options.
+
 ## Configuration
 
 Configuration is via `config.yaml` or environment variables:
