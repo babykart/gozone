@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"html/template"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +40,13 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		switch args[0] {
+		case "unlock":
+			return runUnlock(args[1:])
+		}
+	}
+
 	flags := flag.NewFlagSet("gozone", flag.ContinueOnError)
 	configPath := flags.String("config", "config.yaml", "Path to YAML configuration file")
 	if err := flags.Parse(args); err != nil {
@@ -524,4 +533,91 @@ func clientIPMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 // variants and surrounding whitespace.
 func loginUsernameKey(r *http.Request) string {
 	return strings.ToLower(strings.TrimSpace(r.FormValue("username")))
+}
+
+// runUnlock implements the `gozone unlock` emergency CLI.
+//
+// Usage:
+//
+//	gozone unlock --user <id|username> [--config <path>]
+//
+// It opens the configured database, resolves the user (by numeric ID or
+// username), clears their lockout and failed-login counter, then exits.
+// Designed for operators who have shell access to the host but lost the
+// admin password or got themselves locked out by a brute-force storm —
+// the web UI alone is not enough to recover.
+func runUnlock(args []string) error {
+	flags := flag.NewFlagSet("gozone unlock", flag.ContinueOnError)
+	configPath := flags.String("config", "config.yaml", "Path to YAML configuration file")
+	userFlag := flags.String("user", "", "User ID or username to unlock (required)")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+	if *userFlag == "" {
+		return fmt.Errorf("--user is required (use --user <id> or --user <username>)")
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+
+	logger.Init(cfg.Logging.Level)
+
+	db, err := database.New(&cfg.Database)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var (
+		userID     int64
+		username   string
+		resolveErr error
+	)
+	if id, perr := strconv.ParseInt(*userFlag, 10, 64); perr == nil && id > 0 {
+		userID = id
+		resolveErr = db.QueryRowContext(ctx,
+			`SELECT username FROM users WHERE id = ?`,
+			id,
+		).Scan(&username)
+		if resolveErr != nil {
+			if resolveErr == sql.ErrNoRows {
+				return fmt.Errorf("user id=%d not found", id)
+			}
+			return fmt.Errorf("lookup user id=%d: %w", id, resolveErr)
+		}
+	} else {
+		// Username lookup — case-insensitive; the Login handler does the same.
+		resolveErr = db.QueryRowContext(ctx,
+			`SELECT id, username FROM users WHERE lower(username) = lower(?)`,
+			*userFlag,
+		).Scan(&userID, &username)
+		if resolveErr != nil {
+			if resolveErr == sql.ErrNoRows {
+				return fmt.Errorf("user %q not found", *userFlag)
+			}
+			return fmt.Errorf("lookup user %q: %w", *userFlag, resolveErr)
+		}
+	}
+
+	logger.Info("unlocking user via CLI", "user_id", userID, "username", username)
+
+	if err := db.AdminUnlockUser(ctx, userID); err != nil {
+		return fmt.Errorf("unlock user %d: %w", userID, err)
+	}
+
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'unlock_user_cli', ?)",
+		userID, fmt.Sprintf("Unlocked via CLI by operator (was id=%d username=%q)", userID, username),
+	); err != nil {
+		// Best-effort: the unlock itself succeeded, so we don't fail the CLI.
+		logger.Warn("failed to log CLI unlock activity", "user_id", userID, "error", err)
+	}
+
+	logger.Info("user unlocked", "user_id", userID, "username", username)
+	return nil
 }

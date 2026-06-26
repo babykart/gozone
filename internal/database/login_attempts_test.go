@@ -287,3 +287,113 @@ func TestUserLockStatus_NotFound(t *testing.T) {
 		t.Error("expected locked=false for non-existent user")
 	}
 }
+
+func TestIsLastEnabledAdmin_SoleAdmin(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "solo")
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET role='admin' WHERE id = ?", uid); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	last, err := tx.IsLastEnabledAdmin(ctx, uid)
+	if err != nil {
+		t.Fatalf("IsLastEnabledAdmin: %v", err)
+	}
+	if !last {
+		t.Error("expected IsLastEnabledAdmin=true for sole admin")
+	}
+}
+
+func TestIsLastEnabledAdmin_OneOfMany(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	id1 := insertUserForLoginTests(t, db, "admin1")
+	id2 := insertUserForLoginTests(t, db, "admin2")
+	for _, id := range []int64{id1, id2} {
+		if _, err := db.ExecContext(ctx,
+			"UPDATE users SET role='admin' WHERE id = ?", id); err != nil {
+			t.Fatalf("set role: %v", err)
+		}
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for _, id := range []int64{id1, id2} {
+		last, err := tx.IsLastEnabledAdmin(ctx, id)
+		if err != nil {
+			t.Fatalf("IsLastEnabledAdmin(%d): %v", id, err)
+		}
+		if last {
+			t.Errorf("expected IsLastEnabledAdmin=false for id=%d (2 admins exist)", id)
+		}
+	}
+}
+
+func TestIsLastEnabledAdmin_NonAdmin(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	adminID := insertUserForLoginTests(t, db, "admin")
+	userID := insertUserForLoginTests(t, db, "alice")
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET role='admin' WHERE id = ?", adminID); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	last, err := tx.IsLastEnabledAdmin(ctx, userID)
+	if err != nil {
+		t.Fatalf("IsLastEnabledAdmin: %v", err)
+	}
+	if last {
+		t.Error("expected IsLastEnabledAdmin=false for non-admin user")
+	}
+}
+
+func TestIsLastEnabledAdmin_DisabledAdmin(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	id1 := insertUserForLoginTests(t, db, "admin1")
+	id2 := insertUserForLoginTests(t, db, "admin2")
+	for _, id := range []int64{id1, id2} {
+		if _, err := db.ExecContext(ctx,
+			"UPDATE users SET role='admin' WHERE id = ?", id); err != nil {
+			t.Fatalf("set role: %v", err)
+		}
+	}
+	// Disable id2 — id1 becomes the last enabled admin.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET enabled = 0 WHERE id = ?", id2); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	last, err := tx.IsLastEnabledAdmin(ctx, id1)
+	if err != nil {
+		t.Fatalf("IsLastEnabledAdmin: %v", err)
+	}
+	if !last {
+		t.Error("expected IsLastEnabledAdmin=true when only one admin is enabled")
+	}
+}

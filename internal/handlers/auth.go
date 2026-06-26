@@ -155,18 +155,99 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // recordFailedAttempt logs a failed login to login_attempts and, when
 // maxAttempts > 0, increments the per-account counter (possibly triggering a
 // lockout). Errors are logged but never abort the login flow.
+//
+// Last-admin exemption: when the threshold is reached on the only enabled
+// admin, the lockout is refused — the counter is reset to maxAttempts-1 so
+// the next failure still counts, and a CRITICAL warning is logged. This
+// prevents a distributed attacker from locking every admin out of the
+// instance by spraying wrong passwords at admin accounts. Recovery paths:
+//   - another admin (or the same one, when there is one) logs in successfully
+//     (the per-IP/per-username rate limiters will throttle the attacker);
+//   - the CLI `gozone unlock --user <id|username>` command;
+//   - the admin Lock/Unlock UI on /users.
 func (h *Handler) recordFailedAttempt(ctx context.Context, username string, userID int64, ip string, maxAttempts int, lockout time.Duration) {
 	if err := h.DB.RecordLoginAttempt(ctx, username, ip, userID, false); err != nil {
 		logger.Error("failed to record failed login attempt", "username", username, "error", err)
 	}
-	if maxAttempts > 0 && userID > 0 {
-		count, err := h.DB.IncrementFailedLogins(ctx, userID, maxAttempts, lockout)
-		if err != nil {
-			logger.Error("failed to increment failed-login counter", "user_id", userID, "error", err)
-		} else if count >= maxAttempts {
-			logger.Warn("account locked after failed attempts", "user_id", userID, "count", count)
-		}
+	if maxAttempts <= 0 || userID <= 0 {
+		return
 	}
+
+	tx, err := h.DB.BeginTx(ctx, nil)
+	if err != nil {
+		logger.Error("failed to begin tx for failed-login counter", "user_id", userID, "error", err)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	last, err := tx.IsLastEnabledAdmin(ctx, userID)
+	if err != nil {
+		logger.Error("failed to check last-admin status", "user_id", userID, "error", err)
+		return
+	}
+
+	// Bump the counter and read the new value back. Mirrors DB.IncrementFailedLogins
+	// but executes inside the calling tx so we can both check last-admin and
+	// react under the same FOR UPDATE row lock (MySQL/Postgres).
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
+		userID,
+	); err != nil {
+		logger.Error("failed to increment failed-login counter", "user_id", userID, "error", err)
+		return
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT failed_login_attempts FROM users WHERE id = ?", userID,
+	).Scan(&count); err != nil {
+		logger.Error("failed to read failed-login counter", "user_id", userID, "error", err)
+		return
+	}
+
+	if count >= maxAttempts && last {
+		// Refuse to lock the last admin out. Reset the counter to one below
+		// the threshold so the next failure still counts towards a lockout
+		// (and so concurrent failure storms do not bypass future locks once
+		// the situation changes).
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE users SET failed_login_attempts = ?, locked_until = NULL WHERE id = ?",
+			maxAttempts-1, userID,
+		); err != nil {
+			logger.Error("failed to reset last-admin counter", "user_id", userID, "error", err)
+			return
+		}
+		logger.Warn("refused to lock the last enabled admin",
+			"user_id", userID, "username", username, "count", count, "threshold", maxAttempts)
+		if err := tx.Commit(); err != nil {
+			logger.Error("failed to commit last-admin reset", "user_id", userID, "error", err)
+		} else {
+			committed = true
+		}
+		return
+	}
+
+	if count >= maxAttempts {
+		lockedUntil := time.Now().UTC().Add(lockout)
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE users SET locked_until = ? WHERE id = ?",
+			lockedUntil, userID,
+		); err != nil {
+			logger.Error("failed to set locked_until", "user_id", userID, "error", err)
+			return
+		}
+		logger.Warn("account locked after failed attempts", "user_id", userID, "count", count)
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.Error("failed to commit failed-login counter", "user_id", userID, "error", err)
+		return
+	}
+	committed = true
 }
 
 // Logout clears the session cookie, revokes the current JWT, and redirects to /login.

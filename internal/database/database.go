@@ -416,6 +416,35 @@ func (tx *Tx) CountEnabledAdmins(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// IsLastEnabledAdmin reports whether userID is the only enabled admin in the
+// database, with the same FOR UPDATE semantics as CountEnabledAdmins so the
+// answer is stable for the lifetime of the calling transaction. Returns
+// false if the user does not exist, is not an admin, or is not enabled, or
+// if there is at least one other enabled admin. Used by the login lockout
+// to refuse to lock the last admin out of the instance.
+func (tx *Tx) IsLastEnabledAdmin(ctx context.Context, userID int64) (bool, error) {
+	query := "SELECT role, enabled FROM users WHERE id = ?"
+	if tx.dialect.DriverName() != "sqlite3" {
+		query += " FOR UPDATE"
+	}
+	var role string
+	var enabled int
+	if err := tx.QueryRowContext(ctx, query, userID).Scan(&role, &enabled); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if role != "admin" || enabled != 1 {
+		return false, nil
+	}
+	count, err := tx.CountEnabledAdmins(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count <= 1, nil
+}
+
 // BeginTx starts a transaction with automatic placeholder rebinding and the
 // given transaction options. The context is used until the transaction is
 // committed or rolled back.

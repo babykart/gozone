@@ -331,3 +331,117 @@ func TestProfilePage(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
+
+// TestLogin_LastAdmin_NotLocked verifies the REVIEW.md fix: an attacker that
+// fails to log in as the SOLE enabled admin must not be able to lock them
+// out. The counter is incremented up to maxAttempts-1 (so the next failure
+// still counts) but locked_until stays NULL.
+func TestLogin_LastAdmin_NotLocked(t *testing.T) {
+	h := newTestHandler(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"soleadmin", "sole@admin.local", string(hash), "admin",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Trigger the threshold (10 by default) — each call with a wrong password
+	// calls recordFailedAttempt. We do 12 to make sure the counter caps at 9.
+	for i := 0; i < 12; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=soleadmin&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if locked {
+		t.Error("sole admin must NOT be locked by failed-login attempts")
+	}
+
+	var count int
+	if err := h.DB.QueryRow("SELECT failed_login_attempts FROM users WHERE id = ?", uid).Scan(&count); err != nil {
+		t.Fatalf("counter: %v", err)
+	}
+	if count >= 10 {
+		t.Errorf("counter should stay below threshold after last-admin exemption, got %d", count)
+	}
+}
+
+// TestLogin_NonAdmin_StillLocked verifies the exemption only applies to
+// the last enabled admin. A non-last-admin must still get locked normally
+// once the threshold is reached.
+func TestLogin_NonAdmin_StillLocked(t *testing.T) {
+	h := newTestHandler(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	// Two admins so neither is "last" + a user to be locked.
+	for _, u := range []struct {
+		name, role string
+	}{
+		{"admin1", "admin"},
+		{"admin2", "admin"},
+		{"victim", "user"},
+	} {
+		h.DB.Exec(
+			`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+			u.name, u.name+"@test.local", string(hash), u.role,
+		)
+	}
+
+	// 12 wrong attempts against victim.
+	for i := 0; i < 12; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	var victimID int64
+	if err := h.DB.QueryRow("SELECT id FROM users WHERE username = 'victim'").Scan(&victimID); err != nil {
+		t.Fatalf("find victim: %v", err)
+	}
+	locked, _, err := h.DB.UserLockStatus(context.Background(), victimID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Error("non-admin user must be locked after threshold even when admins exist")
+	}
+}
+
+// TestLogin_TwoAdmins_LastAdminLocked verifies that when two admins exist
+// and one of them is targeted, the last-admin exemption does NOT trigger —
+// the targeted admin can still be locked because there is another admin
+// available.
+func TestLogin_TwoAdmins_TargetedAdminLocked(t *testing.T) {
+	h := newTestHandler(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	for _, name := range []string{"admin1", "admin2"} {
+		h.DB.Exec(
+			`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+			name, name+"@admin.local", string(hash), "admin",
+		)
+	}
+
+	for i := 0; i < 12; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin1&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	var adminID int64
+	if err := h.DB.QueryRow("SELECT id FROM users WHERE username = 'admin1'").Scan(&adminID); err != nil {
+		t.Fatalf("find admin1: %v", err)
+	}
+	locked, _, err := h.DB.UserLockStatus(context.Background(), adminID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Error("admin1 should be locked when admin2 still exists — there is no last-admin exemption for it")
+	}
+}
