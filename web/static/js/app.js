@@ -78,15 +78,18 @@ function resetRowValues(row) {
     var editTTL = row.querySelector('.ev-ttl');
     var editPrio = row.querySelector('.ev-prio');
     var editDisabled = row.querySelector('.ev-disabled');
+    var editComments = row.querySelector('.ev-comments');
 
     var origContent = row.querySelector('.rv-content');
     var origTTL = row.querySelector('.rv-ttl');
     var origPrio = row.querySelector('.rv-prio');
+    var origComments = row.querySelector('.rv-comments');
 
     if (editContent && origContent) editContent.value = origContent.textContent;
     if (editTTL && origTTL) editTTL.value = origTTL.textContent;
     if (editPrio && origPrio) editPrio.value = (origPrio.textContent === '-' ? '0' : origPrio.textContent);
     if (editDisabled) editDisabled.checked = row.getAttribute('data-disabled') === 'true';
+    if (editComments && origComments) editComments.value = origComments.textContent;
 }
 
 function showNotification(message, type) {
@@ -115,6 +118,7 @@ function saveRecordRow(btn) {
     var ttl = row.querySelector('.ev-ttl').value;
     var prio = row.querySelector('.ev-prio').value;
     var disabled = row.querySelector('.ev-disabled') ? row.querySelector('.ev-disabled').checked : false;
+    var comment = row.querySelector('.ev-comments') ? row.querySelector('.ev-comments').value : '';
 
     if (!content) { showNotification('Content is required', 'error'); return; }
 
@@ -128,6 +132,7 @@ function saveRecordRow(btn) {
     formData.append('disabled', disabled ? 'true' : 'false');
     formData.append('original_content', row.getAttribute('data-original-content'));
     formData.append('original_priority', row.getAttribute('data-original-priority'));
+    formData.append('comment', comment);
 
     fetch('/zones/' + zoneID + '/records/inline-update', {
         method: 'POST',
@@ -158,6 +163,28 @@ function saveRecordRow(btn) {
                     row.setAttribute('data-disabled', 'false');
                 }
             }
+            var rvComments = row.querySelector('.rv-comments');
+            var trimmedComment = comment.replace(/^\s+|\s+$/g, '');
+            if (rvComments) {
+                if (trimmedComment) {
+                    if (rvComments.parentNode) {
+                        rvComments.textContent = trimmedComment + '\n';
+                    }
+                } else if (rvComments.parentNode) {
+                    rvComments.parentNode.removeChild(rvComments);
+                }
+            } else if (trimmedComment) {
+                var contentCell = row.querySelector('.ev-content').parentNode;
+                var newRv = document.createElement('div');
+                newRv.className = 'rv rv-comments record-comments';
+                newRv.textContent = trimmedComment + '\n';
+                var editComments = row.querySelector('.ev-comments');
+                if (editComments) {
+                    contentCell.insertBefore(newRv, editComments);
+                } else {
+                    contentCell.appendChild(newRv);
+                }
+            }
             row.setAttribute('data-original-content', content);
             row.setAttribute('data-original-priority', prio);
             toggleEditMode(row, false);
@@ -184,6 +211,10 @@ function addRecordRow() {
         } else {
             inputs[i].value = '';
         }
+    }
+    var textareas = template.querySelectorAll('textarea');
+    for (var j = 0; j < textareas.length; j++) {
+        textareas[j].value = '';
     }
     var select = template.querySelector('select[name=type]');
     if (select) select.value = select.querySelector('option').value;

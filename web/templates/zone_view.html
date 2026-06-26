@@ -57,6 +57,12 @@
                 <td>
                     <span class="rv rv-content">{{.Content}}</span>
                     <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
+                    {{if $rrset.Comments}}
+                    <div class="rv rv-comments record-comments">{{range $rrset.Comments}}{{.Content}}
+{{end}}</div>
+                    {{end}}
+                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range $rrset.Comments}}{{.Content}}
+{{end}}</textarea>
                 </td>
                 <td class="nowrap">
                     <span class="rv rv-status">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>

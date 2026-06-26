@@ -1102,3 +1102,445 @@ func TestNormalizeRecordName(t *testing.T) {
 		}
 	}
 }
+
+func TestParseComments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []models.Comment
+	}{
+		{"empty", "", nil},
+		{"whitespace_only", "   \n   \n", nil},
+		{"single_line", "managed by ops", []models.Comment{{Content: "managed by ops"}}},
+		{"multi_line", "first\nsecond\nthird", []models.Comment{{Content: "first"}, {Content: "second"}, {Content: "third"}}},
+		{"trims_whitespace", "  hello  \n  world  ", []models.Comment{{Content: "hello"}, {Content: "world"}}},
+		{"skips_blank_lines", "first\n\n   \nsecond\n", []models.Comment{{Content: "first"}, {Content: "second"}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseComments(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("parseComments(%q) returned %d comments, want %d: %+v", tc.input, len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i].Content != tc.want[i].Content {
+					t.Errorf("comment[%d] = %q, want %q", i, got[i].Content, tc.want[i].Content)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCommentsFromLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing []models.Comment
+		newLines []string
+		want     []models.Comment
+	}{
+		{
+			name:     "no_existing_no_new",
+			existing: nil,
+			newLines: nil,
+			want:     nil,
+		},
+		{
+			name:     "no_existing_with_new",
+			existing: nil,
+			newLines: []string{"first"},
+			want:     []models.Comment{{Content: "first"}},
+		},
+		{
+			name:     "existing_preserved_when_no_new",
+			existing: []models.Comment{{Content: "old"}},
+			newLines: nil,
+			want:     nil,
+		},
+		{
+			name:     "existing_appended_with_new",
+			existing: []models.Comment{{Content: "old"}},
+			newLines: []string{"new"},
+			want:     []models.Comment{{Content: "old"}, {Content: "new"}},
+		},
+		{
+			name:     "multiple_new_lines",
+			existing: []models.Comment{{Content: "old"}},
+			newLines: []string{"new1", "new2"},
+			want:     []models.Comment{{Content: "old"}, {Content: "new1"}, {Content: "new2"}},
+		},
+		{
+			name:     "blank_new_lines_skipped",
+			existing: []models.Comment{{Content: "old"}},
+			newLines: []string{"", "  ", "new"},
+			want:     []models.Comment{{Content: "old"}, {Content: "new"}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildCommentsFromLines(tc.existing, tc.newLines...)
+			if len(got) != len(tc.want) {
+				t.Fatalf("returned %d comments, want %d: %+v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i].Content != tc.want[i].Content {
+					t.Errorf("comment[%d] = %q, want %q", i, got[i].Content, tc.want[i].Content)
+				}
+			}
+		})
+	}
+}
+
+func TestCreateRecord_SendsComment(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www&type=A&content=1.2.3.4&ttl=300&comment=managed+by+ops"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	comments := patchedRRSet[0].Comments
+	if len(comments) != 1 || comments[0].Content != "managed by ops" {
+		t.Errorf("expected one comment 'managed by ops', got %+v", comments)
+	}
+}
+
+func TestCreateRecord_NoComment_OmitsField(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]json.RawMessage
+			json.Unmarshal(body, &payload)
+			json.Unmarshal(payload["rrsets"], &patchedRRSet)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www&type=A&content=1.2.3.4&ttl=300"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	if len(patchedRRSet[0].Comments) != 0 {
+		t.Errorf("expected no comments in PATCH body, got %+v", patchedRRSet[0].Comments)
+	}
+}
+
+func TestInlineUpdateRecord_AppendsComment(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: []models.Comment{{Content: "existing comment"}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0&comment=existing+comment%0Anew+comment"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	comments := patchedRRSet[0].Comments
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments (existing + new), got %d: %+v", len(comments), comments)
+	}
+	if comments[0].Content != "existing comment" {
+		t.Errorf("first comment = %q, want existing comment", comments[0].Content)
+	}
+	if comments[1].Content != "new comment" {
+		t.Errorf("second comment = %q, want new comment", comments[1].Content)
+	}
+}
+
+func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: []models.Comment{{Content: "existing comment"}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			rawBody, _ = io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(rawBody, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The PATCH body must NOT contain a `comments` key so that PowerDNS keeps
+	// the existing comments untouched.
+	if strings.Contains(string(rawBody), `"comments"`) {
+		t.Errorf("PATCH body should not contain 'comments' key when no new comment is provided, got: %s", rawBody)
+	}
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	if len(patchedRRSet[0].Comments) != 0 {
+		t.Errorf("expected empty Comments slice in unmarshalled RRSet, got %+v", patchedRRSet[0].Comments)
+	}
+}
+
+func TestBatchCreateRecords_SendsCommentsPerRow(t *testing.T) {
+	type patchBody struct {
+		RRSets []models.RRSet `json:"rrsets"`
+	}
+	var body patchBody
+
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{},
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	formBody := "name=www&type=A&content=10.0.0.1&comment=first+row&name=mail&type=A&content=10.0.0.2&comment=second+row"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(formBody))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(body.RRSets) != 2 {
+		t.Fatalf("expected 2 rrsets, got %d", len(body.RRSets))
+	}
+
+	gotComments := make(map[string]string)
+	for _, rr := range body.RRSets {
+		if len(rr.Comments) == 1 {
+			gotComments[rr.Name+" "+rr.Type] = rr.Comments[0].Content
+		}
+	}
+	if gotComments["www.example.com. A"] != "first row" {
+		t.Errorf("expected 'first row' comment for www, got %q", gotComments["www.example.com. A"])
+	}
+	if gotComments["mail.example.com. A"] != "second row" {
+		t.Errorf("expected 'second row' comment for mail, got %q", gotComments["mail.example.com. A"])
+	}
+}
+
+func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
+	type patchBody struct {
+		RRSets []models.RRSet `json:"rrsets"`
+	}
+	var body patchBody
+
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: []models.Comment{{Content: "existing"}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	formBody := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&comment=new"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(formBody))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(body.RRSets) != 1 {
+		t.Fatalf("expected 1 rrset (merged), got %d", len(body.RRSets))
+	}
+	comments := body.RRSets[0].Comments
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 comments (existing + new), got %d: %+v", len(comments), comments)
+	}
+	if comments[0].Content != "existing" {
+		t.Errorf("first comment = %q, want 'existing'", comments[0].Content)
+	}
+	if comments[1].Content != "new" {
+		t.Errorf("second comment = %q, want 'new'", comments[1].Content)
+	}
+}

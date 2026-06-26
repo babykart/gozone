@@ -52,6 +52,11 @@
         </label>
     </div>
     {{end}}
+    <div class="form-group">
+        <label for="comment">Comment <span class="field-hint">(optional, one per line)</span></label>
+        <textarea id="comment" name="comment" rows="3" class="form-control" placeholder="e.g. managed by ops-team">{{range .Record.Comments}}{{.Content}}
+{{end}}</textarea>
+    </div>
     <div class="form-actions">
         <button type="submit" class="btn btn-primary">Update Record</button>
         <a href="/zones/{{.Zone.ID}}" class="btn btn-secondary">Cancel</a>
