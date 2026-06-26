@@ -201,6 +201,59 @@ func TestExportZone_CSV_IncludesDisabledRecords(t *testing.T) {
 	}
 }
 
+func testExportPDNSWithComments() testutil.PDNSHandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(r.URL.RawQuery, "rrsets") {
+			w.Write([]byte(`[{"name":"example.com.","id":"example.com.","kind":"Native","serial":2024010100}]`))
+			return
+		}
+
+		if strings.Contains(path, "/zones/") && !strings.Contains(path, "/export") && !strings.Contains(path, "/import") && !strings.Contains(path, "/records") && !strings.Contains(path, "/cryptokeys") && !strings.Contains(path, "/metadata") {
+			if r.Method == http.MethodGet {
+				w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","serial":2024010100,"rrsets":[{"name":"example.com.","type":"SOA","ttl":3600,"records":[{"content":"ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600","disabled":false}]},{"name":"example.com.","type":"NS","ttl":3600,"records":[{"content":"ns1.example.com.","disabled":false}]},{"name":"www.example.com.","type":"A","ttl":3600,"records":[{"content":"192.0.2.1","disabled":false},{"content":"198.51.100.1","disabled":false}],"comments":[{"content":"managed by ops"},{"content":"reviewed 2026-01-01"}]}]}`))
+				return
+			}
+		}
+
+		w.Write([]byte(`[]`))
+	}
+}
+
+func TestExportZone_CSV_IncludesComments(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithComments())
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=csv", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	if !strings.Contains(body, ",comment\n") && !strings.HasSuffix(strings.Split(body, "\n")[0], ",comment") {
+		t.Errorf("expected CSV header to end with ',comment', got: %s", strings.Split(body, "\n")[0])
+	}
+	if !strings.Contains(body, "managed by ops") {
+		t.Errorf("expected first comment in CSV output, got: %s", body)
+	}
+	if !strings.Contains(body, "reviewed 2026-01-01") {
+		t.Errorf("expected second comment in CSV output, got: %s", body)
+	}
+	// Both A record rows for www.example.com. should carry the same comment cell.
+	count := strings.Count(body, "managed by ops\nreviewed 2026-01-01")
+	if count != 2 {
+		t.Errorf("expected both A record rows to carry the joined comments, got %d occurrences in: %s", count, body)
+	}
+}
+
 func TestRelativeBindName(t *testing.T) {
 	tests := []struct {
 		name, origin, expected string

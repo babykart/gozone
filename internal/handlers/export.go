@@ -138,9 +138,24 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 
 	writer := csv.NewWriter(w)
 	// #nosec G104 — csv.Writer.Write errors in HTTP handler context; Flush at end reports accumulated errors
-	_ = writer.Write([]string{"name", "type", "content", "ttl", "priority", "disabled"})
+	_ = writer.Write([]string{"name", "type", "content", "ttl", "priority", "disabled", "comment"})
+
+	// Multiple comments per RRSet are joined with newlines so the cell can
+	// round-trip via the standard CSV embedded-newline quoting. The same
+	// value is repeated on every row of the RRSet for consistency.
+	joinedComments := func(comments []models.Comment) string {
+		if len(comments) == 0 {
+			return ""
+		}
+		parts := make([]string, len(comments))
+		for i, c := range comments {
+			parts[i] = c.Content
+		}
+		return strings.Join(parts, "\n")
+	}
 
 	for _, rr := range records {
+		commentCell := joinedComments(rr.Comments)
 		for _, rec := range rr.Records {
 			ttl := rr.TTL
 			disabled := "false"
@@ -162,6 +177,7 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 				fmt.Sprintf("%d", ttl),
 				fmt.Sprintf("%d", priority),
 				disabled,
+				commentCell,
 			})
 		}
 	}

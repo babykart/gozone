@@ -421,6 +421,10 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 	groups := make(map[key][]models.RecordInfo)
 	order := make([]key, 0)
 	groupTTLs := make(map[key]int)
+	// groupComments collects the comment cell for each row of a given RRSet.
+	// The export duplicates the comment on every record row, so we dedup here
+	// while preserving insertion order across rows.
+	groupComments := make(map[key][]string)
 
 	for _, row := range rows[1:] {
 		if len(row) == 0 || (len(row) == 1 && strings.TrimSpace(row[0]) == "") {
@@ -468,19 +472,60 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 			Disabled: disabled,
 			Priority: csvPriority,
 		})
+
+		if comment := getCSVField(row, headers, "comment"); comment != "" {
+			groupComments[k] = appendIfMissing(groupComments[k], comment)
+		}
 	}
 
 	rrsets := make([]models.RRSet, 0, len(order))
 	for _, k := range order {
 		rrsets = append(rrsets, models.RRSet{
-			Name:    k.name,
-			Type:    k.rtype,
-			TTL:     groupTTLs[k],
-			Records: groups[k],
+			Name:     k.name,
+			Type:     k.rtype,
+			TTL:      groupTTLs[k],
+			Records:  groups[k],
+			Comments: parseCSVComments(groupComments[k]),
 		})
 	}
 
 	return rrsets, nil
+}
+
+// parseCSVComments turns the deduplicated per-RRSet comment cells collected by
+// parseCSVZone into a Comment slice. Each cell may itself contain multiple
+// comments separated by newlines (one comment per line, matching the web UI
+// textarea convention).
+func parseCSVComments(cells []string) []models.Comment {
+	if len(cells) == 0 {
+		return nil
+	}
+	var out []models.Comment
+	for _, cell := range cells {
+		for _, line := range strings.Split(cell, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			out = append(out, models.Comment{Content: line})
+		}
+	}
+	return out
+}
+
+// appendIfMissing appends v to s only if no existing element equals v
+// (preserving the original order). Returns s unchanged when v is already
+// present or empty.
+func appendIfMissing(s []string, v string) []string {
+	if v == "" {
+		return s
+	}
+	for _, existing := range s {
+		if existing == v {
+			return s
+		}
+	}
+	return append(s, v)
 }
 
 func getCSVField(row []string, headers map[string]int, name string) string {

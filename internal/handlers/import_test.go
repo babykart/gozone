@@ -425,3 +425,101 @@ func TestGetCSVField(t *testing.T) {
 		t.Errorf("expected empty, got %s", v)
 	}
 }
+
+func TestParseCSVZone_Comments(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled,comment
+www.example.com.,A,192.0.2.1,3600,0,false,managed by ops
+www.example.com.,A,198.51.100.1,3600,0,false,managed by ops
+mail.example.com.,A,192.0.2.10,3600,0,false,multi
+mail.example.com.,A,192.0.2.11,3600,0,false,line
+api.example.com.,A,192.0.2.20,3600,0,false,
+txt.example.com.,TXT,"v=DMARC1; p=none",3600,0,false,"quoted, comment"`
+
+	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 4 {
+		t.Fatalf("expected 4 rrsets, got %d", len(rrsets))
+	}
+
+	// www RRSet: two rows with the same comment cell → dedup → 1 Comment
+	for _, rr := range rrsets {
+		switch rr.Name {
+		case "www.example.com.":
+			if len(rr.Comments) != 1 || rr.Comments[0].Content != "managed by ops" {
+				t.Errorf("www: expected single dedup comment 'managed by ops', got %+v", rr.Comments)
+			}
+		case "mail.example.com.":
+			// Two rows with different cells ('multi', 'line') → 2 distinct Comments
+			if len(rr.Comments) != 2 {
+				t.Errorf("mail: expected 2 distinct comments, got %d: %+v", len(rr.Comments), rr.Comments)
+				continue
+			}
+			if rr.Comments[0].Content != "multi" || rr.Comments[1].Content != "line" {
+				t.Errorf("mail: expected ['multi','line'], got %+v", rr.Comments)
+			}
+		case "api.example.com.":
+			if len(rr.Comments) != 0 {
+				t.Errorf("api: expected no comments (empty cell), got %+v", rr.Comments)
+			}
+		case "txt.example.com.":
+			if len(rr.Comments) != 1 || rr.Comments[0].Content != "quoted, comment" {
+				t.Errorf("txt: expected quoted comma comment, got %+v", rr.Comments)
+			}
+		}
+	}
+}
+
+func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
+	// A single cell with embedded newlines (CSV-quoted) should split into
+	// multiple Comments — matching the web-UI textarea convention.
+	input := "name,type,content,ttl,priority,disabled,comment\n" +
+		"www.example.com.,A,192.0.2.1,3600,0,false,\"first line\nsecond line\nthird line\""
+
+	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %d", len(rrsets))
+	}
+	comments := rrsets[0].Comments
+	if len(comments) != 3 {
+		t.Fatalf("expected 3 comments from multi-line cell, got %d: %+v", len(comments), comments)
+	}
+	want := []string{"first line", "second line", "third line"}
+	for i, c := range comments {
+		if c.Content != want[i] {
+			t.Errorf("comment[%d] = %q, want %q", i, c.Content, want[i])
+		}
+	}
+}
+
+func TestAppendIfMissing(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		v    string
+		want []string
+	}{
+		{"nil_empty", nil, "", nil},
+		{"nil_new", nil, "x", []string{"x"}},
+		{"existing", []string{"a", "b"}, "b", []string{"a", "b"}},
+		{"missing", []string{"a", "b"}, "c", []string{"a", "b", "c"}},
+		{"empty_into_existing", []string{"a"}, "", []string{"a"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := appendIfMissing(tc.in, tc.v)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len = %d, want %d (%v)", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
