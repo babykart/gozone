@@ -137,5 +137,20 @@ func (s *sqliteDialect) Migrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
 		`ALTER TABLE activity_logs ADD COLUMN old_value TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE activity_logs ADD COLUMN new_value TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN locked_until DATETIME`,
+		`CREATE TABLE IF NOT EXISTS login_attempts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			user_id INTEGER,
+			ip_address TEXT NOT NULL DEFAULT '',
+			success INTEGER NOT NULL DEFAULT 0,
+			attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(user_id, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_attempted_at ON login_attempts(attempted_at)`,
 	}
 }

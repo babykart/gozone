@@ -207,6 +207,163 @@ func (db *DB) PurgeActivityLogs(ctx context.Context, retentionDays, batchSize in
 	return totalDeleted, nil
 }
 
+// RecordLoginAttempt stores a login attempt in the login_attempts audit table.
+// userID may be 0 when the attempted username does not exist. The success flag
+// distinguishes successful from failed attempts for forensics.
+func (db *DB) RecordLoginAttempt(ctx context.Context, username, ipAddress string, userID int64, success bool) error {
+	var uid any
+	if userID > 0 {
+		uid = userID
+	}
+	successInt := 0
+	if success {
+		successInt = 1
+	}
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO login_attempts (username, user_id, ip_address, success) VALUES (?, ?, ?, ?)",
+		username, uid, ipAddress, successInt,
+	)
+	return err
+}
+
+// PurgeLoginAttempts removes login attempt rows older than retentionHours.
+// Returns the number of deleted rows.
+func (db *DB) PurgeLoginAttempts(ctx context.Context, retentionHours int) (int64, error) {
+	if retentionHours <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(retentionHours) * time.Hour)
+	res, err := db.ExecContext(ctx,
+		"DELETE FROM login_attempts WHERE attempted_at < ?",
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// FailedLoginStats reports the number of failed login attempts within the
+// given rolling window for the supplied username, and the most recent failure
+// timestamp. Returns zeros / zero time when no attempts match.
+func (db *DB) FailedLoginStats(ctx context.Context, username string, window time.Duration) (count int, lastFailed time.Time, err error) {
+	cutoff := time.Now().UTC().Add(-window)
+	row := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
+		username, cutoff,
+	)
+	if err := row.Scan(&count); err != nil {
+		return 0, time.Time{}, err
+	}
+	var last sql.NullString
+	row = db.QueryRowContext(ctx,
+		"SELECT MAX(attempted_at) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
+		username, cutoff,
+	)
+	if err := row.Scan(&last); err != nil {
+		return count, time.Time{}, err
+	}
+	if last.Valid {
+		if parsed, perr := parseAttemptedAt(last.String); perr == nil {
+			lastFailed = parsed
+		}
+	}
+	return count, lastFailed, nil
+}
+
+// parseAttemptedAt parses the datetime format used by the login_attempts
+// attempted_at column. SQLite stores CURRENT_TIMESTAMP as "YYYY-MM-DD HH:MM:SS"
+// in UTC; go-sqlite3 marshals time.Time as a SQLite datetime literal with
+// variable sub-second precision (truncated at microseconds on some platforms)
+// and a "+00:00" offset suffix. We accept both shapes plus the standard
+// RFC3339 forms.
+func parseAttemptedAt(s string) (time.Time, error) {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05.999",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05.999-07:00",
+		"2006-01-02 15:04:05.999999-07:00",
+		"2006-01-02 15:04:05.999999999-07:00",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognised attempted_at format: %q", s)
+}
+
+// IncrementFailedLogins bumps failed_login_attempts on the user and, when
+// threshold is reached, sets locked_until to now+lockFor. A locked_until value
+// that has already elapsed is reset by every new failure so a sliding-window
+// attack keeps extending the lockout. Returns the new failed_login_attempts
+// count after the increment.
+func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold int, lockFor time.Duration) (int, error) {
+	if threshold <= 0 {
+		return 0, nil
+	}
+	res, err := db.ExecContext(ctx,
+		"UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
+		userID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := res.RowsAffected(); err != nil {
+		return 0, err
+	}
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"SELECT failed_login_attempts FROM users WHERE id = ?", userID,
+	).Scan(&count); err != nil {
+		return 0, err
+	}
+	if count >= threshold {
+		lockedUntil := time.Now().UTC().Add(lockFor)
+		if _, err := db.ExecContext(ctx,
+			"UPDATE users SET locked_until = ? WHERE id = ?",
+			lockedUntil, userID,
+		); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
+}
+
+// ResetFailedLogins clears the failed-login counter and lockout when the user
+// successfully authenticates. Safe to call when no counter is set.
+func (db *DB) ResetFailedLogins(ctx context.Context, userID int64) error {
+	_, err := db.ExecContext(ctx,
+		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+		userID,
+	)
+	return err
+}
+
+// UserLockStatus reports whether the user is currently locked and, if so,
+// the timestamp at which the lockout expires.
+func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, until time.Time, err error) {
+	var rawUntil sql.NullTime
+	row := db.QueryRowContext(ctx,
+		"SELECT locked_until FROM users WHERE id = ?", userID,
+	)
+	if err := row.Scan(&rawUntil); err != nil {
+		if err == sql.ErrNoRows {
+			return false, time.Time{}, nil
+		}
+		return false, time.Time{}, err
+	}
+	if !rawUntil.Valid {
+		return false, time.Time{}, nil
+	}
+	locked = rawUntil.Time.After(time.Now())
+	return locked, rawUntil.Time, nil
+}
+
 // Begin starts a transaction with automatic placeholder rebinding.
 func (db *DB) Begin() (*Tx, error) {
 	return db.BeginTx(context.Background(), nil)

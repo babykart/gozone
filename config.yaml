@@ -24,6 +24,12 @@ server:
   # reverse proxy) so the CSRF cookie gets the Secure flag. Keep false for
   # plain-HTTP development.
   secure_cookies: false
+  # Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
+  # honored. Each entry is a plain IP ("192.0.2.1") or a CIDR ("10.0.0.0/8",
+  # "fd00::/8"). Leave empty (the default) when GoZone is reachable directly
+  # on the public Internet — the rate limiter then keys off the raw TCP
+  # source address and cannot be bypassed by forging XFF headers.
+  # trusted_proxies: []
 
 database:
   driver: "sqlite3"
@@ -37,6 +43,18 @@ powerdns:
 auth:
   session_duration_hours: 24
   bcrypt_cost: 12
+
+# Login brute-force protection. /login is always protected by an in-memory
+# per-IP rate limiter (5/min). The two knobs below add defence-in-depth:
+#   - username_rate_limit_per_minute: an in-memory per-username limiter,
+#     compounded with the per-IP one at the route level (both must allow).
+#   - max_failed_attempts / lockout_duration_minutes: persistent per-account
+#     lockout that survives restarts and is shared across cluster instances.
+login_lock:
+  max_failed_attempts: 10
+  lockout_duration_minutes: 15
+  username_rate_limit_per_minute: 5
+  attempts_retention_hours: 24
 
 logging:
   level: "info"

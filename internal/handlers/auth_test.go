@@ -90,6 +90,176 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestLogin_FailedAttemptsRecorded(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	uid, _ := res.LastInsertId()
+
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	var count int
+	if err := h.DB.QueryRow("SELECT COUNT(*) FROM login_attempts WHERE username = ? AND success = 0", "victim").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 failed login_attempts, got %d", count)
+	}
+
+	var failed int
+	if err := h.DB.QueryRow("SELECT failed_login_attempts FROM users WHERE id = ?", uid).Scan(&failed); err != nil {
+		t.Fatalf("counter: %v", err)
+	}
+	if failed != 3 {
+		t.Errorf("expected failed_login_attempts=3, got %d", failed)
+	}
+}
+
+func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Default threshold is 10 — push 10 failures, then verify the next attempt
+	// (even with the correct password) is rejected with the lockout error.
+	for i := 0; i < 10; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	locked, until, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Fatal("expected user to be locked after 10 failed attempts")
+	}
+	if !until.After(time.Now()) {
+		t.Errorf("expected locked_until in the future, got %v", until)
+	}
+
+	// Even the correct password must be rejected while locked.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=goodpass"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "account_locked") {
+		t.Errorf("expected redirect to account_locked, got %q", loc)
+	}
+}
+
+func TestLogin_SuccessfulLoginResetsCounter(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=goodpass"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303 after successful login, got %d", w.Code)
+	}
+
+	var failed int
+	if err := h.DB.QueryRow("SELECT failed_login_attempts FROM users WHERE id = ?", uid).Scan(&failed); err != nil {
+		t.Fatalf("counter: %v", err)
+	}
+	if failed != 0 {
+		t.Errorf("expected counter reset to 0, got %d", failed)
+	}
+}
+
+func TestLogin_UnknownUsername_RecordsAttempt(t *testing.T) {
+	h := newTestHandler(t)
+
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=ghost&password=anything"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	var count int
+	if err := h.DB.QueryRow("SELECT COUNT(*) FROM login_attempts WHERE username = 'ghost'").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 login_attempts for unknown username, got %d", count)
+	}
+}
+
+func TestLogin_DisabledLockoutWhenZeroThreshold(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.LoginLock.MaxFailedAttempts = 0
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// 100 failures — with threshold 0 the counter must not move and the
+	// account must not lock.
+	for i := 0; i < 100; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if locked {
+		t.Error("expected no lockout when max_failed_attempts is 0")
+	}
+
+	var failed int
+	if err := h.DB.QueryRow("SELECT failed_login_attempts FROM users WHERE id = ?", uid).Scan(&failed); err != nil {
+		t.Fatalf("counter: %v", err)
+	}
+	if failed != 0 {
+		t.Errorf("expected counter to stay at 0, got %d", failed)
+	}
+}
+
 func TestLogout(t *testing.T) {
 	h := newTestHandler(t)
 

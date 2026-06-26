@@ -484,3 +484,100 @@ func TestLoad_AcceptsValidBounds(t *testing.T) {
 		t.Errorf("expected session duration 1, got %d", cfg.Auth.SessionDurationHours)
 	}
 }
+
+func TestLoad_LoginLockEnvOverrides(t *testing.T) {
+	t.Setenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", "5")
+	t.Setenv("GOZONE_LOGIN_LOCKOUT_MINUTES", "30")
+	t.Setenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", "10")
+	t.Setenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", "48")
+	t.Setenv("GOZONE_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.1 , 2001:db8::/32")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("expected valid config, got error: %v", err)
+	}
+	if cfg.LoginLock.MaxFailedAttempts != 5 {
+		t.Errorf("expected max_failed_attempts 5, got %d", cfg.LoginLock.MaxFailedAttempts)
+	}
+	if cfg.LoginLock.LockoutDurationMinutes != 30 {
+		t.Errorf("expected lockout_duration_minutes 30, got %d", cfg.LoginLock.LockoutDurationMinutes)
+	}
+	if cfg.LoginLock.UsernameRateLimitPerMinute != 10 {
+		t.Errorf("expected username_rate_limit_per_minute 10, got %d", cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	if cfg.LoginLock.AttemptsRetentionHours != 48 {
+		t.Errorf("expected attempts_retention_hours 48, got %d", cfg.LoginLock.AttemptsRetentionHours)
+	}
+	if len(cfg.Server.TrustedProxies) != 3 {
+		t.Fatalf("expected 3 trusted_proxies, got %d (%v)", len(cfg.Server.TrustedProxies), cfg.Server.TrustedProxies)
+	}
+	wantProxies := []string{"10.0.0.0/8", "192.0.2.1", "2001:db8::/32"}
+	for i, want := range wantProxies {
+		if cfg.Server.TrustedProxies[i] != want {
+			t.Errorf("trusted_proxies[%d] = %q, want %q", i, cfg.Server.TrustedProxies[i], want)
+		}
+	}
+}
+
+func TestLoad_RejectsBadTrustedProxy(t *testing.T) {
+	t.Setenv("GOZONE_TRUSTED_PROXIES", "not-an-ip")
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected error for malformed trusted_proxies entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Errorf("expected trusted_proxies error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsNegativeLoginLockFields(t *testing.T) {
+	t.Setenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", "-1")
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected error for negative max_failed_attempts, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_failed_attempts") {
+		t.Errorf("expected max_failed_attempts error, got %v", err)
+	}
+}
+
+func TestLoad_LoginLockDisabledByZero(t *testing.T) {
+	t.Setenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", "0")
+	t.Setenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("expected valid config with zero-valued lockout settings, got error: %v", err)
+	}
+	if cfg.LoginLock.MaxFailedAttempts != 0 {
+		t.Errorf("expected max_failed_attempts 0, got %d", cfg.LoginLock.MaxFailedAttempts)
+	}
+	if cfg.LoginLock.UsernameRateLimitPerMinute != 0 {
+		t.Errorf("expected username_rate_limit_per_minute 0, got %d", cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+}
+
+func TestSplitNonEmpty(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"a,b,c", []string{"a", "b", "c"}},
+		{"a, b ,c", []string{"a", "b", "c"}},
+		{"a,,b", []string{"a", "b"}},
+		{"", nil},
+		{",", nil},
+	}
+	for _, tc := range tests {
+		got := splitNonEmpty(tc.input, ",")
+		if len(got) != len(tc.want) {
+			t.Errorf("splitNonEmpty(%q) = %v, want %v", tc.input, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("splitNonEmpty(%q)[%d] = %q, want %q", tc.input, i, got[i], tc.want[i])
+			}
+		}
+	}
+}

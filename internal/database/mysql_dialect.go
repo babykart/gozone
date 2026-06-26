@@ -147,5 +147,20 @@ func (m *mysqlDialect) Migrations() []string {
 			KEY idx_revoked_tokens_expires_at (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`ALTER TABLE activity_logs ADD COLUMN old_value TEXT NOT NULL DEFAULT '', ADD COLUMN new_value TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN locked_until DATETIME NULL`,
+		`CREATE TABLE IF NOT EXISTS login_attempts (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			username VARCHAR(255) NOT NULL,
+			user_id INT,
+			ip_address VARCHAR(64) NOT NULL DEFAULT '',
+			success TINYINT NOT NULL DEFAULT 0,
+			attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+			KEY idx_login_attempts_username (username, attempted_at),
+			KEY idx_login_attempts_ip (ip_address, attempted_at),
+			KEY idx_login_attempts_user (user_id, attempted_at),
+			KEY idx_login_attempts_attempted_at (attempted_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

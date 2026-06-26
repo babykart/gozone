@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -21,13 +22,39 @@ import (
 
 // Config holds all configuration for the application.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	PowerDNS PowerDNSConfig `yaml:"powerdns"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Admin    AdminConfig    `yaml:"admin"`
-	Activity ActivityConfig `yaml:"activity"`
+	Server    ServerConfig    `yaml:"server"`
+	Database  DatabaseConfig  `yaml:"database"`
+	PowerDNS  PowerDNSConfig  `yaml:"powerdns"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Logging   LoggingConfig   `yaml:"logging"`
+	Admin     AdminConfig     `yaml:"admin"`
+	Activity  ActivityConfig  `yaml:"activity"`
+	LoginLock LoginLockConfig `yaml:"login_lock"`
+}
+
+// LoginLockConfig holds settings for the login brute-force protection.
+//
+// The /login endpoint is protected by three complementary defences:
+//   - an in-memory IP-based rate limiter (always on; see RateLimiter).
+//   - an in-memory username-based rate limiter that compounds with the IP one.
+//   - persistent per-account lockout (failed_login_attempts, locked_until on users)
+//     that survives server restarts and cluster-wide rollouts.
+type LoginLockConfig struct {
+	// MaxFailedAttempts is the number of consecutive failed login attempts per
+	// account before the account is locked. Set to 0 to disable persistent
+	// lockout (the rate limiters still protect the endpoint).
+	MaxFailedAttempts int `yaml:"max_failed_attempts"`
+	// LockoutDurationMinutes is how long the account stays locked after the
+	// threshold is reached. Subsequent failed attempts reset the window.
+	LockoutDurationMinutes int `yaml:"lockout_duration_minutes"`
+	// UsernameRateLimitPerMinute bounds login attempts per minute per
+	// attempted username. Compounded with the per-IP limit by AND-ing both
+	// limits at the route level. Set to 0 to disable.
+	UsernameRateLimitPerMinute int `yaml:"username_rate_limit_per_minute"`
+	// AttemptsRetentionHours is how long a recorded login attempt is kept in
+	// the login_attempts table before being purged. Should be greater than
+	// LockoutDurationMinutes so the lockout window can be reliably enforced.
+	AttemptsRetentionHours int `yaml:"attempts_retention_hours"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -42,6 +69,14 @@ type ServerConfig struct {
 	// or behind a TLS-terminating reverse proxy). Leave it false for plain-HTTP
 	// development, otherwise browsers will not return the CSRF cookie.
 	SecureCookies bool `yaml:"secure_cookies"`
+	// TrustedProxies is the list of CIDR ranges from which X-Forwarded-For
+	// headers are trusted. When empty, XFF headers are ignored entirely and
+	// the rate limiter keys off the raw TCP source address. Each entry is
+	// either a plain CIDR ("10.0.0.0/8") or a single IP ("192.0.2.1").
+	// Configure this when running behind nginx/Caddy/Traefik/etc. so the
+	// real client IP is preserved; leaving it empty is safe (and recommended)
+	// for direct internet exposure because attackers cannot forge their IP.
+	TrustedProxies []string `yaml:"trusted_proxies"`
 	// JWTKey is derived from SecretKey via HKDF-SHA256 for JWT signing.
 	JWTKey []byte `yaml:"-"`
 	// CSRFKey is derived from SecretKey via HKDF-SHA256 for CSRF tokens.
@@ -126,6 +161,12 @@ func DefaultConfig() *Config {
 		Activity: ActivityConfig{
 			RetentionDays: 90,
 			BatchSize:     1000,
+		},
+		LoginLock: LoginLockConfig{
+			MaxFailedAttempts:          10,
+			LockoutDurationMinutes:     15,
+			UsernameRateLimitPerMinute: 5,
+			AttemptsRetentionHours:     24,
 		},
 	}
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
@@ -246,6 +287,29 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("invalid activity batch_size %d: must be positive", cfg.Activity.BatchSize)
 	}
 
+	if cfg.LoginLock.MaxFailedAttempts < 0 {
+		return fmt.Errorf("invalid login_lock.max_failed_attempts %d: must be non-negative", cfg.LoginLock.MaxFailedAttempts)
+	}
+	if cfg.LoginLock.LockoutDurationMinutes < 0 {
+		return fmt.Errorf("invalid login_lock.lockout_duration_minutes %d: must be non-negative", cfg.LoginLock.LockoutDurationMinutes)
+	}
+	if cfg.LoginLock.UsernameRateLimitPerMinute < 0 {
+		return fmt.Errorf("invalid login_lock.username_rate_limit_per_minute %d: must be non-negative", cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	if cfg.LoginLock.AttemptsRetentionHours < 0 {
+		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must be non-negative", cfg.LoginLock.AttemptsRetentionHours)
+	}
+
+	for _, p := range cfg.Server.TrustedProxies {
+		if strings.Contains(p, "/") {
+			if _, _, err := net.ParseCIDR(p); err != nil {
+				return fmt.Errorf("invalid trusted_proxies entry %q: %w", p, err)
+			}
+		} else if net.ParseIP(p) == nil {
+			return fmt.Errorf("invalid trusted_proxies entry %q: not a CIDR or IP address", p)
+		}
+	}
+
 	return nil
 }
 
@@ -327,6 +391,49 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Activity.BatchSize = n
 		}
 	}
+	if v := os.Getenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_LOGIN_MAX_FAILED_ATTEMPTS, using default", "value", v, "error", err)
+		} else {
+			cfg.LoginLock.MaxFailedAttempts = n
+		}
+	}
+	if v := os.Getenv("GOZONE_LOGIN_LOCKOUT_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_LOGIN_LOCKOUT_MINUTES, using default", "value", v, "error", err)
+		} else {
+			cfg.LoginLock.LockoutDurationMinutes = n
+		}
+	}
+	if v := os.Getenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE, using default", "value", v, "error", err)
+		} else {
+			cfg.LoginLock.UsernameRateLimitPerMinute = n
+		}
+	}
+	if v := os.Getenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS, using default", "value", v, "error", err)
+		} else {
+			cfg.LoginLock.AttemptsRetentionHours = n
+		}
+	}
+	if v := os.Getenv("GOZONE_TRUSTED_PROXIES"); v != "" {
+		cfg.Server.TrustedProxies = splitNonEmpty(v, ",")
+	}
+}
+
+// splitNonEmpty splits s by sep and returns the non-empty trimmed entries.
+func splitNonEmpty(s, sep string) []string {
+	raw := strings.Split(s, sep)
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // defaultSecretKey is the placeholder value baked into DefaultConfig.

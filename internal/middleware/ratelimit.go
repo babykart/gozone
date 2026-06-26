@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/time/rate"
 
 	"github.com/babykart/gozone/internal/logger"
@@ -120,11 +121,18 @@ func maskKey(key string) string {
 	return hash
 }
 
-// ExtractIP returns the client IP from the request.
+// ExtractIP returns the client IP from the request context.
 //
-// It reads r.RemoteAddr which already includes the real IP when chi's
-// RealIP middleware is in the stack.
+// It reads the IP set by the chi ClientIPFrom* middleware in cmd/gozone/main.go
+// (ClientIPFromRemoteAddr by default, or ClientIPFromXFF when trusted_proxies
+// is configured). When no IP has been resolved (e.g., a test request or a
+// misconfigured middleware stack) it falls back to r.RemoteAddr so the
+// rate-limit key is never empty.
 func ExtractIP(r *http.Request) string {
+	ip := chimw.GetClientIP(r.Context())
+	if ip != "" {
+		return ip
+	}
 	return r.RemoteAddr
 }
 

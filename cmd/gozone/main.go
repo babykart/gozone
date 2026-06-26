@@ -98,14 +98,38 @@ func run(args []string) error {
 		})
 	}
 
+	// Periodically purge login attempts older than the configured retention
+	// window. The retention window must outlast the lockout window so failed
+	// attempts remain visible while a user could still be locked out.
+	var stopLoginAttemptsPurge func()
+	if cfg.LoginLock.AttemptsRetentionHours > 0 {
+		stopLoginAttemptsPurge = startPeriodicJob(context.Background(), "purge login attempts", time.Hour, 30*time.Second, func(ctx context.Context) error {
+			start := time.Now()
+			n, err := db.PurgeLoginAttempts(ctx, cfg.LoginLock.AttemptsRetentionHours)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				logger.Info("login attempts purge completed",
+					"deleted", n,
+					"duration", time.Since(start).String(),
+				)
+			}
+			return nil
+		})
+	}
+
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
 	}
 
-	// Stop the activity log purge goroutine on exit if it was started.
+	// Stop the periodic purge goroutines on exit.
 	if stopActivityPurge != nil {
 		defer stopActivityPurge()
+	}
+	if stopLoginAttemptsPurge != nil {
+		defer stopLoginAttemptsPurge()
 	}
 
 	// Parse templates
@@ -125,7 +149,14 @@ func run(args []string) error {
 	// Set up router
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
+	// Resolve the client IP into the request context without ever mutating
+	// r.RemoteAddr. When trusted_proxies is configured the leftmost XFF entry
+	// outside the trusted CIDRs wins; otherwise only the TCP source address is
+	// honoured and XFF headers are ignored entirely (fail-closed). This is the
+	// fix for the REVIEW.md "Rate-limit du login contournable" finding: the
+	// previous chimw.RealIP let a direct-access attacker rotate XFF and obtain
+	// a fresh rate-limit bucket per request.
+	r.Use(clientIPMiddleware(cfg))
 	r.Use(requestLogger)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Compress(5))
@@ -149,9 +180,15 @@ func run(args []string) error {
 		})),
 	)
 
-	// Rate limiters
+	// Rate limiters. /login uses two limiters compounded (both must allow) so an
+	// attacker cannot rotate XFF to evade the per-IP limit AND cannot spread
+	// guesses across many IPs to evade a per-username limit.
 	loginLimiter := middleware.NewRateLimiter(5) // 5 requests per minute per IP
 	apiLimiter := middleware.NewRateLimiter(100) // 100 requests per minute per API key
+	var loginUsernameLimiter *middleware.RateLimiter
+	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
+		loginUsernameLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
 
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
@@ -167,7 +204,13 @@ func run(args []string) error {
 
 		// Public routes
 		r.Get("/login", h.LoginPage)
-		r.With(loginLimiter.Limit(middleware.ExtractIP)).Post("/login", h.Login)
+		loginChain := []func(http.Handler) http.Handler{
+			loginLimiter.Limit(middleware.ExtractIP),
+		}
+		if loginUsernameLimiter != nil {
+			loginChain = append(loginChain, loginUsernameLimiter.Limit(loginUsernameKey))
+		}
+		r.With(loginChain...).Post("/login", h.Login)
 
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
@@ -448,12 +491,35 @@ func requestLogger(next http.Handler) http.Handler {
 		start := time.Now()
 		wr := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(wr, r)
+		remote := chimw.GetClientIP(r.Context())
+		if remote == "" {
+			remote = r.RemoteAddr
+		}
 		logger.Info("request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", wr.Status(),
 			"duration", time.Since(start).String(),
-			"remote", r.RemoteAddr,
+			"remote", remote,
 		)
 	})
+}
+
+// clientIPMiddleware returns chi middleware that resolves the client IP into
+// the request context without mutating r.RemoteAddr. When server.trusted_proxies
+// is empty the middleware keys strictly off the TCP source address (fail-closed
+// against XFF/Real-IP spoofing); otherwise it walks XFF right-to-left and
+// stops at the first entry that does not fall within a trusted CIDR.
+func clientIPMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
+	if len(cfg.Server.TrustedProxies) == 0 {
+		return chimw.ClientIPFromRemoteAddr
+	}
+	return chimw.ClientIPFromXFF(cfg.Server.TrustedProxies...)
+}
+
+// loginUsernameKey returns the attempted login username (lowercased and
+// trimmed) so the per-username rate-limit bucket is shared across casing
+// variants and surrounding whitespace.
+func loginUsernameKey(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 }

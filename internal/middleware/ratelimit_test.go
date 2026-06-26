@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
 func TestRateLimiter_AllowsBurst(t *testing.T) {
@@ -168,11 +170,27 @@ func TestMaskKey(t *testing.T) {
 }
 
 func TestExtractIP(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.RemoteAddr = "192.168.1.1:12345"
-	if got := ExtractIP(r); got != "192.168.1.1:12345" {
-		t.Errorf("expected 192.168.1.1:12345, got %s", got)
-	}
+	t.Run("falls back to RemoteAddr when no context IP", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = "192.168.1.1:12345"
+		if got := ExtractIP(r); got != "192.168.1.1:12345" {
+			t.Errorf("expected 192.168.1.1:12345, got %s", got)
+		}
+	})
+
+	t.Run("uses context IP set by ClientIPFromRemoteAddr", func(t *testing.T) {
+		// Wrap the request through chi's ClientIPFromRemoteAddr middleware so
+		// the context-stored IP is populated exactly as it is in production.
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = "198.51.100.7:12345"
+		var seen string
+		chimw.ClientIPFromRemoteAddr(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			seen = ExtractIP(req)
+		})).ServeHTTP(httptest.NewRecorder(), r)
+		if seen != "198.51.100.7" {
+			t.Errorf("expected context IP 198.51.100.7 to win over RemoteAddr, got %s", seen)
+		}
+	})
 }
 
 func TestExtractAPIKey(t *testing.T) {

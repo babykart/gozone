@@ -131,5 +131,20 @@ func (p *postgresDialect) Migrations() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
 		`ALTER TABLE activity_logs ADD COLUMN old_value TEXT NOT NULL DEFAULT '', ADD COLUMN new_value TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN locked_until TIMESTAMP`,
+		`CREATE TABLE IF NOT EXISTS login_attempts (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(255) NOT NULL,
+			user_id INTEGER,
+			ip_address VARCHAR(64) NOT NULL DEFAULT '',
+			success SMALLINT NOT NULL DEFAULT 0,
+			attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(user_id, attempted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_login_attempts_attempted_at ON login_attempts(attempted_at)`,
 	}
 }
