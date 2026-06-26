@@ -8,6 +8,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 
 - **Zone Management**: List, create, edit, and delete DNS zones with pagination, search, and per-page controls
 - **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges and inline editing
+- **RRSet Comments**: View, add, and edit PowerDNS comments per RRSet through the web UI, CSV import/export, and REST API
 - **Multi-database Support**: SQLite (default), MySQL, and PostgreSQL are supported. Migrations are versioned by content hash with multi-instance locks.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
@@ -173,6 +174,7 @@ Shows PowerDNS server status (connected/unreachable, version, daemon type), zone
 
 Each zone page displays:
 - **Records table** with color-coded type badges (A=blue, AAAA=violet, CNAME=orange, MX=pink, NS=cyan, etc.)
+- **RRSet comments** — view, add, or edit PowerDNS comments per RRSet via the inline editor and dedicated edit page; one comment per line in the textarea
 - **DNSSEC management** — view, create, activate/deactivate, and delete DNSSEC keys (KSK/ZSK) with algorithm selection and DS record display
 - **Zone metadata** (admin only) — manage ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, and other PowerDNS metadata kinds
 - **Activity logs** — history of changes to the zone
@@ -194,6 +196,19 @@ Admin users can manage DNSSEC for each zone directly from the zone view page. Cr
 Export full zone records in RFC 1035 BIND zone file format or CSV with a single click from the zone view page. Import zone data by uploading a `.zone` or `.csv` file — records are parsed and batch-created into the existing zone. Both are restricted to users with group access to the zone.
 
 Import uses PowerDNS `REPLACE` semantics: for each name+type pair in the file, the existing RRSet is replaced if present, or created if absent. Records not referenced in the import file are left untouched. Importing a file with fewer records than currently exist for a given name+type replaces the entire RRSet — extra existing records within that same name+type are removed.
+
+**Disabled records**: BIND export skips records marked `disabled` (the BIND format has no concept of disabled). CSV export keeps them with `disabled=true` so the round-trip is preserved.
+
+**RRSet comments**: CSV export adds a `comment` column at the end of the row. Multiple comments per RRSet are joined with newlines into a single cell (using standard CSV embedded-newline quoting) and the same cell is repeated on every record row of that RRSet. On import, the cell is split on newlines (one `Comment` per line) and deduplicated across rows of the same RRSet. CSV files without the `comment` column still parse unchanged.
+
+### RRSet Comments
+
+GoZone exposes the PowerDNS API `comments` field for every RRSet. Comments are metadata strings attached to a whole RRSet (not to individual records) and are useful for ops notes like "managed by ops-team" or "created during migration XYZ".
+
+- **Web UI**: a multi-line textarea (one comment per line) is available in the Add Records form, the batch create form, the dedicated Edit Record page, and the inline editor on the zone view. Existing comments are shown read-only under each record's content (styled as an italic blockquote).
+- **CSV export/import**: round-trips through the optional `comment` column described above.
+- **API**: pass a `comments` array in the RRSet payload when creating or updating records (see the API section below).
+- **PowerDNS semantics**: the PATCH `comments` field *replaces* the entire comment list for the RRSet. GoZone preserves this behaviour — when you edit a record without touching the comment field, the existing comments are kept (the field is omitted from the PATCH body); when you add or change a comment, existing comments are echoed back and your changes are applied.
 
 ### Zone Groups
 
@@ -395,6 +410,12 @@ curl -X POST \
 | `records[].content` | string | **yes** | Record content |
 | `records[].priority` | int | no | For MX and SRV types |
 | `records[].disabled` | bool | no | Default `false` |
+| `comments` | array | no | Array of RRSet comments (see below) |
+| `comments[].content` | string | **yes** | Comment text |
+| `comments[].account` | string | no | Account name that added the comment (defaults to `"gozone"` on create) |
+| `comments[].modified_at` | int | no | Unix timestamp; defaults to server time on create |
+
+The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep.
 
 Response `201`:
 
