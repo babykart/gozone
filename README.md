@@ -9,6 +9,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **Zone Management**: List, create, edit, and delete DNS zones with pagination, search, and per-page controls
 - **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges and inline editing
 - **RRSet Comments**: View, add, and edit PowerDNS comments per RRSet through the web UI, CSV import/export, and REST API
+- **Brute-force Protection**: Per-IP and per-username login rate-limiters (compound AND), persistent per-account lockout after repeated failures, audit trail of every attempt
 - **Multi-database Support**: SQLite (default), MySQL, and PostgreSQL are supported. Migrations are versioned by content hash with multi-instance locks.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
@@ -71,6 +72,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.app_name` | `GOZONE_APP_NAME` | `GoZone` |
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
 | `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
+| `server.trusted_proxies` | `GOZONE_TRUSTED_PROXIES` | *empty* (TCP source IP only) |
 
 ### Database
 
@@ -95,6 +97,19 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 |-----------|---------------------|---------|
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
 | `auth.bcrypt_cost` | — | `12` |
+
+### Login Lockout (brute-force protection)
+
+`/login` is always protected by an in-memory per-IP rate limiter (5/min). The knobs below add defence-in-depth against credential-stuffing and distributed brute-force:
+
+| YAML Path | Environment Variable | Default | Description |
+|-----------|---------------------|---------|-------------|
+| `login_lock.max_failed_attempts` | `GOZONE_LOGIN_MAX_FAILED_ATTEMPTS` | `10` | Consecutive failed attempts per account before lock. `0` disables persistent lockout (the IP/username rate limiters still protect the endpoint). |
+| `login_lock.lockout_duration_minutes` | `GOZONE_LOGIN_LOCKOUT_MINUTES` | `15` | How long the account stays locked. Every further failure extends the window so a sliding-window attack cannot recover. |
+| `login_lock.username_rate_limit_per_minute` | `GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE` | `5` | In-memory per-username limiter, compounded with the per-IP limit at the route level. `0` disables. |
+| `login_lock.attempts_retention_hours` | `GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS` | `24` | How long a login attempt is kept in the `login_attempts` audit table before being purged. |
+
+The client IP is resolved through chi's `ClientIPFrom*` middleware: by default `ClientIPFromRemoteAddr` (TCP source only, fail-closed against XFF/Real-IP spoofing). When `server.trusted_proxies` is configured with a list of CIDR ranges, the middleware switches to `ClientIPFromXFF` and walks XFF right-to-left until the first non-trusted hop. Leave `trusted_proxies` empty when GoZone is directly reachable on the public Internet — an attacker in direct access cannot rotate `X-Forwarded-For` to bypass the rate-limit.
 
 ### Admin User (initial seed)
 
@@ -217,6 +232,16 @@ Admin users can create groups, assign zones to groups, and add users as members.
 ### Zone Templates
 
 Admin users can define reusable DNS record templates that pre-populate records when creating new zones or applying to existing zones. Templates support variable substitution (`IP`, `IP6`, `MX_HOST`, `TTL`, `ZONE`, etc.) and include four built-in templates (standard, mail, web, redirect). Accessible under the Templates menu in the sidebar for admin users.
+
+### User Management
+
+Admin users can create, edit, and delete user accounts from the **Users** menu in the sidebar. The list shows username, email, name, role, status (Active/Disabled/Locked), and per-row actions (Edit, Lock/Unlock, Delete).
+
+- **Self-DOS protection**: an admin cannot lock their own account from the UI; the self-lock attempt is rejected with a 400 error.
+- **Account lockout**: the `Lock` button sets `locked_until = now + login_lock.lockout_duration_minutes` and resets the failed-login counter, so a manual lock and the automatic failed-login threshold share the same window. Locked accounts show a yellow badge with a tooltip showing the unlock time.
+- **Unlock**: the `Unlock` button clears `locked_until` and resets the failed-login counter. The action is idempotent — unlocking a non-locked user still writes an `unlock_user` audit-log entry.
+- **Audit trail**: every lock and unlock writes an `activity_logs` entry with the actor's ID and the target's username.
+- **Last-admin guard**: the `UpdateUser` and `DeleteUser` handlers refuse to demote, disable, or delete the last enabled admin. The lock UI inherits this guard indirectly via the self-lock check (an admin cannot reach the lock button for the only admin).
 
 ### API Keys
 
