@@ -31,6 +31,27 @@ func testExportPDNS() testutil.PDNSHandlerFunc {
 	}
 }
 
+func testExportPDNSWithDisabled() testutil.PDNSHandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+
+		if strings.Contains(r.URL.RawQuery, "rrsets") {
+			w.Write([]byte(`[{"name":"example.com.","id":"example.com.","kind":"Native","serial":2024010100}]`))
+			return
+		}
+
+		if strings.Contains(path, "/zones/") && !strings.Contains(path, "/export") && !strings.Contains(path, "/import") && !strings.Contains(path, "/records") && !strings.Contains(path, "/cryptokeys") && !strings.Contains(path, "/metadata") {
+			if r.Method == http.MethodGet {
+				w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","serial":2024010100,"rrsets":[{"name":"example.com.","type":"SOA","ttl":3600,"records":[{"content":"ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600","disabled":false}]},{"name":"example.com.","type":"NS","ttl":3600,"records":[{"content":"ns1.example.com.","disabled":false}]},{"name":"www.example.com.","type":"A","ttl":3600,"records":[{"content":"192.0.2.1","disabled":false},{"content":"198.51.100.1","disabled":true}]},{"name":"example.com.","type":"MX","ttl":3600,"records":[{"content":"mail.example.com.","disabled":false,"priority":10}]}]}`))
+				return
+			}
+		}
+
+		w.Write([]byte(`[]`))
+	}
+}
+
 func TestExportZone_BIND(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNS())
 	defer srv.Close()
@@ -123,6 +144,60 @@ func TestExportZone_InvalidFormat(t *testing.T) {
 
 	if !strings.Contains(w.Body.String(), "Invalid format") {
 		t.Errorf("expected error message, got: %s", w.Body.String())
+	}
+}
+
+func TestExportZone_BIND_ExcludesDisabledRecords(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithDisabled())
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=bind", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	if !strings.Contains(body, "192.0.2.1") {
+		t.Errorf("expected enabled A record content 192.0.2.1 in BIND output, got: %s", body)
+	}
+	if strings.Contains(body, "198.51.100.1") {
+		t.Errorf("disabled A record content 198.51.100.1 should not appear in BIND output, got: %s", body)
+	}
+	if strings.Contains(body, "; disabled") {
+		t.Errorf("BIND output must not contain '; disabled' annotation, got: %s", body)
+	}
+}
+
+func TestExportZone_CSV_IncludesDisabledRecords(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithDisabled())
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=csv", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	if !strings.Contains(body, "192.0.2.1") {
+		t.Errorf("expected enabled A record content 192.0.2.1 in CSV output, got: %s", body)
+	}
+	if !strings.Contains(body, "198.51.100.1") {
+		t.Errorf("CSV output should retain disabled records, expected 198.51.100.1, got: %s", body)
+	}
+	if !strings.Contains(body, "true") {
+		t.Errorf("CSV output should mark disabled records with 'true', got: %s", body)
 	}
 }
 

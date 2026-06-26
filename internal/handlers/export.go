@@ -94,6 +94,10 @@ func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records [
 
 	for _, rr := range records {
 		for _, rec := range rr.Records {
+			if rec.Disabled {
+				continue
+			}
+
 			name := relativeBindName(rr.Name, origin)
 			ttl := rr.TTL
 			if ttl == 0 {
@@ -111,10 +115,6 @@ func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records [
 			fmt.Fprintf(w, " IN %s", rr.Type)
 
 			content := formatRecordContent(rr.Type, rec.Content, rec.Priority)
-
-			if rec.Disabled {
-				content += " ; disabled"
-			}
 
 			// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
 			fmt.Fprintf(w, " %s\n", content)
