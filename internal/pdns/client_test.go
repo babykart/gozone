@@ -352,6 +352,91 @@ func TestListRecordsExtractsPriority(t *testing.T) {
 	}
 }
 
+func TestListRecord_NameOnly(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{
+				{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+				{Name: "www.example.com", Type: "AAAA", TTL: 300, Records: []models.RecordInfo{{Content: "::1"}}},
+			},
+		})
+	})
+
+	records, err := client.ListRecord(context.Background(), "example.com", "www.example.com", "")
+	if err != nil {
+		t.Fatalf("ListRecord failed: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 rrsets (A and AAAA for same name), got %d", len(records))
+	}
+	if !strings.Contains(gotPath, "rrset_name=www.example.com") {
+		t.Errorf("expected rrset_name query param, got %q", gotPath)
+	}
+	if strings.Contains(gotPath, "rrset_type=") {
+		t.Errorf("expected no rrset_type query param when type is empty, got %q", gotPath)
+	}
+}
+
+func TestListRecord_NameAndType(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{
+				{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+			},
+		})
+	})
+
+	records, err := client.ListRecord(context.Background(), "example.com", "www.example.com", "A")
+	if err != nil {
+		t.Fatalf("ListRecord failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 rrset, got %d", len(records))
+	}
+	if records[0].Type != "A" {
+		t.Errorf("expected A rrset, got %s", records[0].Type)
+	}
+	if !strings.Contains(gotPath, "rrset_name=www.example.com") || !strings.Contains(gotPath, "rrset_type=A") {
+		t.Errorf("expected both query params, got %q", gotPath)
+	}
+}
+
+func TestListRecord_EmptyFilters_ListAll(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{
+				{Name: "a.example.com", Type: "A", TTL: 300},
+			},
+		})
+	})
+
+	records, err := client.ListRecord(context.Background(), "example.com", "", "")
+	if err != nil {
+		t.Fatalf("ListRecord failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 rrset, got %d", len(records))
+	}
+	if gotPath != "" {
+		t.Errorf("expected no query params when both filters are empty, got %q", gotPath)
+	}
+}
+
 func TestCreateRecord(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {

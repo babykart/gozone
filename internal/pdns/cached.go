@@ -119,6 +119,10 @@ func (c *cachedClient) ListRecords(ctx context.Context, zoneID string) ([]models
 	return c.client.ListRecords(ctx, zoneID)
 }
 
+func (c *cachedClient) ListRecord(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error) {
+	return c.client.ListRecord(ctx, zoneID, name, rrType)
+}
+
 func (c *cachedClient) GetMetadata(ctx context.Context, zoneID string) ([]models.Metadata, error) {
 	return c.client.GetMetadata(ctx, zoneID)
 }

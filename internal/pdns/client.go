@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -207,9 +208,33 @@ func (c *Client) DeleteZone(ctx context.Context, zoneID string) error {
 
 // ListRecords returns all records (RRSets) for a zone.
 func (c *Client) ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error) {
+	return c.listZoneRRSets(ctx, zoneID, "", "")
+}
+
+// ListRecord returns one or more RRSets filtered by name and (optionally)
+// type. It maps to the PowerDNS API `rrset_name` / `rrset_type` query
+// parameters on the zone GET endpoint, which lets callers fetch a single
+// RRSet (or all RRSets for a given name) without pulling the entire zone.
+//
+// Pass an empty name to fetch every RRSet in the zone (equivalent to
+// ListRecords). Pass a name with an empty rrType to fetch every RRSet
+// matching that name (any type). Pass both to fetch one specific RRSet.
+func (c *Client) ListRecord(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error) {
+	return c.listZoneRRSets(ctx, zoneID, name, rrType)
+}
+
+func (c *Client) listZoneRRSets(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error) {
+	path := "/servers/" + c.serverID + "/zones/" + zoneID
+	if name != "" {
+		path += "?rrset_name=" + url.QueryEscape(name)
+		if rrType != "" {
+			path += "&rrset_type=" + url.QueryEscape(rrType)
+		}
+	}
+
 	full, err := doUnmarshal[struct {
 		RRSets []models.RRSet `json:"rrsets"`
-	}](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil, "rrsets")
+	}](c, ctx, "GET", path, nil, "rrsets")
 	if err != nil {
 		return nil, err
 	}

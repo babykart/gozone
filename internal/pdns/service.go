@@ -27,6 +27,7 @@ type ZoneService interface {
 
 	// Records
 	ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error)
+	ListRecord(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error)
 	CreateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error
 	CreateRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error
 	UpdateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error

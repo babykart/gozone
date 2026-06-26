@@ -341,6 +341,8 @@ Response `200`:
 
 #### List records
 
+Without query parameters, returns every RRSet in the zone as a JSON array:
+
 ```bash
 curl -H "X-API-Key: gozone_yourkey" \
   http://localhost:8080/api/v1/zones/example.com/records
@@ -368,6 +370,20 @@ Response `200`:
   }
 ]
 ```
+
+Pass the optional `name` and `type` query parameters to fetch a single RRSet (or all RRSets matching a name) without pulling the entire zone. They map to the PowerDNS API `rrset_name` / `rrset_type` query parameters:
+
+```bash
+# Every RRSet for a given name (any type)
+curl -H "X-API-Key: gozone_yourkey" \
+  "http://localhost:8080/api/v1/zones/example.com/records?name=www.example.com."
+
+# One specific RRSet (name + type)
+curl -H "X-API-Key: gozone_yourkey" \
+  "http://localhost:8080/api/v1/zones/example.com/records?name=www.example.com.&type=A"
+```
+
+The response is always a JSON array (possibly empty when no match). `type` requires `name`; passing `type` alone returns `400 VALIDATION_ERROR`.
 
 #### Create record
 

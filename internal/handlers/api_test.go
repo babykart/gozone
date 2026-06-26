@@ -171,6 +171,126 @@ func TestAPIListRecords(t *testing.T) {
 	}
 }
 
+func TestAPIListRecords_FilteredByName(t *testing.T) {
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{
+				{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+				{Name: "www.example.com", Type: "AAAA", TTL: 300, Records: []models.RecordInfo{{Content: "::1"}}},
+			},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com/records?name=www.example.com", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	if !strings.Contains(gotPath, "rrset_name=www.example.com") {
+		t.Errorf("expected rrset_name query param, got %q", gotPath)
+	}
+
+	var records []models.RRSet
+	json.NewDecoder(w.Body).Decode(&records)
+	if len(records) != 2 {
+		t.Fatalf("expected 2 rrsets (A + AAAA), got %d", len(records))
+	}
+}
+
+func TestAPIListRecords_FilteredByNameAndType(t *testing.T) {
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{
+				{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4"}}},
+			},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com/records?name=www.example.com&type=A", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	if !strings.Contains(gotPath, "rrset_name=www.example.com") || !strings.Contains(gotPath, "rrset_type=A") {
+		t.Errorf("expected both query params, got %q", gotPath)
+	}
+
+	var records []models.RRSet
+	json.NewDecoder(w.Body).Decode(&records)
+	if len(records) != 1 || records[0].Type != "A" {
+		t.Fatalf("expected 1 A rrset, got %+v", records)
+	}
+}
+
+func TestAPIListRecords_TypeWithoutName_Returns400(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("PDNS should not be called when query params are invalid, but got %s", r.Method)
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com/records?type=A", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "'type' query parameter requires 'name'") {
+		t.Errorf("expected validation error message, got %s", w.Body.String())
+	}
+}
+
+func TestAPIListRecords_Filtered_EmptyResult(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			RRSets: []models.RRSet{},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com/records?name=missing.example.com&type=A", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var records []models.RRSet
+	json.NewDecoder(w.Body).Decode(&records)
+	if records == nil {
+		t.Errorf("expected non-nil empty array, got nil")
+	}
+	if len(records) != 0 {
+		t.Errorf("expected 0 rrsets, got %d", len(records))
+	}
+}
+
 func TestAPICreateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {

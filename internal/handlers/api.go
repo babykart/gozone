@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
@@ -166,10 +167,39 @@ func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 
 // -- Record API ---
 
-// APIListRecords returns all records (RRSets) for a zone as JSON (GET /api/v1/zones/{zone_id}/records).
+// APIListRecords returns records (RRSets) for a zone as JSON
+// (GET /api/v1/zones/{zone_id}/records).
+//
+// Without query parameters the entire zone is returned as a JSON array.
+// With optional `name` and `type` query parameters, the response is filtered
+// to RRSets matching those values (mirroring the PowerDNS API rrset_name and
+// rrset_type query parameters):
+//
+//   - ?name=www.example.com.       → all RRSets with that name (any type)
+//   - ?name=www.example.com.&type=A → the single RRSet for that name+type
+//   - ?type=A                     → invalid alone (PowerDNS requires rrset_name with rrset_type)
+//
+// The response is always a JSON array (possibly empty), so clients do not need
+// to handle a different shape when filters are applied.
 func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
-	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	rrType := strings.TrimSpace(strings.ToUpper(r.URL.Query().Get("type")))
+
+	if rrType != "" && name == "" {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, "the 'type' query parameter requires 'name'")
+		return
+	}
+
+	var (
+		records []models.RRSet
+		err     error
+	)
+	if name == "" {
+		records, err = h.PDNS.ListRecords(r.Context(), zoneID)
+	} else {
+		records, err = h.PDNS.ListRecord(r.Context(), zoneID, name, rrType)
+	}
 	if err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to list records", err)
