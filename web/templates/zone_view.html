@@ -30,8 +30,8 @@
                 <th class="col-name">Name</th>
                 <th>Type</th>
                 <th>TTL</th>
-                <th>Content</th>
                 <th class="col-prio">Prio</th>
+                <th>Content</th>
                 <th>Status</th>
                 <th>Actions</th>
             </tr>
@@ -50,13 +50,13 @@
                     <span class="rv rv-ttl">{{$rrset.TTL}}</span>
                     <input type="number" class="ev ev-ttl form-control-inline" style="display:none" value="{{$rrset.TTL}}" min="0">
                 </td>
-                <td>
-                    <span class="rv rv-content">{{.Content}}</span>
-                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
-                </td>
                 <td class="col-prio">
                     <span class="rv rv-prio">{{if .Priority}}{{.Priority}}{{else}}-{{end}}</span>
                     <input type="number" class="ev ev-prio form-control-inline" style="display:none" value="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" min="0">
+                </td>
+                <td>
+                    <span class="rv rv-content">{{.Content}}</span>
+                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
                 </td>
                 <td class="nowrap">
                     <span class="rv rv-status">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>
