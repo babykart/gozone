@@ -364,6 +364,28 @@ func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, un
 	return locked, rawUntil.Time, nil
 }
 
+// AdminLockUser locks the user account for the given duration, resetting the
+// failed-login counter so the lockout window starts fresh. Used by the admin
+// manual-lock UI; the per-account automatic lockout uses
+// IncrementFailedLogins instead.
+func (db *DB) AdminLockUser(ctx context.Context, userID int64, lockFor time.Duration) error {
+	if lockFor <= 0 {
+		return fmt.Errorf("lockFor must be positive, got %v", lockFor)
+	}
+	lockedUntil := time.Now().UTC().Add(lockFor)
+	_, err := db.ExecContext(ctx,
+		"UPDATE users SET locked_until = ?, failed_login_attempts = 0 WHERE id = ?",
+		lockedUntil, userID,
+	)
+	return err
+}
+
+// AdminUnlockUser clears the lockout and resets the failed-login counter. Safe
+// to call when the user is not currently locked.
+func (db *DB) AdminUnlockUser(ctx context.Context, userID int64) error {
+	return db.ResetFailedLogins(ctx, userID)
+}
+
 // Begin starts a transaction with automatic placeholder rebinding.
 func (db *DB) Begin() (*Tx, error) {
 	return db.BeginTx(context.Background(), nil)

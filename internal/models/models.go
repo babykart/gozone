@@ -9,21 +9,32 @@ import "time"
 
 // User represents an application user.
 type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"-"`
-	FirstName    string    `json:"first_name"`
-	LastName     string    `json:"last_name"`
-	Role         string    `json:"role"`
-	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           int64  `json:"id"`
+	Username     string `json:"username"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"`
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name"`
+	Role         string `json:"role"`
+	Enabled      bool   `json:"enabled"`
+	// LockedUntil is the timestamp at which the account stops being locked.
+	// A null value (or a value in the past) means the account is not locked.
+	// It is populated by the admin lock UI and by the automatic lockout
+	// triggered after repeated failed login attempts.
+	LockedUntil *time.Time `json:"locked_until,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // IsAdmin returns true if the user has the admin role.
 func (u *User) IsAdmin() bool {
 	return u.Role == "admin"
+}
+
+// IsLocked reports whether the account is currently locked, either by an
+// admin manual lock or by the automatic failed-login threshold.
+func (u *User) IsLocked() bool {
+	return u.LockedUntil != nil && u.LockedUntil.After(time.Now())
 }
 
 // ActivityLog represents an activity log entry.

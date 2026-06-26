@@ -30,10 +30,28 @@
             <td>{{.Email}}</td>
             <td>{{.FirstName}} {{.LastName}}</td>
             <td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
-            <td>{{if .Enabled}}<span class="badge badge-active">Active</span>{{else}}<span class="badge badge-disabled">Disabled</span>{{end}}</td>
+            <td>
+                {{if .IsLocked}}
+                <span class="badge badge-locked" title="Locked until {{.LockedUntil.Format "2006-01-02 15:04:05 MST"}}">Locked</span>
+                {{if .Enabled}}<br><span class="badge badge-active">Active</span>{{else}}<br><span class="badge badge-disabled">Disabled</span>{{end}}
+                {{else}}
+                {{if .Enabled}}<span class="badge badge-active">Active</span>{{else}}<span class="badge badge-disabled">Disabled</span>{{end}}
+                {{end}}
+            </td>
             <td>
                 <a href="/users/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
                 {{if ne .ID $.User.ID}}
+                {{if .IsLocked}}
+                <form method="POST" action="/users/{{.ID}}/unlock" style="display:inline" data-confirm="Unlock user {{.Username}}?">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                    <button type="submit" class="btn btn-sm btn-warning">Unlock</button>
+                </form>
+                {{else}}
+                <form method="POST" action="/users/{{.ID}}/lock" style="display:inline" data-confirm="Lock user {{.Username}}?">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
+                    <button type="submit" class="btn btn-sm btn-warning">Lock</button>
+                </form>
+                {{end}}
                 <form method="POST" action="/users/delete" style="display:inline" data-confirm="Delete user {{.Username}}?">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <input type="hidden" name="user_id" value="{{.ID}}">

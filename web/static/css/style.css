@@ -474,6 +474,15 @@ body.sidebar-collapsed .main-content {
     background: #b91c1c;
 }
 
+.btn-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+}
+
 .btn-sm {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
@@ -598,6 +607,11 @@ details summary {
 .badge-disabled {
     background: #fee2e2;
     color: var(--danger);
+}
+
+.badge-locked {
+    background: #fef3c7;
+    color: #92400e;
 }
 
 .badge-admin {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -486,5 +487,185 @@ func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
 	h.DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM users WHERE id=%d", secondAdminID)).Scan(&count)
 	if count != 0 {
 		t.Errorf("second admin should have been deleted")
+	}
+}
+
+func TestLockUser_Success(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/lock", targetID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", targetID))
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+
+	locked, until, err := h.DB.UserLockStatus(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Error("expected target to be locked")
+	}
+	if !until.After(time.Now()) {
+		t.Errorf("expected locked_until in the future, got %v", until)
+	}
+
+	var activityCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='lock_user'").Scan(&activityCount)
+	if activityCount != 1 {
+		t.Errorf("expected 1 lock_user activity log, got %d", activityCount)
+	}
+}
+
+func TestLockUser_SelfBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/lock", admin.ID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", admin.ID))
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for self-lock, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "cannot lock your own account") {
+		t.Errorf("expected self-lock rejection message, got %s", w.Body.String())
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), admin.ID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if locked {
+		t.Error("admin must not be locked after self-lock attempt")
+	}
+}
+
+func TestLockUser_SecondAdminAllowed(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	secondAdminID := testutil.SeedTestUser(t, h.DB, "admin2", "p", "admin", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/lock", secondAdminID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", secondAdminID))
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), secondAdminID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Error("second admin should have been locked")
+	}
+}
+
+func TestLockUser_NotFound(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/99999/lock", nil)
+	r.SetPathValue("user_id", "99999")
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestLockUser_InvalidID(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/abc/lock", nil)
+	r.SetPathValue("user_id", "abc")
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid id, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid user id") {
+		t.Errorf("expected invalid-user-id message, got %s", w.Body.String())
+	}
+}
+
+func TestUnlockUser_Success(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
+
+	// Pre-lock the user via direct DB call.
+	if err := h.DB.AdminLockUser(context.Background(), targetID, time.Hour); err != nil {
+		t.Fatalf("AdminLockUser: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/unlock", targetID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", targetID))
+	r = r.WithContext(ctx)
+	h.UnlockUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303, got %d", w.Code)
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if locked {
+		t.Error("expected target to be unlocked")
+	}
+
+	var activityCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='unlock_user'").Scan(&activityCount)
+	if activityCount != 1 {
+		t.Errorf("expected 1 unlock_user activity log, got %d", activityCount)
+	}
+}
+
+func TestUnlockUser_NotFound(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/99999/unlock", nil)
+	r.SetPathValue("user_id", "99999")
+	r = r.WithContext(ctx)
+	h.UnlockUser(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
 	}
 }

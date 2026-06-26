@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -26,7 +28,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	where, args := buildSearchLikeWhere(search, "username", "email", "first_name", "last_name")
 
 	countQuery := "SELECT COUNT(*) FROM users"
-	selectQuery := `SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at
+	selectQuery := `SELECT id, username, email, first_name, last_name, role, enabled, locked_until, created_at, updated_at
 		FROM users`
 	if where != "" {
 		countQuery += " WHERE " + where
@@ -63,12 +65,17 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var u models.User
 		var enabled int
+		var lockedUntil sql.NullTime
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName,
-			&u.Role, &enabled, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			&u.Role, &enabled, &lockedUntil, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			logger.Error("failed to scan user row", "error", err)
 			continue
 		}
 		u.Enabled = enabled == 1
+		if lockedUntil.Valid {
+			t := lockedUntil.Time
+			u.LockedUntil = &t
+		}
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
@@ -403,4 +410,112 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// LockUser locks a user account for the configured auto-lockout duration
+// (POST /users/{user_id}/lock). Admin-only. Refuses to lock the requesting
+// admin themselves to avoid self-DOS — this is the only effective last-admin
+// guard since the route is also wrapped by RequireAdmin (a non-admin cannot
+// reach the handler).
+//
+// The action is idempotent: locking an already-locked user extends the window
+// and resets the failed-login counter to zero.
+func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
+	admin := middleware.GetUser(r)
+	targetID, err := strconv.ParseInt(r.PathValue("user_id"), 10, 64)
+	if err != nil || targetID <= 0 {
+		h.renderError(w, r, "Invalid user id")
+		return
+	}
+
+	if admin.ID == targetID {
+		h.renderError(w, r, "You cannot lock your own account")
+		return
+	}
+
+	ctx := r.Context()
+
+	if _, err := h.loadTargetUser(ctx, targetID); err != nil {
+		h.renderErrorStatus(w, r, http.StatusNotFound, "User not found")
+		return
+	}
+
+	lockFor := time.Duration(h.Cfg.LoginLock.LockoutDurationMinutes) * time.Minute
+	if lockFor <= 0 {
+		lockFor = 15 * time.Minute
+	}
+	if err := h.DB.AdminLockUser(ctx, targetID, lockFor); err != nil {
+		h.renderInternalError(w, r, "Failed to lock user", err)
+		return
+	}
+
+	if _, err := h.DB.ExecContext(ctx,
+		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'lock_user', ?)",
+		admin.ID, fmt.Sprintf("Locked user id=%d", targetID),
+	); err != nil {
+		logger.Error("failed to log lock_user activity", "target_id", targetID, "error", err)
+	}
+
+	logger.Info("user locked by admin", "admin", admin.Username, "target_id", targetID, "duration", lockFor.String())
+	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// UnlockUser clears the lockout on a user account and resets the failed-login
+// counter (POST /users/{user_id}/unlock). Admin-only. The action is idempotent
+// — unlocking a non-locked user is a no-op on the database side but still
+// writes an activity-log entry so admins have an audit trail of "unlock"
+// attempts.
+func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
+	admin := middleware.GetUser(r)
+	targetID, err := strconv.ParseInt(r.PathValue("user_id"), 10, 64)
+	if err != nil || targetID <= 0 {
+		h.renderError(w, r, "Invalid user id")
+		return
+	}
+
+	ctx := r.Context()
+
+	target, err := h.loadTargetUser(ctx, targetID)
+	if err != nil {
+		h.renderErrorStatus(w, r, http.StatusNotFound, "User not found")
+		return
+	}
+
+	if err := h.DB.AdminUnlockUser(ctx, targetID); err != nil {
+		h.renderInternalError(w, r, "Failed to unlock user", err)
+		return
+	}
+
+	if _, err := h.DB.ExecContext(ctx,
+		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'unlock_user', ?)",
+		admin.ID, fmt.Sprintf("Unlocked user %s (id=%d)", target.Username, targetID),
+	); err != nil {
+		logger.Error("failed to log unlock_user activity", "target_id", targetID, "error", err)
+	}
+
+	logger.Info("user unlocked by admin", "admin", admin.Username, "target", target.Username)
+	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// loadTargetUser fetches a user by id, returning sql.ErrNoRows via the wrapped
+// error path so callers can render 404s.
+func (h *Handler) loadTargetUser(ctx context.Context, id int64) (*models.User, error) {
+	var u models.User
+	var enabled int
+	var lockedUntil sql.NullTime
+	err := h.DB.QueryRowContext(ctx,
+		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, locked_until, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash,
+		&u.FirstName, &u.LastName, &u.Role, &enabled, &lockedUntil,
+		&u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.Enabled = enabled == 1
+	if lockedUntil.Valid {
+		t := lockedUntil.Time
+		u.LockedUntil = &t
+	}
+	return &u, nil
 }

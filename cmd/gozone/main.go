@@ -274,6 +274,8 @@ func run(args []string) error {
 				r.Post("/users/create", h.CreateUser)
 				r.Get("/users/{user_id}/edit", h.EditUserPage)
 				r.Post("/users/{user_id}/update", h.UpdateUser)
+				r.Post("/users/{user_id}/lock", h.LockUser)
+				r.Post("/users/{user_id}/unlock", h.UnlockUser)
 				r.Post("/users/delete", h.DeleteUser)
 
 				r.Get("/groups", h.ListGroups)
