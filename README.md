@@ -412,10 +412,10 @@ curl -X POST \
 | `records[].disabled` | bool | no | Default `false` |
 | `comments` | array | no | Array of RRSet comments (see below) |
 | `comments[].content` | string | **yes** | Comment text |
-| `comments[].account` | string | no | Account name that added the comment (defaults to `"gozone"` on create) |
-| `comments[].modified_at` | int | no | Unix timestamp; defaults to server time on create |
+| `comments[].account` | string | no | Account name that added the comment; omitted from the request if not set (PowerDNS defaults it server-side) |
+| `comments[].modified_at` | int | no | Unix timestamp; omitted from the request if not set (PowerDNS defaults it server-side) |
 
-The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep.
+The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep. GoZone does not set a default `account` or `modified_at` — both fields are optional and PowerDNS fills in the server-side defaults when omitted.
 
 Response `201`:
 
