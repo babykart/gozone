@@ -179,6 +179,13 @@ func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 //   - ?name=www.example.com.&type=A → the single RRSet for that name+type
 //   - ?type=A                     → invalid alone (PowerDNS requires rrset_name with rrset_type)
 //
+// The `name` query value is canonicalised against the zone the same way the
+// write path does: trailing dot is added if missing, `@` resolves to the
+// apex, bare labels ("www") are expanded against the zone. Without this
+// normalisation PowerDNS silently returns an empty list for names that are
+// syntactically valid but missing the canonical trailing dot (e.g.
+// "www.example.com" vs "www.example.com.").
+//
 // The response is always a JSON array (possibly empty), so clients do not need
 // to handle a different shape when filters are applied.
 func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +196,13 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 	if rrType != "" && name == "" {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, "the 'type' query parameter requires 'name'")
 		return
+	}
+
+	if name != "" {
+		// Canonicalise against the zone so PDNS rrset_name matching sees the
+		// same FQDN the write path sends (e.g. "www.example.com" →
+		// "www.example.com."). Lowercase is part of the canonical form too.
+		name = normalizeRecordName(name, zoneID)
 	}
 
 	var (

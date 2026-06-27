@@ -196,8 +196,11 @@ func TestAPIListRecords_FilteredByName(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	if !strings.Contains(gotPath, "rrset_name=www.example.com") {
-		t.Errorf("expected rrset_name query param, got %q", gotPath)
+	// REVIEW.md mineur fix: the handler must canonicalise the name to a
+	// trailing-dot FQDN before forwarding to PowerDNS — "www.example.com"
+	// (no dot) would silently match nothing against the real backend.
+	if !strings.Contains(gotPath, "rrset_name=www.example.com.") {
+		t.Errorf("expected rrset_name to be FQDN-canonical, got %q", gotPath)
 	}
 
 	var records []models.RRSet
@@ -231,8 +234,8 @@ func TestAPIListRecords_FilteredByNameAndType(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	if !strings.Contains(gotPath, "rrset_name=www.example.com") || !strings.Contains(gotPath, "rrset_type=A") {
-		t.Errorf("expected both query params, got %q", gotPath)
+	if !strings.Contains(gotPath, "rrset_name=www.example.com.") || !strings.Contains(gotPath, "rrset_type=A") {
+		t.Errorf("expected FQDN rrset_name + rrset_type=A, got %q", gotPath)
 	}
 
 	var records []models.RRSet
@@ -430,6 +433,129 @@ func TestAPIUpdateRecord_SRVEmbedsPriority(t *testing.T) {
 	}
 	if got := sent[0].Records[0]; got.Content != "10 5 5060 sip.example.com." || got.Priority != 0 {
 		t.Errorf("PDNS received content=%q priority=%d, want %q and 0", got.Content, got.Priority, "10 5 5060 sip.example.com.")
+	}
+}
+
+func TestAPIListRecords_FilteredByName_PreservesFQDN(t *testing.T) {
+	// When the client already sends a canonical FQDN (with trailing dot) the
+	// handler must pass it through unchanged — no double-dot, no rewrite.
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=www.example.com.&type=A", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(gotPath, "rrset_name=www.example.com.") {
+		t.Errorf("expected canonical FQDN to round-trip, got %q", gotPath)
+	}
+	if strings.Contains(gotPath, "rrset_name=www.example.com..") {
+		t.Errorf("normaliser must not add a second trailing dot, got %q", gotPath)
+	}
+}
+
+func TestAPIListRecords_FilteredByRelativeName(t *testing.T) {
+	// "www" must be expanded against the zone into "www.example.com." — the
+	// same canonicalisation the write path applies in prepareAPIRecordSet.
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=www&type=A", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(gotPath, "rrset_name=www.example.com.") {
+		t.Errorf("relative name must expand to FQDN, got %q", gotPath)
+	}
+}
+
+func TestAPIListRecords_FilteredByApex(t *testing.T) {
+	// "@" is the standard apex shorthand and must resolve to the zone name
+	// with trailing dot, matching the write path's behaviour.
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=%40", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(gotPath, "rrset_name=example.com.") {
+		t.Errorf("@ must resolve to zone apex, got %q", gotPath)
+	}
+}
+
+func TestAPIListRecords_FilteredByName_CaseInsensitive(t *testing.T) {
+	// PDNS canonical names are lowercase; the handler must lowercase before
+	// forwarding so a client asking for "WWW.Example.COM" still matches.
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=WWW.Example.COM", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(gotPath, "rrset_name=www.example.com.") {
+		t.Errorf("name must be lowercased before forwarding, got %q", gotPath)
+	}
+}
+
+func TestAPIListRecords_NoName_NoNormalization(t *testing.T) {
+	// Sanity: when no name is given, the handler must call the unfiltered
+	// endpoint and never touch the query string.
+	var gotPath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com/records", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIListRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if gotPath != "" {
+		t.Errorf("expected empty query string, got %q", gotPath)
 	}
 }
 

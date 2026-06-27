@@ -411,6 +411,8 @@ curl -H "X-API-Key: gozone_yourkey" \
   "http://localhost:8080/api/v1/zones/example.com/records?name=www.example.com.&type=A"
 ```
 
+The `name` value is canonicalised against the zone the same way the write path does — trailing dot is added if missing (`www.example.com` → `www.example.com.`), the `@` shorthand resolves to the apex (`example.com.`), bare labels are expanded against the zone (`www` → `www.example.com.`), and the value is lowercased to match PowerDNS canonical names. Without this normalisation PowerDNS silently returns an empty list for names that are syntactically valid but missing the canonical trailing dot.
+
 The response is always a JSON array (possibly empty when no match). `type` requires `name`; passing `type` alone returns `400 VALIDATION_ERROR`.
 
 #### Create record
