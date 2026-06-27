@@ -510,7 +510,41 @@ All user actions (login, lock/unlock, zone creation, record updates, API key cre
 
 ### RRSet Comments (PowerDNS `comments` field)
 
-Every RRSet can carry PowerDNS-style comments (`models.Comment`) attached as metadata. The `models.RRSet` struct includes a `Comments []Comment` field that round-trips through PowerDNS PATCH. The web UI (zone view, dedicated edit page, inline editor) and the CSV export/import (with a trailing `comment` column) both expose the feature. The PATCH `comments` field REPLACES the entire list, so GoZone echoes back existing comments when the user adds a new one and omits the field entirely when no changes are made.
+Every RRSet can carry PowerDNS-style comments (`models.Comment`) attached as metadata. GoZone exposes this through the web UI (zone view, dedicated edit page, inline editor), the CSV export/import (with a trailing `comment` column), and the REST API.
+
+#### CommentPatch wire format
+
+The `comments` field on PowerDNS's PATCH API is tri-state:
+
+| Wire form | Meaning |
+|-----------|---------|
+| absent | preserve existing comments |
+| `"comments":[]` | purge all comments |
+| `"comments":[...]` | replace with these items |
+
+Standard `encoding/json` cannot distinguish a nil slice from an empty slice under `omitempty`, which is why the field is wrapped in a custom `models.CommentPatch` type:
+
+```go
+type CommentPatch struct {
+    Items []Comment
+    Clear bool
+}
+```
+
+`MarshalJSON` emits the right wire form based on `Clear` and the contents of `Items`; `UnmarshalJSON` normalises both `null` and `[]` to a nil `Items` slice and never sets `Clear`. This keeps the read-then-write round trip safe: a PDNS GET returns `comments:[]` for an RRSet with no comments, and a naive round trip must preserve them, not purge them.
+
+The only way to obtain a clear patch is to set `Clear=true` on the struct directly. The handlers in `internal/handlers/records.go` build the patch via two helpers:
+
+- `buildCommentPatch(text, clear)` — for single-record forms (`CreateRecord`, `UpdateRecord`, `InlineUpdateRecord`); reads the `comment` and `comment_clear` form fields.
+- `buildCommentsPatch(existing, clear, newLines...)` — for batch create; merges user-provided lines with any existing comments read from PDNS, with deduplication against both the preserved list and earlier new lines.
+
+#### Web UI clearing flow
+
+The Edit Record page (`web/templates/record_edit.html`) and the inline editor on `zone_view.html` expose a `comment_clear=1` checkbox next to the textarea. When checked, GoZone sends `"comments":[]` to PowerDNS, which deletes every comment on that RRSet. When unchecked, the existing comments are preserved unless the textarea content changes (replace semantics). The CSV import path never sets `Clear`; an empty `comment` cell means "no comments for this RRSet", consistent with the preserve semantic.
+
+#### API clearing flow
+
+The current REST API surface does not expose an explicit clear signal. GoZone's `CommentPatch` normalises `"comments":[]` to a preserve semantic on read-back, so API clients cannot purge comments by sending an empty array. Use the web UI's checkbox or sequence a delete + recreate to clear comments via automation.
 
 ### Brute-Force Protection (defense-in-depth on /login)
 

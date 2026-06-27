@@ -480,12 +480,17 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 
 	rrsets := make([]models.RRSet, 0, len(order))
 	for _, k := range order {
+		items := parseCSVComments(groupComments[k])
+		var patch *models.CommentPatch
+		if len(items) > 0 {
+			patch = &models.CommentPatch{Items: items}
+		}
 		rrsets = append(rrsets, models.RRSet{
 			Name:     k.name,
 			Type:     k.rtype,
 			TTL:      groupTTLs[k],
 			Records:  groups[k],
-			Comments: parseCSVComments(groupComments[k]),
+			Comments: patch,
 		})
 	}
 

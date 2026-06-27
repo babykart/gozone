@@ -447,24 +447,24 @@ txt.example.com.,TXT,"v=DMARC1; p=none",3600,0,false,"quoted, comment"`
 	for _, rr := range rrsets {
 		switch rr.Name {
 		case "www.example.com.":
-			if len(rr.Comments) != 1 || rr.Comments[0].Content != "managed by ops" {
+			if rr.Comments == nil || len(rr.Comments.Items) != 1 || rr.Comments.Items[0].Content != "managed by ops" {
 				t.Errorf("www: expected single dedup comment 'managed by ops', got %+v", rr.Comments)
 			}
 		case "mail.example.com.":
 			// Two rows with different cells ('multi', 'line') → 2 distinct Comments
-			if len(rr.Comments) != 2 {
-				t.Errorf("mail: expected 2 distinct comments, got %d: %+v", len(rr.Comments), rr.Comments)
+			if rr.Comments == nil || len(rr.Comments.Items) != 2 {
+				t.Errorf("mail: expected 2 distinct comments, got %+v", rr.Comments)
 				continue
 			}
-			if rr.Comments[0].Content != "multi" || rr.Comments[1].Content != "line" {
-				t.Errorf("mail: expected ['multi','line'], got %+v", rr.Comments)
+			if rr.Comments.Items[0].Content != "multi" || rr.Comments.Items[1].Content != "line" {
+				t.Errorf("mail: expected ['multi','line'], got %+v", rr.Comments.Items)
 			}
 		case "api.example.com.":
-			if len(rr.Comments) != 0 {
+			if rr.Comments != nil && len(rr.Comments.Items) != 0 {
 				t.Errorf("api: expected no comments (empty cell), got %+v", rr.Comments)
 			}
 		case "txt.example.com.":
-			if len(rr.Comments) != 1 || rr.Comments[0].Content != "quoted, comment" {
+			if rr.Comments == nil || len(rr.Comments.Items) != 1 || rr.Comments.Items[0].Content != "quoted, comment" {
 				t.Errorf("txt: expected quoted comma comment, got %+v", rr.Comments)
 			}
 		}
@@ -484,7 +484,10 @@ func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
 	if len(rrsets) != 1 {
 		t.Fatalf("expected 1 rrset, got %d", len(rrsets))
 	}
-	comments := rrsets[0].Comments
+	if rrsets[0].Comments == nil {
+		t.Fatalf("expected non-nil Comments patch, got nil")
+	}
+	comments := rrsets[0].Comments.Items
 	if len(comments) != 3 {
 		t.Fatalf("expected 3 comments from multi-line cell, got %d: %+v", len(comments), comments)
 	}

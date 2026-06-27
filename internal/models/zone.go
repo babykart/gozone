@@ -1,5 +1,7 @@
 package models
 
+import "encoding/json"
+
 // Zone represents a PowerDNS zone (domain).
 type Zone struct {
 	ID             string   `json:"id"`
@@ -41,13 +43,22 @@ type RecordInfo struct {
 }
 
 // RRSet represents a resource record set in the PowerDNS API.
+//
+// Comments is a *CommentPatch (not a plain slice) so the wire format can
+// distinguish between three PowerDNS PATCH states:
+//   - field absent (PowerDNS preserves existing comments)
+//   - field present but empty (PowerDNS purges all comments)
+//   - field present with items (PowerDNS replaces the list)
+//
+// The standard encoding/json package treats nil slices and empty slices
+// identically for omitempty purposes, which is why the wrapper is required.
 type RRSet struct {
-	Name       string       `json:"name"`
-	Type       string       `json:"type"`
-	TTL        int          `json:"ttl"`
-	ChangeType string       `json:"changetype,omitempty"`
-	Records    []RecordInfo `json:"records"`
-	Comments   []Comment    `json:"comments,omitempty"`
+	Name       string        `json:"name"`
+	Type       string        `json:"type"`
+	TTL        int           `json:"ttl"`
+	ChangeType string        `json:"changetype,omitempty"`
+	Records    []RecordInfo  `json:"records"`
+	Comments   *CommentPatch `json:"comments,omitempty"`
 }
 
 // Comment is a comment on an RRSet.
@@ -55,6 +66,41 @@ type Comment struct {
 	Content    string `json:"content"`
 	Account    string `json:"account,omitempty"`
 	ModifiedAt int64  `json:"modified_at,omitempty"`
+}
+
+// CommentPatch wraps the RRSet comment list with an explicit "clear" signal.
+// MarshalJSON emits one of three wire forms to match PowerDNS PATCH semantics:
+//
+//   - Clear=true                 -> "comments":[]   (explicit purge)
+//   - Items nil or empty         -> "comments":null (preserve; PDNS treats null
+//     equivalently to absent)
+//   - Items non-empty            -> "comments":[...] (replace)
+//
+// UnmarshalJSON always leaves Clear=false; the only way to obtain a clear
+// patch is to set Clear=true on the struct directly. This keeps the
+// read-then-write round trip safe: PowerDNS returns "comments":[] for an
+// RRSet with no comments and a naive round trip must preserve them, not
+// purge them.
+type CommentPatch struct {
+	Items []Comment
+	Clear bool
+}
+
+// MarshalJSON implements the tri-state wire encoding described on CommentPatch.
+func (c CommentPatch) MarshalJSON() ([]byte, error) {
+	if c.Clear {
+		return []byte("[]"), nil
+	}
+	if len(c.Items) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(c.Items)
+}
+
+// UnmarshalJSON parses a comments array (or null) into Items. Both "null" and
+// "[]" are normalised to a nil Items slice; Clear is never set by unmarshalling.
+func (c *CommentPatch) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &c.Items)
 }
 
 // ZoneCreateRequest is the payload for creating a zone.

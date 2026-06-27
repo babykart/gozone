@@ -888,6 +888,13 @@ details summary {
     box-sizing: border-box;
 }
 
+.ev-comment-clear {
+    color: var(--text-muted, #64748b);
+}
+.ev-comment-clear input[type="checkbox"] {
+    margin-right: 0.35rem;
+}
+
 .field-hint {
     font-weight: normal;
     color: var(--text-muted, #64748b);

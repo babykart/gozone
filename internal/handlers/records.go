@@ -47,6 +47,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	ttlStr := strings.TrimSpace(r.FormValue("ttl"))
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
 	comment := r.FormValue("comment")
+	commentClear := r.FormValue("comment_clear") == "1" || r.FormValue("comment_clear") == "true"
 
 	ttl, err := strconv.Atoi(ttlStr)
 	if err != nil || ttl <= 0 {
@@ -113,7 +114,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		Type:     recordType,
 		TTL:      ttl,
 		Records:  records,
-		Comments: parseComments(comment),
+		Comments: buildCommentPatch(comment, commentClear),
 	}
 
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
@@ -325,7 +326,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		Type:     recordType,
 		TTL:      ttl,
 		Records:  updatedRecords,
-		Comments: parseComments(r.FormValue("comment")),
+		Comments: buildCommentPatch(r.FormValue("comment"), r.FormValue("comment_clear") == "1"),
 	}, existingRRSet, nil
 }
 
@@ -346,6 +347,7 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	ttls := r.PostForm["ttl"]
 	priorities := r.PostForm["priority"]
 	comments := r.PostForm["comment"]
+	commentClears := r.PostForm["comment_clear"]
 
 	if len(names) == 0 || len(types) == 0 || len(contents) == 0 {
 		h.renderError(w, r, "At least one record is required")
@@ -366,7 +368,13 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	var logEntries []logEntry
 	// pendingComments collects user-provided comments grouped by name+type so
 	// rows that merge into the same RRSet contribute their comments together.
-	pendingComments := make(map[string][]string)
+	// Each entry carries the textarea text and an explicit "clear" flag so
+	// per-row clear signals survive the merge.
+	type pendingComment struct {
+		text  string
+		clear bool
+	}
+	pendingComments := make(map[string][]pendingComment)
 	for i := 0; i < count; i++ {
 		name := strings.TrimSpace(names[i])
 		recordType := strings.TrimSpace(types[i])
@@ -400,6 +408,10 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		if i < len(comments) {
 			rowComment = strings.TrimSpace(comments[i])
 		}
+		rowCommentClear := false
+		if i < len(commentClears) {
+			rowCommentClear = commentClears[i] == "1" || commentClears[i] == "true"
+		}
 
 		if err := validators.ValidateRecordType(recordType); err != nil {
 			h.renderError(w, r, "Invalid record type '"+recordType+"': "+err.Error())
@@ -421,8 +433,8 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		logEntries = append(logEntries, logEntry{recordType, name, content})
 
 		key := name + "|" + recordType
-		if rowComment != "" {
-			pendingComments[key] = append(pendingComments[key], rowComment)
+		if rowComment != "" || rowCommentClear {
+			pendingComments[key] = append(pendingComments[key], pendingComment{text: rowComment, clear: rowCommentClear})
 		}
 	}
 
@@ -473,15 +485,23 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
 		}
 		// Combine all user comments for this name+type into a single text
-		// payload so parseComments splits them into one Comment per line.
+		// payload so buildCommentsPatch splits them into one Comment per line.
 		// PowerDNS PATCH `comments` REPLACES the RRSet's comment list, so we
 		// also preserve any existing comments from the cloned RRSet.
 		var existing []models.Comment
 		if rr.Comments != nil {
-			existing = rr.Comments
+			existing = rr.Comments.Items
 		}
 		if userComments := pendingComments[key]; len(userComments) > 0 {
-			rr.Comments = buildCommentsFromLines(existing, userComments...)
+			lines := make([]string, 0, len(userComments))
+			clear := false
+			for _, uc := range userComments {
+				lines = append(lines, uc.text)
+				if uc.clear {
+					clear = true
+				}
+			}
+			rr.Comments = buildCommentsPatch(existing, clear, lines...)
 		}
 		merged = append(merged, *rr)
 	}
@@ -551,28 +571,46 @@ func mergeRecordIntoRRSet(existing []models.RecordInfo, originalContent string, 
 	return result
 }
 
-// parseComments turns a multi-line textarea value into a slice of Comment
-// objects, one per non-empty line. Returns nil for empty input so the field is
-// omitted from the PATCH payload (PowerDNS then preserves existing comments).
-func parseComments(text string) []models.Comment {
-	var out []models.Comment
+// buildCommentPatch constructs a *CommentPatch from a multi-line textarea value
+// and an explicit clear signal.
+//
+//   - clear=true                                 -> Clear patch (purge)
+//   - clear=false and text has at least one line -> Items patch (replace)
+//   - clear=false and text is blank              -> nil (preserve; field omitted)
+//
+// PowerDNS PATCH semantics: omitting "comments" preserves existing comments,
+// while a present-but-empty array purges them.
+func buildCommentPatch(text string, clear bool) *models.CommentPatch {
+	if clear {
+		return &models.CommentPatch{Clear: true}
+	}
+	var items []models.Comment
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		out = append(out, models.Comment{Content: line})
+		items = append(items, models.Comment{Content: line})
 	}
-	return out
+	if len(items) == 0 {
+		return nil
+	}
+	return &models.CommentPatch{Items: items}
 }
 
-// buildCommentsFromLines returns the comments slice to send in the PATCH body
-// for an RRSet that previously held `existing` comments and now gains the given
-// user-provided lines. PowerDNS REPLACES the entire comment list when the
-// `comments` field is present, so existing comments must be echoed back unless
-// the user provided no new lines (in which case the field is omitted and
-// existing comments are preserved untouched).
-func buildCommentsFromLines(existing []models.Comment, newLines ...string) []models.Comment {
+// buildCommentsPatch constructs the patch for an RRSet that previously held
+// `existing` comments and now gains the given user-provided lines. PowerDNS
+// REPLACES the entire comment list when the `comments` field is present, so
+// existing comments are echoed back (with deduplication against the new lines)
+// unless clear=true (which emits an empty array and purges everything).
+//
+//   - clear=true                                  -> Clear patch (purge)
+//   - clear=false and no new lines                -> nil (preserve; field omitted)
+//   - clear=false and at least one new line       -> Items patch (replace)
+func buildCommentsPatch(existing []models.Comment, clear bool, newLines ...string) *models.CommentPatch {
+	if clear {
+		return &models.CommentPatch{Clear: true}
+	}
 	cleaned := make([]string, 0, len(newLines))
 	for _, line := range newLines {
 		if line = strings.TrimSpace(line); line != "" {
@@ -583,11 +621,25 @@ func buildCommentsFromLines(existing []models.Comment, newLines ...string) []mod
 		return nil
 	}
 	out := make([]models.Comment, 0, len(existing)+len(cleaned))
-	out = append(out, existing...)
+	for _, c := range existing {
+		out = append(out, c)
+	}
 	for _, line := range cleaned {
+		// Deduplicate against both the preserved existing list and earlier
+		// new lines so replaying the same batch never grows the list.
+		dup := false
+		for _, c := range out {
+			if c.Content == line {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
 		out = append(out, models.Comment{Content: line})
 	}
-	return out
+	return &models.CommentPatch{Items: out}
 }
 
 // normalizeRecordName ensures a user-supplied record name is fully qualified

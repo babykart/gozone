@@ -143,12 +143,12 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 	// Multiple comments per RRSet are joined with newlines so the cell can
 	// round-trip via the standard CSV embedded-newline quoting. The same
 	// value is repeated on every row of the RRSet for consistency.
-	joinedComments := func(comments []models.Comment) string {
-		if len(comments) == 0 {
+	joinedComments := func(comments *models.CommentPatch) string {
+		if comments == nil || len(comments.Items) == 0 {
 			return ""
 		}
-		parts := make([]string, len(comments))
-		for i, c := range comments {
+		parts := make([]string, len(comments.Items))
+		for i, c := range comments.Items {
 			parts[i] = c.Content
 		}
 		return strings.Join(parts, "\n")

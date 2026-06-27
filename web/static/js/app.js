@@ -79,6 +79,7 @@ function resetRowValues(row) {
     var editPrio = row.querySelector('.ev-prio');
     var editDisabled = row.querySelector('.ev-disabled');
     var editComments = row.querySelector('.ev-comments');
+    var editCommentClear = row.querySelector('.ev-comment-clear-cb');
 
     var origContent = row.querySelector('.rv-content');
     var origTTL = row.querySelector('.rv-ttl');
@@ -90,6 +91,7 @@ function resetRowValues(row) {
     if (editPrio && origPrio) editPrio.value = (origPrio.textContent === '-' ? '0' : origPrio.textContent);
     if (editDisabled) editDisabled.checked = row.getAttribute('data-disabled') === 'true';
     if (editComments && origComments) editComments.value = origComments.textContent;
+    if (editCommentClear) editCommentClear.checked = false;
 }
 
 function showNotification(message, type) {
@@ -119,6 +121,7 @@ function saveRecordRow(btn) {
     var prio = row.querySelector('.ev-prio').value;
     var disabled = row.querySelector('.ev-disabled') ? row.querySelector('.ev-disabled').checked : false;
     var comment = row.querySelector('.ev-comments') ? row.querySelector('.ev-comments').value : '';
+    var commentClear = row.querySelector('.ev-comment-clear-cb') ? row.querySelector('.ev-comment-clear-cb').checked : false;
 
     if (!content) { showNotification('Content is required', 'error'); return; }
 
@@ -133,6 +136,7 @@ function saveRecordRow(btn) {
     formData.append('original_content', row.getAttribute('data-original-content'));
     formData.append('original_priority', row.getAttribute('data-original-priority'));
     formData.append('comment', comment);
+    if (commentClear) formData.append('comment_clear', '1');
 
     fetch('/zones/' + zoneID + '/records/inline-update', {
         method: 'POST',
@@ -165,7 +169,11 @@ function saveRecordRow(btn) {
             }
             var rvComments = row.querySelector('.rv-comments');
             var trimmedComment = comment.replace(/^\s+|\s+$/g, '');
-            if (rvComments) {
+            if (commentClear) {
+                if (rvComments && rvComments.parentNode) {
+                    rvComments.parentNode.removeChild(rvComments);
+                }
+            } else if (rvComments) {
                 if (trimmedComment) {
                     if (rvComments.parentNode) {
                         rvComments.textContent = trimmedComment + '\n';
@@ -185,6 +193,8 @@ function saveRecordRow(btn) {
                     contentCell.appendChild(newRv);
                 }
             }
+            var clearCb = row.querySelector('.ev-comment-clear-cb');
+            if (clearCb) clearCb.checked = false;
             row.setAttribute('data-original-content', content);
             row.setAttribute('data-original-priority', prio);
             toggleEditMode(row, false);

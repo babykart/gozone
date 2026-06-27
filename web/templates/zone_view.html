@@ -57,12 +57,16 @@
                 <td>
                     <span class="rv rv-content">{{.Content}}</span>
                     <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
-                    {{if $rrset.Comments}}
-                    <div class="rv rv-comments record-comments">{{range $rrset.Comments}}{{.Content}}
+                    {{if $rrset.Comments.Items}}
+                    <div class="rv rv-comments record-comments">{{range $rrset.Comments.Items}}{{.Content}}
 {{end}}</div>
                     {{end}}
-                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range $rrset.Comments}}{{.Content}}
+                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range $rrset.Comments.Items}}{{.Content}}
 {{end}}</textarea>
+                    <label class="ev ev-comment-clear" style="display:none;margin-top:0.25rem;font-size:0.8rem">
+                        <input type="checkbox" class="ev-comment-clear-cb" value="1">
+                        Clear all comments
+                    </label>
                 </td>
                 <td class="nowrap">
                     <span class="rv rv-status">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>

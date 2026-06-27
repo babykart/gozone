@@ -54,8 +54,12 @@
     {{end}}
     <div class="form-group">
         <label for="comment">Comment <span class="field-hint">(optional, one per line)</span></label>
-        <textarea id="comment" name="comment" rows="3" class="form-control" placeholder="e.g. managed by ops-team">{{range .Record.Comments}}{{.Content}}
+        <textarea id="comment" name="comment" rows="3" class="form-control" placeholder="e.g. managed by ops-team">{{range .Record.Comments.Items}}{{.Content}}
 {{end}}</textarea>
+        <label class="checkbox-inline" style="margin-top:0.5rem;display:block">
+            <input type="checkbox" name="comment_clear" value="1">
+            Clear all comments <span class="field-hint">(purge existing comments on save)</span>
+        </label>
     </div>
     <div class="form-actions">
         <button type="submit" class="btn btn-primary">Update Record</button>

@@ -1103,90 +1103,145 @@ func TestNormalizeRecordName(t *testing.T) {
 	}
 }
 
-func TestParseComments(t *testing.T) {
+func TestBuildCommentPatch(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  []models.Comment
+		name      string
+		text      string
+		clear     bool
+		wantNil   bool
+		wantClear bool
+		wantCount int
 	}{
-		{"empty", "", nil},
-		{"whitespace_only", "   \n   \n", nil},
-		{"single_line", "managed by ops", []models.Comment{{Content: "managed by ops"}}},
-		{"multi_line", "first\nsecond\nthird", []models.Comment{{Content: "first"}, {Content: "second"}, {Content: "third"}}},
-		{"trims_whitespace", "  hello  \n  world  ", []models.Comment{{Content: "hello"}, {Content: "world"}}},
-		{"skips_blank_lines", "first\n\n   \nsecond\n", []models.Comment{{Content: "first"}, {Content: "second"}}},
+		{"empty_text_no_clear", "", false, true, false, 0},
+		{"whitespace_only_no_clear", "   \n   \n", false, true, false, 0},
+		{"single_line_no_clear", "managed by ops", false, false, false, 1},
+		{"multi_line_no_clear", "first\nsecond\nthird", false, false, false, 3},
+		{"trims_whitespace", "  hello  \n  world  ", false, false, false, 2},
+		{"skips_blank_lines", "first\n\n   \nsecond\n", false, false, false, 2},
+		{"clear_with_empty_text", "", true, false, true, 0},
+		{"clear_with_text", "ignored", true, false, true, 0},
+		{"clear_overrides_text", "should be cleared\nbecause explicit", true, false, true, 0},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parseComments(tc.input)
-			if len(got) != len(tc.want) {
-				t.Fatalf("parseComments(%q) returned %d comments, want %d: %+v", tc.input, len(got), len(tc.want), got)
-			}
-			for i := range got {
-				if got[i].Content != tc.want[i].Content {
-					t.Errorf("comment[%d] = %q, want %q", i, got[i].Content, tc.want[i].Content)
+			got := buildCommentPatch(tc.text, tc.clear)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("expected nil patch, got %+v", got)
 				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected non-nil patch, got nil")
+			}
+			if got.Clear != tc.wantClear {
+				t.Errorf("Clear = %v, want %v", got.Clear, tc.wantClear)
+			}
+			if len(got.Items) != tc.wantCount {
+				t.Errorf("len(Items) = %d, want %d (items=%+v)", len(got.Items), tc.wantCount, got.Items)
 			}
 		})
 	}
 }
 
-func TestBuildCommentsFromLines(t *testing.T) {
+func TestBuildCommentsPatch(t *testing.T) {
 	tests := []struct {
-		name     string
-		existing []models.Comment
-		newLines []string
-		want     []models.Comment
+		name      string
+		existing  []models.Comment
+		clear     bool
+		newLines  []string
+		wantNil   bool
+		wantClear bool
+		wantCount int
 	}{
 		{
-			name:     "no_existing_no_new",
+			name:     "no_existing_no_new_no_clear",
 			existing: nil,
+			clear:    false,
 			newLines: nil,
-			want:     nil,
+			wantNil:  true,
 		},
 		{
-			name:     "no_existing_with_new",
-			existing: nil,
-			newLines: []string{"first"},
-			want:     []models.Comment{{Content: "first"}},
+			name:      "no_existing_with_new_no_clear",
+			existing:  nil,
+			clear:     false,
+			newLines:  []string{"first"},
+			wantCount: 1,
 		},
 		{
 			name:     "existing_preserved_when_no_new",
 			existing: []models.Comment{{Content: "old"}},
+			clear:    false,
 			newLines: nil,
-			want:     nil,
+			wantNil:  true,
 		},
 		{
-			name:     "existing_appended_with_new",
-			existing: []models.Comment{{Content: "old"}},
-			newLines: []string{"new"},
-			want:     []models.Comment{{Content: "old"}, {Content: "new"}},
+			name:      "existing_appended_with_new",
+			existing:  []models.Comment{{Content: "old"}},
+			clear:     false,
+			newLines:  []string{"new"},
+			wantCount: 2,
 		},
 		{
-			name:     "multiple_new_lines",
-			existing: []models.Comment{{Content: "old"}},
-			newLines: []string{"new1", "new2"},
-			want:     []models.Comment{{Content: "old"}, {Content: "new1"}, {Content: "new2"}},
+			name:      "multiple_new_lines",
+			existing:  []models.Comment{{Content: "old"}},
+			clear:     false,
+			newLines:  []string{"new1", "new2"},
+			wantCount: 3,
 		},
 		{
-			name:     "blank_new_lines_skipped",
-			existing: []models.Comment{{Content: "old"}},
-			newLines: []string{"", "  ", "new"},
-			want:     []models.Comment{{Content: "old"}, {Content: "new"}},
+			name:      "blank_new_lines_skipped",
+			existing:  []models.Comment{{Content: "old"}},
+			clear:     false,
+			newLines:  []string{"", "  ", "new"},
+			wantCount: 2,
+		},
+		{
+			name:      "clear_with_existing_purges",
+			existing:  []models.Comment{{Content: "old"}, {Content: "older"}},
+			clear:     true,
+			newLines:  nil,
+			wantClear: true,
+		},
+		{
+			name:      "clear_with_new_ignores_them",
+			existing:  []models.Comment{{Content: "old"}},
+			clear:     true,
+			newLines:  []string{"ignored"},
+			wantClear: true,
+		},
+		{
+			name:      "dedup_new_line_already_existing",
+			existing:  []models.Comment{{Content: "old"}},
+			clear:     false,
+			newLines:  []string{"old"},
+			wantCount: 1,
+		},
+		{
+			name:      "dedup_new_line_repeated_in_batch",
+			existing:  nil,
+			clear:     false,
+			newLines:  []string{"dup", "dup"},
+			wantCount: 1,
 		},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildCommentsFromLines(tc.existing, tc.newLines...)
-			if len(got) != len(tc.want) {
-				t.Fatalf("returned %d comments, want %d: %+v", len(got), len(tc.want), got)
-			}
-			for i := range got {
-				if got[i].Content != tc.want[i].Content {
-					t.Errorf("comment[%d] = %q, want %q", i, got[i].Content, tc.want[i].Content)
+			got := buildCommentsPatch(tc.existing, tc.clear, tc.newLines...)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("expected nil patch, got %+v", got)
 				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected non-nil patch, got nil")
+			}
+			if got.Clear != tc.wantClear {
+				t.Errorf("Clear = %v, want %v", got.Clear, tc.wantClear)
+			}
+			if len(got.Items) != tc.wantCount {
+				t.Errorf("len(Items) = %d, want %d (items=%+v)", len(got.Items), tc.wantCount, got.Items)
 			}
 		})
 	}
@@ -1233,7 +1288,11 @@ func TestCreateRecord_SendsComment(t *testing.T) {
 	if len(patchedRRSet) != 1 {
 		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
 	}
-	comments := patchedRRSet[0].Comments
+	patch := patchedRRSet[0].Comments
+	if patch == nil || patch.Clear {
+		t.Fatalf("expected Items patch with no Clear, got %+v", patch)
+	}
+	comments := patch.Items
 	if len(comments) != 1 || comments[0].Content != "managed by ops" {
 		t.Errorf("expected one comment 'managed by ops', got %+v", comments)
 	}
@@ -1278,8 +1337,8 @@ func TestCreateRecord_NoComment_OmitsField(t *testing.T) {
 	if len(patchedRRSet) != 1 {
 		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
 	}
-	if len(patchedRRSet[0].Comments) != 0 {
-		t.Errorf("expected no comments in PATCH body, got %+v", patchedRRSet[0].Comments)
+	if patchedRRSet[0].Comments != nil {
+		t.Errorf("expected nil Comments patch (field omitted), got %+v", patchedRRSet[0].Comments)
 	}
 }
 
@@ -1301,7 +1360,7 @@ func TestInlineUpdateRecord_AppendsComment(t *testing.T) {
 						Records: []models.RecordInfo{
 							{Content: "10.0.0.1", Disabled: false},
 						},
-						Comments: []models.Comment{{Content: "existing comment"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing comment"}}},
 					},
 				},
 			})
@@ -1340,7 +1399,7 @@ func TestInlineUpdateRecord_AppendsComment(t *testing.T) {
 	if len(patchedRRSet) != 1 {
 		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
 	}
-	comments := patchedRRSet[0].Comments
+	comments := patchedRRSet[0].Comments.Items
 	if len(comments) != 2 {
 		t.Fatalf("expected 2 comments (existing + new), got %d: %+v", len(comments), comments)
 	}
@@ -1371,7 +1430,7 @@ func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
 						Records: []models.RecordInfo{
 							{Content: "10.0.0.1", Disabled: false},
 						},
-						Comments: []models.Comment{{Content: "existing comment"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing comment"}}},
 					},
 				},
 			})
@@ -1415,8 +1474,8 @@ func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
 	if len(patchedRRSet) != 1 {
 		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
 	}
-	if len(patchedRRSet[0].Comments) != 0 {
-		t.Errorf("expected empty Comments slice in unmarshalled RRSet, got %+v", patchedRRSet[0].Comments)
+	if patchedRRSet[0].Comments != nil {
+		t.Errorf("expected nil Comments patch in unmarshalled RRSet, got %+v", patchedRRSet[0].Comments)
 	}
 }
 
@@ -1467,8 +1526,8 @@ func TestBatchCreateRecords_SendsCommentsPerRow(t *testing.T) {
 
 	gotComments := make(map[string]string)
 	for _, rr := range body.RRSets {
-		if len(rr.Comments) == 1 {
-			gotComments[rr.Name+" "+rr.Type] = rr.Comments[0].Content
+		if rr.Comments != nil && !rr.Comments.Clear && len(rr.Comments.Items) == 1 {
+			gotComments[rr.Name+" "+rr.Type] = rr.Comments.Items[0].Content
 		}
 	}
 	if gotComments["www.example.com. A"] != "first row" {
@@ -1501,7 +1560,7 @@ func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
 						Records: []models.RecordInfo{
 							{Content: "10.0.0.1", Disabled: false},
 						},
-						Comments: []models.Comment{{Content: "existing"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing"}}},
 					},
 				},
 			})
@@ -1533,7 +1592,11 @@ func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
 	if len(body.RRSets) != 1 {
 		t.Fatalf("expected 1 rrset (merged), got %d", len(body.RRSets))
 	}
-	comments := body.RRSets[0].Comments
+	patch := body.RRSets[0].Comments
+	if patch == nil || patch.Clear {
+		t.Fatalf("expected Items patch with no Clear, got %+v", patch)
+	}
+	comments := patch.Items
 	if len(comments) != 2 {
 		t.Fatalf("expected 2 comments (existing + new), got %d: %+v", len(comments), comments)
 	}
@@ -1542,5 +1605,330 @@ func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
 	}
 	if comments[1].Content != "new" {
 		t.Errorf("second comment = %q, want 'new'", comments[1].Content)
+	}
+}
+
+// TestCommentPatch_MarshalJSON verifies the tri-state wire encoding that lets
+// GoZone distinguish "field absent" (preserve) from "field present but empty"
+// (purge) on PowerDNS PATCH bodies.
+func TestCommentPatch_MarshalJSON(t *testing.T) {
+	cases := []struct {
+		name  string
+		patch *models.CommentPatch
+		want  string
+	}{
+		{"nil_pointer_omitted", nil, ""},
+		{"nil_items_emit_null", &models.CommentPatch{}, "null"},
+		{"clear_emit_empty_array", &models.CommentPatch{Clear: true}, "[]"},
+		{"clear_overrides_items", &models.CommentPatch{Clear: true, Items: []models.Comment{{Content: "ignored"}}}, "[]"},
+		{"non_empty_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}}}, `[{"content":"x"}]`},
+		{"multiple_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}, {Content: "y"}}}, `[{"content":"x"},{"content":"y"}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := models.RRSet{Name: "n", Type: "A", TTL: 1, Records: []models.RecordInfo{{Content: "v"}}, Comments: tc.patch}
+			b, err := json.Marshal(rr)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if tc.want == "" {
+				if strings.Contains(string(b), `"comments"`) {
+					t.Errorf("expected comments field to be omitted, got %s", b)
+				}
+				return
+			}
+			wantSubstr := `"comments":` + tc.want
+			if !strings.Contains(string(b), wantSubstr) {
+				t.Errorf("expected wire form %s in payload %s", wantSubstr, b)
+			}
+		})
+	}
+}
+
+// TestCommentPatch_UnmarshalJSON_RoundTrip verifies that reading an RRSet from
+// PowerDNS and writing it back does not unintentionally clear comments. Both
+// "null" and "[]" are normalised to a nil Items slice and Clear is never set
+// by unmarshalling.
+func TestCommentPatch_UnmarshalJSON_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"null", `{"name":"n","type":"A","ttl":1,"records":[{"content":"v"}],"comments":null}`},
+		{"empty_array", `{"name":"n","type":"A","ttl":1,"records":[{"content":"v"}],"comments":[]}`},
+		{"with_items", `{"name":"n","type":"A","ttl":1,"records":[{"content":"v"}],"comments":[{"content":"x"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var rr models.RRSet
+			if err := json.Unmarshal([]byte(tc.body), &rr); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if rr.Comments == nil {
+				// nil is the safest round-trip state: omit field, preserve.
+				if tc.name == "with_items" {
+					t.Fatalf("expected non-nil patch for with_items, got nil")
+				}
+				return
+			}
+			if rr.Comments.Clear {
+				t.Errorf("Clear must never be set by unmarshal (got Clear=true from %s)", tc.body)
+			}
+			out, err := json.Marshal(rr)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if tc.name == "with_items" {
+				if !strings.Contains(string(out), `"comments":[{"content":"x"}]`) {
+					t.Errorf("expected items preserved on round-trip, got %s", out)
+				}
+			} else {
+				if strings.Contains(string(out), `"comments":[]`) {
+					t.Errorf("round-trip must not emit empty array for null/[] inputs, got %s", out)
+				}
+			}
+		})
+	}
+}
+
+func TestInlineUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing comment"}}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0&comment_clear=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The PATCH body MUST contain `"comments":[]` so PowerDNS purges the list.
+	if !strings.Contains(string(rawBody), `"comments":[]`) {
+		t.Errorf("PATCH body must emit empty comments array to clear, got %s", rawBody)
+	}
+}
+
+func TestUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing"}}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0&comment_clear=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.UpdateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if !strings.Contains(string(rawBody), `"comments":[]`) {
+		t.Errorf("PATCH body must emit empty comments array to clear, got %s", rawBody)
+	}
+}
+
+func TestBatchCreateRecords_ClearFlagPurgesComments(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing"}}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// comment_clear=1 with empty comment text → Clear patch on the merged RRSet.
+	formBody := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&comment_clear=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(formBody))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if !strings.Contains(string(rawBody), `"comments":[]`) {
+		t.Errorf("PATCH body must emit empty comments array to clear, got %s", rawBody)
+	}
+}
+
+func TestBatchCreateRecords_DedupRepeatedComments(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "www.example.com.",
+						Type: "A",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10.0.0.1", Disabled: false},
+						},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing"}}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == "PATCH" {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Three rows for the same RRSet with the same comment → merged patch
+	// must contain each comment once.
+	formBody := "name=www.example.com.&type=A&content=10.0.0.2&ttl=300&comment=existing" +
+		"&name=www.example.com.&type=A&content=10.0.0.3&ttl=300&comment=existing" +
+		"&name=www.example.com.&type=A&content=10.0.0.4&ttl=300&comment=existing"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(formBody))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Decode only the comments field so we don't depend on the (unimportant)
+	// order or content of the records array.
+	var payload struct {
+		RRSets []struct {
+			Comments json.RawMessage `json:"comments"`
+		} `json:"rrsets"`
+	}
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		t.Fatalf("decode PATCH body: %v", err)
+	}
+	if len(payload.RRSets) != 1 {
+		t.Fatalf("expected 1 merged rrset, got %d", len(payload.RRSets))
+	}
+	var got []models.Comment
+	if err := json.Unmarshal(payload.RRSets[0].Comments, &got); err != nil {
+		t.Fatalf("decode comments: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected single deduped comment, got %+v", got)
+	}
+	if len(got) > 0 && got[0].Content != "existing" {
+		t.Errorf("expected content 'existing', got %q", got[0].Content)
 	}
 }

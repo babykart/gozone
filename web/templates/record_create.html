@@ -42,6 +42,10 @@
             <div class="form-group">
                 <label>Comment <span class="field-hint">(optional, one per line)</span></label>
                 <textarea name="comment" rows="2" class="form-control" placeholder="e.g. managed by ops-team"></textarea>
+                <label class="checkbox-inline" style="margin-top:0.5rem;display:block">
+                    <input type="checkbox" name="comment_clear" value="1">
+                    Clear all comments <span class="field-hint">(only applies when the RRSet already exists)</span>
+                </label>
             </div>
         </div>
     </div>

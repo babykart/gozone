@@ -224,6 +224,7 @@ GoZone exposes the PowerDNS API `comments` field for every RRSet. Comments are m
 - **CSV export/import**: round-trips through the optional `comment` column described above.
 - **API**: pass a `comments` array in the RRSet payload when creating or updating records (see the API section below).
 - **PowerDNS semantics**: the PATCH `comments` field *replaces* the entire comment list for the RRSet. GoZone preserves this behaviour — when you edit a record without touching the comment field, the existing comments are kept (the field is omitted from the PATCH body); when you add or change a comment, existing comments are echoed back and your changes are applied.
+- **Clearing all comments**: the Edit Record page and the inline editor expose a "Clear all comments" checkbox. When checked, GoZone sends `"comments":[]` to PowerDNS, which deletes every existing comment for that RRSet. The checkbox only appears in the edit forms (not in the batch-create form, where no comments exist yet by default).
 
 ### Zone Groups
 
@@ -457,6 +458,8 @@ curl -X POST \
 | `comments[].modified_at` | int | no | Unix timestamp; omitted from the request if not set (PowerDNS defaults it server-side) |
 
 The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep. GoZone does not set a default `account` or `modified_at` — both fields are optional and PowerDNS fills in the server-side defaults when omitted.
+
+> Note: the current API surface does not expose an explicit "clear comments" signal. Sending an empty `comments` array (`"comments":[]`) is normalised by GoZone's `CommentPatch` wrapper to a preserve semantic, so existing comments are kept untouched. To clear comments via automation, either issue a delete + recreate sequence or use the web UI's "Clear all comments" checkbox (which sends the purge signal directly to PowerDNS).
 
 Response `201`:
 
