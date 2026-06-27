@@ -101,3 +101,63 @@ func TestPostgresDialect_LockMigrations(t *testing.T) {
 		release()
 	}
 }
+
+func TestPostgresDialect_InsertIgnore_UsesConflictColumns(t *testing.T) {
+	// REVIEW.md mineur fix: the conflict target must come from an explicit
+	// conflictColumns argument so the caller can never accidentally target the
+	// wrong unique index when columns != constraint.
+	d := &postgresDialect{}
+	got := d.InsertIgnore(
+		"zone_group_members",
+		[]string{"group_id", "user_id"},
+		[]string{"group_id", "user_id"},
+	)
+	want := "INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?) ON CONFLICT (group_id, user_id) DO NOTHING"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestPostgresDialect_InsertIgnore_SingleColumnConflict(t *testing.T) {
+	d := &postgresDialect{}
+	got := d.InsertIgnore(
+		"api_keys",
+		[]string{"key_hash"},
+		[]string{"key_hash"},
+	)
+	want := "INSERT INTO api_keys (key_hash) VALUES (?) ON CONFLICT (key_hash) DO NOTHING"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestPostgresDialect_InsertIgnore_AllowsConflictSubsetOfColumns(t *testing.T) {
+	// The conflict target may be a subset of the INSERT columns when a
+	// partial UNIQUE index covers them — the dialect must honour the
+	// conflictColumns exactly, not synthesise one from `columns`.
+	d := &postgresDialect{}
+	got := d.InsertIgnore(
+		"audit_log",
+		[]string{"user_id", "action", "created_at"},
+		[]string{"user_id", "action"},
+	)
+	want := "INSERT INTO audit_log (user_id, action, created_at) VALUES (?, ?, ?) ON CONFLICT (user_id, action) DO NOTHING"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestPostgresDialect_InsertIgnore_RequiresConflictColumns(t *testing.T) {
+	// Defence against the silent-fallback bug the new signature was
+	// introduced for: an empty conflictColumns must produce an obviously
+	// invalid statement rather than masquerading as a valid INSERT.
+	d := &postgresDialect{}
+	got := d.InsertIgnore("any_table", []string{"a"}, nil)
+	if !strings.Contains(got, "-- ERROR") {
+		t.Errorf("empty conflictColumns must produce an error sentinel, got %q", got)
+	}
+	got = d.InsertIgnore("any_table", []string{"a"}, []string{})
+	if !strings.Contains(got, "-- ERROR") {
+		t.Errorf("empty conflictColumns slice must produce an error sentinel, got %q", got)
+	}
+}

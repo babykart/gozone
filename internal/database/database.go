@@ -112,11 +112,21 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	return db.Conn.QueryRowContext(ctx, db.dialect.Rebind(query), args...)
 }
 
-// InsertIgnore inserts a row into table, silently skipping rows that violate a
-// unique constraint. The exact SQL syntax is chosen by the active dialect so it
-// works on SQLite, MySQL/MariaDB and PostgreSQL.
-func (db *DB) InsertIgnore(ctx context.Context, table string, columns []string, values ...any) (sql.Result, error) {
-	query := db.dialect.InsertIgnore(table, columns)
+// InsertIgnore inserts a row into table, silently skipping rows that would
+// violate a unique constraint. The exact SQL syntax is chosen by the active
+// dialect so it works on SQLite, MySQL/MariaDB and PostgreSQL.
+//
+// columns lists the INSERT column list and the bound parameter order.
+// conflictColumns lists the columns that form the conflict target —
+// typically the columns covered by a PRIMARY KEY or UNIQUE constraint on
+// the table. For PostgreSQL this MUST match an existing unique index; for
+// SQLite and MySQL the value is ignored because INSERT OR IGNORE / INSERT
+// IGNORE catch any unique violation. Passing the columns and the conflict
+// target separately removes the implicit "all columns form the unique
+// constraint" assumption that the older signature relied on (REVIEW.md
+// mineur "InsertIgnore Postgres réutilise toutes les colonnes comme cible").
+func (db *DB) InsertIgnore(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
+	query := db.dialect.InsertIgnore(table, columns, conflictColumns)
 	return db.ExecContext(ctx, query, values...)
 }
 

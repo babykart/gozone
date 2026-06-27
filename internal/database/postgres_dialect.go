@@ -18,9 +18,20 @@ func (p *postgresDialect) MaxOpenConns() int { return 25 }
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
 
-func (p *postgresDialect) InsertIgnore(table string, columns []string) string {
+func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []string) string {
+	// conflictColumns is REQUIRED for PostgreSQL: ON CONFLICT (col1, col2, ...)
+	// must match an existing UNIQUE constraint or PRIMARY KEY on the table.
+	// Reject the call early so a silent fallback to the wrong index can never
+	// happen — the older helper that reused `columns` here masked a real
+	// invariant the caller was responsible for maintaining (REVIEW.md
+	// mineur "InsertIgnore Postgres réutilise toutes les colonnes comme cible").
+	if len(conflictColumns) == 0 {
+		return "-- ERROR: postgresDialect.InsertIgnore requires non-empty conflictColumns matching a UNIQUE constraint or PRIMARY KEY"
+	}
 	cols := strings.Join(columns, ", ")
-	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING", table, cols, placeholders(len(columns)), cols)
+	target := strings.Join(conflictColumns, ", ")
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
+		table, cols, placeholders(len(columns)), target)
 }
 
 // LockMigrations acquires a PostgreSQL advisory lock so only one instance

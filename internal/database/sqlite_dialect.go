@@ -32,7 +32,7 @@ func (s *sqliteDialect) MaxOpenConns() int { return constants.MaxOpenConns }
 
 func (s *sqliteDialect) Rebind(query string) string { return query }
 
-func (s *sqliteDialect) InsertIgnore(table string, columns []string) string {
+func (s *sqliteDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT OR IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 

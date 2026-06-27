@@ -12,9 +12,19 @@ type Dialect interface {
 	Migrations() []string
 	MaxOpenConns() int
 	Rebind(query string) string
-	// InsertIgnore returns an INSERT statement that skips rows which violate a
-	// unique constraint, using dialect-specific syntax.
-	InsertIgnore(table string, columns []string) string
+	// InsertIgnore returns an INSERT statement that silently skips rows which
+	// would violate a unique constraint, using dialect-specific syntax.
+	//
+	// columns lists the INSERT column list and the bound parameter order.
+	// conflictColumns lists the columns that form the conflict target —
+	// typically the columns covered by a PRIMARY KEY or UNIQUE constraint
+	// on the target table. PostgreSQL requires this target to match an
+	// existing unique index exactly; for SQLite and MySQL the parameter is
+	// ignored because INSERT OR IGNORE / INSERT IGNORE catch any unique
+	// violation regardless of column. Callers must pass conflictColumns
+	// explicitly so the Postgres dialect cannot silently fall back to the
+	// wrong index when columns != unique constraint.
+	InsertIgnore(table string, columns, conflictColumns []string) string
 	// LockMigrations acquires a cluster-wide lock so that only one instance
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.

@@ -36,7 +36,7 @@ func (m *mysqlDialect) MaxOpenConns() int { return 25 }
 
 func (m *mysqlDialect) Rebind(query string) string { return query }
 
-func (m *mysqlDialect) InsertIgnore(table string, columns []string) string {
+func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 

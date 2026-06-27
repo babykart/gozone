@@ -101,3 +101,30 @@ func TestMySQLDialect_Migrations_ContainInlineIndexes(t *testing.T) {
 		}
 	}
 }
+
+// TestMySQLDialect_InsertIgnore_IgnoresConflictColumns verifies the contract
+// from the Dialect interface: MySQL's INSERT IGNORE catches any unique
+// violation, so the conflictColumns parameter is intentionally unused. The
+// returned SQL must match the previous shape exactly so callers don't observe
+// a behaviour change after the signature update.
+func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
+	d := &mysqlDialect{}
+	got := d.InsertIgnore(
+		"zone_group_members",
+		[]string{"group_id", "user_id"},
+		// Any value here is intentionally ignored; pass a non-empty value
+		// to confirm the signature accepts it without altering output.
+		[]string{"group_id", "user_id"},
+	)
+	want := "INSERT IGNORE INTO zone_group_members (group_id, user_id) VALUES (?, ?)"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+
+	// And with empty conflictColumns — same output, proving the parameter
+	// is purely cosmetic for MySQL.
+	got = d.InsertIgnore("zone_group_members", []string{"group_id", "user_id"}, nil)
+	if got != want {
+		t.Errorf("empty conflictColumns must not alter MySQL output\ngot:  %q\nwant: %q", got, want)
+	}
+}
