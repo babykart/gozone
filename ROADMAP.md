@@ -2,11 +2,6 @@
 
 Remaining tasks to improve the security, quality, and performance of GoZone.
 
-> **Status as of 2026-06-27 (HEAD ahead of `e7a1963`, uncommitted).**
-> One ROADMAP item is now **closed** — see the checkbox update under *Password Enforcement → Account lockout* below. Several other security / quality follow-ups tracked outside the ROADMAP (account-enumeration mitigation, last-admin lockout exemption + CLI unlock, RRSet comments UI + API + CSV, REST API `clear_comments` sentinel, `?name=` FQDN canonicalisation, `InsertIgnore` explicit conflict columns, per-page selector visibility on single-page lists, CSV / BIND export tweaks) have been delivered. See `REVIEW.md` for the full audit trail (suivi table + open items list).
->
-> **Still open from this file:** everything in *OpenID Connect / OAuth2*, *Monitoring and Observability*, *Password policy / expiration / hashing*, and *Performance Targets*. The two security Majeurs still on REVIEW.md (default `admin`/`admin` password without forced change, no minimum-length policy) overlap with the *Password Enforcement* section below and remain to be addressed there.
-
 ## OpenID Connect / OAuth2
 
 - [ ] **OAuth2 / OIDC provider configuration**
