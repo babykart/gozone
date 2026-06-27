@@ -1070,6 +1070,25 @@ details summary {
     pointer-events: none;
 }
 
+/* Per-page <select> now renders in its own block outside the pagination
+   controls so it stays visible when TotalPages == 1 (see REVIEW.md
+   mineur "Sélecteur de taille de page caché"). Right-aligned, small
+   gap to the label. */
+.per-page-wrapper {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.per-page-wrapper .per-page-label {
+    margin: 0;
+    font-weight: normal;
+}
+
 .per-page-select {
     padding: 0.25rem 0.5rem;
     font-size: 0.8rem;

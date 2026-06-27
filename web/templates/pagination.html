@@ -8,12 +8,26 @@
 {{$opg := .OtherPage}}
 {{$opp := .OtherPerPage}}
 {{$extra := .Extra}}
+{{/*
+  REVIEW.md mineur fix: the per-page <select> used to live inside the
+  {{if gt $info.TotalPages 1}} block, so when every result fit on a single
+  page the selector disappeared and the user could no longer change the
+  page size. The selector is now extracted into its own block gated on
+  Total > 0 (no point showing it on an empty result set), while the
+  Previous / Next / page-info text stays inside the original block where
+  it makes sense.
+*/}}
 {{if gt $info.TotalPages 1}}
 <div class="pagination">
     <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
     <span class="page-info">Page {{$info.Current}} / {{$info.TotalPages}} ({{$info.Total}} {{$label}})</span>
     <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
-    <select class="per-page-select" data-action="per-page" data-prefix="{{$prefix}}">
+</div>
+{{end}}
+{{if gt $info.Total 0}}
+<div class="per-page-wrapper">
+    <label class="per-page-label" for="{{$prefix}}PerPageSelect">Per page:</label>
+    <select id="{{$prefix}}PerPageSelect" class="per-page-select" data-action="per-page" data-prefix="{{$prefix}}">
         <option value="10" {{if eq $info.PerPage 10}}selected{{end}}>10</option>
         <option value="20" {{if eq $info.PerPage 20}}selected{{end}}>20</option>
         <option value="30" {{if eq $info.PerPage 30}}selected{{end}}>30</option>
