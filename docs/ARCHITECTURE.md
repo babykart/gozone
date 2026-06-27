@@ -44,7 +44,7 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 │  │ (/login) │  │               │  │             │  │
 │  └──────────┘  └───────────────┘  └─────────────┘  │
 │                                                    │
-│  Global middleware chain:                           │
+│  Global middleware chain:                          │
 │    RequestID → ClientIPFrom* → requestLogger →     │
 │    Recoverer → Compress → SecurityHeaders →        │
 │    ErrorHandler → CSRF                             │
@@ -61,7 +61,7 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
        │(internal/db)  │ │  ┌────────────┐ │
        │  + login_at-  │ │  │cachedClient│ │
        │  tempts audit │ │  │ (TTL cache)│ │
-       └───────────────┘ └──────┬────────┘┘
+       └───────────────┘ └──────┬────────┘-┘
                                │
                         ┌──────▼───────┐
                         │  PowerDNS    │
@@ -573,7 +573,7 @@ The `comments` field is treated differently depending on how the request reaches
 | REST API create (`APICreateRecord`) | none — pass-through | The `comments` array is forwarded to PDNS **exactly as the client sent it** (no implicit dedup, no padding, no clearing). |
 | REST API update (`APIUpdateRecord`) | optional `clear_comments` sentinel → `&CommentPatch{Clear: true}` | Same pass-through for the array, plus the `clear_comments:true` marker adds an explicit purge path. Sentinel is stripped before forwarding to PDNS. |
 
-This split exists because the web UI drives a *merge* workflow (existing + user input → REPLACE) while the REST API exposes a *REPLACE* workflow (full new list → REPLACE). Documented in `README.md` (Records → comments array note).
+This split exists because the web UI drives a *merge* workflow (existing + user input → REPLACE) while the REST API exposes a *REPLACE* workflow (full new list → REPLACE). Documented in `API.md` (Records → comments array note + Clearing comments via the API block).
 
 ### Brute-Force Protection (defense-in-depth on /login)
 
