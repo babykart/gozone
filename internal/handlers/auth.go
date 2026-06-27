@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,39 @@ var (
 	dummyHash     []byte
 )
 
+// Login error codes returned in the ?error=<code> query string on the login
+// page. The user-facing banner always maps the same code to a single generic
+// message so an attacker cannot enumerate valid usernames by triggering the
+// lockout and observing a different error (the historic "account_locked"
+// banner). Future codes (CSRF, expired session, etc.) get their own lookup
+// entries in loginErrorMessages.
+const (
+	// #nosec G101 -- error code identifier, not a credential.
+	invalidCredentialsError = "invalid_credentials"
+)
+
+// loginErrorMessages maps a query-string error code to the user-facing banner.
+// Every authentication failure (unknown user, wrong password, locked account)
+// resolves to invalidCredentialsError to block account enumeration. The map
+// itself is the authoritative lookup; the login template MUST NOT echo the
+// raw query parameter.
+var loginErrorMessages = map[string]string{
+	invalidCredentialsError: "Invalid username or password.",
+}
+
+// loginErrorRedirect builds the /login?error=<code> redirect target. Used by
+// the Login handler so every failure path goes through the same URL builder
+// (and any future escaping/changes happen in one place).
+func loginErrorRedirect(code string) string {
+	return "/login?error=" + url.QueryEscape(code)
+}
+
+// loginErrorBanner returns the user-facing message for the given query code,
+// or "" when the code is unknown (the template renders nothing in that case).
+func loginErrorBanner(code string) string {
+	return loginErrorMessages[code]
+}
+
 func ensureDummyHash(cost int) {
 	dummyHashOnce.Do(func() {
 		dummyHash, _ = bcrypt.GenerateFromPassword([]byte("constant-time-dummy"), cost)
@@ -32,8 +66,9 @@ func ensureDummyHash(cost int) {
 // LoginPage renders the login form (GET /login).
 func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
-		"Title": "Login - " + h.Cfg.Server.AppName,
-		"Error": r.URL.Query().Get("error"),
+		"Title":   "Login - " + h.Cfg.Server.AppName,
+		"Error":   loginErrorBanner(r.URL.Query().Get("error")),
+		"AppName": h.Cfg.Server.AppName,
 	}
 	h.render(w, r, "login.html", data)
 }
@@ -41,7 +76,11 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 // Login authenticates a user from a POST form submission (POST /login).
 //
 // On success, it generates a JWT stored in the "gozone_session" cookie and
-// redirects to /dashboard. On failure, redirects to /login?error=invalid_credentials.
+// redirects to /dashboard. On failure, redirects to /login?error=invalid_credentials
+// with an identical message regardless of the underlying cause (unknown user,
+// wrong password, locked account). The single response code is what blocks
+// account-enumeration via the error banner; the lockout and timing defences
+// below cover the response-time channel.
 //
 // Defences (in addition to the route-level per-IP and per-username rate
 // limiters applied in cmd/gozone/main.go):
@@ -84,7 +123,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		// cannot be distinguished by response time.
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
 		h.recordFailedAttempt(ctx, username, 0, clientIP, maxAttempts, lockoutDuration)
-		http.Redirect(w, r, "/login?error=invalid_credentials", http.StatusSeeOther)
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 		return
 	}
 	if err != nil {
@@ -93,21 +132,23 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reject locked accounts before doing any bcrypt work so an attacker
-	// cannot grind the lockout window by hammering the endpoint.
+	// cannot grind the lockout window by hammering the endpoint. The user-
+	// facing message is identical to a wrong-password attempt so the lockout
+	// state cannot be used to enumerate valid usernames.
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {
 			logger.Error("failed to check lockout status", "user_id", user.ID, "error", lerr)
 		} else if locked {
 			logger.Warn("login attempt on locked account", "username", user.Username, "locked_until", until)
-			http.Redirect(w, r, "/login?error=account_locked", http.StatusSeeOther)
+			http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 			return
 		}
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		h.recordFailedAttempt(ctx, username, user.ID, clientIP, maxAttempts, lockoutDuration)
-		http.Redirect(w, r, "/login?error=invalid_credentials", http.StatusSeeOther)
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 		return
 	}
 

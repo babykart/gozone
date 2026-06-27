@@ -157,15 +157,20 @@ func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
 		t.Errorf("expected locked_until in the future, got %v", until)
 	}
 
-	// Even the correct password must be rejected while locked.
+	// Even the correct password must be rejected while locked. The user-facing
+	// redirect target must match the wrong-password / unknown-user path
+	// (account enumeration defence — see REVIEW.md).
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=goodpass"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	h.Login(w, r)
 
 	loc := w.Header().Get("Location")
-	if !strings.Contains(loc, "account_locked") {
-		t.Errorf("expected redirect to account_locked, got %q", loc)
+	if !strings.Contains(loc, invalidCredentialsError) {
+		t.Errorf("locked-account redirect must use the generic %q error code, got %q", invalidCredentialsError, loc)
+	}
+	if strings.Contains(loc, "account_locked") {
+		t.Errorf("locked-account response must not leak the lockout state, got %q", loc)
 	}
 }
 
@@ -444,4 +449,127 @@ func TestLogin_TwoAdmins_TargetedAdminLocked(t *testing.T) {
 	if !locked {
 		t.Error("admin1 should be locked when admin2 still exists — there is no last-admin exemption for it")
 	}
+}
+
+// TestLogin_ErrorMessage_NoEnumeration verifies the REVIEW.md fix: the
+// user-facing redirect target is identical whether the username is
+// unknown, the password is wrong, or the account is locked. An attacker
+// who triggers a lockout on a guessed username must not be able to
+// distinguish the locked-account response from the wrong-password response.
+func TestLogin_ErrorMessage_NoEnumeration(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Drive the existing user over the lockout threshold (10 by default).
+	for i := 0; i < 11; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+	}
+
+	// Confirm the account is locked before sampling the responses — otherwise
+	// the "locked" branch would silently fall back to the wrong-password path.
+	locked, _, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Fatalf("precondition: account must be locked for this test to be meaningful")
+	}
+
+	cases := []struct {
+		name     string
+		username string
+		password string
+	}{
+		{"unknown_user", "ghost", "anything"},
+		{"wrong_password", "victim", "wrong"},
+		{"locked_account", "victim", "goodpass"},
+	}
+
+	var redirectLocs []string
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username="+tc.username+"&password="+tc.password))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+		redirectLocs = append(redirectLocs, w.Header().Get("Location"))
+	}
+
+	for i, tc := range cases {
+		if !strings.Contains(redirectLocs[i], "error="+invalidCredentialsError) {
+			t.Errorf("%s: redirect must use the generic %q error code, got %q",
+				tc.name, invalidCredentialsError, redirectLocs[i])
+		}
+		if strings.Contains(redirectLocs[i], "account_locked") {
+			t.Errorf("%s: response must not leak the lockout state, got %q", tc.name, redirectLocs[i])
+		}
+	}
+
+	// All three redirect targets must be byte-for-byte identical. This is
+	// the strongest guarantee that no enumeration vector remains.
+	for i := 1; i < len(redirectLocs); i++ {
+		if redirectLocs[i] != redirectLocs[0] {
+			t.Errorf("redirect mismatch: %s case=%q vs base %q",
+				cases[i].name, redirectLocs[i], redirectLocs[0])
+		}
+	}
+
+	// The loginErrorBanner lookup is the second half of the defence: even
+	// if the query code accidentally regressed, the banner mapping must
+	// collapse every authentication failure to the same message.
+	banner := loginErrorBanner(invalidCredentialsError)
+	if banner == "" {
+		t.Fatalf("missing banner for %q", invalidCredentialsError)
+	}
+}
+
+// TestLoginErrorBanner_Mapping guards the message lookup so future login
+// error codes cannot accidentally bypass the mapping and echo raw query
+// values into the banner.
+func TestLoginErrorBanner_Mapping(t *testing.T) {
+	if got := loginErrorBanner(invalidCredentialsError); got == "" {
+		t.Errorf("missing banner for %q", invalidCredentialsError)
+	}
+	if got := loginErrorBanner("nonexistent_code"); got != "" {
+		t.Errorf("unknown code must map to empty banner, got %q", got)
+	}
+	if got := loginErrorBanner(""); got != "" {
+		t.Errorf("empty code must map to empty banner, got %q", got)
+	}
+	// Defence against regression: the historical "account_locked" code must
+	// no longer map to a distinct banner (otherwise the enumeration vector
+	// returns).
+	if _, exists := loginErrorMessages["account_locked"]; exists {
+		t.Errorf("loginErrorMessages must not contain account_locked (enumeration vector)")
+	}
+}
+
+func TestDebugLogin(t *testing.T) {
+	h := newTestHandler(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/login?error=invalid_credentials", nil)
+	h.LoginPage(w, r)
+	t.Logf("Body length: %d", w.Body.Len())
+	t.Logf("Body: %q", w.Body.String())
+	t.Logf("Code: %d", w.Code)
+	// Try executing directly
+	data := map[string]interface{}{
+		"Title":   "Login - " + h.Cfg.Server.AppName,
+		"Error":   loginErrorBanner(r.URL.Query().Get("error")),
+		"AppName": h.Cfg.Server.AppName,
+	}
+	t.Logf("Data: %+v", data)
+	if err := h.Tmpl.ExecuteTemplate(w, "login.html", data); err != nil {
+		t.Logf("Template error: %v", err)
+		t.Logf("Body after error: %q", w.Body.String())
+	}
+	t.Logf("Final body: %q", w.Body.String())
 }

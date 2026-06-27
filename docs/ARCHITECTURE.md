@@ -279,16 +279,15 @@ LoginHandler
   │
   ├── User found:
   │   ├── SELECT locked_until → if in the future, reject (no bcrypt work)
-  │   │   └── redirect /login?error=account_locked
   │   ├── bcrypt.CompareHashAndPassword(user.PasswordHash, password)
   │   │
-  │   ├── Wrong password:
+  │   ├── Wrong password OR locked account:
   │   │   ├── INSERT login_attempts (success=0, user_id=user.ID)
   │   │   ├── IncrementFailedLogins:
   │   │   │   ├── UPDATE users SET failed_login_attempts = failed_login_attempts + 1
   │   │   │   └── if count >= max_failed_attempts:
   │   │   │       └── UPDATE users SET locked_until = now+lockout_duration
-  │   │   └── redirect /login?error=invalid_credentials
+  │   │   └── redirect /login?error=invalid_credentials  ← SAME code as user-not-found
   │   │
   │   └── Correct password:
   │       ├── GenerateToken (HS256, JWT key derived from server.secret_key via HKDF-SHA256)
@@ -554,6 +553,10 @@ The login endpoint is protected by three layers, all of which must allow:
 3. **Persistent per-account lockout** — `users.failed_login_attempts` and `users.locked_until` columns; locked accounts are rejected before any bcrypt work (no timing side channel)
 
 Failed attempts (whether the username exists or not) are recorded in `login_attempts` for forensics and purged hourly. Admin can manually lock/unlock any user from `/users` — see LockUser/UnlockUser handlers and the `lock_user`/`unlock_user` activity log actions.
+
+### Account-Enumeration Defence (identical error responses)
+
+All three failure paths — unknown user, wrong password, locked account — return the **same** redirect target (`/login?error=invalid_credentials`) and the same generic banner ("Invalid username or password."). The mapping is centralised in `loginErrorMessages` so the raw query code cannot leak into the rendered template. An attacker who triggers a lockout by spraying wrong passwords at a guessed username observes no different signal than when guessing an unknown username — the constant-time dummy bcrypt compare (`internal/handlers/auth.go`) covers the timing channel.
 
 ### Client IP Spoofing Resistance
 

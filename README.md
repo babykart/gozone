@@ -9,7 +9,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **Zone Management**: List, create, edit, and delete DNS zones with pagination, search, and per-page controls
 - **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges and inline editing
 - **RRSet Comments**: View, add, and edit PowerDNS comments per RRSet through the web UI, CSV import/export, and REST API
-- **Brute-force Protection**: Per-IP and per-username login rate-limiters (compound AND), persistent per-account lockout after repeated failures, audit trail of every attempt
+- **Brute-force Protection**: Per-IP and per-username login rate-limiters (compound AND), persistent per-account lockout after repeated failures, audit trail of every attempt, identical generic error response across unknown user / wrong password / locked account to block account enumeration
 - **Multi-database Support**: SQLite (default), MySQL, and PostgreSQL are supported. Migrations are versioned by content hash with multi-instance locks.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
@@ -110,6 +110,8 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | `login_lock.attempts_retention_hours` | `GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS` | `24` | How long a login attempt is kept in the `login_attempts` audit table before being purged. |
 
 The client IP is resolved through chi's `ClientIPFrom*` middleware: by default `ClientIPFromRemoteAddr` (TCP source only, fail-closed against XFF/Real-IP spoofing). When `server.trusted_proxies` is configured with a list of CIDR ranges, the middleware switches to `ClientIPFromXFF` and walks XFF right-to-left until the first non-trusted hop. Leave `trusted_proxies` empty when GoZone is directly reachable on the public Internet — an attacker in direct access cannot rotate `X-Forwarded-For` to bypass the rate-limit.
+
+All three authentication failure paths — unknown username, wrong password, locked account — return the **same** redirect target (`/login?error=invalid_credentials`) and the same generic banner ("Invalid username or password."). The mapping is centralised in `loginErrorMessages` so the raw query code cannot leak into the rendered template, closing the account-enumeration channel that a different error message (e.g. `account_locked`) would otherwise expose. The constant-time dummy bcrypt compare on unknown users covers the timing channel; per-IP, per-username, and persistent account lockouts cover the rate channel.
 
 ### Admin User (initial seed)
 
