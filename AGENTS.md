@@ -66,3 +66,5 @@ considering the task complete. Use `// #nosec Gxxx` annotations only for intenti
 ## Commit convention
 
 Commits must always respect the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification).
+
+Messages must remain **concise and synthetic** — a one-line summary (≤ 72 chars on the subject line) plus a short body that lists the actual code/test/doc touchpoints and references the relevant REVIEW.md entry. Avoid prose-style prose, full code snippets, or rationale that belongs in the PR description rather than the commit log.
