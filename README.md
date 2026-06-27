@@ -113,6 +113,57 @@ The client IP is resolved through chi's `ClientIPFrom*` middleware: by default `
 
 All three authentication failure paths — unknown username, wrong password, locked account — return the **same** redirect target (`/login?error=invalid_credentials`) and the same generic banner ("Invalid username or password."). The mapping is centralised in `loginErrorMessages` so the raw query code cannot leak into the rendered template, closing the account-enumeration channel that a different error message (e.g. `account_locked`) would otherwise expose. The constant-time dummy bcrypt compare on unknown users covers the timing channel; per-IP, per-username, and persistent account lockouts cover the rate channel.
 
+#### Recovering a locked admin
+
+When the only admin account is locked (brute-force storm, manual lock, lost credentials, etc.) the Web UI is no longer reachable: the `Unlock` button on `/admin/users` requires another non-locked admin to act. The emergency recovery path is the `gozone unlock` CLI subcommand, which opens the configured database directly and clears the lockout without going through the HTTP flow.
+
+```bash
+# Unlock by username (case-insensitive lookup; default config.yaml).
+gozone unlock --user admin
+
+# Unlock by numeric user ID — handy when the username is unknown.
+gozone unlock --user 1
+
+# Custom config path (e.g. when running outside the install directory).
+gozone unlock --user admin --config /etc/gozone/config.yaml
+```
+
+In containerised deployments, exec into the running container first:
+
+```bash
+# Docker Compose (service name: gozone, see docker-compose.yml).
+docker compose exec gozone gozone unlock --user admin
+
+# Kubernetes (adjust the deployment name and namespace).
+kubectl exec -n gozone deploy/gozone -- gozone unlock --user admin
+```
+
+The action is **idempotent**: unlocking an already-unlocked user is a no-op on the database side but still writes an `unlock_user_cli` entry in the `activity_logs` table, so the audit trail always records the operator's intervention. Verify the unlock took effect by inspecting the user row:
+
+```bash
+# SQLite (default; adjust the path to match database.path in config.yaml)
+sqlite3 /var/lib/gozone/gozone.db \
+  "SELECT id, username, role, enabled, failed_login_attempts, locked_until FROM users WHERE id = 1;"
+
+# PostgreSQL
+psql -U gozone -d gozone \
+  -c "SELECT id, username, role, enabled, failed_login_attempts, locked_until FROM users WHERE id = 1;"
+
+# Recent unlock events from the audit trail
+sqlite3 /var/lib/gozone/gozone.db \
+  "SELECT id, user_id, action, created_at, substr(details, 1, 60) FROM activity_logs WHERE action LIKE 'unlock_user%' ORDER BY id DESC LIMIT 10;"
+```
+
+Common failure modes:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `--user is required (use --user <id> or --user <username>)` | Flag omitted | Both `--user <id>` and `--user <username>` are accepted. |
+| `user "ghost" not found` | Username typo or deleted account | Resolve the ID first with a `SELECT id, username FROM users` query. |
+| `open database: ...` | Binary cannot reach the configured DB | Check `--config` points at the right file and the process has read/write access to the data directory. |
+
+> The CLI only clears the lockout — it does **not** reset the password. To recover a forgotten password without the Web UI, generate a bcrypt hash (GoZone uses `bcrypt.DefaultCost`) and run `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database.
+
 ### Admin User (initial seed)
 
 | YAML Path | Environment Variable | Default |
