@@ -354,6 +354,30 @@ body.sidebar-collapsed .main-content {
     padding: 1.5rem;
 }
 
+/* Progressive widening on large viewports. The mobile/tablet branch below
+ * (max-width: 768px) only adjusts the .container padding, so these
+ * min-width rules never apply to phones/tablets — they only kick in once
+ * the viewport clears the 1400px baseline, giving operators on 27"+ monitors
+ * (1440p/4K) enough horizontal room for the zone records table and its
+ * newly promoted Comment column without forcing a horizontal scroll. */
+@media (min-width: 1600px) {
+    .container {
+        max-width: 1680px;
+    }
+}
+
+@media (min-width: 1920px) {
+    .container {
+        max-width: 1840px;
+    }
+}
+
+@media (min-width: 2400px) {
+    .container {
+        max-width: 2200px;
+    }
+}
+
 /* Page Header */
 .page-header {
     display: flex;
