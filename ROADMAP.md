@@ -2,6 +2,11 @@
 
 Remaining tasks to improve the security, quality, and performance of GoZone.
 
+> **Status as of 2026-06-27 (HEAD ahead of `e7a1963`, uncommitted).**
+> One ROADMAP item is now **closed** — see the checkbox update under *Password Enforcement → Account lockout* below. Several other security / quality follow-ups tracked outside the ROADMAP (account-enumeration mitigation, last-admin lockout exemption + CLI unlock, RRSet comments UI + API + CSV, REST API `clear_comments` sentinel, `?name=` FQDN canonicalisation, `InsertIgnore` explicit conflict columns, per-page selector visibility on single-page lists, CSV / BIND export tweaks) have been delivered. See `REVIEW.md` for the full audit trail (suivi table + open items list).
+>
+> **Still open from this file:** everything in *OpenID Connect / OAuth2*, *Monitoring and Observability*, *Password policy / expiration / hashing*, and *Performance Targets*. The two security Majeurs still on REVIEW.md (default `admin`/`admin` password without forced change, no minimum-length policy) overlap with the *Password Enforcement* section below and remain to be addressed there.
+
 ## OpenID Connect / OAuth2
 
 - [ ] **OAuth2 / OIDC provider configuration**
@@ -72,10 +77,11 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Force change on next login after expiry
   - Admin reset triggers forced change
 
-- [ ] **Account lockout**
-  - Lock account after N failed login attempts (default 5)
-  - Lockout duration (default 15 minutes) or admin unlock
-  - IP-based rate limiting on login endpoint
+- [x] **Account lockout**
+  - [x] Lock account after N failed login attempts (default 5)
+  - [x] Lockout duration (default 15 minutes) or admin unlock
+  - [x] IP-based rate limiting on login endpoint
+  - **Delivered in commit `25ea7fa` + follow-ups.** Layered defense: persistent DB lockout (`failed_login_attempts`, `locked_until`, `login_attempts` table × 4 indexes), per-IP chi token bucket, per-username AND-compounded limiter, last-admin exemption (`Tx.IsLastEnabledAdmin` resets the counter so a sliding-window attack still hits the lockout on the next failure), admin lock/unlock UI, CLI `gozone unlock --user <id|username>`. See REVIEW.md § *Brute-Force Protection* and § *Mineurs* for the full audit trail.
 
 - [ ] **Password hashing**
   - Configurable bcrypt cost (currently hardcoded, make env-configurable)
