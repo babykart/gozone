@@ -918,6 +918,149 @@ func TestAPIUpdateRecord_CommentsAbsentInBody(t *testing.T) {
 	}
 }
 
+// TestAPIUpdateRecord_ClearCommentsTrue verifies the REVIEW.md mineur fix
+// "API REST : pas de signal explicite pour purger les commentaires RRSet":
+// a client can set "clear_comments":true on the PUT body to wipe all existing
+// comments without resorting to the round-trip-unsafe "comments":[] convention
+// (which UnmarshalJSON normalises to "preserve").
+//
+// The handler-level state (`CommentPatch.Clear`) is observed indirectly via
+// the raw PATCH body, which is the form PDNS actually sees: a `Clear=true`
+// patch marshals to `"comments":[]`. Re-decoding the body would lose the
+// `Clear` flag (UnmarshalJSON never sets it — by design, see CommentPatch
+// doc), so we assert against the raw wire form instead.
+func TestAPIUpdateRecord_ClearCommentsTrue(t *testing.T) {
+	var sent []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			sent, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"clear_comments":true}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(string(sent), `"comments":[]`) {
+		t.Errorf("PDNS body must carry the explicit comments:[] purge, got %s", sent)
+	}
+	if strings.Contains(string(sent), `"clear_comments"`) {
+		t.Errorf("clear_comments sentinel must not leak to PDNS, got %s", sent)
+	}
+}
+
+// TestAPIUpdateRecord_ClearCommentsTrue_OverridesItems documents the
+// exclusivity rule discussed in REVIEW.md: when both `clear_comments` and a
+// non-empty `comments` array are sent, the clear wins and the supplied items
+// are discarded. This mirrors the web form's behaviour where the
+// `comment_clear` checkbox overrides the textarea. Asserted on the raw PATCH
+// body since CommentPatch.UnmarshalJSON normalises `[]` to a nil Items slice
+// (Clear is never set on re-decode).
+func TestAPIUpdateRecord_ClearCommentsTrue_OverridesItems(t *testing.T) {
+	var sent []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			sent, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"comments":[{"content":"ignored"}],"clear_comments":true}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(string(sent), `"comments":[]`) {
+		t.Errorf("clear_comments must win over supplied items, expected comments:[] in body, got %s", sent)
+	}
+	if strings.Contains(string(sent), `"ignored"`) {
+		t.Errorf("supplied comments items must be discarded, got body %s", sent)
+	}
+}
+
+// TestAPIUpdateRecord_ClearCommentsFalse verifies that an explicit
+// `clear_comments:false` is treated identically to an absent field: the
+// PATCH body never carries a `comments` field, so PDNS preserves the existing
+// list. The explicit-false case is what the `*bool` sentinel exists for — a
+// plain `bool` could not tell "absent" from "false" and would lose the
+// distinction on every PUT.
+func TestAPIUpdateRecord_ClearCommentsFalse(t *testing.T) {
+	var sent []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			sent, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"clear_comments":false}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(string(sent), `"comments"`) {
+		t.Errorf("clear_comments:false must not inject a comments field, got %s", sent)
+	}
+}
+
+// TestAPIUpdateRecord_ClearCommentsAbsentRejectsEmptyComments is the
+// round-trip-safety regression: without the `clear_comments` sentinel, the
+// API path must never emit a PDNS purge. A client that GETs an RRSet (PDNS
+// returns `comments":[]` for an empty list) and PUTs it back must observe a
+// preserve, not a purge — i.e. the PATCH body carries `"comments":null`,
+// not `"comments":[]` and not a clear flag.
+func TestAPIUpdateRecord_ClearCommentsAbsentRejectsEmptyComments(t *testing.T) {
+	var sent []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			sent, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"comments":[]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	bodyStr := string(sent)
+	if strings.Contains(bodyStr, `"comments":[]`) {
+		t.Errorf("comments:[] without clear_comments sentinel must not leak through as a purge, got body %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"comments":null`) {
+		t.Errorf("expected comments:null (PDNS preserve) in PATCH body, got %s", bodyStr)
+	}
+	if strings.Contains(bodyStr, `"clear_comments"`) {
+		t.Errorf("clear_comments sentinel must not leak to PDNS, got body %s", bodyStr)
+	}
+}
+
 func TestAPIStats_PDNSError(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()

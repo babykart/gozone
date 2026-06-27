@@ -283,25 +283,46 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 //
 // Uses the REPLACE changetype to ensure idempotent updates. As with creation,
 // MX/SRV priority is taken from the "priority" field and embedded into content.
+//
+// The body also accepts an optional GoZone-only sentinel `clear_comments`
+// (bool). When set to true it translates to a PDNS "comments":[] purge before
+// the request is forwarded: all existing comments on the RRSet are dropped,
+// any `comments` array supplied in the same body is discarded. This is the
+// REST counterpart of the web form's `comment_clear` checkbox; the field is
+// write-only and is never returned by GET /records.
 func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
-	var rrset models.RRSet
-	if err := json.NewDecoder(r.Body).Decode(&rrset); err != nil {
+	var req apiRRSetUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeInvalidJSON, "invalid JSON body")
 		return
 	}
 
-	if err := prepareAPIRecordSet(&rrset, zoneID); err != nil {
+	if req.ClearComments != nil && *req.ClearComments {
+		req.RRSet.Comments = &models.CommentPatch{Clear: true}
+	}
+
+	if err := prepareAPIRecordSet(&req.RRSet, zoneID); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
 		return
 	}
 
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
+	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, req.RRSet); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to update record", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record updated"})
+}
+
+// apiRRSetUpdateRequest is the JSON body shape accepted by PUT /api/v1/zones/{zone_id}/records.
+// It embeds models.RRSet so the documented RRSet fields stay flat in the wire
+// payload, and adds the GoZone-only `clear_comments` sentinel that lets clients
+// purge existing RRSet comments without resorting to the round-trip-unsafe
+// "comments":[] convention (which UnmarshalJSON normalises to "preserve").
+type apiRRSetUpdateRequest struct {
+	models.RRSet
+	ClearComments *bool `json:"clear_comments,omitempty"`
 }
 
 // APIDeleteRecord deletes a record from a zone by name and type (DELETE /api/v1/zones/{zone_id}/records).

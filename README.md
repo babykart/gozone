@@ -465,7 +465,7 @@ The `comments` array is omitted from the PATCH payload when left empty or absent
 
 > The REST API is a pass-through for the `comments` field: the array is forwarded to PowerDNS exactly as the client sent it, with no implicit deduplication, padding, or clearing. If you want to **add** a comment to an existing list, GET the RRSet first (returns the current `comments`), merge your additions client-side, and PUT the combined list back. The web UI's textarea + "Clear all comments" checkbox builds the patch for you on the form path; the API path leaves that work to the caller.
 >
-> Note: the current API surface does not expose an explicit "clear comments" signal. Sending an empty `comments` array (`"comments":[]`) is normalised by GoZone's `CommentPatch` wrapper to a preserve semantic, so existing comments are kept untouched. To clear comments via automation, either issue a delete + recreate sequence or use the web UI's "Clear all comments" checkbox (which sends the purge signal directly to PowerDNS).
+> **Clearing comments via the API.** The PUT body accepts an additional GoZone-only boolean `clear_comments` (write-only, never returned by GET). Setting `"clear_comments": true` purges every existing comment on the RRSet — it is the API counterpart of the web form's "Clear all comments" checkbox. The sentinel is exclusive: any `comments` array supplied in the same body is discarded. To replace existing comments atomically, GET → modify → PUT without the sentinel. `clear_comments` is consumed by GoZone and never reaches PowerDNS.
 
 Response `201`:
 
@@ -476,10 +476,18 @@ Response `201`:
 #### Update record
 
 ```bash
+# Replace the records for www.example.com.
 curl -X PUT \
   -H "X-API-Key: gozone_yourkey" \
   -H "Content-Type: application/json" \
   -d '{"name":"www.example.com","type":"A","ttl":600,"records":[{"content":"5.6.7.8"}]}' \
+  http://localhost:8080/api/v1/zones/example.com/records
+
+# Purge every existing comment on the same RRSet (GoZone-only sentinel).
+curl -X PUT \
+  -H "X-API-Key: gozone_yourkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"www.example.com","type":"A","ttl":600,"records":[{"content":"5.6.7.8"}],"clear_comments":true}' \
   http://localhost:8080/api/v1/zones/example.com/records
 ```
 

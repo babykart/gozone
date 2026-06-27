@@ -543,7 +543,23 @@ The Edit Record page (`web/templates/record_edit.html`) and the inline editor on
 
 #### API clearing flow
 
-The current REST API surface does not expose an explicit clear signal. GoZone's `CommentPatch` normalises `"comments":[]` to a preserve semantic on read-back, so API clients cannot purge comments by sending an empty array. Use the web UI's checkbox or sequence a delete + recreate to clear comments via automation.
+The PUT `/api/v1/zones/{zone_id}/records` endpoint accepts an additional GoZone-only boolean `clear_comments` (write-only, never returned by GET). The body shape is the RRSet as documented plus this single sentinel field; embedding is done via an unexported `apiRRSetUpdateRequest` wrapper so the RRSet fields stay flat on the wire:
+
+```go
+type apiRRSetUpdateRequest struct {
+    models.RRSet
+    ClearComments *bool `json:"clear_comments,omitempty"`
+}
+```
+
+Behaviour:
+
+- `clear_comments` absent or `false` → no purge, normal pass-through (Comments pointer is nil or holds Items). Sends preserve or replace semantics.
+- `clear_comments: true` → handler sets `Comments = &CommentPatch{Clear: true}` and the `ClearComments` sentinel is **not** forwarded to PowerDNS (only the resulting `"comments":[]` reaches the upstream API). Any `comments` array supplied in the same body is discarded (the clear wins, mirroring the web form's `comment_clear` checkbox vs. textarea). This exclusivity is the only sane interpretation of an explicit purge marker; "clear then add" would require server-side fetch of the existing list and is out of scope.
+
+The `*bool` (not `bool`) is what makes the absent-vs-false distinction possible. A plain `bool` could not tell "client didn't say" from "client said no" and would silently flip to "preserve" whenever the field was missing from the body — defeating the point of an explicit sentinel.
+
+`CommentPatch.UnmarshalJSON` is intentionally unchanged: it still never sets `Clear`. This keeps the round-trip safety contract (PDNS GET returns `comments:[]` → naive PUT must preserve, not purge) intact for clients that don't use the new sentinel.
 
 #### Comment patch semantics per code path
 
@@ -554,7 +570,8 @@ The `comments` field is treated differently depending on how the request reaches
 | Web form (`CreateRecord`, `UpdateRecord`, `InlineUpdateRecord`) | `buildCommentPatch(text, clear)` | Reads `comment` + `comment_clear` form fields; emits `nil` (preserve), `Items` patch (replace) or `Clear` patch (purge). |
 | Web batch (`BatchCreateRecords`) | `buildCommentsPatch(existing, clear, newLines...)` | Fetches existing comments from PDNS, merges with new lines, **deduplicates** against both the preserved list and earlier new lines so replaying the same batch never grows the list. |
 | CSV import (`parseCSVZone`) | direct `*CommentPatch` builder | Splits multi-line cells, dedupes via `appendIfMissing` per RRSet. |
-| REST API (`APICreateRecord`, `APIUpdateRecord`) | none — pass-through | The `comments` array is forwarded to PDNS **exactly as the client sent it** (no implicit dedup, no padding, no clearing). The client is in control: omit the field to preserve, send `[]` (normalised to preserve, see above) or `[…]` to replace. |
+| REST API create (`APICreateRecord`) | none — pass-through | The `comments` array is forwarded to PDNS **exactly as the client sent it** (no implicit dedup, no padding, no clearing). |
+| REST API update (`APIUpdateRecord`) | optional `clear_comments` sentinel → `&CommentPatch{Clear: true}` | Same pass-through for the array, plus the `clear_comments:true` marker adds an explicit purge path. Sentinel is stripped before forwarding to PDNS. |
 
 This split exists because the web UI drives a *merge* workflow (existing + user input → REPLACE) while the REST API exposes a *REPLACE* workflow (full new list → REPLACE). Documented in `README.md` (Records → comments array note).
 
