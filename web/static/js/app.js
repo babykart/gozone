@@ -182,16 +182,24 @@ function saveRecordRow(btn) {
                     rvComments.parentNode.removeChild(rvComments);
                 }
             } else if (trimmedComment) {
-                var contentCell = row.querySelector('.ev-content').parentNode;
+                // No read-only comment block exists yet — create one. Since
+                // the dedicated Comment column landed in zone_view.html,
+                // .ev-comments lives in the .col-comment cell, NOT in the
+                // Content cell. Insert the new read-only block into the
+                // comment cell, before the edit textarea, so the
+                // read-only block stays visually paired with the textarea
+                // that created it. (Previously this code inserted into
+                // row.querySelector('.ev-content').parentNode — the
+                // Content cell — which raised DOMException
+                // "Node.insertBefore: Child to insert before is not a
+                // child of this node" because .ev-comments no longer
+                // belongs to that cell after the column split.)
+                var commentCell = row.querySelector('.ev-comments').parentNode;
                 var newRv = document.createElement('div');
                 newRv.className = 'rv rv-comments record-comments';
                 newRv.textContent = trimmedComment + '\n';
                 var editComments = row.querySelector('.ev-comments');
-                if (editComments) {
-                    contentCell.insertBefore(newRv, editComments);
-                } else {
-                    contentCell.appendChild(newRv);
-                }
+                commentCell.insertBefore(newRv, editComments);
             }
             var clearCb = row.querySelector('.ev-comment-clear-cb');
             if (clearCb) clearCb.checked = false;
