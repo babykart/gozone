@@ -545,6 +545,19 @@ The Edit Record page (`web/templates/record_edit.html`) and the inline editor on
 
 The current REST API surface does not expose an explicit clear signal. GoZone's `CommentPatch` normalises `"comments":[]` to a preserve semantic on read-back, so API clients cannot purge comments by sending an empty array. Use the web UI's checkbox or sequence a delete + recreate to clear comments via automation.
 
+#### Comment patch semantics per code path
+
+The `comments` field is treated differently depending on how the request reaches GoZone:
+
+| Path | Helper used | Behaviour |
+|------|-------------|-----------|
+| Web form (`CreateRecord`, `UpdateRecord`, `InlineUpdateRecord`) | `buildCommentPatch(text, clear)` | Reads `comment` + `comment_clear` form fields; emits `nil` (preserve), `Items` patch (replace) or `Clear` patch (purge). |
+| Web batch (`BatchCreateRecords`) | `buildCommentsPatch(existing, clear, newLines...)` | Fetches existing comments from PDNS, merges with new lines, **deduplicates** against both the preserved list and earlier new lines so replaying the same batch never grows the list. |
+| CSV import (`parseCSVZone`) | direct `*CommentPatch` builder | Splits multi-line cells, dedupes via `appendIfMissing` per RRSet. |
+| REST API (`APICreateRecord`, `APIUpdateRecord`) | none — pass-through | The `comments` array is forwarded to PDNS **exactly as the client sent it** (no implicit dedup, no padding, no clearing). The client is in control: omit the field to preserve, send `[]` (normalised to preserve, see above) or `[…]` to replace. |
+
+This split exists because the web UI drives a *merge* workflow (existing + user input → REPLACE) while the REST API exposes a *REPLACE* workflow (full new list → REPLACE). Documented in `README.md` (Records → comments array note).
+
 ### Brute-Force Protection (defense-in-depth on /login)
 
 The login endpoint is protected by three layers, all of which must allow:

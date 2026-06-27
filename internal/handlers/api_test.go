@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -841,6 +842,79 @@ func TestAPIDeleteRecord_PDNSError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+// TestAPIUpdateRecord_CommentsPassedThroughUnchanged verifies the REVIEW.md
+// note "reste à vérifier que l'API JSON ne déclenche pas de re-déduplication
+// incorrecte": the REST path does NOT go through buildCommentsPatch, so the
+// `comments` array is forwarded to PowerDNS exactly as the client sent it
+// (no implicit dedup, no clearing, no padding with existing comments). The
+// client is in full control — same PDNS REPLACE semantics documented in the
+// API section of the README.
+func TestAPIUpdateRecord_CommentsPassedThroughUnchanged(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	// Client sends the same content twice in the comments array — the API
+	// path must NOT silently dedup them; PowerDNS replaces the list and the
+	// duplicates end up on the RRSet exactly as transmitted.
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"comments":[{"content":"dup"},{"content":"dup"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 rrset sent to PDNS, got %d", len(sent))
+	}
+	patch := sent[0].Comments
+	if patch == nil || patch.Clear {
+		t.Fatalf("expected Items patch (no Clear), got %+v", patch)
+	}
+	if len(patch.Items) != 2 {
+		t.Fatalf("API must forward duplicates unchanged, expected 2 comments, got %d (%+v)",
+			len(patch.Items), patch.Items)
+	}
+	if patch.Items[0].Content != "dup" || patch.Items[1].Content != "dup" {
+		t.Errorf("expected both comments to be 'dup', got %+v", patch.Items)
+	}
+}
+
+// TestAPIUpdateRecord_CommentsAbsentInBody verifies that omitting the
+// `comments` field entirely leaves the existing list untouched (no implicit
+// clearing, no implicit padding). The REST API is a pass-through to PDNS,
+// which interprets an absent comments field as "preserve".
+func TestAPIUpdateRecord_CommentsAbsentInBody(t *testing.T) {
+	var sent []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			sent, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	// PATCH body must omit the comments field so PowerDNS preserves the
+	// existing list. The web form path is the one that builds the patch;
+	// the API path must never inject one.
+	if strings.Contains(string(sent), `"comments"`) {
+		t.Errorf("API path must not inject a comments field, got body %s", sent)
 	}
 }
 
