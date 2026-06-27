@@ -1479,6 +1479,84 @@ func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
 	}
 }
 
+// TestInlineUpdateRecord_AddComment_EmitsExplicitEmptyAccount is the
+// regression test for the "adding a comment fails with HTTP 500" bug. The
+// root cause was that models.Comment used `omitempty` on Account, so a fresh
+// comment built by buildCommentPatch sent only `[{"content":"…"}]` to PDNS.
+// The PowerDNS authoritative server's gatherComments() reads `account` via
+// stringFromJson(), which throws JsonException on a missing key — the JSON
+// exception is wrapped into ApiException(HTTP 422), and GoZone mapped every
+// PDNS error to HTTP 500 with the opaque "Failed to update record" body.
+//
+// Fix: drop `omitempty` from models.Comment.Account so GoZone always emits
+// `"account":""` explicitly. Empty string is accepted by PowerDNS
+// (json11::is_string() returns true for "") and by the gsql backends
+// (`account VARCHAR(40) DEFAULT NULL`).
+//
+// This test pins the wire form: any future regression that re-introduces
+// `omitempty` (or strips the account key for another reason) will fail
+// because the PATCH body will no longer contain the explicit empty account.
+func TestInlineUpdateRecord_AddComment_EmitsExplicitEmptyAccount(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") && !strings.Contains(r.URL.Path, "/metadata") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name:     "www.example.com.",
+						Type:     "A",
+						TTL:      300,
+						Records:  []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}},
+						Comments: &models.CommentPatch{Items: nil},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com.&type=A&content=10.0.0.1&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0&comment=managed+by+ops-team"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The PATCH body must carry `"account":""` explicitly. Anything that
+	// re-introduces `omitempty` on Comment.Account will fail this check
+	// before the request even reaches PowerDNS.
+	bodyStr := string(rawBody)
+	if !strings.Contains(bodyStr, `"comments":[{"content":"managed by ops-team","account":""}]`) {
+		t.Errorf("PATCH body must carry explicit empty account, got: %s", bodyStr)
+	}
+	// Belt-and-braces: make sure the broken form is NOT present.
+	if strings.Contains(bodyStr, `"content":"managed by ops-team"}]`) &&
+		!strings.Contains(bodyStr, `"content":"managed by ops-team","account":""}`) {
+		t.Errorf("PATCH body must not send a comments array without the account key, got: %s", bodyStr)
+	}
+}
+
 func TestBatchCreateRecords_SendsCommentsPerRow(t *testing.T) {
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
@@ -1621,8 +1699,8 @@ func TestCommentPatch_MarshalJSON(t *testing.T) {
 		{"nil_items_emit_null", &models.CommentPatch{}, "null"},
 		{"clear_emit_empty_array", &models.CommentPatch{Clear: true}, "[]"},
 		{"clear_overrides_items", &models.CommentPatch{Clear: true, Items: []models.Comment{{Content: "ignored"}}}, "[]"},
-		{"non_empty_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}}}, `[{"content":"x"}]`},
-		{"multiple_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}, {Content: "y"}}}, `[{"content":"x"},{"content":"y"}]`},
+		{"non_empty_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}}}, `[{"content":"x","account":""}]`},
+		{"multiple_items", &models.CommentPatch{Items: []models.Comment{{Content: "x"}, {Content: "y"}}}, `[{"content":"x","account":""},{"content":"y","account":""}]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1679,8 +1757,11 @@ func TestCommentPatch_UnmarshalJSON_RoundTrip(t *testing.T) {
 				t.Fatalf("marshal: %v", err)
 			}
 			if tc.name == "with_items" {
-				if !strings.Contains(string(out), `"comments":[{"content":"x"}]`) {
-					t.Errorf("expected items preserved on round-trip, got %s", out)
+				// Input had no `account` key (legacy PDNS payload tolerated
+				// on read). On write GoZone emits `"account":""` explicitly
+				// to keep PDNS stringFromJson() happy.
+				if !strings.Contains(string(out), `"comments":[{"content":"x","account":""}]`) {
+					t.Errorf("expected items preserved on round-trip with explicit empty account, got %s", out)
 				}
 			} else {
 				if strings.Contains(string(out), `"comments":[]`) {

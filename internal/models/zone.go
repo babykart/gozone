@@ -62,9 +62,23 @@ type RRSet struct {
 }
 
 // Comment is a comment on an RRSet.
+//
+// The wire encoding always carries `account` (no omitempty), even when empty.
+// This matches the PowerDNS authoritative server's PATCH semantics: the
+// implementation reads each comment's `account` field via stringFromJson()
+// which throws JsonException on missing keys, so an absent `account` key
+// (which is what `omitempty` produces for an empty string) is rejected as
+// "Key 'account' not present or not a String" and surfaces to the client
+// as HTTP 422. Sending `"account":""` explicitly is accepted by both
+// PowerDNS (is_string() returns true for "") and the gsql backends
+// (account column is VARCHAR(40) DEFAULT NULL, the empty string is valid).
+//
+// The OpenAPI spec lists account as optional but the implementation has
+// historically required it; this encoding keeps GoZone aligned with the
+// implementation rather than the spec.
 type Comment struct {
 	Content    string `json:"content"`
-	Account    string `json:"account,omitempty"`
+	Account    string `json:"account"`
 	ModifiedAt int64  `json:"modified_at,omitempty"`
 }
 
