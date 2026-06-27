@@ -32,6 +32,7 @@
                 <th>TTL</th>
                 <th class="col-prio">Prio</th>
                 <th>Content</th>
+                <th class="col-comment">Comment</th>
                 <th>Status</th>
                 <th>Actions</th>
             </tr>
@@ -57,6 +58,8 @@
                 <td>
                     <span class="rv rv-content">{{.Content}}</span>
                     <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
+                </td>
+                <td class="col-comment">
                     {{if $rrset.Comments.Items}}
                     <div class="rv rv-comments record-comments">{{range $rrset.Comments.Items}}{{.Content}}
 {{end}}</div>

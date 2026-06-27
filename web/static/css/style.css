@@ -870,7 +870,6 @@ details summary {
 }
 
 .record-comments {
-    margin-top: 0.4rem;
     padding: 0.3rem 0.5rem;
     border-left: 3px solid var(--accent, #2563eb);
     background: var(--bg-subtle, rgba(37, 99, 235, 0.06));
@@ -883,9 +882,14 @@ details summary {
 }
 
 .record-comments-edit {
-    margin-top: 0.4rem;
     width: 100%;
     box-sizing: border-box;
+}
+
+.col-comment {
+    min-width: 14rem;
+    max-width: 28rem;
+    vertical-align: top;
 }
 
 .ev-comment-clear {
