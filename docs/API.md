@@ -201,7 +201,7 @@ curl -X POST \
 | `type` | string | **yes** | Any valid DNS record type |
 | `ttl` | int | **yes** | Time-to-live in seconds |
 | `records` | array | **yes** | Array of record objects |
-| `records[].content` | string | **yes** | Record content |
+| `records[].content` | string | **yes** | Record content. For FQDN-target types (CNAME, NS, PTR, ALIAS, MX, SRV) a trailing dot is appended automatically if missing — PowerDNS rejects unqualified targets. TXT/SPF content is auto-quoted. |
 | `records[].priority` | int | no | For MX and SRV types |
 | `records[].disabled` | bool | no | Default `false` |
 | `comments` | array | no | Array of RRSet comments (see below) |

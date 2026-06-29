@@ -241,7 +241,7 @@ Shows PowerDNS server status (connected/unreachable, version, daemon type), zone
 ### Zone View
 
 Each zone page displays:
-- **Records table** with color-coded type badges (A=blue, AAAA=violet, CNAME=orange, MX=pink, NS=cyan, etc.)
+- **Records table** with color-coded type badges (A=blue, AAAA=violet, CNAME=orange, MX=pink, NS=cyan, etc.) and pagination by individual record rows (not RRSets), so the per-page limit always matches the number of visible table rows
 - **RRSet comments** — view, add, or edit PowerDNS comments per RRSet via the inline editor and dedicated edit page; one comment per line in the textarea
 - **DNSSEC management** — view, create, activate/deactivate, and delete DNSSEC keys (KSK/ZSK) with algorithm selection and DS record display
 - **Zone metadata** (admin only) — manage ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, and other PowerDNS metadata kinds
