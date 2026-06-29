@@ -42,29 +42,27 @@
             {{$csrf := .CSRFToken}}
             {{$zoneName := .Zone.Name}}
             {{range .Records}}
-            {{$rrset := .}}
-            {{range .Records}}
-            <tr data-name="{{$rrset.Name}}" data-type="{{$rrset.Type}}" data-zone-id="{{$zoneID}}" data-csrf="{{$csrf}}" data-original-content="{{.Content}}" data-original-priority="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" data-disabled="{{.Disabled}}">
-                <td class="col-name"><span class="rv rv-name">{{relativeName $rrset.Name $zoneName}}</span><span class="ev ev-name" style="display:none">{{$rrset.Name}}</span></td>
-                <td class="nowrap"><span class="badge badge-type badge-type-{{$rrset.Type}}">{{$rrset.Type}}</span></td>
+            <tr data-name="{{.Name}}" data-type="{{.Type}}" data-zone-id="{{$zoneID}}" data-csrf="{{$csrf}}" data-original-content="{{.Record.Content}}" data-original-priority="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" data-disabled="{{.Record.Disabled}}">
+                <td class="col-name"><span class="rv rv-name">{{relativeName .Name $zoneName}}</span><span class="ev ev-name" style="display:none">{{.Name}}</span></td>
+                <td class="nowrap"><span class="badge badge-type badge-type-{{.Type}}">{{.Type}}</span></td>
                 <td class="nowrap">
-                    <span class="rv rv-ttl">{{$rrset.TTL}}</span>
-                    <input type="number" class="ev ev-ttl form-control-inline" style="display:none" value="{{$rrset.TTL}}" min="0">
+                    <span class="rv rv-ttl">{{.TTL}}</span>
+                    <input type="number" class="ev ev-ttl form-control-inline" style="display:none" value="{{.TTL}}" min="0">
                 </td>
                 <td class="col-prio">
-                    <span class="rv rv-prio">{{if .Priority}}{{.Priority}}{{else}}-{{end}}</span>
-                    <input type="number" class="ev ev-prio form-control-inline" style="display:none" value="{{if .Priority}}{{.Priority}}{{else}}0{{end}}" min="0">
+                    <span class="rv rv-prio">{{if .Record.Priority}}{{.Record.Priority}}{{else}}-{{end}}</span>
+                    <input type="number" class="ev ev-prio form-control-inline" style="display:none" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" min="0">
                 </td>
                 <td>
-                    <span class="rv rv-content">{{.Content}}</span>
-                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Content}}</textarea>
+                    <span class="rv rv-content">{{.Record.Content}}</span>
+                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Record.Content}}</textarea>
                 </td>
                 <td class="col-comment">
-                    {{if $rrset.Comments.Items}}
-                    <div class="rv rv-comments record-comments">{{range $rrset.Comments.Items}}{{.Content}}
+                    {{if .Comments.Items}}
+                    <div class="rv rv-comments record-comments">{{range .Comments.Items}}{{.Content}}
 {{end}}</div>
                     {{end}}
-                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range $rrset.Comments.Items}}{{.Content}}
+                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range .Comments.Items}}{{.Content}}
 {{end}}</textarea>
                     <label class="ev ev-comment-clear" style="display:none;margin-top:0.25rem;font-size:0.8rem">
                         <input type="checkbox" class="ev-comment-clear-cb" value="1">
@@ -72,8 +70,8 @@
                     </label>
                 </td>
                 <td class="nowrap">
-                    <span class="rv rv-status">{{if .Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>
-                    <label class="ev ev-status" style="display:none"><input type="checkbox" class="ev-disabled" {{if .Disabled}}checked{{end}}> Disabled</label>
+                    <span class="rv rv-status">{{if .Record.Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>
+                    <label class="ev ev-status" style="display:none"><input type="checkbox" class="ev-disabled" {{if .Record.Disabled}}checked{{end}}> Disabled</label>
                 </td>
                 <td class="actions-cell">
                     <span class="rv"><button type="button" class="btn btn-sm btn-secondary" data-action="edit-record">Edit</button></span>
@@ -81,15 +79,14 @@
                         <button type="button" class="btn btn-sm btn-primary" data-action="save-record">Save</button>
                         <button type="button" class="btn btn-sm btn-secondary" data-action="cancel-edit">Cancel</button>
                     </span>
-                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" data-confirm="Delete record {{$rrset.Name}}?">
+                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" data-confirm="Delete record {{.Name}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
-                        <input type="hidden" name="name" value="{{$rrset.Name}}">
-                        <input type="hidden" name="type" value="{{$rrset.Type}}">
+                        <input type="hidden" name="name" value="{{.Name}}">
+                        <input type="hidden" name="type" value="{{.Type}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                     </form>
                 </td>
             </tr>
-            {{end}}
             {{end}}
         </tbody>
     </table>

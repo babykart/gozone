@@ -22,6 +22,51 @@ type PageInfo struct {
 	Total      int
 }
 
+// ZoneRecordRow is a single displayable record row in the zone view table.
+// It carries the RRset-level metadata (Name, Type, TTL, Comments) alongside
+// the individual RecordInfo so that pagination counts rows (individual
+// records) rather than RRSets. Without this flattening, a zone with one SOA
+// RRset and one NS RRset containing 10 records would count as "2 items"
+// and fit on a single page of 10, displaying 11 rows — violating the
+// per-page limit the user selected.
+type ZoneRecordRow struct {
+	Name     string
+	Type     string
+	TTL      int
+	Comments *models.CommentPatch
+	Record   models.RecordInfo
+}
+
+// flattenRecords expands a sorted slice of RRSets into individual display
+// rows, preserving the RRset sort order and the record order within each
+// RRset. Each row carries the RRset-level metadata so the template can
+// render TTL, comments, and edit/delete actions without a nested loop.
+func flattenRecords(rrsets []models.RRSet) []ZoneRecordRow {
+	rows := make([]ZoneRecordRow, 0, countRecords(rrsets))
+	for _, rrset := range rrsets {
+		for _, rec := range rrset.Records {
+			rows = append(rows, ZoneRecordRow{
+				Name:     rrset.Name,
+				Type:     rrset.Type,
+				TTL:      rrset.TTL,
+				Comments: rrset.Comments,
+				Record:   rec,
+			})
+		}
+	}
+	return rows
+}
+
+// countRecords returns the total number of individual records across all
+// RRSets, used to pre-allocate the flattened slice.
+func countRecords(rrsets []models.RRSet) int {
+	n := 0
+	for _, rrset := range rrsets {
+		n += len(rrset.Records)
+	}
+	return n
+}
+
 // paginate slices a slice into a page and returns the pagination info.
 // When perPage is 0 or negative, all items are returned as a single page.
 func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
@@ -384,8 +429,13 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	// Sort records: SOA first, NS second, zone apex next, then alpha by name+type.
 	sortZoneRecords(records, zone.Name)
 
+	// Flatten RRSets into individual record rows so that pagination counts
+	// rows (what the user actually sees) rather than RRSets. Without this,
+	// a zone with 1 SOA + 1 NS RRset (10 records) counts as "2 items" and
+	// all 11 rows land on a single page, violating the per-page limit.
+	rows := flattenRecords(records)
 	recordPage, recordPerPage := parsePaginationParams(r, 10)
-	paginatedRecords, recordPageInfo := paginate(records, recordPage, recordPerPage)
+	paginatedRows, recordPageInfo := paginate(rows, recordPage, recordPerPage)
 
 	logPage, logPerPage := parseLogPaginationParams(r, 10)
 	logs, logTotal := h.getZoneActivityLogs(zoneID, logPage, logPerPage)
@@ -413,7 +463,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		"Title":          zone.Name + " - " + h.Cfg.Server.AppName,
 		"User":           user,
 		"Zone":           zone,
-		"Records":        paginatedRecords,
+		"Records":        paginatedRows,
 		"RecordPageInfo": recordPageInfo,
 		"Search":         search,
 		"MetaData":       metadata,

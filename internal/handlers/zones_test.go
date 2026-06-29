@@ -1110,3 +1110,95 @@ func TestSortZoneRecords_TwoSOA(t *testing.T) {
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}
 }
+
+// TestFlattenRecords is the regression test for the "10 lines not respected"
+// bug: pagination used to count RRSets (one SOA + one NS = 2 items) instead
+// of individual record rows (1 SOA + 10 NS = 11 rows), so all 11 rows landed
+// on a single page of 10. flattenRecords expands RRSets into rows so that
+// paginate counts what the user actually sees.
+func TestFlattenRecords(t *testing.T) {
+	rrsets := []models.RRSet{
+		{
+			Name: "example.com.",
+			Type: "SOA",
+			TTL:  3600,
+			Records: []models.RecordInfo{
+				{Content: "ns1.example.com. hostmaster 1 10800 3600 604800 3600"},
+			},
+		},
+		{
+			Name: "example.com.",
+			Type: "NS",
+			TTL:  3600,
+			Records: []models.RecordInfo{
+				{Content: "ns1.example.com."},
+				{Content: "ns2.example.com."},
+				{Content: "ns3.example.com."},
+				{Content: "ns4.example.com."},
+				{Content: "ns5.example.com."},
+				{Content: "ns6.example.com."},
+				{Content: "ns7.example.com."},
+				{Content: "ns8.example.com."},
+				{Content: "ns9.example.com."},
+				{Content: "ns10.example.com."},
+			},
+		},
+	}
+
+	rows := flattenRecords(rrsets)
+
+	if len(rows) != 11 {
+		t.Fatalf("expected 11 flattened rows (1 SOA + 10 NS), got %d", len(rows))
+	}
+
+	// First row must carry the SOA RRset metadata + the single SOA record.
+	if rows[0].Name != "example.com." || rows[0].Type != "SOA" {
+		t.Errorf("row 0: expected SOA, got %s %s", rows[0].Name, rows[0].Type)
+	}
+	if rows[0].Record.Content == "" {
+		t.Errorf("row 0: expected non-empty SOA content")
+	}
+
+	// Rows 1–10 must carry the NS RRset metadata + individual NS records.
+	for i := 1; i <= 10; i++ {
+		if rows[i].Type != "NS" {
+			t.Errorf("row %d: expected NS, got %s", i, rows[i].Type)
+		}
+		if rows[i].Record.Content == "" {
+			t.Errorf("row %d: expected non-empty NS content", i)
+		}
+	}
+
+	// With perPage=10, page 1 must contain exactly 10 rows (the SOA +
+	// 9 NS records), not the entire zone.
+	paged, info := paginate(rows, 1, 10)
+	if len(paged) != 10 {
+		t.Fatalf("page 1: expected 10 rows, got %d", len(paged))
+	}
+	if info.Total != 11 || info.TotalPages != 2 {
+		t.Errorf("expected total=11 totalPages=2, got total=%d totalPages=%d", info.Total, info.TotalPages)
+	}
+
+	// Page 2 must contain the remaining NS record.
+	paged2, info2 := paginate(rows, 2, 10)
+	if len(paged2) != 1 {
+		t.Fatalf("page 2: expected 1 row, got %d", len(paged2))
+	}
+	if paged2[0].Record.Content != "ns10.example.com." {
+		t.Errorf("page 2: expected ns10, got %s", paged2[0].Record.Content)
+	}
+	_ = info2
+}
+
+// TestFlattenRecords_Empty ensures no panic on an empty RRset slice and that
+// the result is a non-nil empty slice (so {{if .Records}} works in the
+// template).
+func TestFlattenRecords_Empty(t *testing.T) {
+	rows := flattenRecords(nil)
+	if rows == nil {
+		t.Fatal("expected non-nil empty slice")
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
