@@ -57,6 +57,8 @@ func TestValidateRecordType(t *testing.T) {
 		{"A record", "A", false},
 		{"AAAA record", "AAAA", false},
 		{"CNAME record", "CNAME", false},
+		{"DNAME record", "DNAME", false},
+		{"MINFO record", "MINFO", false},
 		{"MX record", "MX", false},
 		{"TXT record", "TXT", false},
 		{"SOA record", "SOA", false},
@@ -226,6 +228,12 @@ func TestValidateRecordContent(t *testing.T) {
 		{"CNAME valid", "CNAME", "target.example.com", false},
 		{"CNAME with dot", "CNAME", "target.example.com.", false},
 		{"CNAME invalid", "CNAME", "invalid label with spaces", true},
+		{"DNAME valid", "DNAME", "target.example.com", false},
+		{"DNAME with dot", "DNAME", "target.example.com.", false},
+		{"DNAME invalid", "DNAME", "invalid label with spaces", true},
+		{"MINFO valid", "MINFO", "admin.example.com txt.example.com", false},
+		{"MINFO too few fields", "MINFO", "admin.example.com", true},
+		{"MINFO too many fields", "MINFO", "a.example.com b.example.com extra", true},
 		{"ALIAS valid", "ALIAS", "target.example.com", false},
 		{"NS valid", "NS", "ns1.example.com", false},
 		{"PTR valid", "PTR", "host.example.com", false},
@@ -261,10 +269,10 @@ func TestValidateRecordContent(t *testing.T) {
 func TestValidateRecordType_AllWhitelisted(t *testing.T) {
 	for _, rt := range []string{
 		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",
-		"DNSKEY", "DS", "HINFO", "KEY", "LOC", "MX", "NAPTR",
-		"NS", "NSEC", "NSEC3", "NSEC3PARAM", "OPENPGPKEY", "PTR",
-		"RP", "RRSIG", "SOA", "SPF", "SRV", "SSHFP", "TLSA",
-		"TXT", "URI",
+		"DNAME", "DNSKEY", "DS", "HINFO", "KEY", "LOC", "MINFO",
+		"MX", "NAPTR", "NS", "NSEC", "NSEC3", "NSEC3PARAM",
+		"OPENPGPKEY", "PTR", "RP", "RRSIG", "SOA", "SPF", "SRV",
+		"SSHFP", "TLSA", "TXT", "URI",
 	} {
 		t.Run(rt, func(t *testing.T) {
 			if err := ValidateRecordType(rt); err != nil {

@@ -189,18 +189,70 @@ func TestTypeIsFQDNTarget(t *testing.T) {
 		want  bool
 	}{
 		{"CNAME", true},
+		{"DNAME", true},
 		{"NS", true},
 		{"PTR", true},
 		{"ALIAS", true},
+		{"AFSDB", true},
+		{"NAPTR", true},
 		{"MX", true},
 		{"SRV", true},
 		{"A", false},
 		{"AAAA", false},
 		{"TXT", false},
+		{"SOA", false},
+		{"RP", false},
+		{"NSEC", false},
 		{"", false},
 	} {
 		if got := TypeIsFQDNTarget(tc.rtype); got != tc.want {
 			t.Errorf("TypeIsFQDNTarget(%q) = %t, want %t", tc.rtype, got, tc.want)
+		}
+	}
+}
+
+func TestTypeHasFQDNFields(t *testing.T) {
+	for _, tc := range []struct {
+		rtype string
+		want  bool
+	}{
+		{"SOA", true},
+		{"RP", true},
+		{"MINFO", true},
+		{"NSEC", true},
+		{"CNAME", false},
+		{"MX", false},
+		{"A", false},
+		{"TXT", false},
+		{"", false},
+	} {
+		if got := TypeHasFQDNFields(tc.rtype); got != tc.want {
+			t.Errorf("TypeHasFQDNFields(%q) = %t, want %t", tc.rtype, got, tc.want)
+		}
+	}
+}
+
+func TestFQDNFieldIndices(t *testing.T) {
+	for _, tc := range []struct {
+		rtype string
+		want  []int
+	}{
+		{"SOA", []int{0, 1}},
+		{"RP", []int{0, 1}},
+		{"MINFO", []int{0, 1}},
+		{"NSEC", []int{0}},
+		{"CNAME", nil},
+		{"A", nil},
+	} {
+		got := FQDNFieldIndices(tc.rtype)
+		if len(got) != len(tc.want) {
+			t.Errorf("FQDNFieldIndices(%q) = %v, want %v", tc.rtype, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("FQDNFieldIndices(%q)[%d] = %d, want %d", tc.rtype, i, got[i], tc.want[i])
+			}
 		}
 	}
 }
@@ -216,10 +268,35 @@ func TestEnsureTrailingDot(t *testing.T) {
 		{"MX content", "10 mail.example.com", "10 mail.example.com."},
 		{"MX content with dot", "10 mail.example.com.", "10 mail.example.com."},
 		{"SRV content", "10 5 5060 sip.example.com", "10 5 5060 sip.example.com."},
+		{"AFSDB content", "1 afsdb.example.com", "1 afsdb.example.com."},
+		{"NAPTR content", `100 10 "" "" "" sip.example.com`, `100 10 "" "" "" sip.example.com.`},
 		{"empty", "", ""},
 	} {
 		if got := EnsureTrailingDot(tc.input); got != tc.want {
 			t.Errorf("EnsureTrailingDot(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureTrailingDotFields(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		indices []int
+		want    string
+	}{
+		{"SOA both fields", "ns1.example.com hostmaster.example.com 1 10800 3600 604800 3600", []int{0, 1}, "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600"},
+		{"SOA already dotted", "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600", []int{0, 1}, "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600"},
+		{"SOA mixed", "ns1.example.com hostmaster.example.com. 1 10800 3600 604800 3600", []int{0, 1}, "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600"},
+		{"RP both fields", "admin.example.com txt.example.com", []int{0, 1}, "admin.example.com. txt.example.com."},
+		{"NSEC first only", "next.example.com A AAAA NS", []int{0}, "next.example.com. A AAAA NS"},
+		{"MINFO both fields", "rmailbx.example.com emailbx.example.com", []int{0, 1}, "rmailbx.example.com. emailbx.example.com."},
+		{"empty indices", "ns1.example.com hostmaster.example.com", []int{}, "ns1.example.com hostmaster.example.com"},
+		{"empty content", "", []int{0, 1}, ""},
+		{"index out of range", "only.one.field", []int{0, 1}, "only.one.field."},
+	} {
+		if got := EnsureTrailingDotFields(tc.input, tc.indices); got != tc.want {
+			t.Errorf("EnsureTrailingDotFields(%q, %v) = %q, want %q", tc.input, tc.indices, got, tc.want)
 		}
 	}
 }

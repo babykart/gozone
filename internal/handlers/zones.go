@@ -721,10 +721,10 @@ func sortZoneRecords(records []models.RRSet, zoneName string) {
 func GetRecordTypes() []string {
 	return []string{
 		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",
-		"DNSKEY", "DS", "HINFO", "KEY", "LOC", "MX", "NAPTR",
-		"NS", "NSEC", "NSEC3", "NSEC3PARAM", "OPENPGPKEY", "PTR",
-		"RP", "RRSIG", "SOA", "SPF", "SRV", "SSHFP", "TLSA",
-		"TXT", "URI",
+		"DNAME", "DNSKEY", "DS", "HINFO", "KEY", "LOC", "MINFO",
+		"MX", "NAPTR", "NS", "NSEC", "NSEC3", "NSEC3PARAM",
+		"OPENPGPKEY", "PTR", "RP", "RRSIG", "SOA", "SPF", "SRV",
+		"SSHFP", "TLSA", "TXT", "URI",
 	}
 }
 

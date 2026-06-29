@@ -446,6 +446,158 @@ func TestAPICreateRecord_CNAMEPreservesExistingDot(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_AFSDBEnsuresTrailingDot verifies that AFSDB hostname
+// (last field) gets a trailing dot.
+func TestAPICreateRecord_AFSDBEnsuresTrailingDot(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"sub.example.com.","type":"AFSDB","ttl":3600,"records":[{"content":"1 afsdb.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if got := sent[0].Records[0].Content; got != "1 afsdb.example.com." {
+		t.Errorf("PDNS received content=%q, want %q", got, "1 afsdb.example.com.")
+	}
+}
+
+// TestAPICreateRecord_NAPTREnsuresTrailingDot verifies that NAPTR replacement
+// (last field) gets a trailing dot.
+func TestAPICreateRecord_NAPTREnsuresTrailingDot(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"sip.example.com.","type":"NAPTR","ttl":3600,"records":[{"content":"100 10 \"\" \"\" \"\" sip.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if got := sent[0].Records[0].Content; got != "100 10 \"\" \"\" \"\" sip.example.com." {
+		t.Errorf("PDNS received content=%q, want trailing dot on replacement", got)
+	}
+}
+
+// TestAPICreateRecord_DNAMEEnsuresTrailingDot verifies that DNAME target
+// gets a trailing dot.
+func TestAPICreateRecord_DNAMEEnsuresTrailingDot(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"sub.example.com.","type":"DNAME","ttl":3600,"records":[{"content":"target.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if got := sent[0].Records[0].Content; got != "target.example.com." {
+		t.Errorf("PDNS received content=%q, want %q", got, "target.example.com.")
+	}
+}
+
+// TestAPICreateRecord_SOANormalizesMnameRname verifies that SOA mname and
+// rname (fields 0 and 1) each get a trailing dot, while the numeric fields
+// are left untouched.
+func TestAPICreateRecord_SOANormalizesMnameRname(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"example.com.","type":"SOA","ttl":3600,"records":[{"content":"ns1.example.com hostmaster.example.com 1 10800 3600 604800 3600"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	want := "ns1.example.com. hostmaster.example.com. 1 10800 3600 604800 3600"
+	if got := sent[0].Records[0].Content; got != want {
+		t.Errorf("PDNS received content=%q, want %q", got, want)
+	}
+}
+
+// TestAPICreateRecord_RPNormalizesBothFields verifies that RP mbox and
+// txtname (both FQDN fields) each get a trailing dot.
+func TestAPICreateRecord_RPNormalizesBothFields(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"example.com.","type":"RP","ttl":3600,"records":[{"content":"admin.example.com txt.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	want := "admin.example.com. txt.example.com."
+	if got := sent[0].Records[0].Content; got != want {
+		t.Errorf("PDNS received content=%q, want %q", got, want)
+	}
+}
+
+// TestAPICreateRecord_NSECNormalizesNextDomain verifies that NSEC next_domain
+// (field 0) gets a trailing dot while type mnemonics are untouched.
+func TestAPICreateRecord_NSECNormalizesNextDomain(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"NSEC","ttl":3600,"records":[{"content":"next.example.com A AAAA NS"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	want := "next.example.com. A AAAA NS"
+	if got := sent[0].Records[0].Content; got != want {
+		t.Errorf("PDNS received content=%q, want %q", got, want)
+	}
+}
+
+// TestAPICreateRecord_MINFONormalizesBothFields verifies that MINFO rmailbx
+// and emailbx (both FQDN fields) each get a trailing dot.
+func TestAPICreateRecord_MINFONormalizesBothFields(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"example.com.","type":"MINFO","ttl":3600,"records":[{"content":"rmailbx.example.com emailbx.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	want := "rmailbx.example.com. emailbx.example.com."
+	if got := sent[0].Records[0].Content; got != want {
+		t.Errorf("PDNS received content=%q, want %q", got, want)
+	}
+}
+
 func TestAPICreateRecord_NormalizesName(t *testing.T) {
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))

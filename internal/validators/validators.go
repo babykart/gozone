@@ -131,11 +131,12 @@ func ValidateZoneKind(kind string) error {
 // PowerDNS. See https://doc.powerdns.com/authoritative/http-api/rrtypes.html.
 var recordTypeWhitelist = map[string]bool{
 	"A": true, "AAAA": true, "AFSDB": true, "ALIAS": true, "CAA": true,
-	"CERT": true, "CNAME": true, "DNSKEY": true, "DS": true, "HINFO": true,
-	"KEY": true, "LOC": true, "MX": true, "NAPTR": true, "NS": true,
-	"NSEC": true, "NSEC3": true, "NSEC3PARAM": true, "OPENPGPKEY": true,
-	"PTR": true, "RP": true, "RRSIG": true, "SOA": true, "SPF": true,
-	"SRV": true, "SSHFP": true, "TLSA": true, "TXT": true, "URI": true,
+	"CERT": true, "CNAME": true, "DNAME": true, "DNSKEY": true, "DS": true,
+	"HINFO": true, "KEY": true, "LOC": true, "MINFO": true, "MX": true,
+	"NAPTR": true, "NS": true, "NSEC": true, "NSEC3": true, "NSEC3PARAM": true,
+	"OPENPGPKEY": true, "PTR": true, "RP": true, "RRSIG": true, "SOA": true,
+	"SPF": true, "SRV": true, "SSHFP": true, "TLSA": true, "TXT": true,
+	"URI": true,
 }
 
 // ValidateRecordType checks that the given DNS record type is supported.
@@ -276,8 +277,20 @@ func ValidateRecordContent(recordType, content string) error {
 		return ValidateIPv4(content)
 	case "AAAA":
 		return ValidateIPv6(content)
-	case "CNAME", "ALIAS", "NS", "PTR":
+	case "CNAME", "ALIAS", "NS", "PTR", "DNAME":
 		return ValidateDNSName(content)
+	case "MINFO":
+		parts := strings.Fields(content)
+		if len(parts) != 2 {
+			return fmt.Errorf("MINFO content must have exactly 2 fields: rmailbx emailbx")
+		}
+		if err := ValidateDNSName(parts[0]); err != nil {
+			return fmt.Errorf("MINFO rmailbx: %w", err)
+		}
+		if err := ValidateDNSName(parts[1]); err != nil {
+			return fmt.Errorf("MINFO emailbx: %w", err)
+		}
+		return nil
 	case "MX":
 		// MX content can be "priority target" or just "target"
 		// The priority is handled as a separate field, so content is the FQDN

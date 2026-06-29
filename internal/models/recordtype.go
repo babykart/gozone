@@ -18,10 +18,18 @@ type recordTypeSpec struct {
 	quoted      bool
 	// fqdnTarget indicates that the record content is (or ends with) a DNS
 	// name that PowerDNS requires as a fully-qualified domain name with a
-	// trailing dot. For CNAME/NS/PTR/ALIAS the entire content is the target.
-	// For MX/SRV the target is the last space-separated field, after the
-	// priority has been embedded by JoinPriority.
+	// trailing dot. For CNAME/NS/PTR/ALIAS/DNAME the entire content is the
+	// target. For MX/SRV/AFSDB/NAPTR the target is the last space-separated
+	// field (for MX/SRV this is after the priority has been embedded by
+	// JoinPriority).
 	fqdnTarget bool
+	// fqdnFieldIndices lists the zero-based indices of space-separated fields
+	// that are DNS names requiring a trailing dot, for multi-field record
+	// types where FQDNs are NOT in the last position. Used by SOA (mname,
+	// rname = fields 0,1), RP (rmailbx, emailbx = fields 0,1), MINFO (same),
+	// and NSEC (next_domain = field 0). When nil, no per-field normalisation
+	// is applied.
+	fqdnFieldIndices []int
 	// wireFields is the number of space-separated fields the content has once
 	// the priority is already embedded (PowerDNS read format). It distinguishes
 	// form input ("weight port target" → 3 fields for SRV) from wire content
@@ -36,9 +44,16 @@ var recordTypeSpecs = map[string]recordTypeSpec{
 	"TXT":   {quoted: true},
 	"SPF":   {quoted: true},
 	"CNAME": {fqdnTarget: true},
+	"DNAME": {fqdnTarget: true},
 	"NS":    {fqdnTarget: true},
 	"PTR":   {fqdnTarget: true},
 	"ALIAS": {fqdnTarget: true},
+	"AFSDB": {fqdnTarget: true},
+	"NAPTR": {fqdnTarget: true},
+	"SOA":   {fqdnFieldIndices: []int{0, 1}},
+	"RP":    {fqdnFieldIndices: []int{0, 1}},
+	"MINFO": {fqdnFieldIndices: []int{0, 1}},
+	"NSEC":  {fqdnFieldIndices: []int{0}},
 }
 
 // specFor returns the spec for recordType, or the zero value (no priority, not
@@ -77,6 +92,38 @@ func EnsureTrailingDot(content string) string {
 		return content
 	}
 	return content + "."
+}
+
+// TypeHasFQDNFields reports whether recordType has specific space-separated
+// fields that are DNS names requiring a trailing dot (SOA, RP, MINFO, NSEC).
+// These types use per-field normalisation via EnsureTrailingDotFields rather
+// than the whole-content EnsureTrailingDot, because their FQDN fields are not
+// in the last position.
+func TypeHasFQDNFields(recordType string) bool {
+	return len(specFor(recordType).fqdnFieldIndices) > 0
+}
+
+// FQDNFieldIndices returns the zero-based indices of the space-separated
+// fields that are DNS names requiring a trailing dot. Returns nil for types
+// without per-field FQDN normalisation.
+func FQDNFieldIndices(recordType string) []int {
+	return specFor(recordType).fqdnFieldIndices
+}
+
+// EnsureTrailingDotFields normalises specific space-separated fields to end
+// with a trailing dot. Indices are zero-based. Fields that already end with
+// a dot are left unchanged. Fields outside the content range are skipped.
+func EnsureTrailingDotFields(content string, indices []int) string {
+	if len(indices) == 0 || content == "" {
+		return content
+	}
+	fields := strings.Fields(content)
+	for _, idx := range indices {
+		if idx >= 0 && idx < len(fields) && !strings.HasSuffix(fields[idx], ".") {
+			fields[idx] = fields[idx] + "."
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 // SplitPriority detaches the leading priority from a priority-bearing record's

@@ -554,8 +554,13 @@ func prepareRecordContent(recordType, content string, priority int) (string, int
 	case models.TypeIsQuoted(recordType):
 		return models.QuoteContent(recordType, content), priority
 	case models.TypeIsFQDNTarget(recordType):
-		// CNAME/NS/PTR/ALIAS: the entire content is a DNS name target.
+		// CNAME/NS/PTR/ALIAS/DNAME/AFSDB/NAPTR: the entire content or the
+		// last space-separated field is a DNS name target.
 		return models.EnsureTrailingDot(content), priority
+	case models.TypeHasFQDNFields(recordType):
+		// SOA/RP/MINFO/NSEC: specific fields are FQDNs but not in the last
+		// position, so per-field normalisation is required.
+		return models.EnsureTrailingDotFields(content, models.FQDNFieldIndices(recordType)), priority
 	default:
 		return content, priority
 	}
