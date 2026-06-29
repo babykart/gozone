@@ -490,7 +490,7 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_LOGIN_LOCKOUT_MINUTES", "30")
 	t.Setenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", "10")
 	t.Setenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", "48")
-	t.Setenv("GOZONE_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.1 , 2001:db8::/32")
+	t.Setenv("GOZONE_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.1/32, 2001:db8::/32")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -511,7 +511,7 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 	if len(cfg.Server.TrustedProxies) != 3 {
 		t.Fatalf("expected 3 trusted_proxies, got %d (%v)", len(cfg.Server.TrustedProxies), cfg.Server.TrustedProxies)
 	}
-	wantProxies := []string{"10.0.0.0/8", "192.0.2.1", "2001:db8::/32"}
+	wantProxies := []string{"10.0.0.0/8", "192.0.2.1/32", "2001:db8::/32"}
 	for i, want := range wantProxies {
 		if cfg.Server.TrustedProxies[i] != want {
 			t.Errorf("trusted_proxies[%d] = %q, want %q", i, cfg.Server.TrustedProxies[i], want)
@@ -527,6 +527,26 @@ func TestLoad_RejectsBadTrustedProxy(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "trusted_proxies") {
 		t.Errorf("expected trusted_proxies error, got %v", err)
+	}
+}
+
+// TestLoad_RejectsPlainIPTrustedProxy is the regression test for the
+// startup panic "netip.ParsePrefix(\"172.16.1.27\"): no '/'" that occurred
+// when a plain IP (no CIDR prefix) was configured in trusted_proxies. The
+// chi middleware calls netip.MustParsePrefix which panics on entries
+// without a "/"; config validation now rejects plain IPs with a clear
+// error before the middleware is constructed.
+func TestLoad_RejectsPlainIPTrustedProxy(t *testing.T) {
+	t.Setenv("GOZONE_TRUSTED_PROXIES", "172.16.1.27")
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected error for plain-IP trusted_proxies entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Errorf("expected trusted_proxies error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "CIDR") {
+		t.Errorf("expected error to mention CIDR notation, got %v", err)
 	}
 }
 

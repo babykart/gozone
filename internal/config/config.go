@@ -9,7 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -71,11 +71,15 @@ type ServerConfig struct {
 	SecureCookies bool `yaml:"secure_cookies"`
 	// TrustedProxies is the list of CIDR ranges from which X-Forwarded-For
 	// headers are trusted. When empty, XFF headers are ignored entirely and
-	// the rate limiter keys off the raw TCP source address. Each entry is
-	// either a plain CIDR ("10.0.0.0/8") or a single IP ("192.0.2.1").
-	// Configure this when running behind nginx/Caddy/Traefik/etc. so the
-	// real client IP is preserved; leaving it empty is safe (and recommended)
-	// for direct internet exposure because attackers cannot forge their IP.
+	// the rate limiter keys off the raw TCP source address. Each entry MUST
+	// be a CIDR prefix — use "/32" for a single IPv4 host ("192.0.2.1/32")
+	// and "/128" for a single IPv6 host ("2001:db8::1/128"). Plain IPs
+	// without a prefix are rejected at config load to prevent a startup
+	// panic inside chi's ClientIPFromXFF (which calls netip.MustParsePrefix
+	// and panics on entries without a "/"). Configure this when running
+	// behind nginx/Caddy/Traefik/etc. so the real client IP is preserved;
+	// leaving it empty is safe (and recommended) for direct internet
+	// exposure because attackers cannot forge their IP.
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	// JWTKey is derived from SecretKey via HKDF-SHA256 for JWT signing.
 	JWTKey []byte `yaml:"-"`
@@ -301,13 +305,18 @@ func (cfg *Config) validate() error {
 	}
 
 	for _, p := range cfg.Server.TrustedProxies {
-		if strings.Contains(p, "/") {
-			if _, _, err := net.ParseCIDR(p); err != nil {
-				return fmt.Errorf("invalid trusted_proxies entry %q: %w", p, err)
-			}
-		} else if net.ParseIP(p) == nil {
-			return fmt.Errorf("invalid trusted_proxies entry %q: not a CIDR or IP address", p)
+		// chi's ClientIPFromXFF calls netip.MustParsePrefix(p) on every
+		// entry, which panics at startup when p is a plain IP without a
+		// "/" (e.g. "172.16.1.27"). Require CIDR notation here so the
+		// error surfaces as a clean config-load failure rather than a
+		// panic stack trace. netip.ParsePrefix also accepts the exact
+		// forms chi needs (no trailing whitespace, valid prefix length),
+		// so we use it as the single source of truth.
+		prefix, err := netip.ParsePrefix(p)
+		if err != nil {
+			return fmt.Errorf("invalid trusted_proxies entry %q: %w (use CIDR notation such as %q or %q)", p, err, "172.16.1.27/32", "::1/128")
 		}
+		_ = prefix // validation only; chi re-parses at middleware setup
 	}
 
 	return nil

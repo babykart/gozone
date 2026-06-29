@@ -24,11 +24,14 @@ server:
   # reverse proxy) so the CSRF cookie gets the Secure flag. Keep false for
   # plain-HTTP development.
   secure_cookies: false
-  # Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
-  # honored. Each entry is a plain IP ("192.0.2.1") or a CIDR ("10.0.0.0/8",
-  # "fd00::/8"). Leave empty (the default) when GoZone is reachable directly
-  # on the public Internet — the rate limiter then keys off the raw TCP
-  # source address and cannot be bypassed by forging XFF headers.
+# Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
+  # honored. Each entry MUST be a CIDR prefix — use "/32" for a single IPv4
+  # host ("192.0.2.1/32") and "/128" for a single IPv6 host ("2001:db8::1/128").
+  # Plain IPs without a prefix (e.g. "192.0.2.1") are rejected at startup
+  # because chi's ClientIPFromXFF calls netip.MustParsePrefix which panics on
+  # entries without a "/". Leave empty (the default) when GoZone is reachable
+  # directly on the public Internet — the rate limiter then keys off the raw
+  # TCP source address and cannot be bypassed by forging XFF headers.
   # trusted_proxies: []
 
 database:
