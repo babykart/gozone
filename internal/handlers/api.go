@@ -145,6 +145,14 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Canonicalise the zone name and nameservers (lowercase + trailing dot)
+	// so the API accepts "example.com" without requiring the trailing dot
+	// that PowerDNS mandates internally.
+	req.Name = normalizeZoneName(req.Name)
+	for i := range req.Nameservers {
+		req.Nameservers[i] = normalizeZoneName(req.Nameservers[i])
+	}
+
 	zone, err := h.PDNS.CreateZone(r.Context(), req)
 	if err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeZoneCreateError)

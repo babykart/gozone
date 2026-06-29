@@ -14,6 +14,18 @@ import (
 	"github.com/babykart/gozone/internal/validators"
 )
 
+// normalizeZoneName canonicalises a zone name or nameserver hostname for the
+// PowerDNS API: it trims surrounding whitespace, lowercases the value (DNS is
+// case-insensitive and PowerDNS stores canonical lowercase), and appends a
+// trailing dot when missing. PowerDNS rejects zone names and nameserver
+// hostnames that lack the trailing dot, so without this normalisation a user
+// entering "example.com" (as the placeholder suggests) gets a PDNS error.
+func normalizeZoneName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ToLower(name)
+	return models.EnsureTrailingDot(name)
+}
+
 // PageInfo holds pagination state for template rendering.
 type PageInfo struct {
 	Current    int
@@ -268,6 +280,11 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Canonicalise the zone name (lowercase + trailing dot) so the user can
+	// enter "example.com" without worrying about the trailing dot that
+	// PowerDNS requires.
+	name = normalizeZoneName(name)
+
 	req := models.ZoneCreateRequest{
 		Name: name,
 		Kind: kind,
@@ -277,7 +294,7 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		for _, ns := range strings.Split(nameservers, ",") {
 			ns = strings.TrimSpace(ns)
 			if ns != "" {
-				req.Nameservers = append(req.Nameservers, ns)
+				req.Nameservers = append(req.Nameservers, normalizeZoneName(ns))
 			}
 		}
 	}

@@ -11,7 +11,7 @@
     <div class="form-group">
         <label for="name">Zone Name</label>
         <input type="text" id="name" name="name" placeholder="example.com" required>
-        <small>Fully qualified domain name (e.g. example.com)</small>
+        <small>Fully qualified domain name (e.g. example.com — trailing dot is added automatically)</small>
     </div>
     <div class="form-group">
         <label for="kind">Type</label>
@@ -24,7 +24,7 @@
     <div class="form-group">
         <label for="nameservers">Nameservers</label>
         <input type="text" id="nameservers" name="nameservers" placeholder="ns1.example.com,ns2.example.com">
-        <small>Comma-separated list of nameservers</small>
+        <small>Comma-separated list of nameservers (trailing dots are added automatically)</small>
     </div>
 
     {{if .Templates}}

@@ -91,7 +91,7 @@ curl -X POST \
 
 | Field | Type | Required | Default | Notes |
 |-------|------|----------|---------|-------|
-| `name` | string | **yes** | — | Domain name (trailing dot optional) |
+| `name` | string | **yes** | — | Domain name (trailing dot optional — canonicalised to lowercase + trailing dot automatically) |
 | `kind` | string | no | `"Native"` | `Native`, `Master`, `Slave`, `Producer`, `Consumer` |
 | `nameservers` | string[] | no | — | List of NS hostnames |
 | `masters` | string[] | no | — | Required for `Slave`/`Consumer` |

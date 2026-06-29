@@ -110,6 +110,43 @@ func TestAPICreateZone(t *testing.T) {
 	}
 }
 
+// TestAPICreateZone_NormalizesNameAndNameservers verifies that the API
+// canonicalises the zone name and nameservers to lowercase + trailing dot,
+// matching the UI handler's behaviour. Without this, "example.com" (no dot)
+// causes a PDNS error.
+func TestAPICreateZone_NormalizesNameAndNameservers(t *testing.T) {
+	var sent models.ZoneCreateRequest
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(models.Zone{ID: sent.Name, Name: sent.Name, Kind: sent.Kind})
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"Example.COM","kind":"Native","nameservers":["ns1.example.com","ns2.example.com."]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	h.APICreateZone(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if sent.Name != "example.com." {
+		t.Errorf("PDNS received name=%q, want %q", sent.Name, "example.com.")
+	}
+	if len(sent.Nameservers) != 2 {
+		t.Fatalf("expected 2 nameservers, got %d", len(sent.Nameservers))
+	}
+	if sent.Nameservers[0] != "ns1.example.com." {
+		t.Errorf("PDNS received ns[0]=%q, want %q", sent.Nameservers[0], "ns1.example.com.")
+	}
+	if sent.Nameservers[1] != "ns2.example.com." {
+		t.Errorf("PDNS received ns[1]=%q, want %q (no double dot)", sent.Nameservers[1], "ns2.example.com.")
+	}
+}
+
 func TestAPICreateZone_InvalidJSON(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()

@@ -111,6 +111,50 @@ func TestCreateZone_Success(t *testing.T) {
 	}
 }
 
+// TestCreateZone_NormalizesNameAndNameservers is the regression test for the
+// bug where a zone name or nameserver entered without a trailing dot (e.g.
+// "example.com") was forwarded to PowerDNS as-is, causing a PDNS error. The
+// handler must canonicalise both the zone name and each nameserver to
+// lowercase + trailing dot before sending the request.
+func TestCreateZone_NormalizesNameAndNameservers(t *testing.T) {
+	var sent models.ZoneCreateRequest
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(models.Zone{ID: sent.Name, Name: sent.Name, Kind: sent.Kind})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=Example.COM&kind=Native&nameservers=ns1.example.com,ns2.example.com"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateZone(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (%s)", w.Code, w.Body.String())
+	}
+	if sent.Name != "example.com." {
+		t.Errorf("PDNS received name=%q, want %q (lowercase + trailing dot)", sent.Name, "example.com.")
+	}
+	if len(sent.Nameservers) != 2 {
+		t.Fatalf("expected 2 nameservers, got %d", len(sent.Nameservers))
+	}
+	if sent.Nameservers[0] != "ns1.example.com." {
+		t.Errorf("PDNS received ns[0]=%q, want %q", sent.Nameservers[0], "ns1.example.com.")
+	}
+	if sent.Nameservers[1] != "ns2.example.com." {
+		t.Errorf("PDNS received ns[1]=%q, want %q", sent.Nameservers[1], "ns2.example.com.")
+	}
+}
+
 func TestCreateZone_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 
