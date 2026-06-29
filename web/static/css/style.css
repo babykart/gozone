@@ -648,6 +648,15 @@ details summary {
     color: var(--text-muted);
 }
 
+/* Zone kind colors (light mode) */
+.badge-kind-Native  { background: #dbeafe; color: #1d40e8; }
+.badge-kind-Master  { background: #fef3c7; color: #b45309; }
+.badge-kind-Slave   { background: #f3e8ff; color: #9333ea; }
+
+[data-theme="dark"] .badge-kind-Native  { background: rgba(37,99,235,0.18); color: #93c5fd; }
+[data-theme="dark"] .badge-kind-Master  { background: rgba(180,83,9,0.18); color: #fbbf24; }
+[data-theme="dark"] .badge-kind-Slave   { background: rgba(147,51,234,0.18); color: #c084fc; }
+
 .badge-type {
     background: #ede9fe;
     color: #7c3aed;

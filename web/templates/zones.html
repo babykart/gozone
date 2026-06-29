@@ -29,10 +29,10 @@
         {{range .Zones}}
         <tr>
             <td><a href="/zones/{{.Zone.ID}}"><strong>{{.Zone.Name}}</strong></a></td>
-            <td><span class="badge">{{.Zone.Kind}}</span></td>
+            <td><span class="badge badge-kind-{{.Zone.Kind}}">{{.Zone.Kind}}</span></td>
             <td>{{.Zone.Serial}}</td>
             <td></td>
-            <td>{{if .Zone.DNSSEC}}Yes{{else}}No{{end}}</td>
+            <td>{{if .Zone.DNSSEC}}<span class="badge badge-active">Yes</span>{{else}}<span class="badge badge-disabled">No</span>{{end}}</td>
             <td>
                 <a href="/zones/{{.Zone.ID}}" class="btn btn-sm btn-secondary">View</a>
             </td>
