@@ -16,6 +16,12 @@ import (
 type recordTypeSpec struct {
 	hasPriority bool
 	quoted      bool
+	// fqdnTarget indicates that the record content is (or ends with) a DNS
+	// name that PowerDNS requires as a fully-qualified domain name with a
+	// trailing dot. For CNAME/NS/PTR/ALIAS the entire content is the target.
+	// For MX/SRV the target is the last space-separated field, after the
+	// priority has been embedded by JoinPriority.
+	fqdnTarget bool
 	// wireFields is the number of space-separated fields the content has once
 	// the priority is already embedded (PowerDNS read format). It distinguishes
 	// form input ("weight port target" → 3 fields for SRV) from wire content
@@ -25,10 +31,14 @@ type recordTypeSpec struct {
 }
 
 var recordTypeSpecs = map[string]recordTypeSpec{
-	"MX":  {hasPriority: true, wireFields: 2},
-	"SRV": {hasPriority: true, wireFields: 4},
-	"TXT": {quoted: true},
-	"SPF": {quoted: true},
+	"MX":    {hasPriority: true, fqdnTarget: true, wireFields: 2},
+	"SRV":   {hasPriority: true, fqdnTarget: true, wireFields: 4},
+	"TXT":   {quoted: true},
+	"SPF":   {quoted: true},
+	"CNAME": {fqdnTarget: true},
+	"NS":    {fqdnTarget: true},
+	"PTR":   {fqdnTarget: true},
+	"ALIAS": {fqdnTarget: true},
 }
 
 // specFor returns the spec for recordType, or the zero value (no priority, not
@@ -47,6 +57,26 @@ func TypeHasPriority(recordType string) bool {
 // double quotes (TXT, SPF).
 func TypeIsQuoted(recordType string) bool {
 	return specFor(recordType).quoted
+}
+
+// TypeIsFQDNTarget reports whether recordType's content is (or ends with) a
+// DNS name that PowerDNS requires as a fully-qualified domain name with a
+// trailing dot. This covers CNAME, NS, PTR, ALIAS (the entire content is the
+// target) and MX, SRV (the target is the last space-separated field, after
+// priority embedding).
+func TypeIsFQDNTarget(recordType string) bool {
+	return specFor(recordType).fqdnTarget
+}
+
+// EnsureTrailingDot appends a "." to content when it does not already end
+// with one. PowerDNS rejects CNAME/NS/PTR/MX/SRV targets that lack the
+// trailing dot; this normalisation is applied after priority embedding so
+// that "10 mail.example.com" becomes "10 mail.example.com.".
+func EnsureTrailingDot(content string) string {
+	if content == "" || strings.HasSuffix(content, ".") {
+		return content
+	}
+	return content + "."
 }
 
 // SplitPriority detaches the leading priority from a priority-bearing record's

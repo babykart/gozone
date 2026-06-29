@@ -548,9 +548,14 @@ func rrsetSnapshot(rrset *models.RRSet) string {
 func prepareRecordContent(recordType, content string, priority int) (string, int) {
 	switch {
 	case models.TypeHasPriority(recordType):
-		return models.JoinPriority(recordType, priority, content), 0
+		// MX/SRV: embed priority first, then ensure the FQDN target (the
+		// last space-separated field) ends with a trailing dot.
+		return models.EnsureTrailingDot(models.JoinPriority(recordType, priority, content)), 0
 	case models.TypeIsQuoted(recordType):
 		return models.QuoteContent(recordType, content), priority
+	case models.TypeIsFQDNTarget(recordType):
+		// CNAME/NS/PTR/ALIAS: the entire content is a DNS name target.
+		return models.EnsureTrailingDot(content), priority
 	default:
 		return content, priority
 	}

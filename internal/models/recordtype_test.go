@@ -182,3 +182,44 @@ func TestQuoteRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestTypeIsFQDNTarget(t *testing.T) {
+	for _, tc := range []struct {
+		rtype string
+		want  bool
+	}{
+		{"CNAME", true},
+		{"NS", true},
+		{"PTR", true},
+		{"ALIAS", true},
+		{"MX", true},
+		{"SRV", true},
+		{"A", false},
+		{"AAAA", false},
+		{"TXT", false},
+		{"", false},
+	} {
+		if got := TypeIsFQDNTarget(tc.rtype); got != tc.want {
+			t.Errorf("TypeIsFQDNTarget(%q) = %t, want %t", tc.rtype, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureTrailingDot(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"no dot", "mail.example.com", "mail.example.com."},
+		{"already has dot", "mail.example.com.", "mail.example.com."},
+		{"MX content", "10 mail.example.com", "10 mail.example.com."},
+		{"MX content with dot", "10 mail.example.com.", "10 mail.example.com."},
+		{"SRV content", "10 5 5060 sip.example.com", "10 5 5060 sip.example.com."},
+		{"empty", "", ""},
+	} {
+		if got := EnsureTrailingDot(tc.input); got != tc.want {
+			t.Errorf("EnsureTrailingDot(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

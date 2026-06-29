@@ -398,6 +398,54 @@ func TestAPICreateRecord_PriorityZero(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_CNAMEEnsuresTrailingDot is the regression test for the
+// bug where a CNAME target without a trailing dot (e.g. "target.example.com")
+// was forwarded to PowerDNS as-is, causing PDNS to reject the PATCH. The fix
+// ensures FQDN-target types (CNAME, NS, PTR, ALIAS) and priority types
+// (MX, SRV) get a trailing dot via EnsureTrailingDot in prepareRecordContent.
+func TestAPICreateRecord_CNAMEEnsuresTrailingDot(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"CNAME","ttl":300,"records":[{"content":"target.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 rrset with 1 record, got %+v", sent)
+	}
+	if got := sent[0].Records[0].Content; got != "target.example.com." {
+		t.Errorf("PDNS received content=%q, want %q (trailing dot must be ensured)", got, "target.example.com.")
+	}
+}
+
+// TestAPICreateRecord_CNAMEPreservesExistingDot verifies that a CNAME target
+// that already ends with a dot is not double-dotted.
+func TestAPICreateRecord_CNAMEPreservesExistingDot(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"CNAME","ttl":300,"records":[{"content":"target.example.com."}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if got := sent[0].Records[0].Content; got != "target.example.com." {
+		t.Errorf("PDNS received content=%q, want %q (no double dot)", got, "target.example.com.")
+	}
+}
+
 func TestAPICreateRecord_NormalizesName(t *testing.T) {
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
