@@ -272,23 +272,6 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Last enabled admin guard: refuse to demote or disable the only enabled admin.
-	if target.Role == "admin" && target.Enabled {
-		if requestedRole != "admin" || !requestedEnabled {
-			var adminCount int
-			if err := h.DB.QueryRow(
-				"SELECT COUNT(*) FROM users WHERE role = 'admin' AND enabled = 1",
-			).Scan(&adminCount); err != nil {
-				h.renderInternalError(w, r, "Failed to count admins", err)
-				return
-			}
-			if adminCount <= 1 {
-				h.renderError(w, r, "Cannot demote or disable the last enabled admin")
-				return
-			}
-		}
-	}
-
 	enabledVal := 0
 	if requestedEnabled {
 		enabledVal = 1
@@ -300,6 +283,22 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
+	// Last enabled admin guard: refuse to demote or disable the only enabled
+	// admin. Checked INSIDE the transaction to prevent TOCTOU (M-BIZ2): two
+	// concurrent UpdateUser calls demoting the last two admins must not both
+	// observe adminCount==2 and proceed, leaving zero admins.
+	if target.Role == "admin" && target.Enabled && (requestedRole != "admin" || !requestedEnabled) {
+		adminCount, err := tx.CountEnabledAdmins(r.Context())
+		if err != nil {
+			h.renderInternalError(w, r, "Failed to count admins", err)
+			return
+		}
+		if adminCount <= 1 {
+			h.renderError(w, r, "Cannot demote or disable the last enabled admin")
+			return
+		}
+	}
 
 	_, err = tx.Exec(
 		`UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP

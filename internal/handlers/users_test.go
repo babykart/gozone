@@ -378,6 +378,73 @@ func TestUpdateUser_LastEnabledAdminBlocked(t *testing.T) {
 	}
 }
 
+// TestUpdateUser_LastAdminDemotionBlocked is the M-BIZ2 regression test:
+// demoting the only enabled admin (role admin→user) must be refused, and
+// the guard must execute inside the transaction (same pattern as DeleteUser).
+func TestUpdateUser_LastAdminDemotionBlocked(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Try to demote the only enabled admin: role=admin → role=user
+	body := "email=admin@test.local&first_name=&last_name=&role=user&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/1/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "1")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for last-admin demotion, got %d", w.Code)
+	}
+
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id=1").Scan(&role)
+	if role != "admin" {
+		t.Errorf("expected last admin to remain admin, got role=%q", role)
+	}
+}
+
+// TestUpdateUser_DemotionWithTwoAdminsAllowed verifies that demotion succeeds
+// when there is a second enabled admin (the guard inside the tx sees count=2).
+func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	// Insert a second enabled admin.
+	res, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
+		"admin2", "admin2@test.local", "hash", "admin", 1,
+	)
+	if err != nil {
+		t.Fatalf("insert second admin: %v", err)
+	}
+	secondID, _ := res.LastInsertId()
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Demote the second admin (admin → user).
+	body := fmt.Sprintf("email=admin2@test.local&first_name=&last_name=&role=user&enabled=1")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/update", secondID), strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", fmt.Sprintf("%d", secondID))
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect 303 for demotion with 2 admins, got %d", w.Code)
+	}
+
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id=?", secondID).Scan(&role)
+	if role != "user" {
+		t.Errorf("expected second admin to be demoted to user, got role=%q", role)
+	}
+}
+
 func TestUpdateUser_SelfAllowedFields(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
