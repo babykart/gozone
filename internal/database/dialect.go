@@ -12,6 +12,10 @@ type Dialect interface {
 	Migrations() []string
 	MaxOpenConns() int
 	Rebind(query string) string
+	// TimestampType returns the dialect-specific SQL column type for
+	// timestamps. PostgreSQL uses TIMESTAMP (it has no DATETIME type);
+	// SQLite and MySQL use DATETIME.
+	TimestampType() string
 	// InsertIgnore returns an INSERT statement that silently skips rows which
 	// would violate a unique constraint, using dialect-specific syntax.
 	//

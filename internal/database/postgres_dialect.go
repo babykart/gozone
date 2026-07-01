@@ -12,6 +12,8 @@ type postgresDialect struct{}
 
 func (p *postgresDialect) DriverName() string { return "postgres" }
 
+func (p *postgresDialect) TimestampType() string { return "TIMESTAMP" }
+
 func (p *postgresDialect) DSN(dsn string) string { return dsn }
 
 func (p *postgresDialect) MaxOpenConns() int { return 25 }

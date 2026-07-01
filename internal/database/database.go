@@ -538,11 +538,13 @@ func (db *DB) migrate() error {
 	}
 	defer release()
 
-	// Create the migration tracking table first (safe across all dialects)
-	if _, err := db.Conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+	// Create the migration tracking table first (safe across all dialects).
+	// PostgreSQL uses TIMESTAMP instead of DATETIME.
+	tsType := db.dialect.TimestampType()
+	if _, err := db.Conn.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS schema_migrations (
 		version VARCHAR(255) PRIMARY KEY,
-		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`); err != nil {
+		applied_at %s NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`, tsType)); err != nil {
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 

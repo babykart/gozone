@@ -14,6 +14,8 @@ type mysqlDialect struct{}
 
 func (m *mysqlDialect) DriverName() string { return "mysql" }
 
+func (m *mysqlDialect) TimestampType() string { return "DATETIME" }
+
 func (m *mysqlDialect) DSN(dsn string) string {
 	// ParseDSN preserves existing query parameters, avoids the double '?' bug
 	// when the DSN already contains options, and lets us set ParseTime cleanly.

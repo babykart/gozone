@@ -13,6 +13,8 @@ type sqliteDialect struct{}
 
 func (s *sqliteDialect) DriverName() string { return "sqlite3" }
 
+func (s *sqliteDialect) TimestampType() string { return "DATETIME" }
+
 func (s *sqliteDialect) DSN(dsn string) string {
 	if dsn == ":memory:" {
 		return ":memory:?_journal_mode=WAL&_foreign_keys=on"
