@@ -28,6 +28,7 @@
                 {{if .Records}}
                 <div class="table-responsive">
                 <table class="table">
+                    <caption class="visually-hidden">Template records</caption>
                     <thead>
                         <tr><th>Name</th><th>Type</th><th>Content</th><th>TTL</th><th>Priority</th><th>Actions</th></tr>
                     </thead>
@@ -99,6 +100,7 @@
                 <p>Use these variables in record content; they will be replaced when applying the template:</p>
                 <div class="table-responsive">
                 <table class="table">
+                    <caption class="visually-hidden">Template variables</caption>
                     <thead><tr><th>Variable</th><th>Description</th></tr></thead>
                     <tbody>
                         <tr><td><code>ZONE</code></td><td>The target zone name (e.g. example.com.)</td></tr>

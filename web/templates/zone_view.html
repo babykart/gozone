@@ -25,6 +25,7 @@
 <div class="card">
     <div class="table-responsive">
     <table class="table records-table">
+        <caption class="visually-hidden">Records in {{.Zone.Name}}</caption>
         <thead>
             <tr>
                 <th class="col-name">Name</th>
@@ -109,6 +110,7 @@
     {{if .MetaData}}
     <div class="table-responsive">
     <table class="table">
+        <caption class="visually-hidden">Zone metadata</caption>
         <thead>
             <tr><th>Kind</th><th>Values</th><th>Actions</th></tr>
         </thead>
@@ -168,6 +170,7 @@
     {{if .Cryptokeys}}
     <div class="table-responsive">
     <table class="table">
+        <caption class="visually-hidden">DNSSEC signing keys</caption>
         <thead>
             <tr><th>ID</th><th>Type</th><th>Algorithm</th><th>Bits</th><th>Active</th><th>DS</th><th>Actions</th></tr>
         </thead>
@@ -318,6 +321,7 @@
     {{if .Logs}}
     <div class="table-responsive">
     <table class="table">
+        <caption class="visually-hidden">Recent activity for this zone</caption>
         <thead>
             <tr><th>Action</th><th>Details</th><th>User</th><th>Time</th></tr>
         </thead>
