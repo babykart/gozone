@@ -585,6 +585,7 @@ func requestLogger(next http.Handler) http.Handler {
 			remote = r.RemoteAddr
 		}
 		logger.Info("request",
+			"request_id", chimw.GetReqID(r.Context()),
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", wr.Status(),

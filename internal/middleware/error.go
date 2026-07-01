@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"runtime/debug"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
+
 	apperrors "github.com/babykart/gozone/internal/errors"
 	"github.com/babykart/gozone/internal/logger"
 )
@@ -26,7 +28,7 @@ func ErrorHandler(next http.Handler) http.Handler {
 				logger.Error("panic recovered",
 					"panic", rec,
 					"path", r.URL.Path,
-					"request_id", r.Header.Get("X-Request-Id"),
+					"request_id", chimw.GetReqID(r.Context()),
 					"stack", string(debug.Stack()),
 				)
 
