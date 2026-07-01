@@ -164,8 +164,7 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 	}
 	defer db.Close()
 
-	os.Setenv("GOZONE_ADMIN_PASSWORD", "custom-secret")
-	defer os.Unsetenv("GOZONE_ADMIN_PASSWORD")
+	t.Setenv("GOZONE_ADMIN_PASSWORD", "custom-secret")
 
 	cfg, err := config.Load("")
 	if err != nil {
