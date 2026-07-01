@@ -33,15 +33,22 @@ var (
 const (
 	// #nosec G101 -- error code identifier, not a credential.
 	invalidCredentialsError = "invalid_credentials"
+	// csrfInvalidError is set by the CSRF middleware in cmd/gozone/main.go
+	// when a form submission fails token validation (expired session,
+	// missing token, tampered token). It gets its own banner so the user
+	// sees an actionable message instead of a blank page.
+	csrfInvalidError = "csrf_invalid"
 )
 
 // loginErrorMessages maps a query-string error code to the user-facing banner.
 // Every authentication failure (unknown user, wrong password, locked account)
-// resolves to invalidCredentialsError to block account enumeration. The map
-// itself is the authoritative lookup; the login template MUST NOT echo the
-// raw query parameter.
+// resolves to invalidCredentialsError to block account enumeration. The CSRF
+// failure gets its own code so the user understands the form timed out rather
+// than seeing a blank page. The map itself is the authoritative lookup; the
+// login template MUST NOT echo the raw query parameter.
 var loginErrorMessages = map[string]string{
 	invalidCredentialsError: "Invalid username or password.",
+	csrfInvalidError:        "Session expired or security token invalid. Please try again.",
 }
 
 // loginErrorRedirect builds the /login?error=<code> redirect target. Used by

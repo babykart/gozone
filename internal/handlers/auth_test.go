@@ -642,6 +642,10 @@ func TestLoginErrorBanner_Mapping(t *testing.T) {
 	if got := loginErrorBanner(invalidCredentialsError); got == "" {
 		t.Errorf("missing banner for %q", invalidCredentialsError)
 	}
+	// CSRF failures must show a banner (m5 — previously empty).
+	if got := loginErrorBanner(csrfInvalidError); got == "" {
+		t.Errorf("missing banner for %q", csrfInvalidError)
+	}
 	if got := loginErrorBanner("nonexistent_code"); got != "" {
 		t.Errorf("unknown code must map to empty banner, got %q", got)
 	}
