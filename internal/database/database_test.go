@@ -111,13 +111,8 @@ func TestMigrateIdempotent(t *testing.T) {
 func TestMigrate_UpgradeDetection(t *testing.T) {
 	// Simulate an existing database (pre-migration-tracking) by creating tables
 	// directly and then calling migrate() with the new code.
-	cfg := &config.DatabaseConfig{
-		Driver: "sqlite3",
-		DSN:    ":memory:",
-	}
-
 	dialect := &sqliteDialect{}
-	dsn := dialect.DSN(cfg.DSN)
+	dsn := dialect.DSN(":memory:")
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -366,12 +361,8 @@ func TestMigrationVersion_Stability(t *testing.T) {
 }
 
 func TestMigrate_ReorderSafe(t *testing.T) {
-	cfg := &config.DatabaseConfig{
-		Driver: "sqlite3",
-		DSN:    ":memory:",
-	}
 	dialect := &sqliteDialect{}
-	dsn := dialect.DSN(cfg.DSN)
+	dsn := dialect.DSN(":memory:")
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -407,12 +398,8 @@ func TestMigrate_ReorderSafe(t *testing.T) {
 }
 
 func TestMigrate_LegacyVersionsMigrated(t *testing.T) {
-	cfg := &config.DatabaseConfig{
-		Driver: "sqlite3",
-		DSN:    ":memory:",
-	}
 	dialect := &sqliteDialect{}
-	dsn := dialect.DSN(cfg.DSN)
+	dsn := dialect.DSN(":memory:")
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -489,13 +476,8 @@ func (r *reversedSQLiteDialect) Migrations() []string {
 }
 
 func TestTx_Rebind(t *testing.T) {
-	cfg := &config.DatabaseConfig{
-		Driver: "sqlite3",
-		DSN:    ":memory:",
-	}
-
 	dialect := &spyDialect{}
-	conn, err := sql.Open("sqlite3", cfg.DSN)
+	conn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
