@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/babykart/gozone/internal/logger"
 )
 
 // HealthStatus represents the response format for health check endpoints.
@@ -35,14 +37,18 @@ func (h *Handler) HealthReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.DB.Ping(); err != nil {
-		resp.Checks["database"] = "error: " + err.Error()
+		// Do not leak internal error details to unauthenticated callers (m32);
+		// log the cause server-side for operators instead.
+		logger.Error("health check: database ping failed", "error", err)
+		resp.Checks["database"] = "error"
 		resp.Status = "degraded"
 	} else {
 		resp.Checks["database"] = "ok"
 	}
 
 	if err := h.PDNS.HealthCheck(r.Context()); err != nil {
-		resp.Checks["powerdns"] = "error: " + err.Error()
+		logger.Error("health check: powerdns unreachable", "error", err)
+		resp.Checks["powerdns"] = "error"
 		resp.Status = "degraded"
 	} else {
 		resp.Checks["powerdns"] = "ok"

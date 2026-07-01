@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -154,5 +155,65 @@ func TestHealthReady_BothFail(t *testing.T) {
 	}
 	if v, ok := resp.Checks["powerdns"]; !ok || v == "ok" {
 		t.Errorf("expected powerdns error, got %q", resp.Checks["powerdns"])
+	}
+}
+
+// TestHealthReady_DoesNotLeakDBErrorDetails is the m32 regression test: the
+// unauthenticated readiness response must not surface the underlying DB error
+// (which can carry driver/connection details). The check reports a generic
+// "error"; the cause is logged server-side only.
+func TestHealthReady_DoesNotLeakDBErrorDetails(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"server_id":"localhost","daemon_type":"authoritative","version":"4.8.0"}`))
+	})
+	defer pdnsSrv.Close()
+
+	h.DB.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	h.HealthReady(w, r)
+
+	body := w.Body.String()
+	var resp healthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if v := resp.Checks["database"]; v != "error" {
+		t.Errorf("expected generic database status %q, got %q", "error", v)
+	}
+	// "sql:" appears in the closed-DB ping error ("sql: database is closed")
+	// and must not leak into the public response.
+	if strings.Contains(body, "sql:") || strings.Contains(body, "database is closed") {
+		t.Errorf("DB error details leaked into health response: %s", body)
+	}
+}
+
+// TestHealthReady_DoesNotLeakPDNSErrorDetails verifies the PowerDNS failure
+// path likewise returns a generic "error" without echoing the PDNS response
+// body (which the client embeds in its error message).
+func TestHealthReady_DoesNotLeakPDNSErrorDetails(t *testing.T) {
+	const leakMarker = "LEAK-MARKER-PDNS-INTERNAL"
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(leakMarker))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	h.HealthReady(w, r)
+
+	body := w.Body.String()
+	var resp healthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if v := resp.Checks["powerdns"]; v != "error" {
+		t.Errorf("expected generic powerdns status %q, got %q", "error", v)
+	}
+	if strings.Contains(body, leakMarker) {
+		t.Errorf("PDNS error details leaked into health response: %s", body)
 	}
 }
