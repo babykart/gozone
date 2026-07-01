@@ -635,6 +635,43 @@ func TestLogin_LockedAccountExtendsLockout(t *testing.T) {
 	}
 }
 
+// TestLogin_LockoutCheckErrorFailsClosed guards the m34 fix: when the lockout
+// status cannot be read from the DB, the login must be DENIED (fail-closed)
+// even with the correct password — otherwise a DB error would bypass the
+// lockout for an account that is actually locked.
+func TestLogin_LockoutCheckErrorFailsClosed(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+
+	// Break UserLockStatus (SELECT locked_until ...) while leaving the user
+	// fetch — which does not reference locked_until — working, so the handler
+	// reaches the lockout check and sees a DB error there.
+	if _, err := h.DB.Exec(`ALTER TABLE users DROP COLUMN locked_until`); err != nil {
+		t.Fatalf("drop locked_until column: %v (SQLite too old for DROP COLUMN?)", err)
+	}
+
+	body := "username=victim&password=goodpass"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "error="+invalidCredentialsError) {
+		t.Fatalf("fail-closed: expected redirect to generic login error even with correct password, got %q", loc)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			t.Errorf("fail-closed: login must not issue a session cookie when lockout status is uncheckable, got %s", c.Name)
+		}
+	}
+}
+
 // TestLoginErrorBanner_Mapping guards the message lookup so future login
 // error codes cannot accidentally bypass the mapping and echo raw query
 // values into the banner.

@@ -152,8 +152,20 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {
-			logger.Error("failed to check lockout status", "user_id", user.ID, "error", lerr)
-		} else if locked {
+			// Fail-closed (m34): if the lockout status cannot be determined,
+			// deny the login rather than falling through to bcrypt. Otherwise a
+			// DB error would bypass the lockout for an account that is actually
+			// locked. A dummy bcrypt compare keeps the response time in the same
+			// band as the wrong-password path. The failed-login counter is NOT
+			// incremented: this is a system-side inability to check status, not
+			// an authentication failure, and bumping it could unfairly lock
+			// users out during transient DB issues.
+			logger.Error("failed to check lockout status; denying login (fail-closed)", "user_id", user.ID, "error", lerr)
+			bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+			http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
+			return
+		}
+		if locked {
 			logger.Warn("login attempt on locked account", "username", user.Username, "locked_until", until)
 			bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
 			h.recordFailedAttempt(ctx, username, user.ID, clientIP, maxAttempts, lockoutDuration)
