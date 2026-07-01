@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 		{"X-Frame-Options", "DENY"},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"},
+		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"},
 	}
 	for _, tt := range tests {
 		got := w.Header().Get(tt.header)
@@ -84,6 +85,57 @@ func TestSecurityHeaders_PassesThroughStatusCode(t *testing.T) {
 
 	if w.Code != http.StatusTeapot {
 		t.Errorf("expected 418, got %d", w.Code)
+	}
+}
+
+// TestSecurityHeaders_CSPHardenedDirectives verifies that the CSP includes the
+// hardening directives added in m38: object-src 'none', base-uri 'self',
+// frame-ancestors 'none', form-action 'self'. Each is checked individually so
+// the test pinpoints which directive regressed.
+func TestSecurityHeaders_CSPHardenedDirectives(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(w, r)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("Content-Security-Policy header is missing")
+	}
+
+	// Parse the CSP into a map of directive -> raw value for precise checks.
+	directives := map[string]string{}
+	for _, part := range strings.Split(csp, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		fields := strings.Fields(part)
+		name := fields[0]
+		directives[name] = strings.Join(fields[1:], " ")
+	}
+
+	required := []struct {
+		directive string
+		want      string
+	}{
+		{"object-src", "'none'"},
+		{"base-uri", "'self'"},
+		{"frame-ancestors", "'none'"},
+		{"form-action", "'self'"},
+	}
+	for _, tt := range required {
+		got, ok := directives[tt.directive]
+		if !ok {
+			t.Errorf("CSP missing directive %q (full CSP: %q)", tt.directive, csp)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("CSP %q: got %q, want %q", tt.directive, got, tt.want)
+		}
 	}
 }
 
