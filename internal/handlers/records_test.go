@@ -1035,6 +1035,148 @@ func TestBatchCreateRecords_MergesWithExistingRRSet(t *testing.T) {
 	}
 }
 
+// TestBatchCreateRecords_DedupIdenticalRows is the m31 regression test:
+// duplicate batch rows (same name/type/content) must collapse to a single
+// record in the RRSet sent to PowerDNS, which otherwise rejects duplicates.
+func TestBatchCreateRecords_DedupIdenticalRows(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Two identical A rows for www + a distinct A row for mail.
+	body := "name=www&type=A&content=192.0.2.1&name=www&type=A&content=192.0.2.1&name=mail&type=A&content=192.0.2.2"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(patchedRRSet) != 2 {
+		t.Fatalf("expected 2 patched RRSets (www, mail), got %d: %+v", len(patchedRRSet), patchedRRSet)
+	}
+	for _, rr := range patchedRRSet {
+		if rr.Name == "www.example.com." {
+			if len(rr.Records) != 1 {
+				t.Errorf("expected www RRSet deduped to 1 record, got %d: %+v", len(rr.Records), rr.Records)
+			}
+			if len(rr.Records) == 1 && rr.Records[0].Content != "192.0.2.1" {
+				t.Errorf("unexpected www content: %s", rr.Records[0].Content)
+			}
+		}
+	}
+}
+
+// TestBatchCreateRecords_DedupNormalizesBeforeCompare verifies that dedup runs
+// after content normalization: two CNAME rows whose targets differ only by a
+// trailing dot collapse to one record.
+func TestBatchCreateRecords_DedupNormalizesBeforeCompare(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Same CNAME target, one with and one without a trailing dot — both
+	// normalize to "target.example.com." and must collapse.
+	body := "name=alias&type=CNAME&content=target.example.com&name=alias&type=CNAME&content=target.example.com."
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d: %+v", len(patchedRRSet), patchedRRSet)
+	}
+	rr := patchedRRSet[0]
+	if len(rr.Records) != 1 {
+		t.Errorf("expected CNAME RRSet deduped to 1 record, got %d: %+v", len(rr.Records), rr.Records)
+	}
+}
+
+// TestDedupRecordsByContent is a focused unit test for the dedup helper.
+func TestDedupRecordsByContent(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []models.RecordInfo
+		want int
+	}{
+		{"empty", nil, 0},
+		{"single", []models.RecordInfo{{Content: "a"}}, 1},
+		{"two_distinct", []models.RecordInfo{{Content: "a"}, {Content: "b"}}, 2},
+		{"two_identical", []models.RecordInfo{{Content: "a"}, {Content: "a"}}, 1},
+		{"mixed", []models.RecordInfo{{Content: "a"}, {Content: "b"}, {Content: "a"}, {Content: "c"}, {Content: "b"}}, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dedupRecordsByContent(tc.in)
+			if len(got) != tc.want {
+				t.Errorf("got %d records (%+v), want %d", len(got), got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBatchCreateRecords_PDNSError_NoLogs(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

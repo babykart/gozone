@@ -486,6 +486,12 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 			rr.Records[i].Content, rr.Records[i].Priority =
 				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
 		}
+		// DNS RRs in an RRSet are a set, so drop records that produced
+		// identical wire content — e.g. duplicate batch rows, or a new row
+		// that duplicates an existing record. PowerDNS rejects duplicates.
+		// Comparison is post-normalization (MX/SRV priority is embedded in
+		// the content, so targets with different priorities are kept).
+		rr.Records = dedupRecordsByContent(rr.Records)
 		// Combine all user comments for this name+type into a single text
 		// payload so buildCommentsPatch splits them into one Comment per line.
 		// PowerDNS PATCH `comments` REPLACES the RRSet's comment list, so we
@@ -581,6 +587,30 @@ func mergeRecordIntoRRSet(existing []models.RecordInfo, originalContent string, 
 	}
 	result = append(result, replacement)
 	return result
+}
+
+// dedupRecordsByContent removes records with identical wire content within an
+// RRSet. DNS RRs in an RRSet are a set — duplicates are meaningless and
+// PowerDNS rejects them. The first occurrence wins (preserving its Disabled
+// flag and priority). Call this after prepareRecordContent so that inputs
+// canonicalising to the same content (e.g. a CNAME target with and without a
+// trailing dot, or duplicate batch rows) collapse correctly; for MX/SRV the
+// priority is embedded in the content, so targets with different priorities
+// are kept.
+func dedupRecordsByContent(records []models.RecordInfo) []models.RecordInfo {
+	if len(records) < 2 {
+		return records
+	}
+	seen := make(map[string]struct{}, len(records))
+	out := make([]models.RecordInfo, 0, len(records))
+	for _, r := range records {
+		if _, ok := seen[r.Content]; ok {
+			continue
+		}
+		seen[r.Content] = struct{}{}
+		out = append(out, r)
+	}
+	return out
 }
 
 // buildCommentPatch constructs a *CommentPatch from a multi-line textarea value
