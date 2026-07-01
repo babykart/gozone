@@ -392,7 +392,7 @@ func validateRRSIGTime(s, name string) error {
 //   - CNAME, ALIAS, NS, PTR, DNAME: DNS name (underscores allowed)
 //   - MX: priority + FQDN, or just FQDN (priority handled separately)
 //   - TXT, SPF: free text (quoted strings allowed)
-//   - SOA: 7+ fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum
+//   - SOA: 7+ fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum, all > 0
 //
 // All other whitelisted record types (AFSDB, CERT, DNSKEY, DS, HINFO, KEY, LOC,
 // NAPTR, NSEC, NSEC3, NSEC3PARAM, OPENPGPKEY, RP, RRSIG, SSHFP, TLSA, URI) are
@@ -455,8 +455,12 @@ func ValidateRecordContent(recordType, content string) error {
 			if err != nil {
 				return fmt.Errorf("SOA %s %q is not a valid 32-bit unsigned integer", f.name, f.value)
 			}
-			if f.name == "serial" && n == 0 {
-				return fmt.Errorf("SOA serial must be greater than 0")
+			// All SOA timers and the serial must be strictly positive. A 0 value
+			// for any of them is a misconfiguration (e.g. expire 0 expires the
+			// zone immediately) — the check is applied uniformly rather than
+			// only to the serial (m50).
+			if n == 0 {
+				return fmt.Errorf("SOA %s must be greater than 0", f.name)
 			}
 		}
 		return nil

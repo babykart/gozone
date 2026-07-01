@@ -558,6 +558,11 @@ func TestValidateRecordContent_SOANumericFields(t *testing.T) {
 		{"non-numeric refresh", base + " 2024010100 abc 900 604800 86400", true},
 		{"too large serial", base + " 4294967296 3600 900 604800 86400", true},
 		{"max serial", base + " 4294967295 3600 900 604800 86400", false},
+		// m50: the >0 check is applied to all timers, not just the serial.
+		{"zero refresh", base + " 2024010100 0 900 604800 86400", true},
+		{"zero retry", base + " 2024010100 3600 0 604800 86400", true},
+		{"zero expire", base + " 2024010100 3600 900 0 86400", true},
+		{"zero minimum", base + " 2024010100 3600 900 604800 0", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
