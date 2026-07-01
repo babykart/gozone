@@ -588,18 +588,113 @@ func (db *DB) migrate() error {
 			continue
 		}
 
-		if _, err := db.Conn.Exec(m); err != nil {
-			return fmt.Errorf("migration failed: %w\nSQL: %s", err, m)
-		}
-
-		if _, err := db.Conn.Exec(db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
-			return fmt.Errorf("record migration %s: %w", version, err)
+		// Apply the migration and record it inside a single transaction so a
+		// failure midway never leaves the schema changed but unrecorded (or
+		// vice-versa). See applyMigration / REVIEW.md m17.
+		if err := db.applyMigration(m, version); err != nil {
+			return err
 		}
 
 		logger.Info("applied migration", "version", version)
 	}
 	logger.Info("migrations completed")
 	return nil
+}
+
+// applyMigration runs a single migration's statements and records it in
+// schema_migrations inside one transaction, so a failure midway never leaves
+// the schema changed but unrecorded (or vice-versa). The migration SQL is
+// split into individual statements because the MySQL driver runs with
+// MultiStatements disabled for defense-in-depth; executing each statement
+// separately also lets every dialect apply a multi-step migration atomically
+// inside the transaction (REVIEW.md m17).
+//
+// Note: MySQL/MariaDB implicitly commit on most DDL statements, so on those
+// dialects a multi-statement migration is not fully rollback-able. This is a
+// documented engine limitation; SQLite and PostgreSQL provide true atomicity.
+func (db *DB) applyMigration(sqlText, version string) error {
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", version, err)
+	}
+	defer tx.Rollback() // no-op after Commit
+
+	for _, stmt := range splitStatements(sqlText) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", version, err)
+	}
+	return nil
+}
+
+// splitStatements splits a possibly multi-statement SQL string into individual
+// statements. It is needed so a migration can carry several statements and
+// still be applied uniformly across dialects within one transaction, given the
+// MySQL driver has MultiStatements disabled (REVIEW.md m17).
+//
+// The splitter honours single-quoted string literals (with ” escaping) and
+// "--" line comments, so a ';' inside a literal or comment does not start a
+// new statement. Block comments and dollar-quoted strings are intentionally
+// unsupported; GoZone migrations are plain DDL and use neither.
+func splitStatements(sql string) []string {
+	var (
+		out      []string
+		sb       strings.Builder
+		inString bool
+	)
+	flush := func() {
+		s := strings.TrimSpace(sb.String())
+		if s != "" {
+			out = append(out, s)
+		}
+		sb.Reset()
+	}
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		// Line comment: copy through to the newline without treating ';' as
+		// a separator.
+		if !inString && c == '-' && i+1 < len(sql) && sql[i+1] == '-' {
+			for i < len(sql) && sql[i] != '\n' {
+				sb.WriteByte(sql[i])
+				i++
+			}
+			if i < len(sql) {
+				sb.WriteByte(sql[i])
+			}
+			continue
+		}
+		if c == '\'' {
+			sb.WriteByte(c)
+			if inString {
+				// Escaped '' keeps the string open; otherwise this closes it.
+				if i+1 < len(sql) && sql[i+1] == '\'' {
+					sb.WriteByte(sql[i+1])
+					i++
+				} else {
+					inString = false
+				}
+			} else {
+				inString = true
+			}
+			continue
+		}
+		if c == ';' && !inString {
+			flush()
+			continue
+		}
+		sb.WriteByte(c)
+	}
+	flush()
+	return out
 }
 
 // migrateOldVersions converts legacy vNNN version identifiers stored in
