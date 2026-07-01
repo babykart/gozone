@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,14 @@ import (
 type DB struct {
 	Conn    *sql.DB
 	dialect Dialect
+}
+
+// isNoRows reports whether err is (or wraps) sql.ErrNoRows. Using errors.Is
+// instead of a direct == comparison keeps the check correct when a driver or
+// an intermediate wrapper layers an error around sql.ErrNoRows (REVIEW.md
+// m18).
+func isNoRows(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 // New opens a database connection and runs migrations.
@@ -368,7 +377,7 @@ func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, un
 		"SELECT locked_until FROM users WHERE id = ?", userID,
 	)
 	if err := row.Scan(&rawUntil); err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return false, time.Time{}, nil
 		}
 		return false, time.Time{}, err
@@ -446,7 +455,7 @@ func (tx *Tx) IsLastEnabledAdmin(ctx context.Context, userID int64) (bool, error
 	var role string
 	var enabled int
 	if err := tx.QueryRowContext(ctx, query, userID).Scan(&role, &enabled); err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return false, nil
 		}
 		return false, err
