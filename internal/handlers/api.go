@@ -255,6 +255,9 @@ func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 		if err := validators.ValidateRecordContent(rrset.Type, rrset.Records[i].Content); err != nil {
 			return err
 		}
+		if err := validators.ValidateRecordPriority(rrset.Type, rrset.Records[i].Priority); err != nil {
+			return err
+		}
 	}
 
 	rrset.Name = normalizeRecordName(rrset.Name, zoneID)

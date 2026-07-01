@@ -435,6 +435,28 @@ func TestAPICreateRecord_PriorityZero(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_PriorityOutOfRange is the m49 regression test: an MX
+// priority outside the 16-bit range (0-65535) must be rejected with a 400
+// before reaching PowerDNS.
+func TestAPICreateRecord_PriorityOutOfRange(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"example.com.","type":"MX","ttl":3600,"records":[{"content":"mail.example.com.","priority":99999}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for out-of-range priority, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 0 {
+		t.Errorf("expected no PDNS call for invalid priority, got %d sent rrsets", len(sent))
+	}
+}
+
 // TestAPICreateRecord_CNAMEEnsuresTrailingDot is the regression test for the
 // bug where a CNAME target without a trailing dot (e.g. "target.example.com")
 // was forwarded to PowerDNS as-is, causing PDNS to reject the PATCH. The fix

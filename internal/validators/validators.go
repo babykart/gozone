@@ -461,11 +461,25 @@ func ValidateRecordContent(recordType, content string) error {
 		}
 		return nil
 	case "SRV":
+		// SRV content is "<weight> <port> <target>" with the priority carried
+		// separately (validated via ValidateRecordPriority). A 4-field form with
+		// the priority embedded is also tolerated.
 		parts := strings.Fields(content)
-		if len(parts) < 3 {
-			return fmt.Errorf("SRV content must have at least 3 fields: priority|weight port target")
+		if len(parts) < 3 || len(parts) > 4 {
+			return fmt.Errorf("SRV content must have 3 or 4 fields: [priority] weight port target")
 		}
-		return ValidateDNSName(parts[len(parts)-1])
+		// weight and port sit immediately before the target (last field); the
+		// optional leading field is the priority.
+		if err := validateUintField(parts[len(parts)-3], "SRV weight", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[len(parts)-2], "SRV port", 16); err != nil {
+			return err
+		}
+		if err := ValidateDNSName(parts[len(parts)-1]); err != nil {
+			return fmt.Errorf("SRV target: %w", err)
+		}
+		return nil
 	case "CAA":
 		parts := strings.Fields(content)
 		if len(parts) != 3 {
@@ -751,4 +765,20 @@ func ValidateRecordContent(recordType, content string) error {
 	default:
 		return fmt.Errorf("content validation is not implemented for record type %q", recordType)
 	}
+}
+
+// ValidateRecordPriority checks that a priority value is valid for the given
+// record type. MX and SRV carry a 16-bit priority (0-65535); for those types
+// the value is range-checked. The priority lives in RecordInfo.Priority (not in
+// the content string), so it is validated separately from the content (m49).
+// For all other record types the priority is not applicable and any value is
+// accepted (it is ignored downstream by prepareRecordContent).
+func ValidateRecordPriority(recordType string, priority int) error {
+	switch strings.ToUpper(recordType) {
+	case "MX", "SRV":
+		if priority < 0 || priority > 65535 {
+			return fmt.Errorf("%s priority %d is out of range (0-65535)", strings.ToUpper(recordType), priority)
+		}
+	}
+	return nil
 }

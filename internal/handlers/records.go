@@ -82,6 +82,11 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
+		h.renderError(w, r, "Invalid priority: "+err.Error())
+		return
+	}
+
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch existing records", err)
@@ -297,6 +302,10 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		return nil, nil, &recordValidationError{Message: "Invalid record content: " + err.Error()}
 	}
 
+	if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
+		return nil, nil, &recordValidationError{Message: "Invalid priority: " + err.Error()}
+	}
+
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		return nil, nil, err
@@ -421,6 +430,10 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := validators.ValidateRecordContent(recordType, content); err != nil {
 			h.renderError(w, r, "Invalid record content: "+err.Error())
+			return
+		}
+		if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
+			h.renderError(w, r, "Invalid priority '"+recordType+"': "+err.Error())
 			return
 		}
 

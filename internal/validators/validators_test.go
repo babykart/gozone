@@ -379,6 +379,71 @@ func TestValidateRecordContent_StructuredTypes(t *testing.T) {
 	}
 }
 
+// TestValidateRecordContent_SRVNumericFields verifies that SRV weight and port
+// are validated as 16-bit unsigned integers (0-65535), and that both the
+// 3-field (weight port target) and 4-field (priority weight port target)
+// forms are accepted (m49).
+func TestValidateRecordContent_SRVNumericFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{"valid 3-field", "5 5060 sip.example.com.", false},
+		{"valid 4-field with priority", "10 5 5060 sip.example.com.", false},
+		{"weight at max", "65535 5060 sip.example.com.", false},
+		{"port at max", "5 65535 sip.example.com.", false},
+		{"weight too large", "65536 5060 sip.example.com.", true},
+		{"port too large", "5 65536 sip.example.com.", true},
+		{"weight negative", "-1 5060 sip.example.com.", true},
+		{"port not numeric", "5 abc sip.example.com.", true},
+		{"weight not numeric", "abc 5060 sip.example.com.", true},
+		{"too few fields", "5 5060", true},
+		{"too many fields", "1 2 3 4 target.example.com.", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordContent("SRV", tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordContent(SRV, %q) error = %v, wantErr = %v", tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateRecordPriority verifies the MX/SRV priority range check (m49).
+// Priority lives in RecordInfo.Priority, separate from the content string, so
+// it is validated by ValidateRecordPriority rather than ValidateRecordContent.
+func TestValidateRecordPriority(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordType string
+		priority   int
+		wantErr    bool
+	}{
+		{"MX valid zero", "MX", 0, false},
+		{"MX valid", "MX", 10, false},
+		{"MX valid max", "MX", 65535, false},
+		{"MX too large", "MX", 65536, true},
+		{"MX negative", "MX", -1, true},
+		{"SRV valid", "SRV", 10, false},
+		{"SRV valid max", "SRV", 65535, false},
+		{"SRV too large", "SRV", 70000, true},
+		{"A ignores priority (non-applicable)", "A", 999, false},
+		{"A zero", "A", 0, false},
+		{"TXT ignores priority", "TXT", 50, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordPriority(tt.recordType, tt.priority)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordPriority(%q, %d) error = %v, wantErr = %v",
+					tt.recordType, tt.priority, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRecordType_AllWhitelisted(t *testing.T) {
 	for _, rt := range []string{
 		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",
