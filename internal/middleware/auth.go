@@ -74,7 +74,8 @@ func GenerateToken(user *models.User, secret []byte, duration time.Duration) (st
 // ParseToken validates and parses a JWT token string.
 //
 // It verifies the HMAC signature and extracts the embedded claims.
-// Only HS256-family signing methods are accepted.
+// Only HS256 is accepted, matching the algorithm used by GenerateToken.
+// Other HMAC variants (HS384/HS512) and non-HMAC algorithms are rejected.
 //
 // Parameters:
 //   - tokenString: the raw JWT token to parse
@@ -84,7 +85,7 @@ func GenerateToken(user *models.User, secret []byte, duration time.Duration) (st
 // expired, or uses an unsupported algorithm.
 func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return secret, nil

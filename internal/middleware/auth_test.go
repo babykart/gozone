@@ -14,6 +14,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/database"
@@ -97,6 +99,30 @@ func TestParseToken_InvalidSignature(t *testing.T) {
 	_, err = ParseToken(token, []byte("wrong-secret"))
 	if err == nil {
 		t.Error("expected error for wrong secret")
+	}
+}
+
+// TestParseToken_RejectsNonHS256Algorithm guards c7: even though HS384/HS512
+// are HMAC methods, ParseToken must accept only HS256 (the algorithm
+// GenerateToken signs with). A token forged with HS384 using the same secret
+// must be rejected.
+func TestParseToken_RejectsNonHS256Algorithm(t *testing.T) {
+	claims := Claims{
+		UserID:   1,
+		Username: "u",
+		Role:     "user",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS384, claims).SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign HS384 token: %v", err)
+	}
+
+	if _, err := ParseToken(token, testSecret); err == nil {
+		t.Error("expected error for HS384 token, ParseToken must only accept HS256")
 	}
 }
 
