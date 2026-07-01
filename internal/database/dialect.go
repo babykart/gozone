@@ -60,6 +60,13 @@ type Dialect interface {
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.
 	LockMigrations(conn *sql.DB) (release func(), err error)
+	// IsAlreadyExistsError reports whether err indicates a DDL operation tried
+	// to create an object (column, table, index, constraint) that already
+	// exists. The migration runner uses this to tolerate re-running a
+	// previously-applied migration whose content — and therefore content hash —
+	// changed (e.g. a typo fix), so a non-idempotent ALTER TABLE ADD COLUMN no
+	// longer aborts startup. See REVIEW.md m22.
+	IsAlreadyExistsError(err error) bool
 }
 
 // placeholders returns a comma-separated list of n question-mark placeholders.

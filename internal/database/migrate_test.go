@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -196,5 +197,90 @@ func TestApplyMigration_RecordsFailureDoesNotApply(t *testing.T) {
 	}
 	if n != 0 {
 		t.Error("schema change must roll back when recording fails (apply+record must be atomic)")
+	}
+}
+
+// editedSQLiteDialect wraps sqliteDialect and replaces specific migration
+// texts (map key) with edited versions (map value). This simulates a typo fix
+// in an already-applied migration, which changes its content hash but not its
+// schema effect — the exact scenario of REVIEW.md m22.
+type editedSQLiteDialect struct {
+	sqliteDialect
+	override map[string]string
+}
+
+func (e *editedSQLiteDialect) Migrations() []string {
+	orig := e.sqliteDialect.Migrations()
+	out := make([]string, len(orig))
+	for i, m := range orig {
+		if edited, ok := e.override[m]; ok {
+			out[i] = edited
+		} else {
+			out[i] = m
+		}
+	}
+	return out
+}
+
+// TestMigrate_EditedMigrationDoesNotAbort is the core regression test for m22:
+// editing an already-applied migration (so its content hash changes) must not
+// abort startup when the migration is re-run and hits a non-idempotent
+// statement (ALTER TABLE ADD COLUMN). The runner detects the "already exists"
+// error, records the new hash, and continues.
+func TestMigrate_EditedMigrationDoesNotAbort(t *testing.T) {
+	dialect := &sqliteDialect{}
+	conn, err := sql.Open("sqlite3", dialect.DSN(":memory:"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Apply all migrations normally so the schema is fully populated.
+	db := &DB{Conn: conn, dialect: dialect}
+	if err := db.migrate(); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+
+	// 2. Find a non-idempotent ALTER TABLE ADD COLUMN migration and edit it
+	//    (append a trailing comment so the content hash changes but the SQL
+	//    effect is identical).
+	var original string
+	for _, m := range dialect.Migrations() {
+		if strings.Contains(m, "ALTER TABLE activity_logs ADD COLUMN old_value") {
+			original = m
+			break
+		}
+	}
+	if original == "" {
+		t.Fatal("test baseline: ALTER activity_logs old_value migration not found")
+	}
+	edited := original + " -- m22 edit"
+	if migrationVersion(original) == migrationVersion(edited) {
+		t.Fatal("test baseline: edited migration must have a different content hash")
+	}
+
+	// 3. Re-run migrate() with the edited dialect. Without the m22 fix this
+	//    fails with "duplicate column name: old_value".
+	editedDialect := &editedSQLiteDialect{override: map[string]string{original: edited}}
+	db2 := &DB{Conn: conn, dialect: editedDialect}
+	if err := db2.migrate(); err != nil {
+		t.Fatalf("migrate after editing an applied migration should not abort (m22): %v", err)
+	}
+
+	// 4. The edited migration's new hash is now recorded, so a further run is
+	//    a clean no-op (no warning, no error).
+	var recorded int
+	if err := conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version=?", migrationVersion(edited),
+	).Scan(&recorded); err != nil {
+		t.Fatalf("query edited version: %v", err)
+	}
+	if recorded != 1 {
+		t.Errorf("edited migration's new hash should be recorded exactly once, got %d", recorded)
+	}
+
+	db3 := &DB{Conn: conn, dialect: editedDialect}
+	if err := db3.migrate(); err != nil {
+		t.Fatalf("third migrate (steady state) should be a no-op: %v", err)
 	}
 }

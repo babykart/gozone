@@ -612,12 +612,38 @@ func (db *DB) migrate() error {
 		// failure midway never leaves the schema changed but unrecorded (or
 		// vice-versa). See applyMigration / REVIEW.md m17.
 		if err := db.applyMigration(m, version); err != nil {
+			// m22: a migration whose content hash changed (e.g. a typo fix in
+			// an old, already-applied migration) re-runs here and fails on
+			// non-idempotent DDL (ALTER TABLE ADD COLUMN) because the object
+			// already exists. Treat that as "already applied": record the new
+			// hash and continue instead of aborting startup. The content-hash
+			// identity still rejects genuinely-new migrations (their statements
+			// don't trip an already-exists error) and survives slice
+			// reordering (all hashes stay recorded, so none re-run).
+			if db.dialect.IsAlreadyExistsError(err) {
+				logger.Warn("migration already applied; recording new content hash (migration was likely edited)", "version", version, "error", err)
+				if err := db.recordMigrationVersion(context.Background(), version); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 
 		logger.Info("applied migration", "version", version)
 	}
 	logger.Info("migrations completed")
+	return nil
+}
+
+// recordMigrationVersion marks a migration as applied in schema_migrations
+// without running it. It is the fallback path for migrations that are already
+// present in the schema (detected via IsAlreadyExistsError) but whose content
+// hash changed, so they don't re-run on every startup. See REVIEW.md m22.
+func (db *DB) recordMigrationVersion(ctx context.Context, version string) error {
+	if _, err := db.Conn.ExecContext(ctx, db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
 	return nil
 }
 

@@ -3,10 +3,13 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 func TestMySQLDialect_DSN_AppendsParseTime(t *testing.T) {
@@ -135,6 +138,41 @@ func TestMySQLDialect_Migrations_ZoneCreatedIndexDesc(t *testing.T) {
 	needle := "idx_activity_logs_zone_created (zone_id, created_at DESC)"
 	if !strings.Contains(all, needle) {
 		t.Errorf("MySQL migrations must define idx_activity_logs_zone_created with DESC on created_at (m21); missing %q", needle)
+	}
+}
+
+// TestMySQLDialect_IsAlreadyExistsError verifies the typed-error matching that
+// lets the migration runner tolerate re-running an already-applied migration
+// after a content edit (REVIEW.md m22).
+func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
+	d := &mysqlDialect{}
+	codes := []struct {
+		number uint16
+		want   bool
+	}{
+		{1050, true},  // ER_TABLE_EXISTS_ERROR
+		{1060, true},  // ER_DUP_FIELDNAME
+		{1061, true},  // ER_DUP_KEYNAME
+		{1068, true},  // ER_MULTIPLE_PRI_KEY
+		{1146, false}, // ER_NO_SUCH_TABLE
+		{1064, false}, // ER_PARSE_ERROR
+	}
+	for _, c := range codes {
+		err := &mysql.MySQLError{Number: c.number}
+		if got := d.IsAlreadyExistsError(err); got != c.want {
+			t.Errorf("IsAlreadyExistsError(code %d) = %v, want %v", c.number, got, c.want)
+		}
+	}
+	// Wrapped error still matched via errors.As.
+	wrapped := fmt.Errorf("apply migration: %w", &mysql.MySQLError{Number: 1060})
+	if !d.IsAlreadyExistsError(wrapped) {
+		t.Error("IsAlreadyExistsError must detect a wrapped *mysql.MySQLError")
+	}
+	if d.IsAlreadyExistsError(nil) {
+		t.Error("IsAlreadyExistsError(nil) must be false")
+	}
+	if d.IsAlreadyExistsError(errors.New("connection refused")) {
+		t.Error("IsAlreadyExistsError must not match unrelated errors")
 	}
 }
 

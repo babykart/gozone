@@ -3,9 +3,13 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 func TestPostgresDialect_DriverName(t *testing.T) {
@@ -41,6 +45,40 @@ func TestPostgresDialect_PoolSettings(t *testing.T) {
 	}
 	if got := d.ConnMaxLifetime(); got <= 0 {
 		t.Errorf("Postgres ConnMaxLifetime must be positive (finite), got %v", got)
+	}
+}
+
+// TestPostgresDialect_IsAlreadyExistsError verifies the SQLSTATE matching that
+// lets the migration runner tolerate re-running an already-applied migration
+// after a content edit (REVIEW.md m22).
+func TestPostgresDialect_IsAlreadyExistsError(t *testing.T) {
+	d := &postgresDialect{}
+	codes := []struct {
+		code string
+		want bool
+	}{
+		{"42701", true},  // duplicate_column
+		{"42P07", true},  // duplicate_table
+		{"42710", true},  // duplicate_object
+		{"42P01", false}, // undefined_table
+		{"42601", false}, // syntax_error
+	}
+	for _, c := range codes {
+		err := &pq.Error{Code: pq.ErrorCode(c.code)}
+		if got := d.IsAlreadyExistsError(err); got != c.want {
+			t.Errorf("IsAlreadyExistsError(SQLSTATE %q) = %v, want %v", c.code, got, c.want)
+		}
+	}
+	// Wrapped error still matched via errors.As.
+	wrapped := fmt.Errorf("apply migration: %w", &pq.Error{Code: "42701"})
+	if !d.IsAlreadyExistsError(wrapped) {
+		t.Error("IsAlreadyExistsError must detect a wrapped *pq.Error")
+	}
+	if d.IsAlreadyExistsError(nil) {
+		t.Error("IsAlreadyExistsError(nil) must be false")
+	}
+	if d.IsAlreadyExistsError(errors.New("connection refused")) {
+		t.Error("IsAlreadyExistsError must not match unrelated errors")
 	}
 }
 

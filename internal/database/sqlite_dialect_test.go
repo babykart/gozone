@@ -1,6 +1,8 @@
 package database
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -76,5 +78,32 @@ func TestSQLiteDialect_Migrations_NoDoubleOnConflict(t *testing.T) {
 		if strings.Contains(strings.ToUpper(m), "ON CONFLICT") {
 			t.Errorf("SQLite migration must not contain ON CONFLICT: %s", m)
 		}
+	}
+}
+
+// TestSQLiteDialect_IsAlreadyExistsError verifies the message-text matching
+// that lets the migration runner tolerate re-running an already-applied
+// migration after a content edit (REVIEW.md m22).
+func TestSQLiteDialect_IsAlreadyExistsError(t *testing.T) {
+	d := &sqliteDialect{}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"duplicate column", errors.New("duplicate column name: old_value"), true},
+		{"table already exists", errors.New("table users already exists"), true},
+		{"index already exists", errors.New("index idx already exists"), true},
+		{"wrapped duplicate", fmt.Errorf("migrate: %w", errors.New("duplicate column name: x")), true},
+		{"unrelated", errors.New("no such table: x"), false},
+		{"syntax error", errors.New("near \"FOO\": syntax error"), false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := d.IsAlreadyExistsError(tt.err); got != tt.want {
+				t.Errorf("IsAlreadyExistsError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

@@ -3,11 +3,14 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/babykart/gozone/internal/logger"
+
+	"github.com/lib/pq"
 )
 
 type postgresDialect struct{}
@@ -77,6 +80,27 @@ func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
+}
+
+// postgresAlreadyExistsSQLSTATEs are PostgreSQL SQLSTATE codes indicating a
+// DDL operation tried to create an object that is already present. Used by
+// IsAlreadyExistsError so the migration runner tolerates re-running a
+// previously-applied migration whose content hash changed. See REVIEW.md m22.
+var postgresAlreadyExistsSQLSTATEs = map[string]bool{
+	"42701": true, // duplicate_column
+	"42P07": true, // duplicate_table
+	"42710": true, // duplicate_object
+	"42723": true, // duplicate_function
+}
+
+// IsAlreadyExistsError reports whether err is a PostgreSQL "object already
+// exists" DDL error, via its SQLSTATE code. See REVIEW.md m22.
+func (p *postgresDialect) IsAlreadyExistsError(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return postgresAlreadyExistsSQLSTATEs[string(pqErr.Code)]
+	}
+	return false
 }
 
 func (p *postgresDialect) Migrations() []string {

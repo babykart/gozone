@@ -57,6 +57,18 @@ func (s *sqliteDialect) LockMigrations(conn *sql.DB) (func(), error) {
 	return func() {}, nil
 }
 
+// IsAlreadyExistsError matches go-sqlite3's DDL-already-exists messages. The
+// driver exposes no typed error codes for these, so we match on the stable
+// message text. See REVIEW.md m22.
+func (s *sqliteDialect) IsAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name") ||
+		strings.Contains(msg, "already exists")
+}
+
 func (s *sqliteDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (

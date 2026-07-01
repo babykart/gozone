@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,6 +84,27 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
+}
+
+// mysqlAlreadyExistsCodes are MySQL error numbers that indicate a DDL operation
+// tried to create an object that is already present. Used by
+// IsAlreadyExistsError so the migration runner can tolerate re-running a
+// previously-applied migration whose content hash changed. See REVIEW.md m22.
+var mysqlAlreadyExistsCodes = map[uint16]bool{
+	1050: true, // ER_TABLE_EXISTS_ERROR  - Table already exists
+	1060: true, // ER_DUP_FIELDNAME       - Duplicate column name
+	1061: true, // ER_DUP_KEYNAME         - Duplicate key name (index)
+	1068: true, // ER_MULTIPLE_PRI_KEY    - Multiple primary key defined
+}
+
+// IsAlreadyExistsError reports whether err is a MySQL "object already exists"
+// DDL error (duplicate table/column/index/key). See REVIEW.md m22.
+func (m *mysqlDialect) IsAlreadyExistsError(err error) bool {
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) {
+		return mysqlAlreadyExistsCodes[myErr.Number]
+	}
+	return false
 }
 
 func (m *mysqlDialect) Migrations() []string {
