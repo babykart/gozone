@@ -390,11 +390,61 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	serverCh := make(chan *models.ServerInfo, 1)
 	cryptoCh := make(chan []models.Cryptokey, 1)
 
-	go func() { z, err := h.PDNS.GetZone(r.Context(), zoneID); zoneCh <- zoneRes{z, err} }()
-	go func() { recs, err := h.PDNS.ListRecords(r.Context(), zoneID); recordsCh <- recordsRes{recs, err} }()
-	go func() { m, _ := h.PDNS.GetMetadata(r.Context(), zoneID); metadataCh <- m }()
-	go func() { s, _ := h.PDNS.GetServer(r.Context()); serverCh <- s }()
-	go func() { ck, _ := h.PDNS.ListCryptokeys(r.Context(), zoneID); cryptoCh <- ck }()
+	// Each goroutine has a defer/recover so a panic (nil deref in the PDNS
+	// client, JSON decode, …) is logged and the channel still receives a
+	// fallback value — otherwise the receiver would block forever and the
+	// panic would crash the process (the request-level ErrorHandler middleware
+	// does not cover spawned goroutines). (M-BIZ3)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", "GetZone", "panic", rec, "zone_id", zoneID)
+				zoneCh <- zoneRes{nil, fmt.Errorf("internal error: %v", rec)}
+			}
+		}()
+		z, err := h.PDNS.GetZone(r.Context(), zoneID)
+		zoneCh <- zoneRes{z, err}
+	}()
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", "ListRecords", "panic", rec, "zone_id", zoneID)
+				recordsCh <- recordsRes{nil, fmt.Errorf("internal error: %v", rec)}
+			}
+		}()
+		recs, err := h.PDNS.ListRecords(r.Context(), zoneID)
+		recordsCh <- recordsRes{recs, err}
+	}()
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", "GetMetadata", "panic", rec, "zone_id", zoneID)
+				metadataCh <- nil
+			}
+		}()
+		m, _ := h.PDNS.GetMetadata(r.Context(), zoneID)
+		metadataCh <- m
+	}()
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", "GetServer", "panic", rec)
+				serverCh <- nil
+			}
+		}()
+		s, _ := h.PDNS.GetServer(r.Context())
+		serverCh <- s
+	}()
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", "ListCryptokeys", "panic", rec, "zone_id", zoneID)
+				cryptoCh <- nil
+			}
+		}()
+		ck, _ := h.PDNS.ListCryptokeys(r.Context(), zoneID)
+		cryptoCh <- ck
+	}()
 
 	zr := <-zoneCh
 	if zr.err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/pdns"
 	"github.com/babykart/gozone/internal/testutil"
 )
 
@@ -274,6 +275,49 @@ func TestViewZone(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+// panicMetadata wraps a ZoneService and panics on GetMetadata. Used by
+// TestViewZone_GoroutinePanicRecovery to verify the defer/recover guards.
+type panicMetadata struct {
+	pdns.ZoneService
+}
+
+func (p *panicMetadata) GetMetadata(ctx context.Context, zoneID string) ([]models.Metadata, error) {
+	panic("simulated PDNS client panic")
+}
+
+// TestViewZone_GoroutinePanicRecovery is the M-BIZ3 regression test: a panic
+// in any of the PDNS goroutines must be recovered, not crash the process.
+// Here GetMetadata panics; ViewZone ignores metadata errors so the page must
+// still render successfully. Without the recover in the goroutine this test
+// would crash the test runner.
+func TestViewZone_GoroutinePanicRecovery(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(models.Zone{
+			ID: "example.com", Name: "example.com", Kind: "Native",
+		})
+	})
+	defer pdnsSrv.Close()
+
+	// Wrap the PDNS client so GetMetadata panics. All other methods delegate
+	// to the real client.
+	h.PDNS = &panicMetadata{ZoneService: h.PDNS}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com", nil)
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.ViewZone(w, r)
+
+	// The panic must be recovered — ViewZone should still render the page.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 (panic recovered), got %d", w.Code)
 	}
 }
 
