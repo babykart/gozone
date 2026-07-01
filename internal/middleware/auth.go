@@ -183,7 +183,7 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			}
 
 			// Load full user from database
-			user, err := loadUser(db, claims.UserID)
+			user, err := loadUser(r.Context(), db, claims.UserID)
 			if err != nil || !user.Enabled {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
@@ -222,7 +222,7 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 
 			var userID int64
 			var expiresAt sql.NullTime
-			err := db.QueryRow(
+			err := db.QueryRowContext(r.Context(),
 				"SELECT user_id, expires_at FROM api_keys WHERE key_hash = ?",
 				keyHash,
 			).Scan(&userID, &expiresAt)
@@ -237,7 +237,7 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			user, err := loadUser(db, userID)
+			user, err := loadUser(r.Context(), db, userID)
 			if err != nil || !user.Enabled {
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
@@ -246,7 +246,7 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 			// Record last use only once the key has authenticated a valid, enabled
 			// user (m36). Updating it earlier bumped last_used_at for orphaned keys
 			// (user deleted) and disabled-user keys, misrepresenting real usage.
-			if _, err := db.Exec("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
+			if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
 				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
 			}
 
@@ -288,10 +288,10 @@ func GetUser(r *http.Request) *models.User {
 	return user
 }
 
-func loadUser(db *database.DB, userID int64) (*models.User, error) {
+func loadUser(ctx context.Context, db *database.DB, userID int64) (*models.User, error) {
 	user := &models.User{}
 	var enabled int
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at
 		 FROM users WHERE id = ?`, userID,
 	).Scan(

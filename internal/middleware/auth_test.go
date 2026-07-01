@@ -774,7 +774,7 @@ func TestLoadUser_Success(t *testing.T) {
 	db := newTestAuthDB(t)
 	userID := seedTestUser(t, db, "load-ok", "admin", true)
 
-	user, err := loadUser(db, userID)
+	user, err := loadUser(context.Background(), db, userID)
 	if err != nil {
 		t.Fatalf("loadUser failed: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestLoadUser_Success(t *testing.T) {
 func TestLoadUser_NotFound(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	_, err := loadUser(db, 99999)
+	_, err := loadUser(context.Background(), db, 99999)
 	if err == nil {
 		t.Error("expected error for non-existent user")
 	}
@@ -802,11 +802,26 @@ func TestLoadUser_DisabledConversion(t *testing.T) {
 	db := newTestAuthDB(t)
 	seedTestUser(t, db, "conv-user", "user", false)
 
-	user, err := loadUser(db, 1)
+	user, err := loadUser(context.Background(), db, 1)
 	if err != nil {
 		t.Fatalf("loadUser failed: %v", err)
 	}
 	if user.Enabled {
 		t.Error("expected user to be disabled (enabled=0 converted to false)")
+	}
+}
+
+// TestLoadUser_RespectsContext verifies the m37 fix: loadUser honours the
+// passed context, so a pre-cancelled context aborts the query instead of
+// running to completion against context.Background() (the old QueryRow path).
+func TestLoadUser_RespectsContext(t *testing.T) {
+	db := newTestAuthDB(t)
+	seedTestUser(t, db, "ctxuser", "user", true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the call
+
+	if _, err := loadUser(ctx, db, 1); err == nil {
+		t.Fatal("expected loadUser to fail with a cancelled context (m37)")
 	}
 }
