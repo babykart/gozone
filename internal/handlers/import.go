@@ -47,6 +47,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rrsets []models.RRSet
+	var skipped []skippedBindLine
 	switch format {
 	case "bind":
 		data, readErr := io.ReadAll(io.LimitReader(file, 10<<20))
@@ -55,7 +56,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, "Failed to read uploaded file")
 			return
 		}
-		rrsets, err = parseBindZone(data, zoneID)
+		rrsets, skipped, err = parseBindZone(data, zoneID)
 	case "csv":
 		cr := csv.NewReader(file)
 		rrsets, err = parseCSVZone(cr)
@@ -79,7 +80,13 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "user", user.Username)
+	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "skipped", len(skipped), "user", user.Username)
+
+	// Report lines that could not be parsed instead of silently dropping them
+	// (m28): server-side log for operators, plus a user-facing summary.
+	for _, s := range skipped {
+		logger.Warn("Zone import skipped invalid line", "zone", zoneID, "line", s.Line, "reason", s.Reason)
+	}
 
 	for _, rs := range rrsets {
 		contents := make([]string, 0, len(rs.Records))
@@ -95,8 +102,12 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// #nosec G710 — zoneID from chi r.PathValue, controlled by route pattern
-	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
+	redirectURL := "/zones/" + zoneID
+	if n := len(skipped); n > 0 {
+		redirectURL += fmt.Sprintf("?import_skipped=%d", n)
+	}
+	// #nosec G710 — redirectURL is "/zones/" + zoneID (chi PathValue, route-controlled) plus an optional ?import_skipped=N query where N is an int; no user-controlled host/path.
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func detectFormat(filename string) string {
@@ -114,8 +125,17 @@ type bindRecord struct {
 	data  string
 }
 
-// parseBindZone parses an RFC 1035 BIND zone file and returns RRSets.
-func parseBindZone(data []byte, zoneID string) ([]models.RRSet, error) {
+// skippedBindLine records a zone-file line that could not be parsed into a
+// record, so the importer can surface feedback instead of silently dropping it.
+type skippedBindLine struct {
+	Line   string
+	Reason string
+}
+
+// parseBindZone parses an RFC 1035 BIND zone file and returns RRSets plus any
+// lines that could not be parsed (so the caller can surface feedback instead of
+// silently dropping them).
+func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedBindLine, error) {
 	origin := zoneID
 	if !strings.HasSuffix(origin, ".") {
 		origin += "."
@@ -124,6 +144,7 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, error) {
 
 	lines := normalizeBindLines(string(data))
 	raw := make([]bindRecord, 0)
+	var skipped []skippedBindLine
 	lastOwner := "" // owner of the previous record, for RFC 1035 inheritance
 
 	for _, bl := range lines {
@@ -162,12 +183,13 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, error) {
 
 		rec, err := parseBindLine(line, origin, defaultTTL)
 		if err != nil {
+			skipped = append(skipped, skippedBindLine{Line: bl.text, Reason: err.Error()})
 			continue
 		}
 		raw = append(raw, rec)
 	}
 
-	return groupBindRecords(raw), nil
+	return groupBindRecords(raw), skipped, nil
 }
 
 // bindLine is one logical zone-file line (paren continuations joined, comments
@@ -257,7 +279,7 @@ var errSkipBindLine = errors.New("bind line has no record")
 func parseBindLine(line, origin string, defaultTTL int) (bindRecord, error) {
 	tokens := tokenizeBindLine(line)
 	if len(tokens) < 2 {
-		return bindRecord{}, errSkipBindLine
+		return bindRecord{}, fmt.Errorf("%w: not enough fields", errSkipBindLine)
 	}
 
 	idx := 0
@@ -283,7 +305,7 @@ func parseBindLine(line, origin string, defaultTTL int) (bindRecord, error) {
 	}
 
 	if idx >= len(tokens) {
-		return bindRecord{}, errSkipBindLine
+		return bindRecord{}, fmt.Errorf("%w: missing record type", errSkipBindLine)
 	}
 	rtype := strings.ToUpper(tokens[idx])
 	idx++

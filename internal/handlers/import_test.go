@@ -194,6 +194,38 @@ func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 	}
 }
 
+// TestImportZone_BIND_SkippedLinesReported is the m28 regression test at the
+// handler level: a BIND file containing a malformed line must redirect with an
+// ?import_skipped=N query param so the frontend can surface feedback.
+func TestImportZone_BIND_SkippedLinesReported(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, importPDNS())
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
+www IN A 192.0.2.1
+www 300`
+
+	body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.zone\"\r\nContent-Type: text/plain\r\n\r\n%s\r\n--boundary--\r\n", bindContent)
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	h.ImportZone(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d body=%s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "import_skipped=1") {
+		t.Errorf("expected redirect to carry ?import_skipped=1, got %q", loc)
+	}
+}
+
 func assertImportRedirect(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if w.Code != http.StatusSeeOther {
@@ -209,7 +241,7 @@ $TTL 3600
 www IN A 192.0.2.1
 @ IN MX 10 mail.example.com.`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,7 +268,7 @@ func TestParseBindZone_Parens(t *testing.T) {
     3600 )
 @ IN NS ns1.example.com.`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,7 +288,7 @@ func TestParseBindZone_IncludeDirective(t *testing.T) {
 $INCLUDE /etc/bind/zones/other.zone
 @ IN NS ns1.example.com.`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -275,7 +307,7 @@ func TestParseBindZone_OwnerInheritance(t *testing.T) {
   IN NS ns2.example.com.
 www IN A 192.0.2.1`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -314,7 +346,7 @@ func TestParseBindZone_ShortLineNoPanic(t *testing.T) {
 www 300
 @ IN NS ns1.example.com.`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,6 +358,42 @@ www 300
 	}
 	if !hasNS {
 		t.Errorf("expected the valid NS record to be parsed, got %+v", rrsets)
+	}
+}
+
+// TestParseBindZone_ReportsSkippedLines is the m28 regression test: lines that
+// cannot be parsed into records are returned as skipped feedback instead of
+// being silently dropped.
+func TestParseBindZone_ReportsSkippedLines(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN NS ns1.example.com.
+www 300
+lonelytoken
+www IN A 192.0.2.1`)
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 2 {
+		t.Fatalf("expected 2 valid rrsets (NS, A), got %d: %+v", len(rrsets), rrsets)
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("expected 2 skipped lines, got %d: %+v", len(skipped), skipped)
+	}
+	gotLines := map[string]bool{}
+	for _, s := range skipped {
+		if s.Line == "" || s.Reason == "" {
+			t.Errorf("skipped entry missing text/reason: %+v", s)
+		}
+		gotLines[s.Line] = true
+	}
+	if !gotLines["www 300"] {
+		t.Errorf("expected 'www 300' (no type) to be reported as skipped, got %+v", skipped)
+	}
+	if !gotLines["lonelytoken"] {
+		t.Errorf("expected 'lonelytoken' (single token) to be reported as skipped, got %+v", skipped)
 	}
 }
 
@@ -593,7 +661,7 @@ $TTL 3600
 www IN CNAME target.example.com
 @ IN MX 10 mail.example.com`)
 
-	rrsets, err := parseBindZone(data, "example.com.")
+	rrsets, _, err := parseBindZone(data, "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

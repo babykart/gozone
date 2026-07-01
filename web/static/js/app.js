@@ -312,6 +312,19 @@ function initRecordPriority() {
     }
 }
 
+// Surface zone-import feedback carried via the ?import_skipped query param set
+// by ImportZone when BIND lines could not be parsed (m28). Shows a one-shot
+// warning notification, then strips the param so it does not recur on refresh.
+function initImportFeedback() {
+    var params = new URLSearchParams(window.location.search);
+    var skipped = params.get('import_skipped');
+    if (!skipped) return;
+    showNotification('Import completed, but ' + skipped + ' line(s) could not be parsed and were skipped. See server logs for details.', 'warning');
+    params.delete('import_skipped');
+    var clean = params.toString();
+    window.history.replaceState(null, '', clean ? '?' + clean : window.location.pathname);
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -379,8 +392,10 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() {
         initDelegatedListeners();
         initRecordPriority();
+        initImportFeedback();
     });
 } else {
     initDelegatedListeners();
     initRecordPriority();
+    initImportFeedback();
 }
