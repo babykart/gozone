@@ -298,24 +298,24 @@ func TestSortRRSets(t *testing.T) {
 	}
 }
 
-func TestFindSOATTY(t *testing.T) {
+func TestFindSOATTL(t *testing.T) {
 	records := []models.RRSet{
 		{Name: "example.com.", Type: "SOA", TTL: 7200},
 		{Name: "example.com.", Type: "NS", TTL: 3600},
 	}
 
-	ttl := findSOATTY(records)
+	ttl := findSOATTL(records)
 	if ttl != 7200 {
 		t.Errorf("expected 7200, got %d", ttl)
 	}
 }
 
-func TestFindSOATTY_Default(t *testing.T) {
+func TestFindSOATTL_Default(t *testing.T) {
 	records := []models.RRSet{
 		{Name: "example.com.", Type: "NS", TTL: 3600},
 	}
 
-	ttl := findSOATTY(records)
+	ttl := findSOATTL(records)
 	if ttl != 3600 {
 		t.Errorf("expected default 3600, got %d", ttl)
 	}

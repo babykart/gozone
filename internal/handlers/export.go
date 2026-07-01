@@ -81,7 +81,7 @@ func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records [
 
 	sortRRSets(records)
 
-	defaultTTL := findSOATTY(records)
+	defaultTTL := findSOATTL(records)
 
 	// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
 	fmt.Fprintf(w, "$ORIGIN %s\n", origin)
@@ -181,8 +181,8 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 	writer.Flush()
 }
 
-// findSOATTY returns the TTL from the first SOA RRSet, or 3600 as default.
-func findSOATTY(records []models.RRSet) int {
+// findSOATTL returns the TTL from the first SOA RRSet, or 3600 as default.
+func findSOATTL(records []models.RRSet) int {
 	for _, rr := range records {
 		if rr.Type == "SOA" && rr.TTL > 0 {
 			return rr.TTL
