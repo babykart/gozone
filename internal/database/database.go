@@ -142,9 +142,13 @@ func (db *DB) Close() error {
 
 // RevokeToken records a JWT ID (jti) in the revocation list so that the
 // corresponding token can no longer be used, even if it has not expired.
+// Uses InsertIgnore for dialect-portable conflict handling (SQLite: INSERT
+// OR IGNORE, MySQL: INSERT IGNORE, PostgreSQL: ON CONFLICT DO NOTHING).
 func (db *DB) RevokeToken(ctx context.Context, jti string, userID int64, expiresAt time.Time) error {
-	_, err := db.ExecContext(ctx,
-		"INSERT INTO revoked_tokens (jti, user_id, expires_at) VALUES (?, ?, ?) ON CONFLICT(jti) DO NOTHING",
+	_, err := db.InsertIgnore(ctx,
+		"revoked_tokens",
+		[]string{"jti", "user_id", "expires_at"},
+		[]string{"jti"},
 		jti, userID, expiresAt,
 	)
 	return err
