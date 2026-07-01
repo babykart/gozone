@@ -586,6 +586,25 @@ func TestLoad_FieldValidation_AcceptsValid(t *testing.T) {
 	}
 }
 
+// TestLoad_DoesNotCreateHardcodedDataDir is the regression test for m15: Load
+// must not create a hardcoded ./data directory. Directory creation is the
+// responsibility of database.New, which derives the directory from the actual
+// DSN (so a DSN like /var/lib/gozone/data.db no longer litters ./data in the
+// process working directory, and a :memory: DSN touches nothing on disk).
+func TestLoad_DoesNotCreateHardcodedDataDir(t *testing.T) {
+	// Isolate the CWD so we can deterministically assert on ./data.
+	t.Chdir(t.TempDir())
+
+	if _, err := Load(""); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if _, err := os.Stat("data"); err == nil {
+		t.Error("Load created a spurious ./data directory; directory creation is database.New's job (DSN-derived)")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("unexpected Stat error: %v", err)
+	}
+}
+
 func TestDefaultConfig_HasDerivedKeys(t *testing.T) {
 	cfg := DefaultConfig()
 	if len(cfg.Server.JWTKey) != 32 {

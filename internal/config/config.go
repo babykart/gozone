@@ -243,13 +243,6 @@ func Load(path string) (*Config, error) {
 	// Derive independent keys for JWT and CSRF from the master secret
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
 
-	// Ensure data directory exists for SQLite
-	if cfg.Database.Driver == "sqlite3" {
-		if err := os.MkdirAll("./data", 0750); err != nil {
-			return cfg, fmt.Errorf("failed to create data directory: %w", err)
-		}
-	}
-
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}
