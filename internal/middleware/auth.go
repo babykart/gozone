@@ -237,14 +237,17 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			if _, err := db.Exec("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
-				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
-			}
-
 			user, err := loadUser(db, userID)
 			if err != nil || !user.Enabled {
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
+			}
+
+			// Record last use only once the key has authenticated a valid, enabled
+			// user (m36). Updating it earlier bumped last_used_at for orphaned keys
+			// (user deleted) and disabled-user keys, misrepresenting real usage.
+			if _, err := db.Exec("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
+				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
 			}
 
 			ctx := context.WithValue(r.Context(), UserContextKey, user)

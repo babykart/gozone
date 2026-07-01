@@ -435,6 +435,75 @@ func TestAPIKeyAuth_LastUsedAtUpdated(t *testing.T) {
 	}
 }
 
+// TestAPIKeyAuth_DisabledUserDoesNotUpdateLastUsed guards the m36 fix: a key
+// whose user is disabled must be rejected (401) WITHOUT bumping last_used_at,
+// so the timestamp reflects only successful authentications.
+func TestAPIKeyAuth_DisabledUserDoesNotUpdateLastUsed(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "disableduser2", "user", false)
+	seedTestAPIKey(t, db, userID, "disabled-key2", nil)
+
+	mw := APIKeyAuth(db)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "disabled-key2")
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	var lastUsed sql.NullTime
+	if err := db.QueryRow("SELECT last_used_at FROM api_keys WHERE key_hash = ?", hashAPIKey("disabled-key2")).Scan(&lastUsed); err != nil {
+		t.Fatalf("query last_used_at: %v", err)
+	}
+	if lastUsed.Valid {
+		t.Errorf("last_used_at must stay NULL for a disabled-user key (m36), got %v", lastUsed.Time)
+	}
+}
+
+// TestAPIKeyAuth_OrphanKeyDoesNotUpdateLastUsed guards the m36 fix for an
+// orphaned key (user deleted): it must be rejected without bumping last_used_at.
+func TestAPIKeyAuth_OrphanKeyDoesNotUpdateLastUsed(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	// Disable FK to insert a key referencing a non-existent user.
+	db.Exec("PRAGMA foreign_keys = OFF")
+	if _, err := db.Exec(
+		`INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, ?)`,
+		9999, hashAPIKey("orphan-key2"), "orphan",
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec("PRAGMA foreign_keys = ON")
+
+	mw := APIKeyAuth(db)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "orphan-key2")
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	var lastUsed sql.NullTime
+	if err := db.QueryRow("SELECT last_used_at FROM api_keys WHERE key_hash = ?", hashAPIKey("orphan-key2")).Scan(&lastUsed); err != nil {
+		t.Fatalf("query last_used_at: %v", err)
+	}
+	if lastUsed.Valid {
+		t.Errorf("last_used_at must stay NULL for an orphan key (m36), got %v", lastUsed.Time)
+	}
+}
+
 func TestAPIKeyAuth_DisabledUser(t *testing.T) {
 	db := newTestAuthDB(t)
 	userID := seedTestUser(t, db, "disableduser", "user", false)
