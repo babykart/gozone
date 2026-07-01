@@ -192,8 +192,14 @@ func run(args []string) error {
 	// Rate limiters. /login uses two limiters compounded (both must allow) so an
 	// attacker cannot rotate XFF to evade the per-IP limit AND cannot spread
 	// guesses across many IPs to evade a per-username limit.
-	loginLimiter := middleware.NewRateLimiter(5) // 5 requests per minute per IP
-	apiLimiter := middleware.NewRateLimiter(100) // 100 requests per minute per API key
+	//
+	// The API stack is layered: an IP-based limiter (apiIPLimiter) runs BEFORE
+	// APIKeyAuth so an attacker rotating arbitrary keys cannot flood the DB
+	// with SELECT-against-api_keys lookups (M-SEC2). The per-key limiter
+	// (apiLimiter) runs AFTER auth to cap authenticated abuse per key.
+	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
+	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key (post-auth)
+	apiIPLimiter := middleware.NewRateLimiter(300) // 300 requests per minute per IP (pre-auth gate)
 	var loginUsernameLimiter *middleware.RateLimiter
 	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
 		loginUsernameLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
@@ -340,6 +346,9 @@ func run(args []string) error {
 
 	// API routes (API key auth, no CSRF)
 	r.Route("/api/v1", func(r chi.Router) {
+		// IP-based rate limit BEFORE auth so key-rotation floods hit the limiter
+		// before any DB lookup (M-SEC2). The per-key limiter runs after auth.
+		r.Use(apiIPLimiter.Limit(middleware.ExtractIP))
 		r.Use(middleware.APIKeyAuth(db))
 		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
 
