@@ -818,6 +818,52 @@ func TestAPIDeleteRecord(t *testing.T) {
 	}
 }
 
+// TestAPIDeleteRecord_NormalizesName is the m27 regression test: a name
+// without a trailing dot must be normalized to the FQDN before reaching
+// PowerDNS.
+func TestAPIDeleteRecord_NormalizesName(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com","type":"A"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/example.com/records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com")
+	h.APIDeleteRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].Name != "www.example.com." {
+		t.Errorf("expected PDNS to receive name www.example.com., got %+v", sent)
+	}
+}
+
+// TestAPIDeleteRecord_RejectsEmptyName verifies the m27 name validation: an
+// empty name is rejected with 400 before PowerDNS is contacted. This matters
+// because normalizeRecordName("") would otherwise resolve to the zone apex and
+// could delete apex records (SOA/NS).
+func TestAPIDeleteRecord_RejectsEmptyName(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("PDNS should not be called for an empty name")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"","type":"A"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/example.com/records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com")
+	h.APIDeleteRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty name, got %d", w.Code)
+	}
+}
+
 func TestAPIDeleteRecord_InvalidJSON(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()

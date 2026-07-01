@@ -716,8 +716,23 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
-	recordName := r.FormValue("name")
-	recordType := r.FormValue("type")
+	recordName := strings.TrimSpace(r.FormValue("name"))
+	recordType := strings.TrimSpace(r.FormValue("type"))
+
+	if recordName == "" || recordType == "" {
+		h.renderError(w, r, "Record name and type are required")
+		return
+	}
+
+	recordName = normalizeRecordName(recordName, zoneID)
+	if err := validators.ValidateRecordName(recordName); err != nil {
+		h.renderError(w, r, "Invalid record name: "+err.Error())
+		return
+	}
+	if err := validators.ValidateRecordType(recordType); err != nil {
+		h.renderError(w, r, "Invalid record type: "+err.Error())
+		return
+	}
 
 	var oldRRSet *models.RRSet
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)

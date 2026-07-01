@@ -193,6 +193,60 @@ func TestDeleteRecord_Success(t *testing.T) {
 	}
 }
 
+// TestDeleteRecord_NormalizesName is the m26 regression test: a relative name
+// without a trailing dot must be normalized to the FQDN before reaching
+// PowerDNS.
+func TestDeleteRecord_NormalizesName(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www&type=A"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].Name != "www.example.com." {
+		t.Errorf("expected PDNS to receive name www.example.com., got %+v", sent)
+	}
+}
+
+// TestDeleteRecord_RejectsInvalidType verifies the m26 type validation: an
+// unsupported record type is rejected with 400 before PowerDNS is contacted.
+func TestDeleteRecord_RejectsInvalidType(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("PDNS should not be called for an invalid type")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www&type=NOTATYPE"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid type, got %d", w.Code)
+	}
+}
+
 func TestEditRecordPage_Success(t *testing.T) {
 	var callCount int
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {

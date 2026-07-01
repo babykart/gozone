@@ -356,6 +356,11 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
 		return
 	}
+	if err := validators.ValidateRecordName(req.Name); err != nil {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
+		return
+	}
+	req.Name = normalizeRecordName(req.Name, zoneID)
 
 	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, req.Name, req.Type); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
