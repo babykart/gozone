@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/logger"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // Config holds all configuration for the application.
@@ -338,6 +340,48 @@ func (cfg *Config) validate() error {
 			return fmt.Errorf("invalid trusted_proxies entry %q: %w (use CIDR notation such as %q or %q)", p, err, "172.16.1.27/32", "::1/128")
 		}
 		_ = prefix // validation only; chi re-parses at middleware setup
+	}
+
+	// server.host is a bind address: numeric IPs only (a hostname would need
+	// resolution and is almost always a mistake). Empty is allowed — Go's
+	// net/http then listens on all interfaces.
+	if cfg.Server.Host != "" {
+		if _, err := netip.ParseAddr(cfg.Server.Host); err != nil {
+			return fmt.Errorf("invalid server.host %q: must be an IP address (got %v)", cfg.Server.Host, err)
+		}
+	}
+
+	// powerdns.api_url must be a usable base URL for the PowerDNS API.
+	if cfg.PowerDNS.APIURL == "" {
+		return fmt.Errorf("powerdns.api_url is required")
+	}
+	u, err := url.Parse(cfg.PowerDNS.APIURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid powerdns.api_url %q: must be an absolute URL with a host", cfg.PowerDNS.APIURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid powerdns.api_url %q: scheme must be http or https", cfg.PowerDNS.APIURL)
+	}
+
+	if cfg.PowerDNS.ServerID == "" {
+		return fmt.Errorf("powerdns.server_id is required")
+	}
+
+	if cfg.Database.DSN == "" {
+		return fmt.Errorf("database.dsn is required")
+	}
+
+	switch cfg.Logging.Level {
+	case "debug", "info", "warn", "error":
+		// ok
+	default:
+		return fmt.Errorf("invalid logging.level %q: must be one of debug, info, warn, error", cfg.Logging.Level)
+	}
+
+	// admin.username is used to seed the first admin user; it must satisfy the
+	// same rules as any other username (single source of truth in validators).
+	if err := validators.ValidateUsername(cfg.Admin.Username); err != nil {
+		return fmt.Errorf("invalid admin.username: %w", err)
 	}
 
 	return nil

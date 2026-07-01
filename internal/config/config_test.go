@@ -494,6 +494,98 @@ func TestLoadInvalidFile(t *testing.T) {
 	}
 }
 
+// writeTempConfig writes content to a temp config.yaml and returns its path.
+func writeTempConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+// TestLoad_FieldValidation covers the previously-unvalidated fields flagged in
+// m14 (server.host, powerdns.api_url, powerdns.server_id, database.dsn,
+// logging.level, admin.username). Each case drives the value through a YAML
+// config so empty strings are honored (env overrides skip empty values), then
+// asserts that Load rejects it with a message naming the offending field.
+func TestLoad_FieldValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{"server.host not an IP", "server:\n  host: \"not-an-ip\"\n", "server.host"},
+		{"server.host hostname rejected", "server:\n  host: \"localhost\"\n", "server.host"},
+		{"powerdns.api_url empty", "powerdns:\n  api_url: \"\"\n", "powerdns.api_url"},
+		{"powerdns.api_url missing scheme", "powerdns:\n  api_url: \"localhost:8081\"\n", "powerdns.api_url"},
+		{"powerdns.api_url bad scheme", "powerdns:\n  api_url: \"ftp://localhost\"\n", "powerdns.api_url"},
+		{"powerdns.server_id empty", "powerdns:\n  server_id: \"\"\n", "powerdns.server_id"},
+		{"database.dsn empty", "database:\n  dsn: \"\"\n", "database.dsn"},
+		{"logging.level invalid", "logging:\n  level: \"verbose\"\n", "logging.level"},
+		{"admin.username too short", "admin:\n  username: \"ab\"\n", "admin.username"},
+		{"admin.username bad chars", "admin:\n  username: \"bad user\"\n", "admin.username"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.yaml))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestLoad_FieldValidation_AcceptsValid ensures the new guards do not reject
+// legitimate values: empty host (all interfaces), IPv6 bind, https API URL and
+// every supported log level.
+func TestLoad_FieldValidation_AcceptsValid(t *testing.T) {
+	t.Run("empty host", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.Host != "" {
+			t.Errorf("expected empty host preserved, got %q", cfg.Server.Host)
+		}
+	})
+
+	t.Run("ipv6 host", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"::1\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.Host != "::1" {
+			t.Errorf("expected ::1, got %q", cfg.Server.Host)
+		}
+	})
+
+	t.Run("https api_url", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "powerdns:\n  api_url: \"https://pdns.internal:443\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.PowerDNS.APIURL != "https://pdns.internal:443" {
+			t.Errorf("unexpected api_url %q", cfg.PowerDNS.APIURL)
+		}
+	})
+
+	for _, lvl := range []string{"debug", "info", "warn", "error"} {
+		t.Run("level/"+lvl, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, "logging:\n  level: \""+lvl+"\"\n"))
+			if err != nil {
+				t.Fatalf("level %q: expected valid config, got error: %v", lvl, err)
+			}
+			if cfg.Logging.Level != lvl {
+				t.Errorf("level %q: got %q", lvl, cfg.Logging.Level)
+			}
+		})
+	}
+}
+
 func TestDefaultConfig_HasDerivedKeys(t *testing.T) {
 	cfg := DefaultConfig()
 	if len(cfg.Server.JWTKey) != 32 {
