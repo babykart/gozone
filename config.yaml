@@ -24,7 +24,10 @@ server:
   # reverse proxy) so the CSRF cookie gets the Secure flag. Keep false for
   # plain-HTTP development.
   secure_cookies: false
-# Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
+  # Maximum time (in seconds) to wait for in-flight requests to finish
+  # during graceful shutdown (SIGINT/SIGTERM). Default: 30.
+  shutdown_timeout_seconds: 30
+  # Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
   # honored. Each entry MUST be a CIDR prefix — use "/32" for a single IPv4
   # host ("192.0.2.1/32") and "/128" for a single IPv6 host ("2001:db8::1/128").
   # Plain IPs without a prefix (e.g. "192.0.2.1") are rejected at startup

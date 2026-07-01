@@ -85,6 +85,10 @@ type ServerConfig struct {
 	JWTKey []byte `yaml:"-"`
 	// CSRFKey is derived from SecretKey via HKDF-SHA256 for CSRF tokens.
 	CSRFKey []byte `yaml:"-"`
+	// ShutdownTimeoutSeconds is the maximum time to wait for in-flight
+	// requests to finish during graceful shutdown (SIGINT/SIGTERM). Must
+	// be positive. Default: 30.
+	ShutdownTimeoutSeconds int `yaml:"shutdown_timeout_seconds"`
 }
 
 // DatabaseConfig holds database connection settings.
@@ -133,11 +137,12 @@ type AdminConfig struct {
 func DefaultConfig() *Config {
 	cfg := &Config{
 		Server: ServerConfig{
-			Host:          "0.0.0.0",
-			Port:          8080,
-			SecretKey:     defaultSecretKey,
-			AppName:       "GoZone",
-			SecureCookies: false,
+			Host:                   "0.0.0.0",
+			Port:                   8080,
+			SecretKey:              defaultSecretKey,
+			AppName:                "GoZone",
+			SecureCookies:          false,
+			ShutdownTimeoutSeconds: 30,
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite3",
@@ -185,7 +190,8 @@ func DefaultConfig() *Config {
 //  3. Apply environment variable overrides using the GOZONE_ prefix
 //
 // Supported environment variables: GOZONE_SERVER_HOST, GOZONE_SERVER_PORT,
-// GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_DB_DRIVER,
+// GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES,
+// GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
 // GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
 // GOZONE_ACTIVITY_BATCH_SIZE.
@@ -304,6 +310,10 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must be non-negative", cfg.LoginLock.AttemptsRetentionHours)
 	}
 
+	if cfg.Server.ShutdownTimeoutSeconds <= 0 {
+		return fmt.Errorf("invalid server.shutdown_timeout_seconds %d: must be positive", cfg.Server.ShutdownTimeoutSeconds)
+	}
+
 	for _, p := range cfg.Server.TrustedProxies {
 		// chi's ClientIPFromXFF calls netip.MustParsePrefix(p) on every
 		// entry, which panics at startup when p is a plain IP without a
@@ -341,6 +351,13 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GOZONE_SECURE_COOKIES"); v != "" {
 		cfg.Server.SecureCookies = parseBoolOr(v, cfg.Server.SecureCookies)
+	}
+	if v := os.Getenv("GOZONE_SHUTDOWN_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			logger.Warn("invalid GOZONE_SHUTDOWN_TIMEOUT, using default", "value", v, "error", err)
+		} else {
+			cfg.Server.ShutdownTimeoutSeconds = n
+		}
 	}
 	if v := os.Getenv("GOZONE_DB_DRIVER"); v != "" {
 		cfg.Database.Driver = v

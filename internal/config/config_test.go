@@ -50,6 +50,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Admin.LastName != "User" {
 		t.Errorf("expected User, got %s", cfg.Admin.LastName)
 	}
+	if cfg.Server.ShutdownTimeoutSeconds != 30 {
+		t.Errorf("expected shutdown_timeout_seconds 30, got %d", cfg.Server.ShutdownTimeoutSeconds)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -284,6 +287,17 @@ func TestLoad_SecureCookiesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoad_ShutdownTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("GOZONE_SHUTDOWN_TIMEOUT", "60")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Server.ShutdownTimeoutSeconds != 60 {
+		t.Errorf("expected 60, got %d", cfg.Server.ShutdownTimeoutSeconds)
+	}
+}
+
 func TestParseBoolOr(t *testing.T) {
 	tests := []struct {
 		input string
@@ -437,6 +451,18 @@ func TestLoad_ValidatesPort(t *testing.T) {
 			envName: "GOZONE_ACTIVITY_BATCH_SIZE",
 			envVal:  "0",
 			wantErr: "batch_size",
+		},
+		{
+			name:    "shutdown timeout zero",
+			envName: "GOZONE_SHUTDOWN_TIMEOUT",
+			envVal:  "0",
+			wantErr: "shutdown_timeout_seconds",
+		},
+		{
+			name:    "shutdown timeout negative",
+			envName: "GOZONE_SHUTDOWN_TIMEOUT",
+			envVal:  "-5",
+			wantErr: "shutdown_timeout_seconds",
 		},
 	}
 

@@ -72,6 +72,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.app_name` | `GOZONE_APP_NAME` | `GoZone` |
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
 | `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
+| `server.shutdown_timeout_seconds` | `GOZONE_SHUTDOWN_TIMEOUT` | `30` |
 | `server.trusted_proxies` | `GOZONE_TRUSTED_PROXIES` | *empty* (TCP source IP only) | Comma-separated CIDR ranges whose X-Forwarded-For headers are trusted. Use `/32` for a single IPv4 host, `/128` for IPv6. Plain IPs without a prefix are rejected at startup. |
 
 ### Database

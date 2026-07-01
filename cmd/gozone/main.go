@@ -426,7 +426,8 @@ func run(args []string) error {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		logger.Info("shutting down")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(),
+			time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("shutdown error", "error", err)
