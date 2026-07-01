@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -44,15 +45,33 @@ func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 
 // LockMigrations acquires a named MySQL lock so only one instance runs
 // migrations at a time. The lock is released by the returned function.
-func (m *mysqlDialect) LockMigrations(conn *sql.DB) (func(), error) {
-	_, err := conn.Exec("SELECT GET_LOCK('gozone_migrations', -1)")
+//
+// GET_LOCK and RELEASE_LOCK are session-scoped: they must execute on the
+// same database connection. A single *sql.Conn is pinned from the pool for
+// the entire acquire/release lifecycle so the release runs on the same
+// session that holds the lock. Without this pinning, *sql.DB.Exec borrows
+// a different connection per call and the release is a silent no-op,
+// leaking the lock until the original connection is closed by the pool.
+func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
+	ctx := context.Background()
+	conn, err := pool.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("acquire connection for migration lock: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "SELECT GET_LOCK('gozone_migrations', -1)"); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("acquire migration lock: %w", err)
 	}
+	released := false
 	release := func() {
-		if _, err := conn.Exec("SELECT RELEASE_LOCK('gozone_migrations')"); err != nil {
+		if released {
+			return
+		}
+		released = true
+		if _, err := conn.ExecContext(ctx, "SELECT RELEASE_LOCK('gozone_migrations')"); err != nil {
 			logger.Error("failed to release mysql migration lock", "error", err)
 		}
+		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
 }

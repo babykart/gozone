@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -38,16 +39,33 @@ func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []
 
 // LockMigrations acquires a PostgreSQL advisory lock so only one instance
 // runs migrations at a time. The lock is released by the returned function.
-func (p *postgresDialect) LockMigrations(conn *sql.DB) (func(), error) {
-	const lockID = 42
-	_, err := conn.Exec("SELECT pg_advisory_lock($1)", lockID)
+//
+// pg_advisory_lock and pg_advisory_unlock are session-scoped: they must
+// execute on the same connection. A single *sql.Conn is pinned from the
+// pool for the entire acquire/release lifecycle. Without this pinning,
+// *sql.DB.Exec borrows a different connection per call and the unlock is
+// a silent no-op, leaking the lock until the original connection is closed.
+func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
+	ctx := context.Background()
+	conn, err := pool.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("acquire connection for migration lock: %w", err)
+	}
+	const lockID = 42
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("acquire migration lock: %w", err)
 	}
+	released := false
 	release := func() {
-		if _, err := conn.Exec("SELECT pg_advisory_unlock($1)", lockID); err != nil {
+		if released {
+			return
+		}
+		released = true
+		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
 			logger.Error("failed to release postgres migration lock", "error", err)
 		}
+		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
 }
