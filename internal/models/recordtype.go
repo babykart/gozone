@@ -167,12 +167,14 @@ func JoinPriority(recordType string, priority int, content string) string {
 // QuoteContent wraps content in double quotes for quoted types (TXT, SPF) when
 // it is not already quoted. Internal backslashes are doubled and double quotes
 // are escaped so the resulting string is well-formed for PowerDNS wire format.
-// Non-quoted types and empty content pass through.
+// Non-quoted types and empty content pass through. Only a leading double quote
+// counts as "already quoted" — a single quote (') has no meaning in DNS wire
+// format and is treated as a literal character (m51).
 func QuoteContent(recordType, content string) string {
 	if !TypeIsQuoted(recordType) || content == "" {
 		return content
 	}
-	if strings.HasPrefix(content, `"`) || strings.HasPrefix(content, `'`) {
+	if strings.HasPrefix(content, `"`) {
 		return content
 	}
 	// Escape backslashes FIRST, then double quotes — order matters so the

@@ -126,7 +126,11 @@ func TestQuoteContent(t *testing.T) {
 	}{
 		{"TXT unquoted", "TXT", "v=spf1 mx ~all", `"v=spf1 mx ~all"`},
 		{"TXT already double-quoted", "TXT", `"already"`, `"already"`},
-		{"TXT single-quoted left alone", "TXT", `'already'`, `'already'`},
+		// m51: a single quote has no DNS wire meaning — content starting with '
+		// is treated as literal text and double-quote-wrapped, not passed through.
+		{"TXT single-quoted wrapped (m51)", "TXT", `'already'`, `"'already'"`},
+		{"TXT single-quoted with spaces wrapped (m51)", "TXT", `'hello world'`, `"'hello world'"`},
+		{"TXT leading single quote only wrapped (m51)", "TXT", `'foo`, `"'foo"`},
 		{"SPF unquoted", "SPF", "v=spf1 -all", `"v=spf1 -all"`},
 		{"TXT empty content", "TXT", "", ""},
 		{"non-quoted type unchanged", "A", "192.0.2.1", "192.0.2.1"},
@@ -186,6 +190,7 @@ func TestQuoteRoundTrip(t *testing.T) {
 			`backslash\and"quote`,
 			`\\double`,
 			`trailing\`,
+			`'single quoted'`, // m51: single quotes are literal, must round-trip
 		} {
 			if got := UnquoteContent(rtype, QuoteContent(rtype, original)); got != original {
 				t.Errorf("round trip %q %q: got %q, want %q", rtype, original, got, original)
