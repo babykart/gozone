@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/babykart/gozone/internal/constants"
 )
@@ -31,6 +32,16 @@ func (s *sqliteDialect) DSN(dsn string) string {
 }
 
 func (s *sqliteDialect) MaxOpenConns() int { return constants.MaxOpenConns }
+
+// MaxIdleConns matches MaxOpenConns (1): keeping the single connection warm in
+// the idle pool avoids reconnect overhead on every query. database/sql clamps
+// idle to open anyway, so this is belt-and-braces.
+func (s *sqliteDialect) MaxIdleConns() int { return constants.MaxOpenConns }
+
+// ConnMaxLifetime is zero (unlimited) for SQLite: there is a single local
+// connection to a file and no proxy/LB in between that could silently drop it,
+// so recycling would only add needless reconnect cost. See REVIEW.md m16.
+func (s *sqliteDialect) ConnMaxLifetime() time.Duration { return 0 }
 
 func (s *sqliteDialect) Rebind(query string) string { return query }
 

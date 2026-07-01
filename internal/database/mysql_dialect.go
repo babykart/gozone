@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/babykart/gozone/internal/logger"
 
@@ -36,6 +37,14 @@ func (m *mysqlDialect) DSN(dsn string) string {
 }
 
 func (m *mysqlDialect) MaxOpenConns() int { return 25 }
+
+// MaxIdleConns keeps the pool warm at the open limit so bursts don't pay the
+// connect/auth cost. See REVIEW.md m16.
+func (m *mysqlDialect) MaxIdleConns() int { return defaultMaxIdleConns }
+
+// ConnMaxLifetime recycles connections before MySQL's wait_timeout or an
+// intermediary LB/proxy silently drops them. See REVIEW.md m16.
+func (m *mysqlDialect) ConnMaxLifetime() time.Duration { return defaultConnMaxLifetime }
 
 func (m *mysqlDialect) Rebind(query string) string { return query }
 

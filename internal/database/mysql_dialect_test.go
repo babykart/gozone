@@ -70,6 +70,20 @@ func TestMySQLDialect_MaxOpenConns(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_PoolSettings verifies the MySQL pool is fully tuned
+// (REVIEW.md m16): a warm idle pool matching the open limit, and a finite
+// connection lifetime that recycles connections before wait_timeout / an
+// intermediary LB drops them.
+func TestMySQLDialect_PoolSettings(t *testing.T) {
+	d := &mysqlDialect{}
+	if got := d.MaxIdleConns(); got <= 0 || got > d.MaxOpenConns() {
+		t.Errorf("MaxIdleConns must be in (0, MaxOpenConns=%d], got %d", d.MaxOpenConns(), got)
+	}
+	if got := d.ConnMaxLifetime(); got <= 0 {
+		t.Errorf("MySQL ConnMaxLifetime must be positive (finite), got %v", got)
+	}
+}
+
 func TestMySQLDialect_Rebind(t *testing.T) {
 	d := &mysqlDialect{}
 	q := "SELECT * FROM users WHERE id = ?"

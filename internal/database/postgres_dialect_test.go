@@ -30,6 +30,20 @@ func TestPostgresDialect_MaxOpenConns(t *testing.T) {
 	}
 }
 
+// TestPostgresDialect_PoolSettings verifies the PostgreSQL pool is fully tuned
+// (REVIEW.md m16): a warm idle pool matching the open limit, and a finite
+// connection lifetime that recycles connections before PgBouncer / a cloud
+// proxy or the server drops them.
+func TestPostgresDialect_PoolSettings(t *testing.T) {
+	d := &postgresDialect{}
+	if got := d.MaxIdleConns(); got <= 0 || got > d.MaxOpenConns() {
+		t.Errorf("MaxIdleConns must be in (0, MaxOpenConns=%d], got %d", d.MaxOpenConns(), got)
+	}
+	if got := d.ConnMaxLifetime(); got <= 0 {
+		t.Errorf("Postgres ConnMaxLifetime must be positive (finite), got %v", got)
+	}
+}
+
 func TestPostgresDialect_Rebind(t *testing.T) {
 	d := &postgresDialect{}
 	q := "SELECT * FROM users WHERE id = ? AND name = ?"

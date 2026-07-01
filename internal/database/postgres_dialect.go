@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/babykart/gozone/internal/logger"
 )
@@ -18,6 +19,14 @@ func (p *postgresDialect) TimestampType() string { return "TIMESTAMP" }
 func (p *postgresDialect) DSN(dsn string) string { return dsn }
 
 func (p *postgresDialect) MaxOpenConns() int { return 25 }
+
+// MaxIdleConns keeps the pool warm at the open limit so bursts don't pay the
+// connect/auth cost. See REVIEW.md m16.
+func (p *postgresDialect) MaxIdleConns() int { return defaultMaxIdleConns }
+
+// ConnMaxLifetime recycles connections before PgBouncer/cloud proxies or the
+// server drop them. See REVIEW.md m16.
+func (p *postgresDialect) ConnMaxLifetime() time.Duration { return defaultConnMaxLifetime }
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
 

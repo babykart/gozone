@@ -19,6 +19,20 @@ func TestSQLiteDialect_MaxOpenConns(t *testing.T) {
 	}
 }
 
+// TestSQLiteDialect_PoolSettings verifies the SQLite pool is tuned for its
+// single serialized connection: idle matches open (keep the lone conn warm)
+// and the connection lifetime is unlimited (no proxy to drop a local file
+// connection). REVIEW.md m16.
+func TestSQLiteDialect_PoolSettings(t *testing.T) {
+	d := &sqliteDialect{}
+	if got := d.MaxIdleConns(); got != d.MaxOpenConns() {
+		t.Errorf("MaxIdleConns %d must match MaxOpenConns %d for SQLite", got, d.MaxOpenConns())
+	}
+	if got := d.ConnMaxLifetime(); got != 0 {
+		t.Errorf("SQLite ConnMaxLifetime must be 0 (unlimited), got %v", got)
+	}
+}
+
 func TestSQLiteDialect_Rebind(t *testing.T) {
 	d := &sqliteDialect{}
 	q := "SELECT * FROM users WHERE id = ?"

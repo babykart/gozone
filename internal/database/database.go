@@ -64,6 +64,8 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 	}
 
 	conn.SetMaxOpenConns(dialect.MaxOpenConns())
+	conn.SetMaxIdleConns(dialect.MaxIdleConns())
+	conn.SetConnMaxLifetime(dialect.ConnMaxLifetime())
 
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("ping database: %w", err)

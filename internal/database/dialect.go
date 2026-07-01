@@ -4,6 +4,24 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
+)
+
+// Pool-tuning defaults for network databases (MySQL/PostgreSQL). SQLite uses
+// its own single-connection values (see sqliteDialect).
+const (
+	// defaultMaxIdleConns is the idle pool size. It matches MaxOpenConns (25)
+	// so the pool stays warm under typical load instead of churning
+	// connections open/close on every burst.
+	defaultMaxIdleConns = 25
+	// defaultConnMaxLifetime caps how long a connection is reused before being
+	// recycled. Network databases sit behind TCP, load balancers and proxies
+	// (PgBouncer, ProxySQL, cloud RDS proxies) that silently drop idle or
+	// long-lived connections; recycling proactively avoids "connection killed"
+	// errors mid-request. 30 minutes is well under MySQL's default wait_timeout
+	// (8h) and typical LB idle timeouts, while being long enough to amortize
+	// the TLS/auth handshake cost.
+	defaultConnMaxLifetime = 30 * time.Minute
 )
 
 type Dialect interface {
@@ -11,6 +29,15 @@ type Dialect interface {
 	DSN(dsn string) string
 	Migrations() []string
 	MaxOpenConns() int
+	// MaxIdleConns returns the maximum number of idle connections retained in
+	// the pool. It must be <= MaxOpenConns for the dialect (database/sql clamps
+	// it otherwise). See REVIEW.md m16.
+	MaxIdleConns() int
+	// ConnMaxLifetime returns the maximum amount of time a connection may be
+	// reused before being closed and replaced. A zero value means connections
+	// are reused forever (appropriate for the single local SQLite connection).
+	// See REVIEW.md m16.
+	ConnMaxLifetime() time.Duration
 	Rebind(query string) string
 	// TimestampType returns the dialect-specific SQL column type for
 	// timestamps. PostgreSQL uses TIMESTAMP (it has no DATETIME type);
