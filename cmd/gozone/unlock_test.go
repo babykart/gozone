@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,13 +162,27 @@ func TestRunUnlock_LogsActivity(t *testing.T) {
 		t.Fatalf("runUnlock: %v", err)
 	}
 
-	var count int
+	var (
+		logUserID  sql.NullInt64
+		logAction  string
+		logDetails string
+	)
 	if err := db.QueryRowContext(context.Background(),
-		"SELECT COUNT(*) FROM activity_logs WHERE action='unlock_user_cli'").Scan(&count); err != nil {
-		t.Fatalf("count activity: %v", err)
+		"SELECT user_id, action, details FROM activity_logs WHERE action='unlock_user_cli'").Scan(
+		&logUserID, &logAction, &logDetails); err != nil {
+		t.Fatalf("query activity: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("expected 1 unlock_user_cli activity log, got %d", count)
+
+	// user_id must be NULL — the actor is the shell operator, not a GoZone
+	// user (m4). Logging the unlocked user's ID here falsely attributed the
+	// action to the victim.
+	if logUserID.Valid {
+		t.Errorf("expected user_id NULL (operator is not a GoZone user), got %d", logUserID.Int64)
+	}
+
+	// Details must mention the operator identity (username@hostname).
+	if !strings.Contains(logDetails, "operator") {
+		t.Errorf("details should mention the operator, got %q", logDetails)
 	}
 }
 

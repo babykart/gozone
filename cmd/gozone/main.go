@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
@@ -689,9 +690,11 @@ func runUnlock(args []string) error {
 		return fmt.Errorf("unlock user %d: %w", userID, err)
 	}
 
+	// Log with user_id=NULL: the actor is the shell operator, not a GoZone
+	// user. Capture the OS identity (username@hostname) for audit (m4).
 	if _, err := db.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'unlock_user_cli', ?)",
-		userID, fmt.Sprintf("Unlocked via CLI by operator (was id=%d username=%q)", userID, username),
+		"INSERT INTO activity_logs (user_id, action, details) VALUES (NULL, 'unlock_user_cli', ?)",
+		fmt.Sprintf("Unlocked user id=%d username=%q by CLI operator %s", userID, username, operatorIdentity()),
 	); err != nil {
 		// Best-effort: the unlock itself succeeded, so we don't fail the CLI.
 		logger.Warn("failed to log CLI unlock activity", "user_id", userID, "error", err)
@@ -699,4 +702,24 @@ func runUnlock(args []string) error {
 
 	logger.Info("user unlocked", "user_id", userID, "username", username)
 	return nil
+}
+
+// operatorIdentity returns a string identifying the shell user running the
+// CLI, for audit purposes. Best-effort: falls back to "unknown" when the OS
+// user or hostname cannot be determined.
+func operatorIdentity() string {
+	var username, host string
+	if u, err := user.Current(); err == nil {
+		username = u.Username
+	}
+	if h, err := os.Hostname(); err == nil {
+		host = h
+	}
+	if username == "" {
+		username = "unknown"
+	}
+	if host == "" {
+		host = "unknown"
+	}
+	return username + "@" + host
 }
