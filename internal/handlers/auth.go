@@ -377,11 +377,12 @@ func (h *Handler) ProfilePage(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "profile.html", data)
 }
 
-// isSecure detects whether the current request uses HTTPS.
+// isSecure detects whether the current request is effectively HTTPS.
 //
-// It delegates to middleware.IsHTTPS which checks r.TLS (direct TLS) and the
-// X-Forwarded-Proto header (leftmost value, for multi-hop reverse proxy
-// setups). Returns false for plain HTTP.
+// It delegates to middleware.IsHTTPS, which trusts r.TLS (genuine transport)
+// and the HTTPSResolver-stashed decision (trusted-proxy-gated
+// X-Forwarded-Proto, m40/M-SEC4). Returns false for plain HTTP. This drives
+// the Secure flag on session cookies.
 func isSecure(r *http.Request) bool {
 	return middleware.IsHTTPS(r)
 }

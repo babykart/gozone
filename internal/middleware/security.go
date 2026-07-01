@@ -1,30 +1,63 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 )
 
-// IsHTTPS reports whether the request was made over HTTPS, either via direct
-// TLS or via the X-Forwarded-Proto header set by a trusted reverse proxy.
+// httpsCtxKey is the context key under which the HTTPS resolver stores the
+// resolved effective-HTTPS flag. It is unexported so only WithHTTPS/IsHTTPS
+// (and the resolver that calls WithHTTPS) can touch it.
+type httpsCtxKey struct{}
+
+// WithHTTPS returns r carrying the resolver-computed effective-HTTPS flag in
+// its context. It is set by the HTTPS resolver middleware installed in the
+// global request stack (cmd/gozone), which honours X-Forwarded-Proto only when
+// the direct TCP connection comes from a configured trusted proxy (m40/M-SEC4).
+func WithHTTPS(r *http.Request, https bool) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), httpsCtxKey{}, https))
+}
+
+// IsHTTPS reports whether the request is effectively served over HTTPS.
 //
-// In a multi-hop proxy chain each proxy appends to X-Forwarded-Proto, so the
-// header may be "https, http" (HTTPS client → internal HTTP hop). The leftmost
-// value is the original client's protocol; this function checks that value
-// rather than comparing the whole header (m6 — strict equality broke
-// multi-hop chains).
+// Resolution order:
+//  1. r.TLS != nil → the underlying transport is genuinely TLS. net/http sets
+//     this from the actual handshake, so it is not header-spoofable.
+//  2. A value stashed by the HTTPS resolver middleware → the trusted-proxy-gated
+//     X-Forwarded-Proto decision (see WithHTTPS). The resolver honours
+//     X-Forwarded-Proto only when r.RemoteAddr is itself a trusted proxy
+//     (mirroring M-SEC4), so a direct-access attacker cannot inject the header
+//     to force HSTS (SecurityHeaders) or the Secure cookie flag (isSecure) over
+//     plain HTTP (m40).
+//  3. Otherwise false — fail-closed. X-Forwarded-Proto is never trusted without
+//     an explicit trust gate.
 func IsHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	proto := r.Header.Get("X-Forwarded-Proto")
-	if proto == "" {
+	if v, ok := r.Context().Value(httpsCtxKey{}).(bool); ok {
+		return v
+	}
+	return false
+}
+
+// ForwardedProtoIsHTTPS reports whether the leftmost X-Forwarded-Proto value is
+// "https" (case-insensitive), tolerating multi-hop comma-separated chains
+// ("https, http") where the leftmost value is the original client's protocol.
+//
+// Callers MUST gate this on the direct TCP connection being a trusted proxy:
+// the header is client-supplied and trivially spoofable. This function performs
+// NO trust check — it only parses the value. The resolver middleware in
+// cmd/gozone calls it after the M-SEC4-style RemoteAddr ∈ trustedProxies gate.
+func ForwardedProtoIsHTTPS(header string) bool {
+	if header == "" {
 		return false
 	}
-	if i := strings.IndexByte(proto, ','); i >= 0 {
-		proto = proto[:i]
+	if i := strings.IndexByte(header, ','); i >= 0 {
+		header = header[:i]
 	}
-	return strings.EqualFold(strings.TrimSpace(proto), "https")
+	return strings.EqualFold(strings.TrimSpace(header), "https")
 }
 
 // SecurityHeaders adds common HTTP security headers to all responses.

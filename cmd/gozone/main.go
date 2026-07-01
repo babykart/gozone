@@ -171,6 +171,10 @@ func run(args []string) error {
 	r.Use(clientIPMiddleware(cfg))
 	r.Use(requestLogger)
 	r.Use(chimw.Compress(5))
+	// Resolve the effective HTTPS flag (trusted-proxy-gated) BEFORE
+	// SecurityHeaders so HSTS and the Secure cookie flag read a trusted value
+	// instead of a raw, spoofable X-Forwarded-Proto header (m40/M-SEC4).
+	r.Use(httpsResolverMiddleware(cfg))
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.BodyLimit)
 	r.Use(middleware.ErrorHandler)
@@ -646,6 +650,44 @@ func trustedProxy(ip netip.Addr, prefixes []netip.Prefix) bool {
 		}
 	}
 	return false
+}
+
+// httpsResolverMiddleware resolves the effective HTTPS status of each request
+// and stashes it in the request context (via middleware.WithHTTPS) so that
+// IsHTTPS — used by SecurityHeaders (HSTS), the CSRF plaintext gate and
+// isSecure (Secure cookie flag) — reads a trusted value instead of a raw,
+// client-supplied header.
+//
+// m40 / M-SEC4: X-Forwarded-Proto is honoured ONLY when the direct TCP
+// connection (r.RemoteAddr) itself arrives from a configured trusted proxy.
+// Without this gate a direct-access attacker could inject
+// X-Forwarded-Proto: https over plain HTTP to force HSTS and mark the session
+// cookie Secure (which a browser would then refuse to send back over the
+// attacker's plain-HTTP connection is not the risk — the risk is the server
+// believing the session is protected when it is not, plus HSTS pinning). When
+// trusted_proxies is empty, X-Forwarded-Proto is ignored entirely and only a
+// genuine r.TLS connection counts.
+func httpsResolverMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
+	prefixes := make([]netip.Prefix, len(cfg.Server.TrustedProxies))
+	for i, p := range cfg.Server.TrustedProxies {
+		prefixes[i] = netip.MustParsePrefix(p)
+	}
+
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			https := r.TLS != nil
+			if !https && len(prefixes) > 0 {
+				host, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					host = r.RemoteAddr // RemoteAddr may be a bare IP (e.g. in tests).
+				}
+				if ip, perr := netip.ParseAddr(host); perr == nil && trustedProxy(ip.Unmap(), prefixes) {
+					https = middleware.ForwardedProtoIsHTTPS(r.Header.Get("X-Forwarded-Proto"))
+				}
+			}
+			h.ServeHTTP(w, middleware.WithHTTPS(r, https))
+		})
+	}
 }
 
 // emptyUsernameRateLimitKey is the shared rate-limit bucket for login attempts

@@ -63,19 +63,43 @@ func TestSecurityHeaders_HSTSOnTLS(t *testing.T) {
 	}
 }
 
-func TestSecurityHeaders_HSTSOnForwardedProto(t *testing.T) {
+// TestSecurityHeaders_HSTSWhenResolverSetsHTTPS verifies that SecurityHeaders
+// emits HSTS when the HTTPS resolver (trusted-proxy-gated, m40) has stashed a
+// positive decision. SecurityHeaders delegates to IsHTTPS, which reads the
+// resolver's context value — NOT a raw client header.
+func TestSecurityHeaders_HSTSWhenResolverSetsHTTPS(t *testing.T) {
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set("X-Forwarded-Proto", "https")
+	// Simulate the resolver having validated X-Forwarded-Proto behind a trusted proxy.
+	r = WithHTTPS(r, true)
 	handler.ServeHTTP(w, r)
 
 	hsts := w.Header().Get("Strict-Transport-Security")
 	if hsts == "" {
-		t.Error("HSTS must be set when X-Forwarded-Proto is https")
+		t.Error("HSTS must be set when the resolver stashed HTTPS=true")
+	}
+}
+
+// TestSecurityHeaders_NoHSTSForBareXFP is the m40 regression test: a bare
+// X-Forwarded-Proto header with NO resolver in the stack MUST NOT trigger HSTS.
+// Before m40, IsHTTPS honoured the header unconditionally, so a direct-access
+// attacker over plain HTTP could inject it to pin HSTS.
+func TestSecurityHeaders_NoHSTSForBareXFP(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "https") // spoofable client header, no resolver
+	handler.ServeHTTP(w, r)
+
+	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
+		t.Errorf("HSTS must NOT be set for a bare X-Forwarded-Proto without the resolver (m40), got %q", hsts)
 	}
 }
 
@@ -144,36 +168,68 @@ func TestSecurityHeaders_CSPHardenedDirectives(t *testing.T) {
 	}
 }
 
-// TestIsHTTPS verifies that IsHTTPS handles direct TLS, single-hop proxies,
-// and multi-hop chains where X-Forwarded-Proto is comma-separated (m6).
+// TestIsHTTPS verifies the resolution order of IsHTTPS (m40): r.TLS wins;
+// otherwise the resolver-stashed context value is used; otherwise fail-closed
+// to false. IsHTTPS no longer reads X-Forwarded-Proto directly — that decision
+// is the resolver's job (gated on RemoteAddr ∈ trustedProxies), so a bare
+// header is ignored here.
 func TestIsHTTPS(t *testing.T) {
 	tests := []struct {
 		name  string
 		tls   bool
-		proto string
+		xfp   string // raw X-Forwarded-Proto set on the request (must be IGNORED)
+		stash *bool  // resolver-set context value; nil = no resolver ran
 		want  bool
 	}{
-		{"direct TLS", true, "", true},
-		{"plain HTTP no header", false, "", false},
-		{"single hop https", false, "https", true},
-		{"single hop http", false, "http", false},
-		{"multi-hop https then http", false, "https, http", true},
-		{"multi-hop http then https", false, "http, https", false},
-		{"uppercase HTTPS", false, "HTTPS", true},
-		{"whitespace around value", false, " https , http ", true},
+		{"direct TLS", true, "", nil, true},
+		{"TLS wins even when resolver said false", true, "", boolPtr(false), true},
+		{"plain HTTP, no resolver → fail-closed false", false, "", nil, false},
+		{"resolver stashed true → true", false, "", boolPtr(true), true},
+		{"resolver stashed false → false", false, "", boolPtr(false), false},
+		{"bare XFP header without resolver → ignored (m40)", false, "https", nil, false},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/", nil)
 			if tt.tls {
 				r.TLS = &tls.ConnectionState{}
 			}
-			if tt.proto != "" {
-				r.Header.Set("X-Forwarded-Proto", tt.proto)
+			if tt.xfp != "" {
+				r.Header.Set("X-Forwarded-Proto", tt.xfp)
+			}
+			if tt.stash != nil {
+				r = WithHTTPS(r, *tt.stash)
 			}
 			if got := IsHTTPS(r); got != tt.want {
-				t.Errorf("IsHTTPS() = %v, want %v (proto=%q, tls=%v)", got, tt.want, tt.proto, tt.tls)
+				t.Errorf("IsHTTPS() = %v, want %v (tls=%v, xfp=%q, stash=%v)", got, tt.want, tt.tls, tt.xfp, tt.stash)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestForwardedProtoIsHTTPS covers the multi-hop-aware X-Forwarded-Proto
+// parsing (m6) now that the logic lives in ForwardedProtoIsHTTPS — the value
+// parser the resolver uses AFTER its RemoteAddr ∈ trustedProxies gate (m40).
+func TestForwardedProtoIsHTTPS(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		want   bool
+	}{
+		{"empty", "", false},
+		{"single hop https", "https", true},
+		{"single hop http", "http", false},
+		{"multi-hop https then http", "https, http", true},
+		{"multi-hop http then https", "http, https", false},
+		{"uppercase HTTPS", "HTTPS", true},
+		{"whitespace around value", " https , http ", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ForwardedProtoIsHTTPS(tt.header); got != tt.want {
+				t.Errorf("ForwardedProtoIsHTTPS(%q) = %v, want %v", tt.header, got, tt.want)
 			}
 		})
 	}
