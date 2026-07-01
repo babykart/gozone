@@ -531,6 +531,62 @@ func TestLogin_ErrorMessage_NoEnumeration(t *testing.T) {
 	}
 }
 
+// TestLogin_LockedAccountPerformsBcrypt guards the M-SEC1 fix: the locked-
+// account branch must perform a dummy bcrypt compare so its response time
+// matches the wrong-password / unknown-user paths. Before the fix the locked
+// branch returned in ~0 ms, creating a timing oracle that let an attacker
+// distinguish a locked-but-valid account from an unknown username.
+//
+// With the default bcrypt cost (12) the dummy compare takes ~250 ms; we assert
+// a conservative lower bound well above the sub-millisecond no-bcrypt path.
+func TestLogin_LockedAccountPerformsBcrypt(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), h.Cfg.Auth.BcryptCost)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Lock the account directly instead of grinding 11 failed attempts.
+	if _, err := h.DB.Exec(
+		`UPDATE users SET locked_until = ? WHERE id = ?`,
+		time.Now().Add(15*time.Minute).UTC(), uid,
+	); err != nil {
+		t.Fatalf("failed to lock account: %v", err)
+	}
+
+	locked, _, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Fatal("precondition: account must be locked")
+	}
+
+	// The locked-account login must take long enough that bcrypt clearly ran.
+	// bcrypt cost 12 ≈ 250 ms; a 15 ms floor is safely above the <1 ms no-op
+	// redirect and safely below real bcrypt even on a loaded CI runner.
+	const minBcryptElapsed = 15 * time.Millisecond
+	body := "username=victim&password=whatever"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	start := time.Now()
+	h.Login(w, r)
+	elapsed := time.Since(start)
+
+	if !strings.Contains(w.Header().Get("Location"), "error="+invalidCredentialsError) {
+		t.Errorf("locked account must redirect to generic error, got %q", w.Header().Get("Location"))
+	}
+	if elapsed < minBcryptElapsed {
+		t.Errorf("locked-account login took %v, expected ≥ %v (bcrypt work missing — timing oracle regression, M-SEC1)",
+			elapsed, minBcryptElapsed)
+	}
+}
+
 // TestLoginErrorBanner_Mapping guards the message lookup so future login
 // error codes cannot accidentally bypass the mapping and echo raw query
 // values into the banner.

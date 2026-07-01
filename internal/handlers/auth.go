@@ -131,16 +131,20 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reject locked accounts before doing any bcrypt work so an attacker
-	// cannot grind the lockout window by hammering the endpoint. The user-
-	// facing message is identical to a wrong-password attempt so the lockout
-	// state cannot be used to enumerate valid usernames.
+	// Reject locked accounts. The user-facing message is identical to a
+	// wrong-password attempt so the lockout state cannot be used to enumerate
+	// valid usernames via the error banner. A dummy bcrypt compare is still
+	// performed so the response time matches the wrong-password path: without
+	// it, a locked account would return in ~0 ms while a wrong password takes
+	// ~250 ms (bcrypt), letting an attacker distinguish a locked-but-valid
+	// account from an unknown one (timing oracle / account enumeration).
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {
 			logger.Error("failed to check lockout status", "user_id", user.ID, "error", lerr)
 		} else if locked {
 			logger.Warn("login attempt on locked account", "username", user.Username, "locked_until", until)
+			bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
 			http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 			return
 		}
