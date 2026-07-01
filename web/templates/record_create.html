@@ -13,12 +13,12 @@
         <div class="record-row" style="border:1px solid var(--border);border-radius:6px;padding:1rem;margin-bottom:0.75rem">
             <div class="form-row">
                 <div class="form-group">
-                    <label>Name</label>
-                    <input type="text" name="name" placeholder="www" class="form-control" required>
+                    <label for="rec-name-0">Name</label>
+                    <input type="text" id="rec-name-0" name="name" placeholder="www" class="form-control" required>
                 </div>
                 <div class="form-group">
-                    <label>Type</label>
-                    <select name="type" class="form-control" data-action="toggle-priority" required>
+                    <label for="rec-type-0">Type</label>
+                    <select name="type" id="rec-type-0" class="form-control" data-action="toggle-priority" required>
                         {{range .RecordTypes}}
                         <option value="{{.}}">{{.}}</option>
                         {{end}}
@@ -27,21 +27,21 @@
             </div>
             <div class="form-row">
                 <div class="form-group" style="flex:1">
-                    <label>Content</label>
-                    <input type="text" name="content" placeholder="192.168.1.1" class="form-control" required>
+                    <label for="rec-content-0">Content</label>
+                    <input type="text" id="rec-content-0" name="content" placeholder="192.168.1.1" class="form-control" required>
                 </div>
                 <div class="form-group" style="flex:0 0 5rem">
-                    <label>TTL</label>
-                    <input type="number" name="ttl" value="3600" min="0" class="form-control">
+                    <label for="rec-ttl-0">TTL</label>
+                    <input type="number" id="rec-ttl-0" name="ttl" value="3600" min="0" class="form-control">
                 </div>
                 <div class="form-group record-prio-group" style="display:none;flex:0 0 6rem">
-                    <label>Prio</label>
-                    <input type="number" name="priority" value="0" min="0" class="form-control">
+                    <label for="rec-priority-0">Prio</label>
+                    <input type="number" id="rec-priority-0" name="priority" value="0" min="0" class="form-control">
                 </div>
             </div>
             <div class="form-group">
-                <label>Comment <span class="field-hint">(optional, one per line)</span></label>
-                <textarea name="comment" rows="2" class="form-control" placeholder="e.g. managed by ops-team"></textarea>
+                <label for="rec-comment-0">Comment <span class="field-hint">(optional, one per line)</span></label>
+                <textarea name="comment" id="rec-comment-0" rows="2" class="form-control" placeholder="e.g. managed by ops-team"></textarea>
                 <label class="checkbox-inline" style="margin-top:0.5rem;display:block">
                     <input type="checkbox" name="comment_clear" value="1">
                     Clear all comments <span class="field-hint">(only applies when the RRSet already exists)</span>

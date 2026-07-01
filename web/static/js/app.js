@@ -220,6 +220,19 @@ function addRecordRow() {
     var container = document.getElementById('record-rows');
     var rows = container.querySelectorAll('.record-row');
     var template = rows[0].cloneNode(true);
+    var idx = rows.length;
+    // Re-scope label associations to unique ids for the cloned row (m54):
+    // cloneNode would otherwise duplicate the template row's ids, breaking the
+    // for/id pairing and producing invalid HTML. Each id/for ends with the
+    // template row's index (0); rewrite the trailing "-<n>" to the new index.
+    var labels = template.querySelectorAll('label[for]');
+    for (var k = 0; k < labels.length; k++) {
+        labels[k].setAttribute('for', labels[k].getAttribute('for').replace(/-\d+$/, '-' + idx));
+    }
+    var idEls = template.querySelectorAll('[id]');
+    for (var m = 0; m < idEls.length; m++) {
+        idEls[m].setAttribute('id', idEls[m].getAttribute('id').replace(/-\d+$/, '-' + idx));
+    }
     var inputs = template.querySelectorAll('input[type=text], input[type=number]');
     for (var i = 0; i < inputs.length; i++) {
         if (inputs[i].name === 'ttl') {

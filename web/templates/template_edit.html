@@ -9,12 +9,12 @@
             <form method="POST" action="{{if .Template.ID}}/templates/{{.Template.ID}}/update{{else}}/templates/create{{end}}" style="margin-bottom:2rem">
                 <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
                 <div class="form-group">
-                    <label for="name">Name</label>
-                    <input type="text" id="name" name="name" value="{{.Template.Name}}" required class="form-control">
+                    <label for="tpl-name">Name</label>
+                    <input type="text" id="tpl-name" name="name" value="{{.Template.Name}}" required class="form-control">
                 </div>
                 <div class="form-group">
-                    <label for="description">Description</label>
-                    <input type="text" id="description" name="description" value="{{.Template.Description}}" class="form-control">
+                    <label for="tpl-description">Description</label>
+                    <input type="text" id="tpl-description" name="description" value="{{.Template.Description}}" class="form-control">
                 </div>
                 <button type="submit" class="btn btn-primary">Save</button>
                 {{if .Template.ID}}
@@ -60,12 +60,12 @@
                         <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
                         <div class="form-row">
                             <div class="form-group" style="flex:1">
-                                <label for="name">Name (<code>@</code> for apex)</label>
-                                <input type="text" id="name" name="name" value="@" class="form-control">
+                                <label for="rec-name">Name (<code>@</code> for apex)</label>
+                                <input type="text" id="rec-name" name="name" value="@" class="form-control">
                             </div>
                             <div class="form-group" style="flex:1">
-                                <label for="type">Type</label>
-                                <select name="type" id="type" class="form-control">
+                                <label for="rec-type">Type</label>
+                                <select name="type" id="rec-type" class="form-control">
                                     {{range $.RecordTypes}}
                                     <option value="{{.}}">{{.}}</option>
                                     {{end}}
@@ -73,17 +73,17 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label for="content">Content (use ZONE, IP, IP6 etc. for substitution)</label>
-                            <input type="text" id="content" name="content" required class="form-control">
+                            <label for="rec-content">Content (use ZONE, IP, IP6 etc. for substitution)</label>
+                            <input type="text" id="rec-content" name="content" required class="form-control">
                         </div>
                         <div class="form-row">
                             <div class="form-group">
-                                <label for="ttl">TTL</label>
-                                <input type="number" id="ttl" name="ttl" value="3600" min="0" class="form-control" style="width:8rem">
+                                <label for="rec-ttl">TTL</label>
+                                <input type="number" id="rec-ttl" name="ttl" value="3600" min="0" class="form-control" style="width:8rem">
                             </div>
                             <div class="form-group">
-                                <label for="priority">Priority (MX/SRV only)</label>
-                                <input type="number" id="priority" name="priority" value="0" min="0" class="form-control" style="width:8rem">
+                                <label for="rec-priority">Priority (MX/SRV only)</label>
+                                <input type="number" id="rec-priority" name="priority" value="0" min="0" class="form-control" style="width:8rem">
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" name="disabled"> Disabled</label>
