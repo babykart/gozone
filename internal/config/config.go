@@ -218,7 +218,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Environment variable overrides
-	applyEnvOverrides(cfg)
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, err
+	}
 
 	// Auto-generate a secret key if a well-known placeholder is still in use.
 	// This prevents deployments from running with a publicly known default key.
@@ -341,16 +343,22 @@ func (cfg *Config) validate() error {
 	return nil
 }
 
-func applyEnvOverrides(cfg *Config) {
+// applyEnvOverrides overlays GOZONE_-prefixed environment variables on top of
+// the YAML-provided config. An unparseable override (e.g.
+// GOZONE_SERVER_PORT=abc) is returned as a hard error rather than silently
+// keeping the default, so a typo fails config load loud-and-early instead of
+// hiding the operator's intent (REVIEW.md m13). String overrides are accepted
+// as-is since any non-empty value is valid for them.
+func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("GOZONE_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
 	if v := os.Getenv("GOZONE_SERVER_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_SERVER_PORT, using default", "value", v, "error", err)
-		} else {
-			cfg.Server.Port = n
+		n, err := envInt("GOZONE_SERVER_PORT", v)
+		if err != nil {
+			return err
 		}
+		cfg.Server.Port = n
 	}
 	if v := os.Getenv("GOZONE_APP_NAME"); v != "" {
 		cfg.Server.AppName = v
@@ -359,14 +367,18 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Server.SecretKey = v
 	}
 	if v := os.Getenv("GOZONE_SECURE_COOKIES"); v != "" {
-		cfg.Server.SecureCookies = parseBoolOr(v, cfg.Server.SecureCookies)
+		b, err := envBool("GOZONE_SECURE_COOKIES", v)
+		if err != nil {
+			return err
+		}
+		cfg.Server.SecureCookies = b
 	}
 	if v := os.Getenv("GOZONE_SHUTDOWN_TIMEOUT"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_SHUTDOWN_TIMEOUT, using default", "value", v, "error", err)
-		} else {
-			cfg.Server.ShutdownTimeoutSeconds = n
+		n, err := envInt("GOZONE_SHUTDOWN_TIMEOUT", v)
+		if err != nil {
+			return err
 		}
+		cfg.Server.ShutdownTimeoutSeconds = n
 	}
 	if v := os.Getenv("GOZONE_DB_DRIVER"); v != "" {
 		cfg.Database.Driver = v
@@ -384,18 +396,18 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.PowerDNS.ServerID = v
 	}
 	if v := os.Getenv("GOZONE_SESSION_DURATION"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_SESSION_DURATION, using default", "value", v, "error", err)
-		} else {
-			cfg.Auth.SessionDurationHours = n
+		n, err := envInt("GOZONE_SESSION_DURATION", v)
+		if err != nil {
+			return err
 		}
+		cfg.Auth.SessionDurationHours = n
 	}
 	if v := os.Getenv("GOZONE_BCRYPT_COST"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_BCRYPT_COST, using default", "value", v, "error", err)
-		} else {
-			cfg.Auth.BcryptCost = n
+		n, err := envInt("GOZONE_BCRYPT_COST", v)
+		if err != nil {
+			return err
 		}
+		cfg.Auth.BcryptCost = n
 	}
 	if v := os.Getenv("GOZONE_ADMIN_USERNAME"); v != "" {
 		cfg.Admin.Username = v
@@ -413,49 +425,75 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Admin.LastName = v
 	}
 	if v := os.Getenv("GOZONE_ACTIVITY_RETENTION_DAYS"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_ACTIVITY_RETENTION_DAYS, using default", "value", v, "error", err)
-		} else {
-			cfg.Activity.RetentionDays = n
+		n, err := envInt("GOZONE_ACTIVITY_RETENTION_DAYS", v)
+		if err != nil {
+			return err
 		}
+		cfg.Activity.RetentionDays = n
 	}
 	if v := os.Getenv("GOZONE_ACTIVITY_BATCH_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_ACTIVITY_BATCH_SIZE, using default", "value", v, "error", err)
-		} else {
-			cfg.Activity.BatchSize = n
+		n, err := envInt("GOZONE_ACTIVITY_BATCH_SIZE", v)
+		if err != nil {
+			return err
 		}
+		cfg.Activity.BatchSize = n
 	}
 	if v := os.Getenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_LOGIN_MAX_FAILED_ATTEMPTS, using default", "value", v, "error", err)
-		} else {
-			cfg.LoginLock.MaxFailedAttempts = n
+		n, err := envInt("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", v)
+		if err != nil {
+			return err
 		}
+		cfg.LoginLock.MaxFailedAttempts = n
 	}
 	if v := os.Getenv("GOZONE_LOGIN_LOCKOUT_MINUTES"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_LOGIN_LOCKOUT_MINUTES, using default", "value", v, "error", err)
-		} else {
-			cfg.LoginLock.LockoutDurationMinutes = n
+		n, err := envInt("GOZONE_LOGIN_LOCKOUT_MINUTES", v)
+		if err != nil {
+			return err
 		}
+		cfg.LoginLock.LockoutDurationMinutes = n
 	}
 	if v := os.Getenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE, using default", "value", v, "error", err)
-		} else {
-			cfg.LoginLock.UsernameRateLimitPerMinute = n
+		n, err := envInt("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", v)
+		if err != nil {
+			return err
 		}
+		cfg.LoginLock.UsernameRateLimitPerMinute = n
 	}
 	if v := os.Getenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			logger.Warn("invalid GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS, using default", "value", v, "error", err)
-		} else {
-			cfg.LoginLock.AttemptsRetentionHours = n
+		n, err := envInt("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", v)
+		if err != nil {
+			return err
 		}
+		cfg.LoginLock.AttemptsRetentionHours = n
 	}
 	if v := os.Getenv("GOZONE_TRUSTED_PROXIES"); v != "" {
 		cfg.Server.TrustedProxies = splitNonEmpty(v, ",")
+	}
+	return nil
+}
+
+// envInt parses an integer environment override. An unparseable value is
+// returned as an error rather than silently falling back to the default, so a
+// typo in the override fails config load instead of hiding the operator's
+// intent (REVIEW.md m13).
+func envInt(name, v string) (int, error) {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s=%q: expected an integer (%v)", name, v, err)
+	}
+	return n, nil
+}
+
+// envBool parses a boolean environment override. Unrecognized spellings are
+// returned as an error for the same reason as envInt (REVIEW.md m13).
+func envBool(name, v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "t", "true", "yes", "on":
+		return true, nil
+	case "0", "f", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s=%q: expected a boolean (true/false, 1/0, yes/no, on/off)", name, v)
 	}
 }
 
@@ -542,17 +580,4 @@ func generateSecretKey() (string, error) {
 		return "", fmt.Errorf("generate secret key: %w", err)
 	}
 	return hex.EncodeToString(b), nil
-}
-
-// parseBoolOr parses a boolean environment value, returning defaultVal for
-// anything it does not recognize. Accepts the common truthy/falsy spellings.
-func parseBoolOr(s string, defaultVal bool) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "1", "t", "true", "yes", "on":
-		return true
-	case "0", "f", "false", "no", "off":
-		return false
-	default:
-		return defaultVal
-	}
 }

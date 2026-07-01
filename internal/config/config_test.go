@@ -330,26 +330,46 @@ func TestLoad_SecureCookiesDefaultFalse(t *testing.T) {
 }
 
 func TestLoad_SecureCookiesEnvOverride(t *testing.T) {
-	tests := []struct {
+	valid := []struct {
 		env  string
 		want bool
 	}{
 		{"true", true},
+		{"TRUE", true}, // case-insensitive
 		{"1", true},
 		{"on", true},
+		{"yes", true},
 		{"false", false},
 		{"0", false},
-		{"garbage", false}, // unrecognized keeps the prior value (default false)
+		{"off", false},
+		{"no", false},
 	}
-	for _, tt := range tests {
-		t.Setenv("GOZONE_SECURE_COOKIES", tt.env)
-		cfg, err := Load("")
-		if err != nil {
-			t.Fatalf("Load failed: %v", err)
-		}
-		if cfg.Server.SecureCookies != tt.want {
-			t.Errorf("GOZONE_SECURE_COOKIES=%q: got %v, want %v", tt.env, cfg.Server.SecureCookies, tt.want)
-		}
+	for _, tt := range valid {
+		t.Run("valid/"+tt.env, func(t *testing.T) {
+			t.Setenv("GOZONE_SECURE_COOKIES", tt.env)
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatalf("GOZONE_SECURE_COOKIES=%q: Load failed: %v", tt.env, err)
+			}
+			if cfg.Server.SecureCookies != tt.want {
+				t.Errorf("GOZONE_SECURE_COOKIES=%q: got %v, want %v", tt.env, cfg.Server.SecureCookies, tt.want)
+			}
+		})
+	}
+
+	// Unrecognized non-empty boolean spellings must fail config load (m13):
+	// the override intent is surfaced instead of silently keeping the default.
+	for _, bad := range []string{"garbage", "maybe", "2"} {
+		t.Run("invalid/"+bad, func(t *testing.T) {
+			t.Setenv("GOZONE_SECURE_COOKIES", bad)
+			_, err := Load("")
+			if err == nil {
+				t.Fatalf("GOZONE_SECURE_COOKIES=%q: expected error, got nil", bad)
+			}
+			if !strings.Contains(err.Error(), "GOZONE_SECURE_COOKIES") {
+				t.Errorf("GOZONE_SECURE_COOKIES=%q: expected error to mention the var, got %v", bad, err)
+			}
+		})
 	}
 }
 
@@ -364,23 +384,106 @@ func TestLoad_ShutdownTimeoutEnvOverride(t *testing.T) {
 	}
 }
 
-func TestParseBoolOr(t *testing.T) {
+func TestEnvInt(t *testing.T) {
 	tests := []struct {
-		input string
-		def   bool
-		want  bool
+		name    string
+		v       string
+		want    int
+		wantErr bool
 	}{
-		{"true", false, true},
-		{"YES", false, true},
-		{"Off", true, false},
-		{"", true, true},
-		{"maybe", true, true},
-		{"maybe", false, false},
+		{"decimal", "8080", 8080, false},
+		{"zero", "0", 0, false},
+		{"negative", "-1", -1, false},
+		{"non-numeric", "abc", 0, true},
+		{"float", "1.5", 0, true},
+		{"empty-ish", " ", 0, true},
+		{"with-spaces", " 42 ", 0, true},
 	}
 	for _, tt := range tests {
-		if got := parseBoolOr(tt.input, tt.def); got != tt.want {
-			t.Errorf("parseBoolOr(%q, %v) = %v, want %v", tt.input, tt.def, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := envInt("GOZONE_TEST", tt.v)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("envInt(%q): expected error, got %d", tt.v, got)
+				}
+				if !strings.Contains(err.Error(), "GOZONE_TEST") {
+					t.Errorf("envInt(%q): error should mention the var name, got %v", tt.v, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("envInt(%q): unexpected error: %v", tt.v, err)
+			}
+			if got != tt.want {
+				t.Errorf("envInt(%q) = %d, want %d", tt.v, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvBool(t *testing.T) {
+	valid := []struct {
+		v    string
+		want bool
+	}{
+		{"true", true}, {"TRUE", true}, {"Yes", true}, {"1", true}, {"on", true},
+		{"false", false}, {"0", false}, {"OFF", false}, {"no", false},
+	}
+	for _, tt := range valid {
+		t.Run("valid/"+tt.v, func(t *testing.T) {
+			got, err := envBool("GOZONE_TEST", tt.v)
+			if err != nil {
+				t.Fatalf("envBool(%q): unexpected error: %v", tt.v, err)
+			}
+			if got != tt.want {
+				t.Errorf("envBool(%q) = %v, want %v", tt.v, got, tt.want)
+			}
+		})
+	}
+	for _, bad := range []string{"garbage", "maybe", "2", " "} {
+		t.Run("invalid/"+bad, func(t *testing.T) {
+			_, err := envBool("GOZONE_TEST", bad)
+			if err == nil {
+				t.Fatalf("envBool(%q): expected error, got nil", bad)
+			}
+			if !strings.Contains(err.Error(), "GOZONE_TEST") {
+				t.Errorf("envBool(%q): error should mention the var name, got %v", bad, err)
+			}
+		})
+	}
+}
+
+// TestLoad_RejectsInvalidEnvOverride is the regression test for m13: a
+// non-integer value on a numeric GOZONE_* override must fail Load (instead of
+// the previous behavior of logging a warning and silently keeping the
+// default), so the operator's override intent is never lost to a typo.
+func TestLoad_RejectsInvalidEnvOverride(t *testing.T) {
+	cases := []string{
+		"GOZONE_SERVER_PORT",
+		"GOZONE_SHUTDOWN_TIMEOUT",
+		"GOZONE_SESSION_DURATION",
+		"GOZONE_BCRYPT_COST",
+		"GOZONE_ACTIVITY_RETENTION_DAYS",
+		"GOZONE_ACTIVITY_BATCH_SIZE",
+		"GOZONE_LOGIN_MAX_FAILED_ATTEMPTS",
+		"GOZONE_LOGIN_LOCKOUT_MINUTES",
+		"GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE",
+		"GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS",
+	}
+	for _, env := range cases {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "not-a-number")
+			_, err := Load("")
+			if err == nil {
+				t.Fatalf("%s=not-a-number: expected error, got nil", env)
+			}
+			if !strings.Contains(err.Error(), env) {
+				t.Errorf("%s=not-a-number: expected error to mention %q, got %v", env, env, err)
+			}
+			if !strings.Contains(err.Error(), "expected an integer") {
+				t.Errorf("%s=not-a-number: expected 'expected an integer' in error, got %v", env, err)
+			}
+		})
 	}
 }
 
