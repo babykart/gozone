@@ -285,6 +285,22 @@ func TestSanitizeDSN_MySQL(t *testing.T) {
 			"admin:p@ss:w0rd@tcp(host)/mydb",
 			"admin:***@tcp(host)/mydb",
 		},
+		// Unix-socket DSNs (REVIEW.md m20): previously leaked verbatim because
+		// only "@tcp(" was recognised.
+		{
+			"user:password@unix(/var/run/mysqld/mysqld.sock)/gozone",
+			"user:***@unix(/var/run/mysqld/mysqld.sock)/gozone",
+		},
+		{
+			"root:secret@unix(/tmp/mysql.sock)/db?parseTime=true",
+			"root:***@unix(/tmp/mysql.sock)/db?parseTime=true",
+		},
+		// Password containing '@' on a unix-socket DSN: the delimiter match
+		// lands on the '@' right before "unix(", so the password is redacted.
+		{
+			"admin:p@ss@unix(/sock)/db",
+			"admin:***@unix(/sock)/db",
+		},
 	}
 
 	for _, tt := range tests {

@@ -761,17 +761,24 @@ func (db *DB) migrateOldVersions() error {
 }
 
 // sanitizeDSN redacts passwords from database connection strings for safe
-// logging. It handles MySQL-style (user:password@tcp(...)), PostgreSQL
-// (password=secret), and SQLite (file path) DSN formats.
+// logging. It handles MySQL-style DSNs — both TCP (user:password@tcp(host))
+// and unix-socket (user:password@unix(/path)) — PostgreSQL
+// (password=secret), and SQLite (file path) formats.
 func sanitizeDSN(dsn string) string {
-	// MySQL-style: user:password@tcp(host)/db
-	sep := "@tcp("
-	if idx := strings.Index(dsn, sep); idx >= 0 {
-		prefix := dsn[:idx]
-		if colon := strings.Index(prefix, ":"); colon >= 0 {
-			return prefix[:colon+1] + "***" + dsn[idx:]
+	// MySQL-style userinfo: user:password@<protocol>(<addr>)/db, where
+	// <protocol> is tcp or unix. Searching for the "@tcp(" / "@unix(" delimiter
+	// (rather than a bare "@") redacts passwords that themselves contain '@'
+	// correctly: strings.Index lands on the '@' immediately before the protocol
+	// keyword. REVIEW.md m20: "@unix(" socket DSNs were previously leaked
+	// verbatim because only "@tcp(" was recognised.
+	for _, sep := range []string{"@unix(", "@tcp("} {
+		if idx := strings.Index(dsn, sep); idx >= 0 {
+			prefix := dsn[:idx]
+			if colon := strings.Index(prefix, ":"); colon >= 0 {
+				return prefix[:colon+1] + "***" + dsn[idx:]
+			}
+			return dsn // no password present in userinfo
 		}
-		return dsn
 	}
 	// PostgreSQL-style: password=secret
 	re := regexp.MustCompile(`password=[^ ]+`)
