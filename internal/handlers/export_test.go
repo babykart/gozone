@@ -142,6 +142,9 @@ func TestExportZone_InvalidFormat(t *testing.T) {
 	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
 	h.ExportZone(w, r)
 
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid format, got %d", w.Code)
+	}
 	if !strings.Contains(w.Body.String(), "Invalid format") {
 		t.Errorf("expected error message, got: %s", w.Body.String())
 	}
@@ -341,5 +344,54 @@ func TestFormatRecordContent(t *testing.T) {
 				t.Errorf("formatRecordContent(%q, %q, %d) = %q, want %q", tc.rtype, tc.content, tc.priority, result, tc.expected)
 			}
 		})
+	}
+}
+
+// TestExportZone_GetZoneError_Returns500 is the m23 regression test: a PDNS
+// failure on GetZone must surface as HTTP 500 via renderErrorStatus, not be
+// silently downgraded to 400 by a double WriteHeader before renderError.
+func TestExportZone_GetZoneError_Returns500(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=bind", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 on PDNS GetZone failure, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestExportZone_ListRecordsError_Returns500 verifies the second PDNS call
+// (ListRecords) also surfaces as 500 via renderErrorStatus, not 400. GetZone
+// and ListRecords both hit GET /zones/{id}; the first call (GetZone) succeeds
+// and the second (ListRecords) fails.
+func TestExportZone_ListRecordsError_Returns500(t *testing.T) {
+	var zoneCalls int
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") && zoneCalls == 0 {
+			zoneCalls++
+			w.Header().Set("Content-Type", "application/json")
+			// #nosec G104 — test handler writing to httptest.ResponseRecorder
+			w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","serial":2024010100}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=bind", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 on PDNS ListRecords failure, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }

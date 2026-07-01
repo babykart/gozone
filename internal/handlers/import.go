@@ -26,14 +26,12 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	// #nosec G120 — Form size limited to 10MB via ParseMultipartForm argument
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "Failed to parse upload: "+err.Error())
 		return
 	}
 
 	file, header, err := r.FormFile("zonefile")
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "No file uploaded: "+err.Error())
 		return
 	}
@@ -44,7 +42,6 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		format = detectFormat(header.Filename)
 	}
 	if format != "bind" && format != "csv" {
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "Could not detect format. Please select BIND or CSV.")
 		return
 	}
@@ -55,7 +52,6 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		data, readErr := io.ReadAll(io.LimitReader(file, 10<<20))
 		if readErr != nil {
 			logger.Error("ImportZone: read failed", "zone", zoneID, "error", readErr)
-			w.WriteHeader(http.StatusBadRequest)
 			h.renderError(w, r, "Failed to read uploaded file")
 			return
 		}
@@ -67,22 +63,18 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		logger.Error("ImportZone: parse failed", "zone", zoneID, "format", format, "error", err)
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "Failed to parse file: "+err.Error())
 		return
 	}
 
 	if len(rrsets) == 0 {
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "No valid records found in file")
 		return
 	}
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
 		logger.Error("ImportZone: CreateRecords failed", "zone", zoneID, "error", err)
-		status := pdnsErrorHTTPStatus(err)
-		w.WriteHeader(status)
-		h.renderError(w, r, "Failed to create records: "+err.Error())
+		h.renderErrorStatus(w, r, pdnsErrorHTTPStatus(err), "Failed to create records: "+err.Error())
 		return
 	}
 

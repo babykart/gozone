@@ -18,7 +18,6 @@ func (h *Handler) ExportZone(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 
 	if format != "bind" && format != "csv" {
-		w.WriteHeader(http.StatusBadRequest)
 		h.renderError(w, r, "Invalid format. Use ?format=bind or ?format=csv")
 		return
 	}
@@ -26,16 +25,14 @@ func (h *Handler) ExportZone(w http.ResponseWriter, r *http.Request) {
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
 		logger.Error("ExportZone: GetZone failed", "zone", zoneID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		h.renderError(w, r, "Failed to get zone")
+		h.renderErrorStatus(w, r, http.StatusInternalServerError, "Failed to get zone")
 		return
 	}
 
 	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		logger.Error("ExportZone: ListRecords failed", "zone", zoneID, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		h.renderError(w, r, "Failed to list records")
+		h.renderErrorStatus(w, r, http.StatusInternalServerError, "Failed to list records")
 		return
 	}
 
