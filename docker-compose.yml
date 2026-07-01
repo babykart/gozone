@@ -19,7 +19,10 @@ services:
       start_period: 10s
 
   powerdns:
-    image: powerdns/pdns-auth-master:latest
+    # Pinned by immutable digest for reproducible builds (c12). To update,
+    # `docker pull powerdns/pdns-auth-master:latest` and replace the digest via
+    # `docker image inspect --format '{{index .RepoDigests 0}}' powerdns/pdns-auth-master:latest`.
+    image: powerdns/pdns-auth-master@sha256:5f1fe53a69e1e503a0ecaa12baf76462209b1bb567f3cc414675f76be9347dfb
     ports:
       - "53:53"
       - "53:53/udp"
