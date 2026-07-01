@@ -947,3 +947,42 @@ func TestPathEscaping_NormalValuesUnchanged(t *testing.T) {
 		t.Errorf("normal zoneID: escaped path = %q, want suffix %q", escaped, want)
 	}
 }
+
+// TestReadLimitedBody covers the response-size cap (m42). The limit+1 trick is
+// exercised at the boundary: a body exactly equal to the limit is accepted, a
+// single extra byte is rejected, and the helper never silently truncates.
+func TestReadLimitedBody(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		limit   int64
+		want    string // expected body when wantErr is false
+		wantErr bool
+	}{
+		{"empty body", "", 10, "", false},
+		{"under limit", "hello", 10, "hello", false},
+		{"exactly at limit (boundary)", "0123456789", 10, "0123456789", false},
+		{"one byte over limit", "0123456789a", 10, "", true},
+		{"well over limit", strings.Repeat("x", 1000), 10, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := readLimitedBody(strings.NewReader(tc.input), tc.limit)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input len %d with limit %d, got body len %d", len(tc.input), tc.limit, len(got))
+				}
+				if !strings.Contains(err.Error(), "exceeds") {
+					t.Errorf("error should mention the limit, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("body: got %q, want %q", string(got), tc.want)
+			}
+		})
+	}
+}

@@ -58,6 +58,29 @@ func NewClient(cfg *config.PowerDNSConfig) *Client {
 	}
 }
 
+// maxPDNSResponseBytes caps the size of a single PowerDNS API response body
+// read into memory. It is generous enough for a full zone dump (a zone with
+// tens of thousands of records is well under this), yet bounded so a
+// misconfigured or compromised upstream cannot exhaust server memory by
+// streaming an unbounded body (m42).
+const maxPDNSResponseBytes int64 = 64 << 20 // 64 MiB
+
+// readLimitedBody reads at most limit bytes from r. It uses the limit+1 trick:
+// reading one extra byte makes it possible to distinguish a body that exactly
+// equals the limit (valid) from one that exceeds it (rejected), rather than
+// silently truncating and handing malformed JSON to the caller. A body larger
+// than limit yields an error.
+func readLimitedBody(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d-byte limit (possible misconfigured or compromised upstream)", limit)
+	}
+	return b, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
 	url := c.baseURL + path
 
@@ -87,7 +110,7 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedBody(resp.Body, maxPDNSResponseBytes)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
 	}
