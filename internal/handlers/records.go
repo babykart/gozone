@@ -231,12 +231,14 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		case *recordValidationError:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.Message})
 		default:
+			logger.Error("InlineUpdateRecord: failed to build update", "zone_id", zoneID, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 		}
 		return
 	}
 
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
+		logger.Error("InlineUpdateRecord: UpdateRecord failed", "zone_id", zoneID, "name", rrset.Name, "type", rrset.Type, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 		return
 	}

@@ -403,6 +403,92 @@ func TestInlineUpdateRecord_InvalidType(t *testing.T) {
 	}
 }
 
+// TestInlineUpdateRecord_PDNSUpdateError_Returns500 covers the m24 error path:
+// when PowerDNS rejects the PATCH (UpdateRecord), the AJAX handler must
+// respond 500 with a generic message — the underlying error is logged
+// server-side, never leaked to the client.
+func TestInlineUpdateRecord_PDNSUpdateError_Returns500(t *testing.T) {
+	const leakMarker = "PDNS-INTERNAL-LEAK-MARKER"
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}}}},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusInternalServerError)
+			// #nosec G104 — test handler writing to httptest.ResponseRecorder
+			w.Write([]byte(`{"error":"` + leakMarker + `"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.2&ttl=3600&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Failed to update record") {
+		t.Errorf("expected generic error message in body, got: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), leakMarker) {
+		t.Errorf("PDNS internal error leaked to client: %s", w.Body.String())
+	}
+}
+
+// TestInlineUpdateRecord_ListRecordsError_Returns500 covers the other m24
+// error path: when updateRecordFromForm fails to fetch the zone from PowerDNS
+// (ListRecords), the AJAX handler must respond 500 with a generic message and
+// log the underlying error server-side.
+func TestInlineUpdateRecord_ListRecordsError_Returns500(t *testing.T) {
+	const leakMarker = "PDNS-INTERNAL-LEAK-MARKER"
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		// #nosec G104 — test handler writing to httptest.ResponseRecorder
+		w.Write([]byte(`{"error":"` + leakMarker + `"}`))
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.2&ttl=3600&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Failed to update record") {
+		t.Errorf("expected generic error message in body, got: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), leakMarker) {
+		t.Errorf("PDNS internal error leaked to client: %s", w.Body.String())
+	}
+}
+
 func TestInlineUpdateRecord_PreservesSiblingRecords(t *testing.T) {
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
