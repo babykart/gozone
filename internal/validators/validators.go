@@ -72,6 +72,10 @@ func ValidateDomainName(name string) error {
 // ValidateDNSName checks that a DNS name is structurally valid, allowing
 // underscores and wildcard labels. It is suitable for record names and record
 // targets (CNAME, MX, SRV, etc.) where underscores are permitted.
+//
+// Per RFC 4592 a wildcard "*" is valid only as the leftmost label and must not
+// appear elsewhere (m48): "*.*.example.com" and "foo.*.example.com" are
+// rejected.
 func ValidateDNSName(name string) error {
 	name = strings.TrimSuffix(name, ".")
 
@@ -83,7 +87,7 @@ func ValidateDNSName(name string) error {
 	}
 
 	labels := strings.Split(name, ".")
-	for _, label := range labels {
+	for i, label := range labels {
 		if len(label) == 0 {
 			return fmt.Errorf("DNS name contains an empty label")
 		}
@@ -92,6 +96,10 @@ func ValidateDNSName(name string) error {
 		}
 		if !dnsLabel.MatchString(label) {
 			return fmt.Errorf("label %q contains invalid characters", label)
+		}
+		// RFC 4592: a wildcard label is valid only in the leftmost position.
+		if label == "*" && i != 0 {
+			return fmt.Errorf("wildcard label %q is only valid as the leftmost label", label)
 		}
 	}
 
