@@ -20,7 +20,7 @@
 {{define "sidebar"}}
 <aside class="sidebar">
     <div class="sidebar-header">
-        <button class="sidebar-toggle" data-action="toggle-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
+        <button class="sidebar-toggle" data-action="toggle-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
         <div class="sidebar-brand">
             <a href="/dashboard">{{.AppName}}</a>
             <span class="nav-subtitle">PowerDNS Admin</span>
@@ -47,7 +47,7 @@
         <button class="theme-toggle" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
         <form method="POST" action="/logout" class="logout-form">
             <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
-            <button type="submit" class="btn-logout" title="Logout" aria-label="Logout">⏻</button>
+            <button type="submit" class="btn-logout" title="Logout" aria-label="Logout"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg></button>
         </form>
     </div>
 </header>

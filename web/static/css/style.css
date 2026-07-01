@@ -147,6 +147,15 @@ body {
     color: #f1f5f9;
 }
 
+.sidebar-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
 .sidebar-brand {
     display: flex;
     flex-direction: column;
@@ -263,6 +272,19 @@ body {
     color: var(--danger);
     text-decoration: none;
     transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.topbar .btn-logout svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .topbar .btn-logout:hover {
