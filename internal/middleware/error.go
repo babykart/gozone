@@ -3,13 +3,15 @@ package middleware
 import (
 	"encoding/json"
 	"net/http"
+	"runtime/debug"
 
 	apperrors "github.com/babykart/gozone/internal/errors"
 	"github.com/babykart/gozone/internal/logger"
 )
 
-// ErrorHandler is a middleware that recovers from panics and returns
-// structured error responses.
+// ErrorHandler is the single panic-recovery middleware for the request
+// goroutine. It replaces chi's Recoverer (m8) and adds structured logging
+// with a full stack trace plus API-aware error responses.
 //
 // For JSON API requests (those with /api/ in the path or Accept: application/json),
 // errors are returned as JSON with standardized codes. For web UI requests,
@@ -21,7 +23,12 @@ func ErrorHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				logger.Error("panic recovered", "panic", rec, "path", r.URL.Path, "request_id", r.Header.Get("X-Request-Id"))
+				logger.Error("panic recovered",
+					"panic", rec,
+					"path", r.URL.Path,
+					"request_id", r.Header.Get("X-Request-Id"),
+					"stack", string(debug.Stack()),
+				)
 
 				if isAPIRequest(r) {
 					respondJSON(w, http.StatusInternalServerError, apperrors.Internal("internal server error"))

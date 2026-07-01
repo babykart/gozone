@@ -170,7 +170,6 @@ func run(args []string) error {
 	// a fresh rate-limit bucket per request.
 	r.Use(clientIPMiddleware(cfg))
 	r.Use(requestLogger)
-	r.Use(chimw.Recoverer)
 	r.Use(chimw.Compress(5))
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.BodyLimit)
