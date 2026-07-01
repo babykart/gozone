@@ -266,6 +266,119 @@ func TestValidateRecordContent(t *testing.T) {
 	}
 }
 
+// TestValidateRecordContent_StructuredTypes covers the 17 record types that
+// previously fell through to the default-accept case (m47). Each type is
+// exercised with at least one valid example and one structurally invalid one.
+func TestValidateRecordContent_StructuredTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordType string
+		content    string
+		wantErr    bool
+	}{
+		// AFSDB: <subtype> <hostname>
+		{"AFSDB valid", "AFSDB", "1 afsdb.example.com.", false},
+		{"AFSDB too few fields", "AFSDB", "afsdb.example.com.", true},
+		{"AFSDB subtype not numeric", "AFSDB", "abc afsdb.example.com.", true},
+		{"AFSDB bad hostname", "AFSDB", "1 invalid host.", true},
+
+		// HINFO: <cpu> <os>
+		{"HINFO valid", "HINFO", `"x86" "linux"`, false},
+		{"HINFO too few fields", "HINFO", "cpu", true},
+
+		// NAPTR: <order> <pref> <flags> <service> <regexp> <replacement>
+		{"NAPTR valid", "NAPTR", `100 50 "s" "z3950+tcp" "" _z3950._tcp.example.com.`, false},
+		{"NAPTR too few fields", "NAPTR", `100 50 "s"`, true},
+		{"NAPTR order not numeric", "NAPTR", `abc 50 "s" "svc" "" target.example.com.`, true},
+		{"NAPTR bad replacement", "NAPTR", `100 50 "s" "svc" "" invalid host.`, true},
+
+		// URI: <priority> <weight> <target>
+		{"URI valid", "URI", `10 1 "https://example.com"`, false},
+		{"URI too few fields", "URI", "10 1", true},
+		{"URI priority not numeric", "URI", `xx 1 "https://example.com"`, true},
+
+		// SSHFP: <algorithm> <fptype> <fingerprint(hex)>
+		{"SSHFP valid", "SSHFP", "1 1 123456789abcdef0123456789abcdef0", false},
+		{"SSHFP too few fields", "SSHFP", "1 1", true},
+		{"SSHFP fingerprint not hex", "SSHFP", "1 1 nothex!", true},
+
+		// TLSA: <usage> <selector> <matchingtype> <certificate(hex)>
+		{"TLSA valid", "TLSA", "3 1 1 abcd1234ef", false},
+		{"TLSA too few fields", "TLSA", "3 1", true},
+		{"TLSA certificate not hex", "TLSA", "3 1 1 nothex!", true},
+
+		// DS: <keytag> <algorithm> <digesttype> <digest(hex)>
+		{"DS valid", "DS", "12345 8 2 abc123def456", false},
+		{"DS too few fields", "DS", "12345 8", true},
+		{"DS digest not hex", "DS", "12345 8 2 nothex!", true},
+		{"DS algorithm too large", "DS", "12345 300 2 abc123", true},
+
+		// DNSKEY: <flags> <protocol> <algorithm> <publickey(base64)>
+		{"DNSKEY valid", "DNSKEY", "257 3 5 AwEAAcd3dummykey", false},
+		{"DNSKEY too few fields", "DNSKEY", "257 3 5", true},
+		{"DNSKEY publickey not base64", "DNSKEY", "257 3 5 not!base64!!", true},
+
+		// KEY: same structure as DNSKEY
+		{"KEY valid", "KEY", "256 3 5 AwEAAkey", false},
+		{"KEY too few fields", "KEY", "256 3 5", true},
+
+		// CERT: <type> <keytag> <algorithm> <certificate(base64)>
+		{"CERT valid mnemonic", "CERT", "PGP 0 0 dGhpcw==", false},
+		{"CERT valid numeric", "CERT", "1 0 0 dGhpcw==", false},
+		{"CERT too few fields", "CERT", "PGP 0 0", true},
+		{"CERT certificate not base64", "CERT", "PGP 0 0 not!b64!!", true},
+
+		// OPENPGPKEY: single base64 blob
+		{"OPENPGPKEY valid", "OPENPGPKEY", "dGhpcyBpcyBhIGtleQ==", false},
+		{"OPENPGPKEY not base64", "OPENPGPKEY", "not!a!key!!", true},
+
+		// NSEC: <next> <type> [<type>...]
+		{"NSEC valid", "NSEC", "host.example.com. A RRSIG", false},
+		{"NSEC too few fields", "NSEC", "host.example.com.", true},
+		{"NSEC bad next domain", "NSEC", "bad!label. A", true},
+
+		// NSEC3: <hashalgo> <flags> <iterations> <salt> <hash> [type...]
+		{"NSEC3 valid", "NSEC3", "1 0 10 - ABCDEF A RRSIG", false},
+		{"NSEC3 too few fields", "NSEC3", "1 0 10 -", true},
+		{"NSEC3 salt not hex", "NSEC3", "1 0 10 nothex! ABCDEF A", true},
+
+		// NSEC3PARAM: <hashalgo> <flags> <iterations> <salt>
+		{"NSEC3PARAM valid", "NSEC3PARAM", "1 0 10 -", false},
+		{"NSEC3PARAM valid hex salt", "NSEC3PARAM", "1 0 10 a1b2c3", false},
+		{"NSEC3PARAM too few fields", "NSEC3PARAM", "1 0 10", true},
+		{"NSEC3PARAM salt not hex", "NSEC3PARAM", "1 0 10 nothex!", true},
+
+		// RRSIG: 9 fields
+		{"RRSIG valid", "RRSIG", "A 8 2 3600 20251231235959 20250101000000 12345 example.com. c2lnbmF0dXJl==", false},
+		{"RRSIG too few fields", "RRSIG", "A 8 2 3600", true},
+		{"RRSIG bad typecovered", "RRSIG", "NOTATYPE 8 2 3600 20251231235959 20250101000000 12345 example.com. c2ln==", true},
+		{"RRSIG bad expiration time", "RRSIG", "A 8 2 3600 badtime12chars 20250101000000 12345 example.com. c2ln==", true},
+		{"RRSIG bad signer", "RRSIG", "A 8 2 3600 20251231235959 20250101000000 12345 bad signer. c2ln==", true},
+
+		// LOC: minimal sanity check
+		{"LOC valid", "LOC", "37 23 30.900 N 121 59 19.000 W 7m", false},
+		{"LOC no digits", "LOC", "north east", true},
+		{"LOC no cardinal", "LOC", "42 100", true},
+
+		// RP: <rmailbx> <emailbx>
+		{"RP valid", "RP", "admin.example.com txt.example.com", false},
+		{"RP too few fields", "RP", "admin.example.com", true},
+		{"RP bad mailbox", "RP", "bad mbox. txt.example.com", true},
+
+		// default now rejects unknown types (m47 closure)
+		{"unknown type rejected", "NOTAREALTYPE", "anything", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordContent(tt.recordType, tt.content)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRecordContent(%q, %q) error = %v, wantErr = %v",
+					tt.recordType, tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRecordType_AllWhitelisted(t *testing.T) {
 	for _, rt := range []string{
 		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",

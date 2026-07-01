@@ -342,15 +342,55 @@ func ValidateIPv6(ip string) error {
 	return nil
 }
 
+// hexString matches a non-empty hexadecimal string (digests, fingerprints,
+// NSEC3 salts). Used to sanity-check opaque hex blob fields.
+var hexString = regexp.MustCompile(`^[0-9A-Fa-f]+$`)
+
+// base64String matches a non-empty standard-alphabet base64 string with
+// optional trailing padding. Used to sanity-check opaque key/blob fields
+// (DNSKEY/KEY public keys, RRSIG signatures, CERT/OPENPGPKEY payloads) without
+// strict length decoding, which would risk false positives on legitimate keys.
+var base64String = regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
+
+// validateUintField checks that s is a base-10 unsigned integer that fits in
+// bits bits (e.g. 8, 16, 32). name is included in the error message.
+func validateUintField(s, name string, bits int) error {
+	if _, err := strconv.ParseUint(s, 10, bits); err != nil {
+		return fmt.Errorf("%s %q is not a valid %d-bit unsigned integer", name, s, bits)
+	}
+	return nil
+}
+
+// validateRRSIGTime checks that s is a 14-digit RRSIG time stamp
+// (YYYYMMDDHHMMSS per RFC 4034 §3.2). It does not validate the date itself,
+// only the digit format, since PowerDNS enforces semantic validity.
+func validateRRSIGTime(s, name string) error {
+	if len(s) != 14 {
+		return fmt.Errorf("RRSIG %s %q must be 14 digits (YYYYMMDDHHMMSS)", name, s)
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return fmt.Errorf("RRSIG %s %q must be 14 digits (YYYYMMDDHHMMSS)", name, s)
+		}
+	}
+	return nil
+}
+
 // ValidateRecordContent validates a DNS record's content field based on its
 // record type. Different record types have different content format requirements:
 //
 //   - A: IPv4 address
 //   - AAAA: IPv6 address
-//   - CNAME, ALIAS, NS, PTR: DNS name (underscores allowed)
+//   - CNAME, ALIAS, NS, PTR, DNAME: DNS name (underscores allowed)
 //   - MX: priority + FQDN, or just FQDN (priority handled separately)
 //   - TXT, SPF: free text (quoted strings allowed)
 //   - SOA: 7+ fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum
+//
+// All other whitelisted record types (AFSDB, CERT, DNSKEY, DS, HINFO, KEY, LOC,
+// NAPTR, NSEC, NSEC3, NSEC3PARAM, OPENPGPKEY, RP, RRSIG, SSHFP, TLSA, URI) are
+// structurally validated (field count, numeric ranges, DNS-name fields, hex/base64
+// blobs) so no whitelisted type is accepted without a content check (m47). The
+// default therefore rejects unknown types rather than silently accepting them.
 //
 // Returns nil if valid, an error describing the violation otherwise.
 func ValidateRecordContent(recordType, content string) error {
@@ -442,7 +482,265 @@ func ValidateRecordContent(recordType, content string) error {
 		return nil
 	case "TXT", "SPF":
 		return nil
-	default:
+	case "RP":
+		// RFC 1183: <rmailbx> <emailbx> — two DNS names.
+		parts := strings.Fields(content)
+		if len(parts) != 2 {
+			return fmt.Errorf("RP content must have exactly 2 fields: rmailbx emailbx")
+		}
+		if err := ValidateDNSName(parts[0]); err != nil {
+			return fmt.Errorf("RP rmailbx: %w", err)
+		}
+		if err := ValidateDNSName(parts[1]); err != nil {
+			return fmt.Errorf("RP emailbx: %w", err)
+		}
 		return nil
+	case "AFSDB":
+		// RFC 1183: <subtype> <hostname>.
+		parts := strings.Fields(content)
+		if len(parts) != 2 {
+			return fmt.Errorf("AFSDB content must have exactly 2 fields: subtype hostname")
+		}
+		if err := validateUintField(parts[0], "AFSDB subtype", 16); err != nil {
+			return err
+		}
+		if err := ValidateDNSName(parts[1]); err != nil {
+			return fmt.Errorf("AFSDB hostname: %w", err)
+		}
+		return nil
+	case "HINFO":
+		// RFC 1035: <cpu> <os>. Tolerate quoted forms by requiring at least the
+		// two fields be present.
+		parts := strings.Fields(content)
+		if len(parts) < 2 {
+			return fmt.Errorf("HINFO content must have 2 fields: cpu os")
+		}
+		return nil
+	case "NAPTR":
+		// RFC 3403: <order> <pref> <flags> <service> <regexp> <replacement>.
+		parts := strings.Fields(content)
+		if len(parts) != 6 {
+			return fmt.Errorf("NAPTR content must have exactly 6 fields: order preference flags service regexp replacement")
+		}
+		if err := validateUintField(parts[0], "NAPTR order", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "NAPTR preference", 16); err != nil {
+			return err
+		}
+		if err := ValidateDNSName(parts[5]); err != nil {
+			return fmt.Errorf("NAPTR replacement: %w", err)
+		}
+		return nil
+	case "URI":
+		// RFC 7553: <priority> <weight> <target>.
+		parts := strings.Fields(content)
+		if len(parts) < 3 {
+			return fmt.Errorf("URI content must have at least 3 fields: priority weight target")
+		}
+		if err := validateUintField(parts[0], "URI priority", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "URI weight", 16); err != nil {
+			return err
+		}
+		if strings.Trim(strings.Join(parts[2:], " "), `"`) == "" {
+			return fmt.Errorf("URI target must not be empty")
+		}
+		return nil
+	case "SSHFP":
+		// RFC 4255: <algorithm> <fptype> <fingerprint>.
+		parts := strings.Fields(content)
+		if len(parts) != 3 {
+			return fmt.Errorf("SSHFP content must have exactly 3 fields: algorithm fptype fingerprint")
+		}
+		if err := validateUintField(parts[0], "SSHFP algorithm", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "SSHFP fptype", 8); err != nil {
+			return err
+		}
+		if !hexString.MatchString(parts[2]) {
+			return fmt.Errorf("SSHFP fingerprint must be a hexadecimal string")
+		}
+		return nil
+	case "TLSA":
+		// RFC 6698: <usage> <selector> <matchingtype> <certificate>.
+		parts := strings.Fields(content)
+		if len(parts) != 4 {
+			return fmt.Errorf("TLSA content must have exactly 4 fields: usage selector matchingtype certificate")
+		}
+		for i, name := range []string{"usage", "selector", "matchingtype"} {
+			if err := validateUintField(parts[i], "TLSA "+name, 8); err != nil {
+				return err
+			}
+		}
+		if !hexString.MatchString(parts[3]) {
+			return fmt.Errorf("TLSA certificate data must be a hexadecimal string")
+		}
+		return nil
+	case "DS":
+		// RFC 4034: <keytag> <algorithm> <digesttype> <digest>.
+		parts := strings.Fields(content)
+		if len(parts) != 4 {
+			return fmt.Errorf("DS content must have exactly 4 fields: keytag algorithm digesttype digest")
+		}
+		if err := validateUintField(parts[0], "DS keytag", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "DS algorithm", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], "DS digesttype", 8); err != nil {
+			return err
+		}
+		if !hexString.MatchString(parts[3]) {
+			return fmt.Errorf("DS digest must be a hexadecimal string")
+		}
+		return nil
+	case "DNSKEY", "KEY":
+		// RFC 4034/2535: <flags> <protocol> <algorithm> <publickey>.
+		rt := strings.ToUpper(recordType)
+		parts := strings.Fields(content)
+		if len(parts) != 4 {
+			return fmt.Errorf("%s content must have exactly 4 fields: flags protocol algorithm publickey", rt)
+		}
+		if err := validateUintField(parts[0], rt+" flags", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], rt+" protocol", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], rt+" algorithm", 8); err != nil {
+			return err
+		}
+		if !base64String.MatchString(parts[3]) {
+			return fmt.Errorf("%s publickey must be a base64-encoded string", rt)
+		}
+		return nil
+	case "CERT":
+		// RFC 4398: <type> <keytag> <algorithm> <certificate>. The type field
+		// may be a numeric value or a mnemonic; only the structured fields are
+		// checked here (PowerDNS validates the type mnemonic).
+		parts := strings.Fields(content)
+		if len(parts) != 4 {
+			return fmt.Errorf("CERT content must have exactly 4 fields: type keytag algorithm certificate")
+		}
+		if err := validateUintField(parts[1], "CERT keytag", 16); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], "CERT algorithm", 8); err != nil {
+			return err
+		}
+		if !base64String.MatchString(parts[3]) {
+			return fmt.Errorf("CERT certificate must be a base64-encoded string")
+		}
+		return nil
+	case "OPENPGPKEY":
+		// RFC 7929: a single base64-encoded transferable public key.
+		if !base64String.MatchString(content) {
+			return fmt.Errorf("OPENPGPKEY content must be a base64-encoded OpenPGP key")
+		}
+		return nil
+	case "NSEC":
+		// RFC 4034: <next> <type> [<type>...].
+		parts := strings.Fields(content)
+		if len(parts) < 2 {
+			return fmt.Errorf("NSEC content must have at least 2 fields: next_domain type [type...]")
+		}
+		if err := ValidateDNSName(parts[0]); err != nil {
+			return fmt.Errorf("NSEC next domain: %w", err)
+		}
+		return nil
+	case "NSEC3":
+		// RFC 5155: <hashalgo> <flags> <iterations> <salt> <hash> [type...].
+		parts := strings.Fields(content)
+		if len(parts) < 5 {
+			return fmt.Errorf("NSEC3 content must have at least 5 fields: hashalgo flags iterations salt hash [type...]")
+		}
+		if err := validateUintField(parts[0], "NSEC3 hash algorithm", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "NSEC3 flags", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], "NSEC3 iterations", 16); err != nil {
+			return err
+		}
+		if parts[3] != "-" && !hexString.MatchString(parts[3]) {
+			return fmt.Errorf(`NSEC3 salt must be a hexadecimal string or "-"`)
+		}
+		if parts[4] == "" {
+			return fmt.Errorf("NSEC3 next hashed owner name must not be empty")
+		}
+		return nil
+	case "NSEC3PARAM":
+		// RFC 5155: <hashalgo> <flags> <iterations> <salt>.
+		parts := strings.Fields(content)
+		if len(parts) != 4 {
+			return fmt.Errorf("NSEC3PARAM content must have exactly 4 fields: hashalgo flags iterations salt")
+		}
+		if err := validateUintField(parts[0], "NSEC3PARAM hash algorithm", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[1], "NSEC3PARAM flags", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], "NSEC3PARAM iterations", 16); err != nil {
+			return err
+		}
+		if parts[3] != "-" && !hexString.MatchString(parts[3]) {
+			return fmt.Errorf(`NSEC3PARAM salt must be a hexadecimal string or "-"`)
+		}
+		return nil
+	case "RRSIG":
+		// RFC 4034: <typecovered> <algorithm> <labels> <origttl>
+		// <expiration> <inception> <keytag> <signer> <signature>.
+		parts := strings.Fields(content)
+		if len(parts) != 9 {
+			return fmt.Errorf("RRSIG content must have exactly 9 fields: typecovered algorithm labels origttl expiration inception keytag signer signature")
+		}
+		if err := ValidateRecordType(parts[0]); err != nil {
+			return fmt.Errorf("RRSIG typecovered: %w", err)
+		}
+		if err := validateUintField(parts[1], "RRSIG algorithm", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[2], "RRSIG labels", 8); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[3], "RRSIG origttl", 32); err != nil {
+			return err
+		}
+		if err := validateRRSIGTime(parts[4], "expiration"); err != nil {
+			return err
+		}
+		if err := validateRRSIGTime(parts[5], "inception"); err != nil {
+			return err
+		}
+		if err := validateUintField(parts[6], "RRSIG keytag", 16); err != nil {
+			return err
+		}
+		if err := ValidateDNSName(parts[7]); err != nil {
+			return fmt.Errorf("RRSIG signer: %w", err)
+		}
+		if !base64String.MatchString(parts[8]) {
+			return fmt.Errorf("RRSIG signature must be a base64-encoded string")
+		}
+		return nil
+	case "LOC":
+		// RFC 1876 has a complex coordinate format. Apply a minimal sanity
+		// check — the content must contain numeric coordinates and a cardinal
+		// direction (N/S/E/W) — so grossly malformed input is rejected without
+		// risking false positives from full coordinate parsing.
+		if !strings.ContainsAny(content, "0123456789") {
+			return fmt.Errorf("LOC content must contain numeric coordinates")
+		}
+		if !strings.ContainsAny(strings.ToUpper(content), "NSEW") {
+			return fmt.Errorf("LOC content must contain a cardinal direction (N, S, E or W)")
+		}
+		return nil
+	default:
+		return fmt.Errorf("content validation is not implemented for record type %q", recordType)
 	}
 }
