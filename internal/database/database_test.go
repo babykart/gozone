@@ -31,10 +31,6 @@ func TestNewInMemory(t *testing.T) {
 	if journalMode != "wal" && journalMode != "memory" {
 		t.Errorf("expected journal_mode wal or memory, got %s", journalMode)
 	}
-	// In-memory databases use 'memory' journal mode, not 'wal'
-	if journalMode != "wal" && journalMode != "memory" {
-		t.Errorf("expected journal_mode wal or memory, got %s", journalMode)
-	}
 
 	var enabled int
 	err = db.Conn.QueryRow("PRAGMA foreign_keys").Scan(&enabled) // Corrected variable name
