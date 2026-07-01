@@ -105,6 +105,11 @@ func TestIsAPIRequest(t *testing.T) {
 		{"web path with json accept", "/dashboard", "application/json", true},
 		{"web path with html accept", "/dashboard", "text/html", false},
 		{"web path no accept", "/zones", "", false},
+		{"apikey-help not api", "/apikey-help", "", false},
+		{"apikeys not api", "/apikeys", "", false},
+		{"api-docs not api", "/api-docs", "", false},
+		{"bare /api not api", "/api", "", false},
+		{"api v1 root is api", "/api/v1", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

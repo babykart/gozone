@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime/debug"
+	"strings"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
@@ -59,7 +60,7 @@ func WriteAppError(w http.ResponseWriter, r *http.Request, err *apperrors.AppErr
 
 // isAPIRequest returns true for API endpoint requests.
 func isAPIRequest(r *http.Request) bool {
-	if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
 		return true
 	}
 	return r.Header.Get("Accept") == "application/json"
