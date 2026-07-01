@@ -192,5 +192,17 @@ func (m *mysqlDialect) Migrations() []string {
 			KEY idx_login_attempts_user (user_id, attempted_at),
 			KEY idx_login_attempts_attempted_at (attempted_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		// m21: idx_activity_logs_zone_created was originally created inline
+		// above as (zone_id, created_at) without DESC, unlike the SQLite and
+		// PostgreSQL dialects which both order created_at DESC. Rebuild the
+		// index with DESC so zone-scoped activity queries (ORDER BY
+		// created_at DESC) are served in index order. This is a NEW migration
+		// rather than an edit of the original CREATE TABLE: migrations are
+		// content-hashed (REVIEW.md m22), so editing the original would just
+		// re-run a no-op "CREATE TABLE IF NOT EXISTS" on existing databases
+		// and leave the index unchanged; a new ALTER migration fixes both
+		// fresh and existing databases. (MySQL < 8.0 parses DESC but ignores
+		// it; MySQL 8.0+ / modern MariaDB build a real descending index.)
+		`ALTER TABLE activity_logs DROP INDEX idx_activity_logs_zone_created, ADD INDEX idx_activity_logs_zone_created (zone_id, created_at DESC)`,
 	}
 }

@@ -120,6 +120,24 @@ func TestMySQLDialect_Migrations_ContainInlineIndexes(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_Migrations_ZoneCreatedIndexDesc is the regression test for
+// m21: idx_activity_logs_zone_created must be defined with DESC on
+// created_at, matching the SQLite and PostgreSQL dialects. MySQL originally
+// created it inline as (zone_id, created_at) without DESC; a dedicated ALTER
+// migration now rebuilds it with DESC. We assert against the full joined
+// migration text rather than the original CREATE TABLE because the fix is
+// delivered as a new migration (editing the original would not fix existing
+// databases — CREATE TABLE IF NOT EXISTS is a no-op there — and would churn
+// the content-hash, see m22).
+func TestMySQLDialect_Migrations_ZoneCreatedIndexDesc(t *testing.T) {
+	d := &mysqlDialect{}
+	all := strings.Join(d.Migrations(), "\n")
+	needle := "idx_activity_logs_zone_created (zone_id, created_at DESC)"
+	if !strings.Contains(all, needle) {
+		t.Errorf("MySQL migrations must define idx_activity_logs_zone_created with DESC on created_at (m21); missing %q", needle)
+	}
+}
+
 // TestMySQLDialect_InsertIgnore_IgnoresConflictColumns verifies the contract
 // from the Dialect interface: MySQL's INSERT IGNORE catches any unique
 // violation, so the conflictColumns parameter is intentionally unused. The
