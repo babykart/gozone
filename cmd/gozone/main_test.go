@@ -140,6 +140,64 @@ func TestAPIRateLimitRunsBeforeAuth(t *testing.T) {
 	}
 }
 
+// TestLoginUsernameKey covers the m35 fix at the key-function level: an empty
+// (or whitespace-only) username must map to a dedicated sentinel bucket rather
+// than "" (which bypasses the per-username rate limiter), while real usernames
+// are lowercased and trimmed.
+func TestLoginUsernameKey(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty body", "", emptyUsernameRateLimitKey},
+		{"no username field", "foo=bar", emptyUsernameRateLimitKey},
+		{"whitespace only", "username=%20%20%20", emptyUsernameRateLimitKey},
+		{"simple", "username=admin", "admin"},
+		{"uppercased", "username=ADMIN", "admin"},
+		{"surrounding spaces", "username=+admin+", "admin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(tt.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if got := loginUsernameKey(r); got != tt.want {
+				t.Errorf("loginUsernameKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoginUsernameRateLimit_EmptyUsernameNotBypassed is the m35 behavioral
+// regression test: empty-username login attempts must consume the per-username
+// rate-limit bucket instead of bypassing the limiter.
+func TestLoginUsernameRateLimit_EmptyUsernameNotBypassed(t *testing.T) {
+	const userLimit = 3
+	limiter := middleware.NewRateLimiter(userLimit)
+	t.Cleanup(limiter.Close)
+
+	handler := limiter.Limit(loginUsernameKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Fire userLimit+1 login POSTs with NO username. Before the fix every one
+	// bypassed the limiter (key "" -> no bucket consumed) and all returned 200.
+	// After the fix they share the <empty-username> bucket, so the last request
+	// must be 429.
+	var lastCode int
+	for i := 0; i < userLimit+1; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(""))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handler.ServeHTTP(w, r)
+		lastCode = w.Code
+	}
+	if lastCode != http.StatusTooManyRequests {
+		t.Errorf("after %d empty-username requests, expected the %dth to be 429, got %d (limiter bypassed — m35 regression)",
+			userLimit, userLimit+1, lastCode)
+	}
+}
+
 // TestClientIPMiddleware_TrustedProxyHonorsXFF verifies that when the direct
 // TCP connection (RemoteAddr) arrives from a configured trusted proxy, the
 // X-Forwarded-For header is honoured and the real client IP is resolved.

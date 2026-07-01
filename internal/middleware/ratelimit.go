@@ -100,6 +100,13 @@ type KeyFunc func(r *http.Request) string
 //
 // When the rate limit is exceeded, returns HTTP 429 with a Retry-After header
 // and a JSON error body.
+//
+// A key function that returns "" for a request causes that request to bypass
+// rate-limiting entirely (no bucket is consumed). This is intended for key
+// functions that legitimately cannot extract a key (so blocking would be
+// wrong); a key function that wants empty-key requests limited must return a
+// non-empty sentinel — e.g. loginUsernameKey maps an empty username to a shared
+// bucket (m35).
 func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

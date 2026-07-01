@@ -648,11 +648,25 @@ func trustedProxy(ip netip.Addr, prefixes []netip.Prefix) bool {
 	return false
 }
 
+// emptyUsernameRateLimitKey is the shared rate-limit bucket for login attempts
+// that carry no username. It is not a valid username (ValidateUsername requires
+// ≥3 chars starting with a letter), so it cannot collide with a real account.
+const emptyUsernameRateLimitKey = "<empty-username>"
+
 // loginUsernameKey returns the attempted login username (lowercased and
 // trimmed) so the per-username rate-limit bucket is shared across casing
 // variants and surrounding whitespace.
+//
+// An empty username maps to a dedicated sentinel bucket (m35) so that requests
+// with no username do not bypass the per-username rate limiter —
+// RateLimiter.Limit skips enforcement when the key is "". The sentinel is not a
+// valid username, so it cannot collide with a real account's bucket.
 func loginUsernameKey(r *http.Request) string {
-	return strings.ToLower(strings.TrimSpace(r.FormValue("username")))
+	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
+	if username == "" {
+		return emptyUsernameRateLimitKey
+	}
+	return username
 }
 
 // runUnlock implements the `gozone unlock` emergency CLI.
