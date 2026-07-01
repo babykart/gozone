@@ -327,34 +327,45 @@ func parseAttemptedAt(s string) (time.Time, error) {
 // that has already elapsed is reset by every new failure so a sliding-window
 // attack keeps extending the lockout. Returns the new failed_login_attempts
 // count after the increment.
+//
+// The increment and the conditional lockout are applied as a single atomic
+// UPDATE inside a transaction (REVIEW.md m19). This removes the previous
+// read-modify-write race where two concurrent failures could each observe a
+// stale count and disagree on whether the lockout threshold was reached; the
+// SELECT reading the new count back runs in the same transaction, under the
+// row lock held by the UPDATE, so it always sees the value this call wrote.
 func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold int, lockFor time.Duration) (int, error) {
 	if threshold <= 0 {
 		return 0, nil
 	}
-	res, err := db.ExecContext(ctx,
-		"UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
-		userID,
-	)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := res.RowsAffected(); err != nil {
+	defer tx.Rollback() // no-op after Commit
+
+	lockedUntil := time.Now().UTC().Add(lockFor)
+	// Atomic increment + conditional lock: the CASE references the pre-update
+	// failed_login_attempts, so "failed_login_attempts + 1" is the new count.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET failed_login_attempts = failed_login_attempts + 1,
+		    locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END
+		WHERE id = ?`,
+		threshold, lockedUntil, userID,
+	); err != nil {
 		return 0, err
 	}
+
 	var count int
-	if err := db.QueryRowContext(ctx,
+	if err := tx.QueryRowContext(ctx,
 		"SELECT failed_login_attempts FROM users WHERE id = ?", userID,
 	).Scan(&count); err != nil {
 		return 0, err
 	}
-	if count >= threshold {
-		lockedUntil := time.Now().UTC().Add(lockFor)
-		if _, err := db.ExecContext(ctx,
-			"UPDATE users SET locked_until = ? WHERE id = ?",
-			lockedUntil, userID,
-		); err != nil {
-			return count, err
-		}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return count, nil
 }

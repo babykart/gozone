@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,6 +222,58 @@ func TestIncrementFailedLogins_DisabledWhenZeroThreshold(t *testing.T) {
 	}
 	if locked {
 		t.Error("expected no lockout when threshold is 0")
+	}
+}
+
+// TestIncrementFailedLogins_ConcurrentNoLostIncrements is the regression test
+// for m19: under a concurrent burst of failed logins the counter must never
+// lose or duplicate an increment, and the lockout must take effect once the
+// threshold is crossed. The previous non-transactional read-modify-write could
+// race and observe stale counts. (SQLite serializes writers via MaxOpenConns=1,
+// so this mainly guards against deadlocks and confirms the final count is
+// exact; the race is most acute on MySQL/PostgreSQL where writers truly
+// overlap.)
+func TestIncrementFailedLogins_ConcurrentNoLostIncrements(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "bob")
+
+	const goroutines = 50
+	const threshold = 10
+
+	var wg sync.WaitGroup
+	var failures atomic.Int64
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := db.IncrementFailedLogins(ctx, uid, threshold, 15*time.Minute); err != nil {
+				failures.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := failures.Load(); n != 0 {
+		t.Fatalf("%d concurrent IncrementFailedLogins calls returned an error", n)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"SELECT failed_login_attempts FROM users WHERE id = ?", uid,
+	).Scan(&count); err != nil {
+		t.Fatalf("select counter: %v", err)
+	}
+	if count != goroutines {
+		t.Errorf("concurrent increments lost or duplicated: counter = %d, want %d", count, goroutines)
+	}
+
+	locked, _, err := db.UserLockStatus(ctx, uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Error("expected user to be locked after crossing the threshold under concurrency")
 	}
 }
 
