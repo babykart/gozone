@@ -149,6 +149,17 @@ function saveRecordRow(btn) {
                 throw new Error('HTTP ' + resp.status + (text ? ': ' + text : ''));
             });
         }
+        // Session expired: the auth middleware 303-redirects to /login, which
+        // fetch follows transparently, so resp is now the HTML login page (200)
+        // and resp.json() would throw an opaque "Unexpected token <". Detect the
+        // redirect and surface a clear, actionable message instead.
+        if (resp.redirected) {
+            throw new Error('Session expired. Please reload the page to log in again.');
+        }
+        var ct = resp.headers.get('Content-Type') || '';
+        if (ct.indexOf('application/json') === -1) {
+            throw new Error('Unexpected response from server (not JSON).');
+        }
         return resp.json();
     })
     .then(function(data) {
