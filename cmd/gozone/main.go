@@ -87,9 +87,10 @@ func run(args []string) error {
 	// Periodically purge expired JWT revocation entries so the revoked_tokens
 	// table does not grow without bound. Runs once at startup, then hourly until
 	// shutdown.
-	defer startPeriodicJob(context.Background(), "cleanup revoked tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
+	stopCleanupRevokedTokens := startPeriodicJob(context.Background(), "cleanup revoked tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
 		return db.CleanupRevokedTokens(ctx)
-	})()
+	})
+	defer stopCleanupRevokedTokens()
 
 	// Periodically purge old activity logs based on the configured retention
 	// period (default 90 days). Runs once at startup, then daily. A retention
