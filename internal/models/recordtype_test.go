@@ -83,6 +83,11 @@ func TestJoinPriority(t *testing.T) {
 		{"MX from form content", "MX", 10, "mail.example.com.", "10 mail.example.com."},
 		{"MX priority zero", "MX", 0, "mail.example.com.", "0 mail.example.com."},
 		{"MX strips embedded priority", "MX", 20, "10 mail.example.com.", "20 mail.example.com."},
+		{"MX strips max priority (65535)", "MX", 20, "65535 mail.example.com.", "20 mail.example.com."},
+		// m52: a negative or out-of-range leading token is NOT a valid priority
+		// and must not be stripped — it is preserved as content.
+		{"MX keeps negative prefix (m52)", "MX", 20, "-5 mail.example.com.", "20 -5 mail.example.com."},
+		{"MX keeps out-of-range prefix (m52)", "MX", 20, "99999 mail.example.com.", "20 99999 mail.example.com."},
 		{"SRV from form content (3 fields)", "SRV", 10, "5 5060 srv.example.com.", "10 5 5060 srv.example.com."},
 		{"SRV strips embedded priority (4 fields)", "SRV", 20, "10 5 5060 srv.example.com.", "20 5 5060 srv.example.com."},
 		{"non-priority type unchanged", "A", 0, "192.0.2.1", "192.0.2.1"},

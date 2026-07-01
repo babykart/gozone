@@ -157,7 +157,11 @@ func JoinPriority(recordType string, priority int, content string) string {
 	}
 	tokens := strings.Fields(content)
 	if len(tokens) >= spec.wireFields {
-		if _, err := strconv.Atoi(tokens[0]); err == nil {
+		// Only strip an already-embedded priority when the leading token is a
+		// valid 16-bit unsigned integer (0-65535). strconv.Atoi would also
+		// accept negative or out-of-range values like "-5" (m52), stripping a
+		// token that was never a real priority.
+		if _, err := strconv.ParseUint(tokens[0], 10, 16); err == nil {
 			content = strings.Join(tokens[1:], " ")
 		}
 	}
