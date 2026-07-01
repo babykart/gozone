@@ -211,3 +211,46 @@ func TestClientIPMiddleware_NoTrustedProxiesUsesRemoteAddr(t *testing.T) {
 		t.Errorf("no trusted proxies: expected RemoteAddr %q, got %q", "198.51.100.7", resolved)
 	}
 }
+
+// TestRelativeName is the unit test for the relativeName template func (m2):
+// it covers the apex, sub-domains, case-insensitivity, the dot-boundary guard,
+// and the missing-trailing-dot edge case that previously returned "" for apex.
+func TestRelativeName(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordName string
+		zoneName   string
+		want       string
+	}{
+		// Apex with trailing dot on both sides.
+		{"apex both dotted", "example.com.", "example.com.", "@"},
+		// Apex without trailing dot on zone name — the main m2 bug: returned "" before.
+		{"apex zone undotted", "example.com.", "example.com", "@"},
+		// Sub-domain, single label.
+		{"single label", "www.example.com.", "example.com.", "www"},
+		// Sub-domain, single label, zone undotted.
+		{"single label zone undotted", "www.example.com.", "example.com", "www"},
+		// Sub-domain, multiple labels.
+		{"multi label", "a.b.example.com.", "example.com.", "a.b"},
+		// Case-insensitivity (DNS names are).
+		{"uppercase record", "WWW.Example.COM.", "example.com.", "WWW"},
+		{"uppercase zone", "www.example.com.", "EXAMPLE.COM", "www"},
+		{"mixed case both", "MaIl.ExAmPlE.cOm.", "ExAmPle.Com", "MaIl"},
+		// Dot-boundary guard: "notexample.com." is NOT a subdomain of "example.com.".
+		{"prefix without dot boundary", "notexample.com.", "example.com.", "notexample.com."},
+		// Record outside the zone entirely.
+		{"other zone", "www.other.com.", "example.com.", "www.other.com."},
+		// Root-level zone (".") edge case.
+		{"root zone apex", ".", ".", "@"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := relativeName(tt.recordName, tt.zoneName)
+			if got != tt.want {
+				t.Errorf("relativeName(%q, %q) = %q, want %q",
+					tt.recordName, tt.zoneName, got, tt.want)
+			}
+		})
+	}
+}

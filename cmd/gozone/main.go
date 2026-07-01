@@ -474,17 +474,33 @@ func fileServer(r chi.Router, path string, root http.FileSystem) {
 // relativeName strips the zone suffix from a record name. The apex (zone name
 // itself) is displayed as "@". For example, with zone "example.com.", the
 // record "www.example.com." becomes "www" and "example.com." becomes "@".
+//
+// The comparison is case-insensitive (DNS names are), and the zone name is
+// normalized to end with a dot before matching so callers may pass either
+// "example.com" or "example.com.".
 func relativeName(recordName, zoneName string) string {
-	if recordName == zoneName {
+	// Normalize the zone name: lowercase, ensure trailing dot.
+	zone := strings.ToLower(zoneName)
+	if !strings.HasSuffix(zone, ".") {
+		zone += "."
+	}
+
+	record := strings.ToLower(recordName)
+
+	// Apex: record name matches the zone name exactly.
+	if record == zone {
 		return "@"
 	}
-	if !strings.HasSuffix(zoneName, ".") {
-		zoneName += "."
-	}
-	if strings.HasSuffix(recordName, zoneName) {
-		rel := strings.TrimSuffix(recordName, zoneName)
+
+	// Sub-domain: record name ends with ".<zone>". The leading dot prevents
+	// "notexample.com." from matching zone "example.com.".
+	dotZone := "." + zone
+	if len(record) > len(dotZone) && strings.HasSuffix(record, dotZone) {
+		rel := recordName[:len(recordName)-len(dotZone)]
 		return strings.TrimSuffix(rel, ".")
 	}
+
+	// Record is not in this zone; return as-is.
 	return recordName
 }
 
