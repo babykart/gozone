@@ -403,7 +403,7 @@ func run(args []string) error {
 	r.Get("/health/live", h.HealthLive)
 
 	// Start server
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 
 	// Graceful shutdown
 	srv := &http.Server{

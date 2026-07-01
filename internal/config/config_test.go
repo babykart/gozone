@@ -563,6 +563,26 @@ func TestLoad_FieldValidation_AcceptsValid(t *testing.T) {
 		}
 	})
 
+	t.Run("ipv6 host bracketed any normalized", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"[::]\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.Host != "::" {
+			t.Errorf("expected bracketed [::] normalized to \"::\", got %q", cfg.Server.Host)
+		}
+	})
+
+	t.Run("ipv6 host bracketed loopback normalized", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"[::1]\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.Host != "::1" {
+			t.Errorf("expected bracketed [::1] normalized to \"::1\", got %q", cfg.Server.Host)
+		}
+	})
+
 	t.Run("https api_url", func(t *testing.T) {
 		cfg, err := Load(writeTempConfig(t, "powerdns:\n  api_url: \"https://pdns.internal:443\"\n"))
 		if err != nil {

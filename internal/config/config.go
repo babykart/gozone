@@ -337,11 +337,19 @@ func (cfg *Config) validate() error {
 
 	// server.host is a bind address: numeric IPs only (a hostname would need
 	// resolution and is almost always a mistake). Empty is allowed — Go's
-	// net/http then listens on all interfaces.
+	// net/http then listens on all interfaces. IPv6 may be written with or
+	// without surrounding brackets (e.g. "[::]" or "::"); brackets are stripped
+	// so the stored value is a bare address that net.JoinHostPort brackets
+	// correctly when building the listen address.
 	if cfg.Server.Host != "" {
-		if _, err := netip.ParseAddr(cfg.Server.Host); err != nil {
+		host := cfg.Server.Host
+		if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+			host = host[1 : len(host)-1]
+		}
+		if _, err := netip.ParseAddr(host); err != nil {
 			return fmt.Errorf("invalid server.host %q: must be an IP address (got %v)", cfg.Server.Host, err)
 		}
+		cfg.Server.Host = host
 	}
 
 	// powerdns.api_url must be a usable base URL for the PowerDNS API.
