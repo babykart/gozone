@@ -62,6 +62,32 @@ func TestNewClient_Transport(t *testing.T) {
 	if tr.DisableKeepAlives {
 		t.Error("DisableKeepAlives: got true, want false")
 	}
+	// m43: per-phase transport timeouts must be set (not just the global
+	// http.Client.Timeout) so a stuck phase fails fast.
+	if tr.DialContext == nil {
+		t.Error("DialContext: nil, expected a net.Dialer with a dial timeout (m43)")
+	}
+	if tr.TLSHandshakeTimeout != pdnsTLSHandshakeTimeout {
+		t.Errorf("TLSHandshakeTimeout: got %v, want %v (m43)", tr.TLSHandshakeTimeout, pdnsTLSHandshakeTimeout)
+	}
+	if tr.ResponseHeaderTimeout != pdnsResponseHeaderTimeout {
+		t.Errorf("ResponseHeaderTimeout: got %v, want %v (m43)", tr.ResponseHeaderTimeout, pdnsResponseHeaderTimeout)
+	}
+	if tr.ExpectContinueTimeout != pdnsExpectContinueTimeout {
+		t.Errorf("ExpectContinueTimeout: got %v, want %v (m43)", tr.ExpectContinueTimeout, pdnsExpectContinueTimeout)
+	}
+	// Each phase timeout must be strictly less than the overall client timeout
+	// (30s) so it is the binding constraint for a stuck phase rather than being
+	// masked by the global budget.
+	if pdnsDialTimeout >= c.http.Timeout {
+		t.Errorf("pdnsDialTimeout %v must be < client timeout %v", pdnsDialTimeout, c.http.Timeout)
+	}
+	if pdnsTLSHandshakeTimeout >= c.http.Timeout {
+		t.Errorf("pdnsTLSHandshakeTimeout %v must be < client timeout %v", pdnsTLSHandshakeTimeout, c.http.Timeout)
+	}
+	if pdnsResponseHeaderTimeout >= c.http.Timeout {
+		t.Errorf("pdnsResponseHeaderTimeout %v must be < client timeout %v", pdnsResponseHeaderTimeout, c.http.Timeout)
+	}
 	if c.http.Timeout != 30*time.Second {
 		t.Errorf("Timeout: got %v, want 30s", c.http.Timeout)
 	}

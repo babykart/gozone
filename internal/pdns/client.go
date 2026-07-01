@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,21 +31,53 @@ type Client struct {
 	http     *http.Client
 }
 
+// Transport-level timeouts for the PowerDNS HTTP client (m43). Each covers a
+// single connection phase and is shorter than the 30s http.Client.Timeout, so a
+// stuck phase (TCP dial, TLS handshake, slow response headers) fails fast with a
+// phase-specific error instead of consuming the whole request budget.
+const (
+	// pdnsDialTimeout caps the TCP connect to the PowerDNS API (usually local or
+	// same-network, so well under a second; 10s is a generous ceiling).
+	pdnsDialTimeout = 10 * time.Second
+	// pdnsTLSHandshakeTimeout caps the TLS handshake.
+	pdnsTLSHandshakeTimeout = 10 * time.Second
+	// pdnsResponseHeaderTimeout caps the wait for response headers after the
+	// request is sent — the main defence against a server that accepts the
+	// connection but then stalls (slowloris-style header attack).
+	pdnsResponseHeaderTimeout = 15 * time.Second
+	// pdnsExpectContinueTimeout caps the wait for a 100-Continue response before
+	// sending a request body. Standard value; Go uses 1s by default.
+	pdnsExpectContinueTimeout = 1 * time.Second
+	// pdnsDialerKeepAlive is the TCP keepalive probe interval for pooled
+	// connections (enables dead-connection detection).
+	pdnsDialerKeepAlive = 30 * time.Second
+)
+
 // NewClient creates a new PowerDNS API client from configuration.
 //
-// It normalizes the API URL to ensure it ends with "/api/v1" and configures
-// an HTTP client with a 30-second request timeout.
+// It normalizes the API URL to ensure it ends with "/api/v1" and configures an
+// HTTP client with a 30-second overall request timeout plus per-phase transport
+// timeouts (dial, TLS handshake, response headers) so a stuck connection phase
+// fails fast rather than burning the entire budget (m43).
 func NewClient(cfg *config.PowerDNSConfig) *Client {
 	baseURL := strings.TrimRight(cfg.APIURL, "/")
 	if !strings.HasSuffix(baseURL, "/api/v1") {
 		baseURL += "/api/v1"
 	}
 
+	dialer := &net.Dialer{
+		Timeout:   pdnsDialTimeout,
+		KeepAlive: pdnsDialerKeepAlive,
+	}
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-		DisableKeepAlives:   false,
+		DialContext:           dialer.DialContext,
+		TLSHandshakeTimeout:   pdnsTLSHandshakeTimeout,
+		ResponseHeaderTimeout: pdnsResponseHeaderTimeout,
+		ExpectContinueTimeout: pdnsExpectContinueTimeout,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		DisableKeepAlives:     false,
 	}
 
 	return &Client{
