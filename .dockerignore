@@ -1,0 +1,47 @@
+# VCS
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Local build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Local database / runtime data (may contain user hashes)
+data/
+
+# Documentation not needed in the image
+AGENTS.md
+CHANGELOG.md
+CONTRIBUTING.md
+README.md
+REVIEW.md
+ROADMAP.md
+docs/
+
+# Docker / CI tooling (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+Makefile
+justfile
+cliff.toml
+.editorconfig
+
+# Test artifacts
+*_test.go
+**/*_test.go
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
