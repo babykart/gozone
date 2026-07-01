@@ -8,6 +8,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // CreateCryptokey creates a new DNSSEC key for a zone.
@@ -24,6 +25,10 @@ func (h *Handler) CreateCryptokey(w http.ResponseWriter, r *http.Request) {
 	algorithm := r.FormValue("algorithm")
 	if algorithm == "" {
 		algorithm = "ecdsa256"
+	}
+	if err := validators.ValidateDNSSECAlgorithm(algorithm); err != nil {
+		h.renderError(w, r, "Invalid algorithm: "+err.Error())
+		return
 	}
 
 	key, err := h.PDNS.CreateCryptokey(r.Context(), zoneID, keyType, true, algorithm)

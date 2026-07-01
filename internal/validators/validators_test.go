@@ -405,3 +405,75 @@ func TestValidateRecordContent_UnderscoreTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMetadataKind(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"SOA-EDIT", "SOA-EDIT", false},
+		{"ALLOW-AXFR-FROM", "ALLOW-AXFR-FROM", false},
+		{"NSEC3PARAM", "NSEC3PARAM", false},
+		{"empty", "", true},
+		{"lowercase not accepted", "soa-edit", true},
+		{"unsupported", "EVIL-KIND", true},
+		{"random", "FOO", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateMetadataKind(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateMetadataKind(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateDNSSECAlgorithm(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"ecdsa256", "ecdsa256", false},
+		{"rsasha512", "rsasha512", false},
+		{"ed25519", "ed25519", false},
+		{"uppercase accepted", "ECDSA256", false},
+		{"empty", "", true},
+		{"unsupported", "rsa1024", true},
+		{"random", "not-an-algo", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDNSSECAlgorithm(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSSECAlgorithm(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateTSIGAlgorithm(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"hmac-sha256", "hmac-sha256", false},
+		{"hmac-md5", "hmac-md5", false},
+		{"hmac-sha512", "hmac-sha512", false},
+		{"uppercase accepted", "HMAC-SHA512", false},
+		{"empty", "", true},
+		{"unsupported", "hmac-sha9999", true},
+		{"random", "plaintext", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTSIGAlgorithm(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateTSIGAlgorithm(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}

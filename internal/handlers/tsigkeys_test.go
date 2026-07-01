@@ -185,6 +185,28 @@ func TestCreateTSIGKey_EmptyAlgorithm(t *testing.T) {
 	}
 }
 
+// TestCreateTSIGKey_InvalidAlgorithm is the m33 regression test: an
+// unsupported TSIG algorithm must be rejected before reaching PowerDNS.
+func TestCreateTSIGKey_InvalidAlgorithm(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/create", strings.NewReader("name=test-key.&algorithm=plaintext&key=test"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateTSIGKey(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid algorithm") {
+		t.Error("expected 'Invalid algorithm' in error page")
+	}
+}
+
 func TestCreateTSIGKey_EmptyKey(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -307,6 +329,29 @@ func TestUpdateTSIGKey_EmptyAlgorithm(t *testing.T) {
 
 	if !strings.Contains(w.Body.String(), "Algorithm is required") {
 		t.Error("expected 'Algorithm is required' in error page")
+	}
+}
+
+// TestUpdateTSIGKey_InvalidAlgorithm is the m33 regression test for the update
+// path: an unsupported TSIG algorithm must be rejected before reaching PowerDNS.
+func TestUpdateTSIGKey_InvalidAlgorithm(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/my-key./update", strings.NewReader("algorithm=plaintext&key=test"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("key_id", "my-key.")
+	r = r.WithContext(ctx)
+	h.UpdateTSIGKey(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid algorithm") {
+		t.Error("expected 'Invalid algorithm' in error page")
 	}
 }
 

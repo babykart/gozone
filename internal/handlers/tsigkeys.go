@@ -10,6 +10,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // ListTSIGKeys renders the TSIG keys listing page (GET /tsigkeys).
@@ -95,6 +96,10 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Algorithm is required")
 		return
 	}
+	if err := validators.ValidateTSIGAlgorithm(algorithm); err != nil {
+		h.renderError(w, r, "Invalid algorithm: "+err.Error())
+		return
+	}
 	if key == "" {
 		var err error
 		key, err = generateTSIGSecret()
@@ -155,6 +160,10 @@ func (h *Handler) UpdateTSIGKey(w http.ResponseWriter, r *http.Request) {
 
 	if algorithm == "" {
 		h.renderError(w, r, "Algorithm is required")
+		return
+	}
+	if err := validators.ValidateTSIGAlgorithm(algorithm); err != nil {
+		h.renderError(w, r, "Invalid algorithm: "+err.Error())
 		return
 	}
 	if key == "" {

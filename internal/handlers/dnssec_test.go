@@ -192,6 +192,30 @@ func TestCreateCryptokey_InvalidType(t *testing.T) {
 	}
 }
 
+// TestCreateCryptokey_InvalidAlgorithm is the m33 regression test: an
+// unsupported DNSSEC algorithm must be rejected before reaching PowerDNS.
+func TestCreateCryptokey_InvalidAlgorithm(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	body := "keytype=ksk&algorithm=rsa1024"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./cryptokeys/create", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.CreateCryptokey(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid algorithm") {
+		t.Errorf("expected 'Invalid algorithm' in error page, got %s", w.Body.String())
+	}
+}
+
 func TestViewZone_IncludesCryptokeys(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()

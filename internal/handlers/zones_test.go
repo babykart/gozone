@@ -539,6 +539,29 @@ func TestCreateMetadata_EmptyKind(t *testing.T) {
 	}
 }
 
+// TestCreateMetadata_InvalidKind is the m33 regression test: a metadata kind
+// not on the PowerDNS whitelist must be rejected before reaching PowerDNS.
+func TestCreateMetadata_InvalidKind(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/metadata/create", strings.NewReader("kind=EVIL-KIND&values=test"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateMetadata(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid metadata kind") {
+		t.Error("expected 'Invalid metadata kind' in error page")
+	}
+}
+
 func TestCreateMetadata_EmptyValues(t *testing.T) {
 	h := newTestHandler(t)
 

@@ -154,6 +154,92 @@ func ValidateRecordType(recordType string) error {
 	return nil
 }
 
+// metadataKindWhitelist is the set of PowerDNS zone metadata kinds exposed in
+// the UI. Kept in sync with GetMetadataKinds() in the handlers package.
+var metadataKindWhitelist = map[string]bool{
+	"ALLOW-AXFR-FROM":           true,
+	"ALLOW-DNSUPDATE-FROM":      true,
+	"ALSO-NOTIFY":               true,
+	"AXFR-MASTER-TSIG":          true,
+	"AXFR-SOURCE":               true,
+	"FORWARD-DNSSEC":            true,
+	"GSS-ACCEPTOR-PRINCIPAL":    true,
+	"GSS-ALLOW-AXFR-PRINCIPALS": true,
+	"IXFR":                      true,
+	"LUA-AXFR-SCRIPT":           true,
+	"NOTIFY-DNSUPDATE":          true,
+	"NSEC3NARROW":               true,
+	"NSEC3PARAM":                true,
+	"PRESIGNED":                 true,
+	"PUBLISH-CDNSKEY":           true,
+	"PUBLISH-CDS":               true,
+	"SOA-EDIT":                  true,
+	"SOA-EDIT-API":              true,
+	"SOA-EDIT-DNSUPDATE":        true,
+	"TSIG-ALLOW-AXFR":           true,
+	"TSIG-ALLOW-DNSUPDATE":      true,
+}
+
+// ValidateMetadataKind checks that the given PowerDNS zone metadata kind is
+// supported. The whitelist is kept in sync with GetMetadataKinds() in the
+// handlers package. Comparison is exact (canonical uppercase identifiers).
+func ValidateMetadataKind(kind string) error {
+	if kind == "" {
+		return fmt.Errorf("metadata kind must not be empty")
+	}
+	if !metadataKindWhitelist[kind] {
+		return fmt.Errorf("unsupported metadata kind %q", kind)
+	}
+	return nil
+}
+
+// dnssecAlgorithmWhitelist is the set of DNSSEC algorithm names supported by
+// PowerDNS. Kept in sync with models.DNSSECAlgorithms().
+var dnssecAlgorithmWhitelist = map[string]bool{
+	"rsasha256": true,
+	"rsasha512": true,
+	"ecdsa256":  true,
+	"ecdsa384":  true,
+	"ed25519":   true,
+	"ed448":     true,
+}
+
+// ValidateDNSSECAlgorithm checks that the given DNSSEC algorithm name is
+// supported. Kept in sync with models.DNSSECAlgorithms(). Comparison is
+// case-insensitive (algorithm names are conventionally lowercase); the
+// canonical lowercase value is what reaches PowerDNS.
+func ValidateDNSSECAlgorithm(algorithm string) error {
+	if algorithm == "" {
+		return fmt.Errorf("algorithm must not be empty")
+	}
+	if !dnssecAlgorithmWhitelist[strings.ToLower(algorithm)] {
+		return fmt.Errorf("unsupported DNSSEC algorithm %q", algorithm)
+	}
+	return nil
+}
+
+// tsigAlgorithmWhitelist is the set of TSIG algorithms accepted by PowerDNS.
+// Kept in sync with tsigAlgorithms() in the handlers package.
+var tsigAlgorithmWhitelist = map[string]bool{
+	"hmac-md5":    true,
+	"hmac-sha1":   true,
+	"hmac-sha256": true,
+	"hmac-sha512": true,
+}
+
+// ValidateTSIGAlgorithm checks that the given TSIG algorithm is supported.
+// Kept in sync with tsigAlgorithms() in the handlers package. Comparison is
+// case-insensitive (algorithm names are conventionally lowercase).
+func ValidateTSIGAlgorithm(algorithm string) error {
+	if algorithm == "" {
+		return fmt.Errorf("algorithm must not be empty")
+	}
+	if !tsigAlgorithmWhitelist[strings.ToLower(algorithm)] {
+		return fmt.Errorf("unsupported TSIG algorithm %q", algorithm)
+	}
+	return nil
+}
+
 // usernameRegex requires 3 to 32 characters: alphanumeric, underscores,
 // and hyphens. Must start with a letter.
 var usernameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]{2,31}$`)

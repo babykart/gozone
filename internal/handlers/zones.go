@@ -602,6 +602,10 @@ func (h *Handler) CreateMetadata(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Metadata kind is required")
 		return
 	}
+	if err := validators.ValidateMetadataKind(kind); err != nil {
+		h.renderError(w, r, "Invalid metadata kind: "+err.Error())
+		return
+	}
 	if valuesRaw == "" {
 		h.renderError(w, r, "At least one value is required")
 		return
