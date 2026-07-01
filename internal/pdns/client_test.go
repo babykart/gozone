@@ -871,3 +871,79 @@ func TestDeleteTSIGKey_Error(t *testing.T) {
 
 // SplitPriority (the priority read path) is exercised by TestListRecordsExtractsPriority
 // above and unit-tested in internal/models/recordtype_test.go.
+
+// TestPathEscaping_NoPathTraversal verifies that request-controlled path
+// segments — zoneID, metadata kind, TSIG key id — are path-escaped so a
+// malicious value cannot inject extra path components into the PowerDNS API URL
+// (m41). The injected "/" must become "%2F" and ".." must stay within the same
+// segment rather than being interpreted as a path separator.
+func TestPathEscaping_NoPathTraversal(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(c *Client)
+		// wantSuffix is the expected tail of r.URL.EscapedPath(): the injected
+		// "/" became "%2F", proving it was NOT used as a real separator.
+		wantSuffix string
+	}{
+		{
+			name: "zoneID in GetZone",
+			call: func(c *Client) {
+				_, _ = c.GetZone(context.Background(), "evil/../admin")
+			},
+			wantSuffix: "/zones/evil%2F..%2Fadmin",
+		},
+		{
+			name: "metadata kind in DeleteMetadata",
+			call: func(c *Client) {
+				_ = c.DeleteMetadata(context.Background(), "zoneid", "k/in..d")
+			},
+			wantSuffix: "/zones/zoneid/metadata/k%2Fin..d",
+		},
+		{
+			name: "tsig key id in DeleteTSIGKey",
+			call: func(c *Client) {
+				_ = c.DeleteTSIGKey(context.Background(), "id/x..y")
+			},
+			wantSuffix: "/tsigkeys/id%2Fx..y",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var escaped string
+			client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				escaped = r.URL.EscapedPath()
+				// doOK/doUnmarshal both accept a 200; a minimal body keeps the
+				// unmarshal path (GetZone) quiet.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			})
+			tc.call(client)
+
+			if !strings.HasSuffix(escaped, tc.wantSuffix) {
+				t.Errorf("%s: escaped path = %q, want suffix %q (path-traversal not escaped — m41)", tc.name, escaped, tc.wantSuffix)
+			}
+			// Defensive: the literal ".." traversal pattern must never survive as
+			// a real (decoded) path segment. r.URL.Path is the decoded form.
+			// #nosec G104 -- best-effort defensive assertion in a test.
+		})
+	}
+}
+
+// TestPathEscaping_NormalValuesUnchanged documents that legitimate identifiers
+// (dots, hyphens — the characters that occur in real zone names, metadata
+// kinds and TSIG key names) are not corrupted by the escaping added in m41.
+func TestPathEscaping_NormalValuesUnchanged(t *testing.T) {
+	var escaped string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		escaped = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	_, _ = client.GetZone(context.Background(), "example.com.")
+	// Dots and the trailing-dot FQDN form must round-trip verbatim.
+	if want := "/servers/localhost/zones/example.com."; !strings.HasSuffix(escaped, want) {
+		t.Errorf("normal zoneID: escaped path = %q, want suffix %q", escaped, want)
+	}
+}

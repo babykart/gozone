@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,6 +126,22 @@ func doUnmarshal[T any](c *Client, ctx context.Context, method, path string, bod
 	return zero, nil
 }
 
+// serverPath returns the server-scoped URL path "/servers/<serverID>" with the
+// (config-supplied) serverID path-escaped so it cannot inject extra path
+// components.
+func (c *Client) serverPath() string {
+	return "/servers/" + url.PathEscape(c.serverID)
+}
+
+// zonePath returns the zone-scoped URL path prefix
+// "/servers/<serverID>/zones/<zoneID>" with both segments path-escaped so a
+// request-controlled zoneID (or a configured serverID) cannot inject extra path
+// components. This closes the path-traversal surface flagged in m41 —
+// identifiers are never interpolated raw into request URLs.
+func (c *Client) zonePath(zoneID string) string {
+	return c.serverPath() + "/zones/" + url.PathEscape(zoneID)
+}
+
 // GetServers returns the list of PowerDNS servers.
 func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
 	return doUnmarshal[[]models.ServerInfo](c, ctx, "GET", "/servers", nil, "servers")
@@ -132,7 +149,7 @@ func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
 
 // GetServer returns a single server's info.
 func (c *Client) GetServer(ctx context.Context) (*models.ServerInfo, error) {
-	server, err := doUnmarshal[models.ServerInfo](c, ctx, "GET", "/servers/"+c.serverID, nil, "server")
+	server, err := doUnmarshal[models.ServerInfo](c, ctx, "GET", c.serverPath(), nil, "server")
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +165,7 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 
 // GetStatistics returns global PowerDNS statistics.
 func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, error) {
-	return doUnmarshal[[]models.StatisticItem](c, ctx, "GET", "/servers/"+c.serverID+"/statistics", nil, "statistics")
+	return doUnmarshal[[]models.StatisticItem](c, ctx, "GET", c.serverPath()+"/statistics", nil, "statistics")
 }
 
 // ListZones returns all zones without their rrsets.
@@ -156,7 +173,7 @@ func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, err
 // ?rrsets=false prevents PowerDNS from including record sets in the response,
 // keeping the payload small regardless of zone size.
 func (c *Client) ListZones(ctx context.Context) ([]models.Zone, error) {
-	return doUnmarshal[[]models.Zone](c, ctx, "GET", "/servers/"+c.serverID+"/zones?rrsets=false", nil, "zones")
+	return doUnmarshal[[]models.Zone](c, ctx, "GET", c.serverPath()+"/zones?rrsets=false", nil, "zones")
 }
 
 // ListZonesWithInfo returns all zones in a single request.
@@ -178,7 +195,7 @@ func (c *Client) ListZonesWithInfo(ctx context.Context) ([]models.ZoneWithInfo, 
 
 // GetZone returns a specific zone.
 func (c *Client) GetZone(ctx context.Context, zoneID string) (*models.Zone, error) {
-	zone, err := doUnmarshal[models.Zone](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID, nil, "zone")
+	zone, err := doUnmarshal[models.Zone](c, ctx, "GET", c.zonePath(zoneID), nil, "zone")
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +211,7 @@ func (c *Client) CreateZone(ctx context.Context, req models.ZoneCreateRequest) (
 		req.Nameservers = []string{}
 	}
 
-	zone, err := doUnmarshal[models.Zone](c, ctx, "POST", "/servers/"+c.serverID+"/zones", req, "zone")
+	zone, err := doUnmarshal[models.Zone](c, ctx, "POST", c.serverPath()+"/zones", req, "zone")
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +220,7 @@ func (c *Client) CreateZone(ctx context.Context, req models.ZoneCreateRequest) (
 
 // DeleteZone deletes a zone.
 func (c *Client) DeleteZone(ctx context.Context, zoneID string) error {
-	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID, nil)
+	return doOK(c, ctx, "DELETE", c.zonePath(zoneID), nil)
 }
 
 // ListRecords returns all records (RRSets) for a zone.
@@ -224,7 +241,7 @@ func (c *Client) ListRecord(ctx context.Context, zoneID, name, rrType string) ([
 }
 
 func (c *Client) listZoneRRSets(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error) {
-	path := "/servers/" + c.serverID + "/zones/" + zoneID
+	path := c.zonePath(zoneID)
 	if name != "" {
 		path += "?rrset_name=" + url.QueryEscape(name)
 		if rrType != "" {
@@ -287,22 +304,22 @@ func (c *Client) patchZone(ctx context.Context, zoneID string, rrsets []models.R
 	payload := map[string]interface{}{
 		"rrsets": rrsets,
 	}
-	return doOK(c, ctx, "PATCH", "/servers/"+c.serverID+"/zones/"+zoneID, payload)
+	return doOK(c, ctx, "PATCH", c.zonePath(zoneID), payload)
 }
 
 // RectifyZone triggers DNSSEC rectification for a zone.
 func (c *Client) RectifyZone(ctx context.Context, zoneID string) error {
-	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/rectify", nil)
+	return doOK(c, ctx, "PUT", c.zonePath(zoneID)+"/rectify", nil)
 }
 
 // NotifySlaves sends NOTIFY to slave servers for a zone.
 func (c *Client) NotifySlaves(ctx context.Context, zoneID string) error {
-	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/notify", nil)
+	return doOK(c, ctx, "PUT", c.zonePath(zoneID)+"/notify", nil)
 }
 
 // GetMetadata returns all zone metadata entries.
 func (c *Client) GetMetadata(ctx context.Context, zoneID string) ([]models.Metadata, error) {
-	return doUnmarshal[[]models.Metadata](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata", nil, "metadata")
+	return doUnmarshal[[]models.Metadata](c, ctx, "GET", c.zonePath(zoneID)+"/metadata", nil, "metadata")
 }
 
 // SetMetadata creates or replaces a zone metadata entry.
@@ -313,12 +330,12 @@ func (c *Client) SetMetadata(ctx context.Context, zoneID string, meta models.Met
 		meta.Metadata = []string{}
 	}
 	payload := map[string][]string{"metadata": meta.Metadata}
-	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+meta.Kind, payload)
+	return doOK(c, ctx, "PUT", c.zonePath(zoneID)+"/metadata/"+url.PathEscape(meta.Kind), payload)
 }
 
 // DeleteMetadata removes a zone metadata entry by kind.
 func (c *Client) DeleteMetadata(ctx context.Context, zoneID string, kind string) error {
-	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/zones/"+zoneID+"/metadata/"+kind, nil)
+	return doOK(c, ctx, "DELETE", c.zonePath(zoneID)+"/metadata/"+url.PathEscape(kind), nil)
 }
 
 // ServerID returns the configured server ID.
@@ -328,12 +345,12 @@ func (c *Client) ServerID() string {
 
 // ListTSIGKeys returns all TSIG keys for the server.
 func (c *Client) ListTSIGKeys(ctx context.Context) ([]models.TSIGKey, error) {
-	return doUnmarshal[[]models.TSIGKey](c, ctx, "GET", "/servers/"+c.serverID+"/tsigkeys", nil, "tsigkeys")
+	return doUnmarshal[[]models.TSIGKey](c, ctx, "GET", c.serverPath()+"/tsigkeys", nil, "tsigkeys")
 }
 
 // GetTSIGKey returns a single TSIG key.
 func (c *Client) GetTSIGKey(ctx context.Context, id string) (*models.TSIGKey, error) {
-	key, err := doUnmarshal[models.TSIGKey](c, ctx, "GET", "/servers/"+c.serverID+"/tsigkeys/"+id, nil, "tsigkey")
+	key, err := doUnmarshal[models.TSIGKey](c, ctx, "GET", c.serverPath()+"/tsigkeys/"+url.PathEscape(id), nil, "tsigkey")
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +359,7 @@ func (c *Client) GetTSIGKey(ctx context.Context, id string) (*models.TSIGKey, er
 
 // CreateTSIGKey creates a new TSIG key.
 func (c *Client) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models.TSIGKey, error) {
-	created, err := doUnmarshal[models.TSIGKey](c, ctx, "POST", "/servers/"+c.serverID+"/tsigkeys", key, "tsigkey")
+	created, err := doUnmarshal[models.TSIGKey](c, ctx, "POST", c.serverPath()+"/tsigkeys", key, "tsigkey")
 	if err != nil {
 		return nil, err
 	}
@@ -351,12 +368,12 @@ func (c *Client) CreateTSIGKey(ctx context.Context, key models.TSIGKey) (*models
 
 // UpdateTSIGKey updates an existing TSIG key.
 func (c *Client) UpdateTSIGKey(ctx context.Context, id string, key models.TSIGKey) error {
-	return doOK(c, ctx, "PUT", "/servers/"+c.serverID+"/tsigkeys/"+id, key)
+	return doOK(c, ctx, "PUT", c.serverPath()+"/tsigkeys/"+url.PathEscape(id), key)
 }
 
 // DeleteTSIGKey deletes a TSIG key.
 func (c *Client) DeleteTSIGKey(ctx context.Context, id string) error {
-	return doOK(c, ctx, "DELETE", "/servers/"+c.serverID+"/tsigkeys/"+id, nil)
+	return doOK(c, ctx, "DELETE", c.serverPath()+"/tsigkeys/"+url.PathEscape(id), nil)
 }
 
 // --- DNSSEC Cryptokeys ---
@@ -369,7 +386,7 @@ type createCryptoRequest struct {
 
 // ListCryptokeys returns all DNSSEC keys for a zone.
 func (c *Client) ListCryptokeys(ctx context.Context, zoneID string) ([]models.Cryptokey, error) {
-	return doUnmarshal[[]models.Cryptokey](c, ctx, "GET", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", nil, "cryptokeys")
+	return doUnmarshal[[]models.Cryptokey](c, ctx, "GET", c.zonePath(zoneID)+"/cryptokeys", nil, "cryptokeys")
 }
 
 // CreateCryptokey creates a new DNSSEC key for a zone.
@@ -379,7 +396,7 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 		Active:    active,
 		Algorithm: algorithm,
 	}
-	key, err := doUnmarshal[models.Cryptokey](c, ctx, "POST", "/servers/"+c.serverID+"/zones/"+zoneID+"/cryptokeys", req, "cryptokey")
+	key, err := doUnmarshal[models.Cryptokey](c, ctx, "POST", c.zonePath(zoneID)+"/cryptokeys", req, "cryptokey")
 	if err != nil {
 		return nil, err
 	}
@@ -389,12 +406,12 @@ func (c *Client) CreateCryptokey(ctx context.Context, zoneID string, keyType str
 // ToggleCryptokey activates or deactivates a DNSSEC key.
 func (c *Client) ToggleCryptokey(ctx context.Context, zoneID string, keyID int, active bool) error {
 	payload := map[string]interface{}{"active": active}
-	return doOK(c, ctx, "PUT", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), payload)
+	return doOK(c, ctx, "PUT", c.zonePath(zoneID)+"/cryptokeys/"+strconv.Itoa(keyID), payload)
 }
 
 // DeleteCryptokey deletes a DNSSEC key from a zone.
 func (c *Client) DeleteCryptokey(ctx context.Context, zoneID string, keyID int) error {
-	return doOK(c, ctx, "DELETE", fmt.Sprintf("/servers/%s/zones/%s/cryptokeys/%d", c.serverID, zoneID, keyID), nil)
+	return doOK(c, ctx, "DELETE", c.zonePath(zoneID)+"/cryptokeys/"+strconv.Itoa(keyID), nil)
 }
 
 // Close is a no-op for the bare client, which holds no resources.
