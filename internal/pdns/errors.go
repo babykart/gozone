@@ -1,6 +1,7 @@
 package pdns
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,24 +37,45 @@ var (
 // httpError builds a typed sentinel error from a non-2xx HTTP status code and
 // the response body. The returned error is always non-nil and unwraps to one
 // of the sentinel errors above.
+//
+// The user-facing message is extracted from PowerDNS's JSON error body
+// ({"error": "..."}) so callers never paste raw JSON into a response (m46). The
+// raw body is still consulted for substring-based detection (e.g. the
+// enable-lua-record-updates marker).
 func httpError(status int, body []byte) error {
-	msg := string(body)
-	if msg == "" {
-		msg = http.StatusText(status)
+	raw := string(body)
+	detail := extractErrorMessage(body)
+	if detail == "" {
+		detail = http.StatusText(status)
 	}
 
 	switch {
 	case status == http.StatusNotFound:
-		return fmt.Errorf("%w: status %d: %s", ErrNotFound, status, msg)
+		return fmt.Errorf("%w: status %d: %s", ErrNotFound, status, detail)
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
-		return fmt.Errorf("%w: status %d: %s", ErrValidation, status, msg)
+		return fmt.Errorf("%w: status %d: %s", ErrValidation, status, detail)
 	case status == http.StatusConflict:
-		return fmt.Errorf("%w: status %d: %s", ErrConflict, status, msg)
+		return fmt.Errorf("%w: status %d: %s", ErrConflict, status, detail)
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, status, msg)
-	case status == http.StatusInternalServerError && strings.Contains(strings.ToLower(msg), "enable-lua-record-updates"):
-		return fmt.Errorf("%w: status %d: %s", ErrLuaUpdatesDisabled, status, msg)
+		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, status, detail)
+	case status == http.StatusInternalServerError && strings.Contains(strings.ToLower(raw), "enable-lua-record-updates"):
+		return fmt.Errorf("%w: status %d: %s", ErrLuaUpdatesDisabled, status, detail)
 	default:
-		return fmt.Errorf("unexpected status %d: %s", status, msg)
+		return fmt.Errorf("unexpected status %d: %s", status, detail)
 	}
+}
+
+// extractErrorMessage parses a PowerDNS error body and returns the
+// human-readable message. PowerDNS emits errors as {"error": "..."}; that field
+// is returned verbatim (trimmed). If the body is not JSON or has no "error"
+// field, the return is empty so the caller falls back to the HTTP status text —
+// never the raw body — keeping user-facing error strings clean (m46).
+func extractErrorMessage(body []byte) string {
+	var v struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v.Error)
 }

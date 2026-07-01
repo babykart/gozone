@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
@@ -138,5 +139,60 @@ func TestClient_DeleteZone_TypedNotFound(t *testing.T) {
 	err := client.DeleteZone(context.Background(), "missing.")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestHTTPError_CleanMessage (m46) verifies that the raw PowerDNS JSON body is
+// not pasted into the error string: the human-readable "error" field is used
+// instead, and non-JSON bodies fall back to the HTTP status text rather than
+// being dumped verbatim.
+func TestHTTPError_CleanMessage(t *testing.T) {
+	// Standard JSON error: the "error" field is surfaced, not the JSON wrapper.
+	err := httpError(http.StatusUnprocessableEntity, []byte(`{"error":"Zone 'example.com.' already exists"}`))
+	got := err.Error()
+	if want := "Zone 'example.com.' already exists"; !strings.Contains(got, want) {
+		t.Errorf("expected extracted message %q in error, got %q", want, got)
+	}
+	if strings.Contains(got, `{"error":`) || strings.Contains(got, `"error":"`) {
+		t.Errorf("raw JSON leaked into error message (m46): %q", got)
+	}
+
+	// Non-JSON body (e.g. an HTML page from a misconfigured proxy): must fall
+	// back to the HTTP status text, never dump the body.
+	err = httpError(http.StatusBadGateway, []byte(`<html><body>502 Bad Gateway</body></html>`))
+	got = err.Error()
+	if strings.Contains(got, "<html>") {
+		t.Errorf("non-JSON body leaked into error message (m46): %q", got)
+	}
+	if want := http.StatusText(http.StatusBadGateway); !strings.Contains(got, want) {
+		t.Errorf("expected status text %q in error, got %q", want, got)
+	}
+
+	// Empty body: status text fallback (unchanged behaviour).
+	err = httpError(http.StatusNotFound, nil)
+	if want := http.StatusText(http.StatusNotFound); !strings.Contains(err.Error(), want) {
+		t.Errorf("expected status text %q for empty body, got %q", want, err.Error())
+	}
+}
+
+func TestExtractErrorMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"json error field", `{"error":"boom"}`, "boom"},
+		{"json error trimmed", `{"error":"  spaced  "}`, "spaced"},
+		{"json no error field", `{"other":"x"}`, ""},
+		{"invalid json", `not json`, ""},
+		{"empty", ``, ""},
+		{"html body", `<html>nope</html>`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractErrorMessage([]byte(tc.body)); got != tc.want {
+				t.Errorf("extractErrorMessage(%q) = %q, want %q", tc.body, got, tc.want)
+			}
+		})
 	}
 }
