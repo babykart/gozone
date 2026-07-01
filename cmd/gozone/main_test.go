@@ -104,7 +104,9 @@ func TestStartPeriodicJob(t *testing.T) {
 func TestAPIRateLimitRunsBeforeAuth(t *testing.T) {
 	const ipLimit = 3
 	ipLimiter := middleware.NewRateLimiter(ipLimit)
+	t.Cleanup(ipLimiter.Close)
 	keyLimiter := middleware.NewRateLimiter(100)
+	t.Cleanup(keyLimiter.Close)
 
 	var authCalls int32
 	authMiddleware := func(next http.Handler) http.Handler {

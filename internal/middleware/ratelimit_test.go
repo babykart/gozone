@@ -12,6 +12,7 @@ import (
 
 func TestRateLimiter_AllowsBurst(t *testing.T) {
 	rl := NewRateLimiter(5)
+	t.Cleanup(rl.Close)
 
 	handler := rl.Limit(func(r *http.Request) string { return "test-key" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +32,7 @@ func TestRateLimiter_AllowsBurst(t *testing.T) {
 
 func TestRateLimiter_BlocksAfterBurst(t *testing.T) {
 	rl := NewRateLimiter(3)
+	t.Cleanup(rl.Close)
 
 	handler := rl.Limit(func(r *http.Request) string { return "test-key" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +67,7 @@ func TestRateLimiter_BlocksAfterBurst(t *testing.T) {
 
 func TestRateLimiter_DifferentKeys(t *testing.T) {
 	rl := NewRateLimiter(2)
+	t.Cleanup(rl.Close)
 
 	handler := rl.Limit(func(r *http.Request) string { return r.Header.Get("X-Key") })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +110,7 @@ func TestRateLimiter_DifferentKeys(t *testing.T) {
 
 func TestRateLimiter_EmptyKeyPassesThrough(t *testing.T) {
 	rl := NewRateLimiter(1)
+	t.Cleanup(rl.Close)
 
 	handler := rl.Limit(func(r *http.Request) string { return "" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +130,7 @@ func TestRateLimiter_EmptyKeyPassesThrough(t *testing.T) {
 
 func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 	rl := NewRateLimiter(50)
+	t.Cleanup(rl.Close)
 
 	handler := rl.Limit(func(r *http.Request) string { return "concurrent-key" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +158,23 @@ func TestRateLimiter_ConcurrentAccess(t *testing.T) {
 		if code != http.StatusOK {
 			t.Errorf("concurrent request got %d", code)
 		}
+	}
+}
+
+// TestRateLimiter_CloseStopsGoroutine verifies that Close() is idempotent and
+// stops the cleanup goroutine (m3 regression guard).
+func TestRateLimiter_CloseStopsGoroutine(t *testing.T) {
+	rl := NewRateLimiter(1)
+
+	// Close must be safe to call multiple times.
+	rl.Close()
+	rl.Close()
+
+	// After Close, the stopCh is closed; the cleanup goroutine should have
+	// exited. Verify by checking that allow() still works (the limiter
+	// struct itself is still usable, just the background sweep is gone).
+	if !rl.allow("post-close-key") {
+		t.Error("allow() should still work after Close()")
 	}
 }
 

@@ -23,6 +23,8 @@ type RateLimiter struct {
 	rate     rate.Limit
 	burst    int
 	ttl      time.Duration
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 type rateLimiterEntry struct {
@@ -40,23 +42,38 @@ func NewRateLimiter(n int) *RateLimiter {
 		rate:     rate.Limit(n) / 60.0,
 		burst:    n,
 		ttl:      5 * time.Minute,
+		stopCh:   make(chan struct{}),
 	}
 	go rl.cleanup()
 	return rl
 }
 
-// cleanup periodically removes entries not seen for ttl duration.
+// Close stops the background cleanup goroutine. It is safe to call multiple
+// times (m3).
+func (rl *RateLimiter) Close() {
+	rl.stopOnce.Do(func() {
+		close(rl.stopCh)
+	})
+}
+
+// cleanup periodically removes entries not seen for ttl duration. It exits
+// when Close() is called or the stopCh is closed.
 func (rl *RateLimiter) cleanup() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		for key, entry := range rl.limiters {
-			if time.Since(entry.lastSeen) > rl.ttl {
-				delete(rl.limiters, key)
+	for {
+		select {
+		case <-ticker.C:
+			rl.mu.Lock()
+			for key, entry := range rl.limiters {
+				if time.Since(entry.lastSeen) > rl.ttl {
+					delete(rl.limiters, key)
+				}
 			}
+			rl.mu.Unlock()
+		case <-rl.stopCh:
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 
