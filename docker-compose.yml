@@ -23,13 +23,12 @@ services:
     ports:
       - "53:53"
       - "53:53/udp"
-      - "8081:8081"
     environment:
       - PDNS_auth_api=yes
       - PDNS_api_key=changeme
       - PDNS_webserver=yes
       - PDNS_webserver_address=0.0.0.0
-      - PDNS_webserver_allow_from=0.0.0.0/0
+      - PDNS_webserver_allow_from=172.16.0.0/12
       - PDNS_webserver_port=8081
       - PDNS_default_ttl=3600
     restart: unless-stopped
