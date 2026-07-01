@@ -587,6 +587,54 @@ func TestLogin_LockedAccountPerformsBcrypt(t *testing.T) {
 	}
 }
 
+// TestLogin_LockedAccountExtendsLockout guards the M-SEC5 fix: a login
+// attempt on an already-locked account must extend locked_until (sliding
+// expiration) so an attacker cannot get one free guess per lockout window.
+func TestLogin_LockedAccountExtendsLockout(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Lock the account with a SHORT window (1 minute) so we can detect
+	// extension. failed_login_attempts is already at the threshold so
+	// recordFailedAttempt will push locked_until out by a full lockoutDuration.
+	shortUntil := time.Now().Add(1 * time.Minute).UTC()
+	if _, err := h.DB.Exec(
+		`UPDATE users SET locked_until = ?, failed_login_attempts = ? WHERE id = ?`,
+		shortUntil, h.Cfg.LoginLock.MaxFailedAttempts, uid,
+	); err != nil {
+		t.Fatalf("failed to lock account: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=wrong"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	if !strings.Contains(w.Header().Get("Location"), "error="+invalidCredentialsError) {
+		t.Fatalf("locked account must redirect to generic error, got %q", w.Header().Get("Location"))
+	}
+
+	// The lockout must have been extended. Default lockout is 15 minutes, so
+	// locked_until should now be ~15 min in the future — well beyond the
+	// original 1-minute window. Use a 2-minute tolerance for execution time.
+	lockoutDuration := time.Duration(h.Cfg.LoginLock.LockoutDurationMinutes) * time.Minute
+	_, newUntil, err := h.DB.UserLockStatus(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	expectedMin := time.Now().Add(lockoutDuration - 2*time.Minute)
+	if !newUntil.After(expectedMin) {
+		t.Errorf("lockout not extended (M-SEC5): locked_until=%v, expected at least %v",
+			newUntil, expectedMin)
+	}
+}
+
 // TestLoginErrorBanner_Mapping guards the message lookup so future login
 // error codes cannot accidentally bypass the mapping and echo raw query
 // values into the banner.

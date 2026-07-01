@@ -138,6 +138,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// it, a locked account would return in ~0 ms while a wrong password takes
 	// ~250 ms (bcrypt), letting an attacker distinguish a locked-but-valid
 	// account from an unknown one (timing oracle / account enumeration).
+	//
+	// M-SEC5: recordFailedAttempt is called even on an already-locked account
+	// so each further failure extends the lockout window (sliding expiration).
+	// Without this an attacker gets one free guess per lockout window.
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {
@@ -145,6 +149,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		} else if locked {
 			logger.Warn("login attempt on locked account", "username", user.Username, "locked_until", until)
 			bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+			h.recordFailedAttempt(ctx, username, user.ID, clientIP, maxAttempts, lockoutDuration)
 			http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 			return
 		}
