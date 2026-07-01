@@ -1,8 +1,10 @@
 package pdns
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1010,5 +1012,44 @@ func TestReadLimitedBody(t *testing.T) {
 				t.Errorf("body: got %q, want %q", string(got), tc.want)
 			}
 		})
+	}
+}
+
+// TestPatchZone_OmitsPriorityEvenWhenNonZero is the m53 regression test: even
+// when a caller feeds a record carrying a non-zero Priority into the PATCH
+// path, the wire body must NOT contain a "priority" element — PowerDNS rejects
+// it (422) because the priority must be embedded in the content. The dedicated
+// patchRecord type (content + disabled only) makes this structural rather than
+// relying on RecordInfo's omitempty, which only hides a zero value.
+func TestPatchZone_OmitsPriorityEvenWhenNonZero(t *testing.T) {
+	var body []byte
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Deliberately set a non-zero Priority on an MX record. Before m53 the
+	// PATCH body would have included "priority":10 and PowerDNS would 422.
+	err := client.UpdateRecord(context.Background(), "z.", models.RRSet{
+		Name: "z.",
+		Type: "MX",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "10 mail.example.com.", Priority: 10, Disabled: false},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRecord: %v", err)
+	}
+	if bytes.Contains(body, []byte(`"priority"`)) {
+		t.Errorf("PATCH body must not contain a priority element (m53), got: %s", body)
+	}
+	// Sanity: the content (with priority embedded) and disabled must still be
+	// present so the record itself is well-formed.
+	if !bytes.Contains(body, []byte(`"content":"10 mail.example.com."`)) {
+		t.Errorf("PATCH body missing content element, got: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"disabled":false`)) {
+		t.Errorf("PATCH body missing disabled element, got: %s", body)
 	}
 }

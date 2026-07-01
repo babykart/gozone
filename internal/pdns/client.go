@@ -356,9 +356,51 @@ func (c *Client) CreateRecords(ctx context.Context, zoneID string, rrsets []mode
 	return c.patchZone(ctx, zoneID, rrsets)
 }
 
+// patchRecord is the PATCH-body representation of a record. It carries only
+// content and disabled: PowerDNS rejects a separate "priority" element in a
+// PATCH (the priority must be embedded in the content for MX/SRV). Using a
+// dedicated type — rather than RecordInfo, whose omitempty only hides a zero
+// priority — guarantees a stray non-zero Priority can never leak into the PATCH
+// body and trigger a PDNS 422 (m53).
+type patchRecord struct {
+	Content  string `json:"content"`
+	Disabled bool   `json:"disabled"`
+}
+
+// patchRRSet is the PATCH-body representation of an RRSet, mirroring RRSet but
+// with records projected to patchRecord (no priority element).
+type patchRRSet struct {
+	Name       string               `json:"name"`
+	Type       string               `json:"type"`
+	TTL        int                  `json:"ttl"`
+	ChangeType string               `json:"changetype,omitempty"`
+	Records    []patchRecord        `json:"records"`
+	Comments   *models.CommentPatch `json:"comments,omitempty"`
+}
+
 func (c *Client) patchZone(ctx context.Context, zoneID string, rrsets []models.RRSet) error {
+	patch := make([]patchRRSet, len(rrsets))
+	for i, rr := range rrsets {
+		// Preserve a nil Records slice as null (DELETE changetype); only project
+		// to patchRecord when records are present.
+		var recs []patchRecord
+		if rr.Records != nil {
+			recs = make([]patchRecord, len(rr.Records))
+			for j, r := range rr.Records {
+				recs[j] = patchRecord{Content: r.Content, Disabled: r.Disabled}
+			}
+		}
+		patch[i] = patchRRSet{
+			Name:       rr.Name,
+			Type:       rr.Type,
+			TTL:        rr.TTL,
+			ChangeType: rr.ChangeType,
+			Records:    recs,
+			Comments:   rr.Comments,
+		}
+	}
 	payload := map[string]interface{}{
-		"rrsets": rrsets,
+		"rrsets": patch,
 	}
 	return doOK(c, ctx, "PATCH", c.zonePath(zoneID), payload)
 }

@@ -30,9 +30,13 @@ type Record struct {
 	SetPTR   bool   `json:"set_ptr,omitempty"`
 }
 
-// RecordInfo is the PowerDNS API representation of a record with metadata.
-// Priority uses omitempty because PowerDNS rejects the "priority" element in
-// PATCH body — it must be embedded in the content string for MX/SRV types.
+// RecordInfo is the PowerDNS API representation of a record with metadata. It
+// is used both for deserializing PowerDNS GET responses and for the API read
+// response, where Priority is emitted for MX/SRV records. The PATCH write path
+// must NOT emit a priority element (PowerDNS embeds it in the content); that is
+// enforced by a dedicated PATCH record type (see patchRecord in the pdns
+// package), not by this struct's omitempty, which only keeps non-priority read
+// responses clean (m53).
 type RecordInfo struct {
 	Name     string `json:"name,omitempty"`
 	Type     string `json:"type,omitempty"`
