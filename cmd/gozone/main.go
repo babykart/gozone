@@ -574,7 +574,16 @@ func parseTemplates() (*template.Template, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load embedded templates: %w", err)
 	}
-	logger.Info("templates loaded", "count", len(tmpl.Templates()))
+	// template.New("base") registers an empty "base" template that only carries
+	// the FuncMap; it has no parsed content and is not a renderable page, so
+	// exclude it from the count to avoid an off-by-one.
+	count := 0
+	for _, t := range tmpl.Templates() {
+		if t.Name() != "base" {
+			count++
+		}
+	}
+	logger.Info("templates loaded", "count", count)
 	return tmpl, nil
 }
 
