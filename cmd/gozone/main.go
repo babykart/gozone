@@ -170,6 +170,7 @@ func run(args []string) error {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Compress(5))
 	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.BodyLimit)
 	r.Use(middleware.ErrorHandler)
 
 	// CSRF protection for web UI forms
