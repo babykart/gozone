@@ -1,8 +1,12 @@
 package database
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMySQLDialect_DSN_AppendsParseTime(t *testing.T) {
@@ -126,5 +130,146 @@ func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 	got = d.InsertIgnore("zone_group_members", []string{"group_id", "user_id"}, nil)
 	if got != want {
 		t.Errorf("empty conflictColumns must not alter MySQL output\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests (require GOZONE_TEST_MYSQL_DSN)
+// ---------------------------------------------------------------------------
+
+// TestMySQLIntegration_Migrations verifies that the full migration suite
+// runs against a real MySQL instance.
+func TestMySQLIntegration_Migrations(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+
+	var count int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	expected := len(db.dialect.Migrations())
+	if count != expected {
+		t.Errorf("expected %d migrations, got %d", expected, count)
+	}
+}
+
+// TestMySQLIntegration_RevokeToken is the regression test for M-DB1:
+// RevokeToken previously used "ON CONFLICT(jti) DO NOTHING" which MySQL
+// rejects. The fix routes through InsertIgnore.
+func TestMySQLIntegration_RevokeToken(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	jti := "test-jti-mysql"
+	expires := time.Now().Add(1 * time.Hour)
+
+	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+		t.Fatalf("RevokeToken failed: %v", err)
+	}
+	revoked, err := db.IsTokenRevoked(ctx, jti)
+	if err != nil {
+		t.Fatalf("IsTokenRevoked: %v", err)
+	}
+	if !revoked {
+		t.Error("expected token to be revoked")
+	}
+	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+		t.Errorf("duplicate RevokeToken should be a no-op, got: %v", err)
+	}
+}
+
+// TestMySQLIntegration_LockMigrations is the regression test for M-DB3:
+// LockMigrations previously borrowed a different pooled connection for
+// RELEASE_LOCK than GET_LOCK, making the release a silent no-op.
+func TestMySQLIntegration_LockMigrations(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+
+	release1, err := db.dialect.LockMigrations(db.Conn)
+	if err != nil {
+		t.Fatalf("first LockMigrations: %v", err)
+	}
+	release1()
+
+	release2, err := db.dialect.LockMigrations(db.Conn)
+	if err != nil {
+		t.Fatalf("second LockMigrations after release: %v (release was a no-op?)", err)
+	}
+	release2()
+}
+
+// TestMySQLIntegration_InsertIgnore verifies InsertIgnore silently skips
+// a row that violates a real unique index.
+func TestMySQLIntegration_InsertIgnore(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, '', '', 'user', 1)",
+		"testuser", "test@example.com", "hash",
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, err = db.InsertIgnore(ctx, "users",
+		[]string{"username", "email", "password_hash", "first_name", "last_name", "role", "enabled"},
+		[]string{"username"},
+		"testuser", "other@example.com", "hash", "", "", "user", 1,
+	)
+	if err != nil {
+		t.Fatalf("InsertIgnore on conflict: %v", err)
+	}
+	var count int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", "testuser").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 user after InsertIgnore, got %d", count)
+	}
+}
+
+// TestMySQLIntegration_MigrateIdempotent verifies that running migrate()
+// twice against MySQL does not error.
+func TestMySQLIntegration_MigrateIdempotent(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+// dropAllTablesMySQL removes every user-created table in the current
+// database so migrations run from a clean slate.
+func dropAllTablesMySQL(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	rows, err := conn.Query("SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()")
+	if err != nil {
+		t.Fatalf("query tables: %v", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			t.Fatalf("scan: %v", err)
+		}
+		tables = append(tables, name)
+	}
+	rows.Close()
+	if len(tables) == 0 {
+		return
+	}
+	if _, err := conn.Exec("SET FOREIGN_KEY_CHECKS = 0"); err != nil {
+		t.Fatalf("disable FK: %v", err)
+	}
+	for _, tbl := range tables {
+		if _, err := conn.Exec(fmt.Sprintf("DROP TABLE IF EXISTS `%s`", tbl)); err != nil {
+			t.Fatalf("drop table %s: %v", tbl, err)
+		}
+	}
+	if _, err := conn.Exec("SET FOREIGN_KEY_CHECKS = 1"); err != nil {
+		t.Fatalf("enable FK: %v", err)
 	}
 }

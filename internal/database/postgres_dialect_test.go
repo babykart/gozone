@@ -1,9 +1,11 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPostgresDialect_DriverName(t *testing.T) {
@@ -159,5 +161,136 @@ func TestPostgresDialect_InsertIgnore_RequiresConflictColumns(t *testing.T) {
 	got = d.InsertIgnore("any_table", []string{"a"}, []string{})
 	if !strings.Contains(got, "-- ERROR") {
 		t.Errorf("empty conflictColumns slice must produce an error sentinel, got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests (require GOZONE_TEST_POSTGRES_DSN)
+// ---------------------------------------------------------------------------
+
+// TestPostgresIntegration_Migrations is the direct regression test for
+// M-DB2: schema_migrations must use TIMESTAMP, not DATETIME, or the CREATE
+// TABLE fails before any migration runs.
+func TestPostgresIntegration_Migrations(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+
+	var count int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	expected := len(db.dialect.Migrations())
+	if count != expected {
+		t.Errorf("expected %d migrations, got %d", expected, count)
+	}
+
+	// Verify schema_migrations.applied_at uses TIMESTAMP (M-DB2 regression).
+	var dataType string
+	err := db.Conn.QueryRow(
+		"SELECT data_type FROM information_schema.columns WHERE table_name = 'schema_migrations' AND column_name = 'applied_at'",
+	).Scan(&dataType)
+	if err != nil {
+		t.Fatalf("query column type: %v", err)
+	}
+	if dataType != "timestamp without time zone" && dataType != "timestamp" {
+		t.Errorf("expected TIMESTAMP for applied_at, got %s", dataType)
+	}
+}
+
+// TestPostgresIntegration_RevokeToken verifies RevokeToken works on
+// PostgreSQL.
+func TestPostgresIntegration_RevokeToken(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+	ctx := context.Background()
+
+	jti := "test-jti-pg"
+	expires := time.Now().Add(1 * time.Hour)
+
+	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+		t.Fatalf("RevokeToken failed: %v", err)
+	}
+	revoked, err := db.IsTokenRevoked(ctx, jti)
+	if err != nil {
+		t.Fatalf("IsTokenRevoked: %v", err)
+	}
+	if !revoked {
+		t.Error("expected token to be revoked")
+	}
+	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+		t.Errorf("duplicate RevokeToken should be a no-op, got: %v", err)
+	}
+}
+
+// TestPostgresIntegration_LockMigrations is the regression test for M-DB3:
+// LockMigrations previously borrowed a different pooled connection for
+// pg_advisory_unlock than pg_advisory_lock, making the release a no-op.
+func TestPostgresIntegration_LockMigrations(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+
+	release1, err := db.dialect.LockMigrations(db.Conn)
+	if err != nil {
+		t.Fatalf("first LockMigrations: %v", err)
+	}
+	release1()
+
+	release2, err := db.dialect.LockMigrations(db.Conn)
+	if err != nil {
+		t.Fatalf("second LockMigrations after release: %v (release was a no-op?)", err)
+	}
+	release2()
+}
+
+// TestPostgresIntegration_InsertIgnore verifies InsertIgnore silently skips
+// a row that violates a real unique constraint.
+func TestPostgresIntegration_InsertIgnore(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+	ctx := context.Background()
+
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES ($1, $2, $3, '', '', 'user', 1)",
+		"testuser", "test@example.com", "hash",
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, err = db.InsertIgnore(ctx, "users",
+		[]string{"username", "email", "password_hash", "first_name", "last_name", "role", "enabled"},
+		[]string{"username"},
+		"testuser", "other@example.com", "hash", "", "", "user", 1,
+	)
+	if err != nil {
+		t.Fatalf("InsertIgnore on conflict: %v", err)
+	}
+	var count int
+	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users WHERE username = $1", "testuser").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 user after InsertIgnore, got %d", count)
+	}
+}
+
+// TestPostgresIntegration_MigrateIdempotent verifies that running migrate()
+// twice against PostgreSQL does not error.
+func TestPostgresIntegration_MigrateIdempotent(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+// dropAllTablesPostgres drops and recreates the public schema for a clean
+// slate so migrations run from scratch.
+func dropAllTablesPostgres(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	if _, err := conn.Exec("DROP SCHEMA public CASCADE"); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if _, err := conn.Exec("CREATE SCHEMA public"); err != nil {
+		t.Fatalf("create schema: %v", err)
 	}
 }

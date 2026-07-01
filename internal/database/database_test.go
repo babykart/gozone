@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"os"
 	"strings"
 	"testing"
 
@@ -639,5 +640,58 @@ func TestContextMethods(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("expected 2 rows, got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared integration test helpers (MySQL + PostgreSQL)
+//
+// Set GOZONE_TEST_MYSQL_DSN / GOZONE_TEST_POSTGRES_DSN to run the
+// dialect-specific integration tests in mysql_dialect_test.go and
+// postgres_dialect_test.go respectively.
+// ---------------------------------------------------------------------------
+
+func skipIfNoDSN(t *testing.T, envVar string) string {
+	t.Helper()
+	dsn := os.Getenv(envVar)
+	if dsn == "" {
+		t.Skipf("set %s to run this integration test", envVar)
+	}
+	return dsn
+}
+
+func newIntegrationDB(t *testing.T, driverName, dsn string) *DB {
+	t.Helper()
+	dialect, err := selectDialect(driverName)
+	if err != nil {
+		t.Fatalf("selectDialect: %v", err)
+	}
+
+	// Open a raw connection to clean up.
+	rawConn, err := sql.Open(dialect.DriverName(), dialect.DSN(dsn))
+	if err != nil {
+		t.Fatalf("open raw %s: %v", driverName, err)
+	}
+	dropAllTables(t, rawConn, driverName)
+	if err := rawConn.Close(); err != nil {
+		t.Fatalf("close raw conn: %v", err)
+	}
+
+	// Create a fresh DB with migrations.
+	db, err := New(&config.DatabaseConfig{Driver: driverName, DSN: dsn})
+	if err != nil {
+		t.Fatalf("New %s: %v", driverName, err)
+	}
+	t.Cleanup(func() { db.Close() }) // #nosec G104 -- best-effort cleanup in test
+	return db
+}
+
+func dropAllTables(t *testing.T, conn *sql.DB, driverName string) {
+	t.Helper()
+	switch driverName {
+	case "mysql":
+		dropAllTablesMySQL(t, conn)
+	case "postgres":
+		dropAllTablesPostgres(t, conn)
 	}
 }
