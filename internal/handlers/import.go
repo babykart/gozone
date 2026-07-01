@@ -385,8 +385,14 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 
 		records := make([]models.RecordInfo, 0, len(recs))
 		for _, r := range recs {
+			// BIND data is already in wire format (priority embedded, TXT
+			// quoted). Extract the embedded priority first so
+			// prepareRecordContent re-embeds it correctly and applies
+			// FQDN-target / multi-FQDN-field trailing-dot normalization (M-BIZ1).
+			prio, rest, _ := models.SplitPriority(r.rtype, r.data)
+			normalized, _ := prepareRecordContent(r.rtype, rest, prio)
 			records = append(records, models.RecordInfo{
-				Content:  r.data,
+				Content:  normalized,
 				Disabled: false,
 			})
 		}
@@ -452,14 +458,10 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 			name += "."
 		}
 
-		csvContent := content
-		csvPriority := 0
-		switch {
-		case models.TypeHasPriority(rtype):
-			csvContent = models.JoinPriority(rtype, priority, content)
-		case models.TypeIsQuoted(rtype):
-			csvContent = models.QuoteContent(rtype, content)
-		}
+		// Route through the same normalization pipeline as the web/API paths
+		// so FQDN-target (CNAME/NS/PTR/…) and multi-FQDN-field (SOA/RP/…)
+		// types get trailing dots, not just priority/quoted handling (M-BIZ1).
+		csvContent, csvPriority := prepareRecordContent(rtype, content, priority)
 
 		k := key{name, rtype}
 		if _, exists := groups[k]; !exists {

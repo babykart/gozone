@@ -526,3 +526,95 @@ func TestAppendIfMissing(t *testing.T) {
 		})
 	}
 }
+
+// TestParseCSVZone_FQDNTargetNormalization is the M-BIZ1 regression test:
+// CSV import must route through prepareRecordContent so FQDN-target types
+// (CNAME/NS/PTR) get trailing dots, not just priority/quoted handling.
+func TestParseCSVZone_FQDNTargetNormalization(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+www.example.com.,CNAME,target.example.com,3600,0,false
+example.com.,NS,ns1.example.com,3600,0,false
+mail.example.com.,MX,mail.example.com,3600,10,false`
+
+	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 3 {
+		t.Fatalf("expected 3 rrsets, got %d", len(rrsets))
+	}
+
+	want := []struct {
+		rtype   string
+		content string
+	}{
+		{"CNAME", "target.example.com."},
+		{"NS", "ns1.example.com."},
+		{"MX", "10 mail.example.com."},
+	}
+	for i, w := range want {
+		if rrsets[i].Type != w.rtype {
+			t.Errorf("rrset[%d] type = %q, want %q", i, rrsets[i].Type, w.rtype)
+		}
+		if rrsets[i].Records[0].Content != w.content {
+			t.Errorf("rrset[%d] (%s) content = %q, want %q", i, w.rtype, rrsets[i].Records[0].Content, w.content)
+		}
+	}
+}
+
+// TestParseCSVZone_MultiFQDNFieldNormalization verifies SOA gets per-field
+// trailing dots on fields 0 and 1 (mname, rname) when imported via CSV.
+func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+@,SOA,"ns1.example.com hostmaster.example.com 2024010100 3600 900 1209600 3600",3600,0,false`
+
+	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %d", len(rrsets))
+	}
+	got := rrsets[0].Records[0].Content
+	want := "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600"
+	if got != want {
+		t.Errorf("SOA content = %q, want %q", got, want)
+	}
+}
+
+// TestParseBindZone_FQDNTargetNormalization is the M-BIZ1 regression test for
+// the BIND parser: a CNAME target without a trailing dot must get one, and MX
+// priority must be preserved through normalization.
+func TestParseBindZone_FQDNTargetNormalization(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
+@ IN NS ns1.example.com.
+www IN CNAME target.example.com
+@ IN MX 10 mail.example.com`)
+
+	rrsets, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]string{
+		"CNAME": "target.example.com.",
+		"MX":    "10 mail.example.com.",
+		"NS":    "ns1.example.com.",
+	}
+	found := make(map[string]string)
+	for _, rr := range rrsets {
+		if w, ok := want[rr.Type]; ok {
+			found[rr.Type] = rr.Records[0].Content
+			if rr.Records[0].Content != w {
+				t.Errorf("%s content = %q, want %q", rr.Type, rr.Records[0].Content, w)
+			}
+		}
+	}
+	for rtype := range want {
+		if _, ok := found[rtype]; !ok {
+			t.Errorf("type %s missing from parsed rrsets", rtype)
+		}
+	}
+}
