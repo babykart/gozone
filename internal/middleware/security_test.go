@@ -23,7 +23,6 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 	}{
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
-		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
 		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"},
 	}
@@ -32,6 +31,12 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%s: got %q, want %q", tt.header, got, tt.want)
 		}
+	}
+
+	// m39: X-XSS-Protection is deprecated (buggy Auditor, removed from modern
+	// browsers) and must not be emitted. The strong CSP is the real mitigation.
+	if xss := w.Header().Get("X-XSS-Protection"); xss != "" {
+		t.Errorf("X-XSS-Protection must not be set (deprecated, m39), got %q", xss)
 	}
 
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {

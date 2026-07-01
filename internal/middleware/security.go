@@ -32,15 +32,21 @@ func IsHTTPS(r *http.Request) bool {
 // Headers added:
 //   - X-Content-Type-Options: nosniff
 //   - X-Frame-Options: DENY
-//   - X-XSS-Protection: 1; mode=block
 //   - Referrer-Policy: strict-origin-when-cross-origin
 //   - Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
 //   - Strict-Transport-Security: max-age=31536000; includeSubDomains (only over HTTPS)
+//
+// Note: X-XSS-Protection is intentionally omitted (m39). The header is
+// deprecated (the Auditor was removed from Chrome/Edge and never shipped in
+// Firefox; it was known to introduce cross-site information leaks). The strong
+// CSP above — script-src 'self' with no 'unsafe-inline' — is the modern,
+// robust XSS mitigation. An explicit "0" is unnecessary since modern browsers
+// no longer act on this header and the application does not support legacy
+// user agents that ship a non-default Auditor.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
 
