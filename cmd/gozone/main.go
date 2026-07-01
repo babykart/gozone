@@ -213,7 +213,7 @@ func run(args []string) error {
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
+				if !middleware.IsHTTPS(r) {
 					r = csrf.PlaintextHTTPRequest(r)
 				}
 				next.ServeHTTP(w, r)

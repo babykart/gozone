@@ -86,3 +86,38 @@ func TestSecurityHeaders_PassesThroughStatusCode(t *testing.T) {
 		t.Errorf("expected 418, got %d", w.Code)
 	}
 }
+
+// TestIsHTTPS verifies that IsHTTPS handles direct TLS, single-hop proxies,
+// and multi-hop chains where X-Forwarded-Proto is comma-separated (m6).
+func TestIsHTTPS(t *testing.T) {
+	tests := []struct {
+		name  string
+		tls   bool
+		proto string
+		want  bool
+	}{
+		{"direct TLS", true, "", true},
+		{"plain HTTP no header", false, "", false},
+		{"single hop https", false, "https", true},
+		{"single hop http", false, "http", false},
+		{"multi-hop https then http", false, "https, http", true},
+		{"multi-hop http then https", false, "http, https", false},
+		{"uppercase HTTPS", false, "HTTPS", true},
+		{"whitespace around value", false, " https , http ", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tt.tls {
+				r.TLS = &tls.ConnectionState{}
+			}
+			if tt.proto != "" {
+				r.Header.Set("X-Forwarded-Proto", tt.proto)
+			}
+			if got := IsHTTPS(r); got != tt.want {
+				t.Errorf("IsHTTPS() = %v, want %v (proto=%q, tls=%v)", got, tt.want, tt.proto, tt.tls)
+			}
+		})
+	}
+}

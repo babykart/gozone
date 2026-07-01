@@ -2,7 +2,30 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 )
+
+// IsHTTPS reports whether the request was made over HTTPS, either via direct
+// TLS or via the X-Forwarded-Proto header set by a trusted reverse proxy.
+//
+// In a multi-hop proxy chain each proxy appends to X-Forwarded-Proto, so the
+// header may be "https, http" (HTTPS client → internal HTTP hop). The leftmost
+// value is the original client's protocol; this function checks that value
+// rather than comparing the whole header (m6 — strict equality broke
+// multi-hop chains).
+func IsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		return false
+	}
+	if i := strings.IndexByte(proto, ','); i >= 0 {
+		proto = proto[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
 
 // SecurityHeaders adds common HTTP security headers to all responses.
 //
@@ -21,7 +44,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'")
 
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		if IsHTTPS(r) {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 

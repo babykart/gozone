@@ -367,11 +367,9 @@ func (h *Handler) ProfilePage(w http.ResponseWriter, r *http.Request) {
 
 // isSecure detects whether the current request uses HTTPS.
 //
-// It checks r.TLS (direct TLS) and the X-Forwarded-Proto header
-// for reverse proxy setups. Returns false for plain HTTP.
+// It delegates to middleware.IsHTTPS which checks r.TLS (direct TLS) and the
+// X-Forwarded-Proto header (leftmost value, for multi-hop reverse proxy
+// setups). Returns false for plain HTTP.
 func isSecure(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return r.Header.Get("X-Forwarded-Proto") == "https"
+	return middleware.IsHTTPS(r)
 }
