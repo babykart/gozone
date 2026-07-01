@@ -193,14 +193,24 @@ func run(args []string) error {
 		})),
 	)
 
-	// Rate limiters. /login uses two limiters compounded (both must allow) so an
-	// attacker cannot rotate XFF to evade the per-IP limit AND cannot spread
-	// guesses across many IPs to evade a per-username limit.
+	// Rate limiters.
 	//
-	// The API stack is layered: an IP-based limiter (apiIPLimiter) runs BEFORE
-	// APIKeyAuth so an attacker rotating arbitrary keys cannot flood the DB
-	// with SELECT-against-api_keys lookups (M-SEC2). The per-key limiter
-	// (apiLimiter) runs AFTER auth to cap authenticated abuse per key.
+	// /login stack (both limiters BEFORE the handler — there is no separate
+	// auth step, the handler IS the auth):
+	//   loginLimiter (per-IP) → loginUsernameLimiter (per-username) → Login
+	// The per-IP limiter catches floods before the form body is even parsed;
+	// the per-username limiter prevents distributed brute-force (many IPs,
+	// one target). Both must pass.
+	//
+	// /api stack (IP limiter BEFORE auth, per-key limiter AFTER auth):
+	//   apiIPLimiter (per-IP) → APIKeyAuth (DB lookup) → apiLimiter (per-key)
+	// The IP limiter is a pre-auth gate so an attacker rotating arbitrary
+	// keys cannot flood the DB with SELECT-against-api_keys lookups (M-SEC2).
+	// The per-key limiter runs AFTER auth because it needs the authenticated
+	// key identity to apply the per-key bucket — it caps authenticated abuse,
+	// not DB-flooding. This ordering asymmetry vs /login is intentional:
+	// /login has no separate auth middleware, so all limiting is pre-handler;
+	// /api splits at the auth boundary (m7).
 	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
 	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key (post-auth)
 	apiIPLimiter := middleware.NewRateLimiter(300) // 300 requests per minute per IP (pre-auth gate)
@@ -223,6 +233,9 @@ func run(args []string) error {
 
 		// Public routes
 		r.Get("/login", h.LoginPage)
+		// Both limiters run BEFORE the Login handler (no separate auth
+		// middleware — see the rate-limiter documentation above for the
+		// /login vs /api ordering asymmetry, m7).
 		loginChain := []func(http.Handler) http.Handler{
 			loginLimiter.Limit(middleware.ExtractIP),
 		}
