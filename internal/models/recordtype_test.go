@@ -132,6 +132,9 @@ func TestQuoteContent(t *testing.T) {
 		{"non-quoted type unchanged", "A", "192.0.2.1", "192.0.2.1"},
 		{"TXT escapes internal quotes", "TXT", `foo"bar`, `"foo\"bar"`},
 		{"TXT escapes multiple internal quotes", "TXT", `a"b"c`, `"a\"b\"c"`},
+		{"TXT escapes backslash", "TXT", `path\to`, `"path\\to"`},
+		{"TXT escapes backslash and quote", "TXT", `a\"b`, `"a\\\"b"`},
+		{"TXT escapes multiple backslashes", "TXT", `\\`, `"\\\\"`},
 	}
 
 	for _, tt := range tests {
@@ -156,6 +159,10 @@ func TestUnquoteContent(t *testing.T) {
 		{"single quote char untouched", "TXT", `"`, `"`},
 		{"TXT unescapes internal quotes", "TXT", `"foo\"bar"`, `foo"bar`},
 		{"TXT unescapes multiple internal quotes", "TXT", `"a\"b\"c"`, `a"b"c`},
+		{"TXT unescapes backslash", "TXT", `"path\\to"`, `path\to`},
+		{"TXT unescapes backslash then quote", "TXT", `"a\\\"b"`, `a\"b`},
+		{"TXT unescapes multiple backslashes", "TXT", `"\\\\"`, `\\`},
+		{"TXT escaped backslash not treated as quote escape", "TXT", `"\\"`, `\`},
 	}
 
 	for _, tt := range tests {
@@ -175,6 +182,10 @@ func TestQuoteRoundTrip(t *testing.T) {
 			`foo"bar`,
 			`a"b"c`,
 			`"leading`,
+			`path\to\file`,
+			`backslash\and"quote`,
+			`\\double`,
+			`trailing\`,
 		} {
 			if got := UnquoteContent(rtype, QuoteContent(rtype, original)); got != original {
 				t.Errorf("round trip %q %q: got %q, want %q", rtype, original, got, original)

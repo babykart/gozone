@@ -165,9 +165,9 @@ func JoinPriority(recordType string, priority int, content string) string {
 }
 
 // QuoteContent wraps content in double quotes for quoted types (TXT, SPF) when
-// it is not already quoted. Internal double quotes are escaped with a backslash
-// so the resulting string is well-formed for PowerDNS. Non-quoted types and
-// empty content pass through.
+// it is not already quoted. Internal backslashes are doubled and double quotes
+// are escaped so the resulting string is well-formed for PowerDNS wire format.
+// Non-quoted types and empty content pass through.
 func QuoteContent(recordType, content string) string {
 	if !TypeIsQuoted(recordType) || content == "" {
 		return content
@@ -175,18 +175,48 @@ func QuoteContent(recordType, content string) string {
 	if strings.HasPrefix(content, `"`) || strings.HasPrefix(content, `'`) {
 		return content
 	}
-	return `"` + strings.ReplaceAll(content, `"`, `\"`) + `"`
+	// Escape backslashes FIRST, then double quotes — order matters so the
+	// backslashes introduced by quote-escaping are not themselves doubled.
+	escaped := strings.ReplaceAll(content, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 // UnquoteContent removes one pair of surrounding double quotes from quoted types
-// (TXT, SPF) and unescapes escaped internal quotes, leaving other types and
-// unquoted content unchanged.
+// (TXT, SPF) and unescapes escaped internal quotes and backslashes, leaving
+// other types and unquoted content unchanged.
 func UnquoteContent(recordType, content string) string {
 	if !TypeIsQuoted(recordType) {
 		return content
 	}
 	if len(content) >= 2 && strings.HasPrefix(content, `"`) && strings.HasSuffix(content, `"`) {
-		return strings.ReplaceAll(content[1:len(content)-1], `\"`, `"`)
+		return unescapeQuotedContent(content[1 : len(content)-1])
 	}
 	return content
+}
+
+// unescapeQuotedContent reverses the escaping applied by QuoteContent:
+// `\\` → `\` and `\"` → `"`. A single left-to-right scan is required because
+// sequential strings.ReplaceAll would create false matches (e.g. `\\"`
+// unescapes to `\"`, not `"`).
+func unescapeQuotedContent(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '\\':
+				b.WriteByte('\\')
+				i++
+			case '"':
+				b.WriteByte('"')
+				i++
+			default:
+				b.WriteByte(s[i])
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
