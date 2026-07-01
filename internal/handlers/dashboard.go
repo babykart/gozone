@@ -25,7 +25,11 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Get zone count (filtered by user's allowed zones)
 	zones, _ := h.PDNS.ListZones(r.Context())
-	zones, _ = h.filterZonesForUser(r, zones)
+	filtered, filterErr := h.filterZonesForUser(r, zones)
+	if filterErr != nil {
+		logger.Error("failed to filter zones for user", "error", filterErr)
+	}
+	zones = filtered
 	zoneCount := 0
 	if zones != nil {
 		zoneCount = len(zones)

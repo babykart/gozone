@@ -876,6 +876,44 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 	}
 }
 
+// TestAPIListZones_FilterErrorFailClosed is the m25 regression test: when
+// filterZonesForUser fails (DB error in the zone-group lookup), the endpoint
+// must stay fail-closed — return HTTP 200 with an empty zone list, never the
+// unfiltered zones — while logging the error server-side (no longer silent).
+func TestAPIListZones_FilterErrorFailClosed(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.Zone{
+			{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+			{ID: "b.example.", Name: "b.example.", Kind: "Native"},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	userID := seedUserWithHash(t, h, "zoneuser", "pass", "user")
+
+	// Break the zone-group lookup so filterZonesForUser returns an error.
+	if _, err := h.DB.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+
+	user := &models.User{ID: userID, Username: "zoneuser", Role: "user"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), user)
+	w := httptest.NewRecorder()
+	h.APIListZones(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fail-closed, not 500), got %d: %s", w.Code, w.Body.String())
+	}
+	var zones []models.Zone
+	if err := json.NewDecoder(w.Body).Decode(&zones); err != nil {
+		t.Fatal(err)
+	}
+	if len(zones) != 0 {
+		t.Errorf("expected 0 zones on filter error (fail-closed), got %d: %+v", len(zones), zones)
+	}
+}
+
 func TestAPIGetZone_NotFound(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

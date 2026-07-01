@@ -202,7 +202,11 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zones, _ = h.filterZonesWithInfoForUser(r, zones)
+	filtered, filterErr := h.filterZonesWithInfoForUser(r, zones)
+	if filterErr != nil {
+		logger.Error("failed to filter zones for user", "error", filterErr)
+	}
+	zones = filtered
 	if zones == nil {
 		zones = []models.ZoneWithInfo{}
 	}

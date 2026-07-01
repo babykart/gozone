@@ -101,7 +101,11 @@ func (h *Handler) APIListZones(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to list zones", err)
 		return
 	}
-	zones, _ = h.filterZonesForUser(r, zones)
+	filtered, filterErr := h.filterZonesForUser(r, zones)
+	if filterErr != nil {
+		logger.Error("failed to filter zones for user", "error", filterErr)
+	}
+	zones = filtered
 	if zones == nil {
 		zones = []models.Zone{}
 	}
@@ -370,7 +374,11 @@ func (h *Handler) APIStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	zones, _ := h.PDNS.ListZones(r.Context())
-	zones, _ = h.filterZonesForUser(r, zones)
+	filtered, filterErr := h.filterZonesForUser(r, zones)
+	if filterErr != nil {
+		logger.Error("failed to filter zones for user", "error", filterErr)
+	}
+	zones = filtered
 	zoneCount := 0
 	if zones != nil {
 		zoneCount = len(zones)
