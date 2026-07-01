@@ -396,6 +396,17 @@ func run(args []string) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Bind the listener BEFORE starting the signal-watcher goroutine so a
+	// port-in-use error returns cleanly without leaking the goroutine and
+	// its signal.Notify registration (m1). ListenAndServe would bind and
+	// serve in one blocking call, making the leak unavoidable on bind
+	// failure because the goroutine is already running by the time the
+	// error surfaces.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("server failed: %w", err)
+	}
+
 	shutdownDone := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -411,12 +422,12 @@ func run(args []string) error {
 	}()
 
 	logger.Info("server starting", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server failed: %w", err)
 	}
-	// ListenAndServe returns ErrServerClosed as soon as Shutdown begins; wait
-	// for the drain to finish before returning so deferred cleanup (db.Close,
-	// etc.) does not run while in-flight requests are still being served.
+	// Serve returns ErrServerClosed as soon as Shutdown begins; wait for the
+	// drain to finish before returning so deferred cleanup (db.Close, etc.)
+	// does not run while in-flight requests are still being served.
 	<-shutdownDone
 	logger.Info("server stopped")
 	return nil
