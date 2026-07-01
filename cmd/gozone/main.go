@@ -11,7 +11,9 @@ import (
 	"html/template"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -531,11 +533,51 @@ func requestLogger(next http.Handler) http.Handler {
 // is empty the middleware keys strictly off the TCP source address (fail-closed
 // against XFF/Real-IP spoofing); otherwise it walks XFF right-to-left and
 // stops at the first entry that does not fall within a trusted CIDR.
+//
+// M-SEC4: XFF is honoured ONLY when the direct TCP connection (r.RemoteAddr)
+// itself arrives from a trusted proxy. Without this check an attacker with
+// direct access to the server could inject X-Forwarded-For to rotate
+// rate-limit buckets even though trusted_proxies is configured.
 func clientIPMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	if len(cfg.Server.TrustedProxies) == 0 {
 		return chimw.ClientIPFromRemoteAddr
 	}
-	return chimw.ClientIPFromXFF(cfg.Server.TrustedProxies...)
+
+	prefixes := make([]netip.Prefix, len(cfg.Server.TrustedProxies))
+	for i, p := range cfg.Server.TrustedProxies {
+		prefixes[i] = netip.MustParsePrefix(p)
+	}
+
+	return func(h http.Handler) http.Handler {
+		// Pre-wrap with both strategies so we can switch per-request without
+		// re-wrapping on every request.
+		xff := chimw.ClientIPFromXFF(cfg.Server.TrustedProxies...)(h)
+		remote := chimw.ClientIPFromRemoteAddr(h)
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr // RemoteAddr may be a bare IP (e.g. in tests).
+			}
+			if ip, err := netip.ParseAddr(host); err == nil && trustedProxy(ip.Unmap(), prefixes) {
+				xff.ServeHTTP(w, r)
+				return
+			}
+			// Direct connection is NOT a trusted proxy — ignore XFF entirely.
+			remote.ServeHTTP(w, r)
+		})
+	}
+}
+
+// trustedProxy reports whether ip falls within any of the configured trusted
+// proxy CIDR prefixes.
+func trustedProxy(ip netip.Addr, prefixes []netip.Prefix) bool {
+	for _, p := range prefixes {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // loginUsernameKey returns the attempted login username (lowercased and

@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
+
+	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/middleware"
 )
 
@@ -131,5 +134,80 @@ func TestAPIRateLimitRunsBeforeAuth(t *testing.T) {
 	if got != ipLimit {
 		t.Errorf("auth middleware invoked %d times, want %d (IP limiter must block the last request BEFORE auth — M-SEC2 regression)",
 			got, ipLimit)
+	}
+}
+
+// TestClientIPMiddleware_TrustedProxyHonorsXFF verifies that when the direct
+// TCP connection (RemoteAddr) arrives from a configured trusted proxy, the
+// X-Forwarded-For header is honoured and the real client IP is resolved.
+func TestClientIPMiddleware_TrustedProxyHonorsXFF(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Server.TrustedProxies = []string{"10.0.0.0/8"}
+
+	mw := clientIPMiddleware(cfg)
+	var resolved string
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved = chimw.GetClientIP(r.Context())
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Connection from a trusted proxy (10.x) with a spoofed-looking XFF chain.
+	r.RemoteAddr = "10.0.0.1:12345"
+	r.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+	handler.ServeHTTP(w, r)
+
+	if resolved != "203.0.113.9" {
+		t.Errorf("trusted-proxy connection: expected client IP from XFF %q, got %q", "203.0.113.9", resolved)
+	}
+}
+
+// TestClientIPMiddleware_UntrustedRemoteAddrIgnoresXFF is the M-SEC4
+// regression test: when RemoteAddr is NOT a trusted proxy, XFF must be
+// ignored entirely so a direct-access attacker cannot rotate rate-limit
+// buckets by injecting X-Forwarded-For.
+func TestClientIPMiddleware_UntrustedRemoteAddrIgnoresXFF(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Server.TrustedProxies = []string{"10.0.0.0/8"}
+
+	mw := clientIPMiddleware(cfg)
+	var resolved string
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved = chimw.GetClientIP(r.Context())
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Direct connection from an untrusted IP with a forged XFF header.
+	r.RemoteAddr = "198.51.100.7:54321"
+	r.Header.Set("X-Forwarded-For", "203.0.113.99")
+	handler.ServeHTTP(w, r)
+
+	if resolved != "198.51.100.7" {
+		t.Errorf("untrusted direct connection: expected RemoteAddr %q, got %q (XFF spoofing regression — M-SEC4)",
+			"198.51.100.7", resolved)
+	}
+}
+
+// TestClientIPMiddleware_NoTrustedProxiesUsesRemoteAddr verifies that with no
+// trusted_proxies configured, XFF is always ignored (existing behaviour).
+func TestClientIPMiddleware_NoTrustedProxiesUsesRemoteAddr(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Server.TrustedProxies = nil
+
+	mw := clientIPMiddleware(cfg)
+	var resolved string
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved = chimw.GetClientIP(r.Context())
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "198.51.100.7:54321"
+	r.Header.Set("X-Forwarded-For", "203.0.113.99")
+	handler.ServeHTTP(w, r)
+
+	if resolved != "198.51.100.7" {
+		t.Errorf("no trusted proxies: expected RemoteAddr %q, got %q", "198.51.100.7", resolved)
 	}
 }
