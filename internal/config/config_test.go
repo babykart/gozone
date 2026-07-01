@@ -125,10 +125,11 @@ activity:
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
+	const secretKey = "mysecret-mysecret-mysecret-mysecret" // >= minSecretKeyLength
 	t.Setenv("GOZONE_SERVER_HOST", "192.168.1.1")
 	t.Setenv("GOZONE_SERVER_PORT", "3000")
 	t.Setenv("GOZONE_APP_NAME", "CustomApp")
-	t.Setenv("GOZONE_SECRET_KEY", "mysecret")
+	t.Setenv("GOZONE_SECRET_KEY", secretKey)
 	t.Setenv("GOZONE_DB_DSN", "/custom/path.db")
 	t.Setenv("GOZONE_PDNS_API_URL", "http://pdns:8081")
 	t.Setenv("GOZONE_PDNS_API_KEY", "testkey")
@@ -153,8 +154,8 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if cfg.Server.Port != 3000 {
 		t.Errorf("expected 3000, got %d", cfg.Server.Port)
 	}
-	if cfg.Server.SecretKey != "mysecret" {
-		t.Errorf("expected mysecret, got %s", cfg.Server.SecretKey)
+	if cfg.Server.SecretKey != secretKey {
+		t.Errorf("expected %s, got %s", secretKey, cfg.Server.SecretKey)
 	}
 	if cfg.Server.AppName != "CustomApp" {
 		t.Errorf("expected CustomApp, got %s", cfg.Server.AppName)
@@ -225,7 +226,10 @@ func TestLoad_AutoGenerateFromConfigPlaceholder(t *testing.T) {
 	// never run with the publicly known value.
 	for _, placeholder := range []string{
 		defaultSecretKey,
-		"change-me-to-a-random-secret-key", // value shipped in config.yaml
+		"change-me-to-a-random-secret-key",           // value shipped in config.yaml
+		"change-me-to-a-random-secret-in-production", // value shipped in docker-compose.yml
+		"Change-Me-To-A-Random-Secret",               // mixed case
+		"CHANGEME",                                   // uppercase concatenated prefix
 	} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "config.yaml")
@@ -253,6 +257,68 @@ func TestLoad_AutoGenerateKeyDeterministic(t *testing.T) {
 
 	if cfg1.Server.SecretKey == cfg2.Server.SecretKey {
 		t.Error("two generated keys should be different (crypto/rand)")
+	}
+}
+
+// TestIsPlaceholderSecret verifies that placeholder detection is exhaustive
+// (prefix-based) and case-insensitive, so that every known/likely weak
+// spelling triggers auto-generation — including the value shipped in
+// docker-compose.yml which the previous exact-match map missed.
+func TestIsPlaceholderSecret(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{"empty", "", true},
+		{"default placeholder", defaultSecretKey, true},
+		{"config.yaml placeholder", "change-me-to-a-random-secret-key", true},
+		{"docker-compose placeholder", "change-me-to-a-random-secret-in-production", true},
+		{"changeme concatenated", "changeme", true},
+		{"changeme with suffix", "changeme-please", true},
+		{"mixed case prefix", "Change-Me-Something", true},
+		{"uppercase prefix", "CHANGE-ME-TO-A-RANDOM-SECRET", true},
+		{"real 32-char hex key", "0123456789abcdef0123456789abcdef", false},
+		{"non-placeholder short", "mysecret", false},
+		{"unrelated long value", "a-different-secret-value-of-some-length", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPlaceholderSecret(tt.key); got != tt.want {
+				t.Errorf("isPlaceholderSecret(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoad_RejectsShortSecretKey is the minimum-length guard (m12): a
+// non-placeholder secret below minSecretKeyLength must fail config load
+// fail-fast rather than being used to derive low-entropy signing keys.
+func TestLoad_RejectsShortSecretKey(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", "tooshort")
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected error for short secret key, got nil")
+	}
+	if !strings.Contains(err.Error(), "secret_key") {
+		t.Errorf("expected secret_key error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "too short") {
+		t.Errorf("expected 'too short' in error, got %v", err)
+	}
+}
+
+// TestLoad_AcceptsMinLengthSecretKey verifies that a secret of exactly
+// minSecretKeyLength characters is accepted (boundary check for the guard).
+func TestLoad_AcceptsMinLengthSecretKey(t *testing.T) {
+	key := strings.Repeat("a", minSecretKeyLength) // exactly 32 chars
+	t.Setenv("GOZONE_SECRET_KEY", key)
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("expected valid config for %d-char secret, got error: %v", minSecretKeyLength, err)
+	}
+	if cfg.Server.SecretKey != key {
+		t.Errorf("expected the configured key to be preserved, got %s", cfg.Server.SecretKey)
 	}
 }
 

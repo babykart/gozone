@@ -270,6 +270,15 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("server port %d is out of valid range (1-65535)", cfg.Server.Port)
 	}
 
+	// By the time validate() runs, placeholder secrets have already been
+	// replaced by a 64-char generated key, so this floor only catches an
+	// operator-configured key that is too weak to safely sign sessions and
+	// CSRF tokens. Reject fail-fast rather than silently deriving keys from
+	// low-entropy material.
+	if len(cfg.Server.SecretKey) < minSecretKeyLength {
+		return fmt.Errorf("server.secret_key is too short: %d chars, need at least %d (generate one with: openssl rand -hex 32)", len(cfg.Server.SecretKey), minSecretKeyLength)
+	}
+
 	if cfg.Auth.BcryptCost < 4 || cfg.Auth.BcryptCost > 31 {
 		return fmt.Errorf("invalid bcrypt_cost %d: must be between 4 and 31", cfg.Auth.BcryptCost)
 	}
@@ -470,19 +479,43 @@ const defaultSecretKey = "change-me-to-a-random-secret"
 // change it; a custom password configured via YAML/env does not.
 const DefaultAdminPassword = "admin"
 
-// placeholderSecrets lists the well-known placeholder secret keys that must
-// never be used as a real signing key. Any of these triggers auto-generation
-// at startup. Includes the value shipped in the sample config.yaml so that
-// running with the unmodified example never uses a publicly known key.
-var placeholderSecrets = map[string]bool{
-	defaultSecretKey:                   true,
-	"change-me-to-a-random-secret-key": true,
+// minSecretKeyLength is the minimum acceptable length for a user-configured
+// secret key (non-placeholder). Placeholders are always replaced by a
+// 64-character generated key before this floor is enforced. 32 characters
+// provide at least 128 bits of entropy for hex-encoded material and a
+// reasonable lower bound for base64 / ASCII passphrases; the auto-generated
+// key (32 bytes hex = 64 chars) comfortably exceeds it.
+const minSecretKeyLength = 32
+
+// placeholderSecretPrefixes lists case-insensitive prefixes that mark a
+// secret as a well-known insecure placeholder. Any value starting with one of
+// these triggers auto-generation at startup, regardless of the suffix, so the
+// docker-compose value "change-me-to-a-random-secret-in-production" and any
+// future variant are caught without enumerating every spelling. Both the
+// hyphenated ("change-me") and concatenated ("changeme") spellings are
+// covered, matching the values shipped in DefaultConfig, config.yaml and
+// docker-compose.yml.
+var placeholderSecretPrefixes = []string{
+	"change-me",
+	"changeme",
 }
 
-// isPlaceholderSecret reports whether the given secret key is empty or one of
-// the well-known insecure placeholders.
+// isPlaceholderSecret reports whether the given secret key is empty or a
+// well-known insecure placeholder. Matching is case-insensitive and
+// prefix-based so that every known/likely placeholder spelling is caught
+// (including the values shipped in config.yaml and docker-compose.yml) without
+// having to maintain an exhaustive allow-list of exact strings.
 func isPlaceholderSecret(key string) bool {
-	return key == "" || placeholderSecrets[key]
+	if key == "" {
+		return true
+	}
+	lower := strings.ToLower(key)
+	for _, p := range placeholderSecretPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // deriveKeys splits a master secret into two independent 32-byte sub-keys
