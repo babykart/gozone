@@ -802,12 +802,13 @@ details summary {
     transition: border-color 0.2s;
 }
 
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
-    outline: none;
+.form-group input:focus-visible,
+.form-group select:focus-visible,
+.form-group textarea:focus-visible {
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    outline: 2px solid transparent;
+    outline-offset: 2px;
 }
 
 .form-row {
@@ -846,10 +847,11 @@ details summary {
     min-width: 200px;
 }
 
-.search-input:focus {
-    outline: none;
+.search-input:focus-visible {
     border-color: var(--primary);
     box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    outline: 2px solid transparent;
+    outline-offset: 2px;
 }
 
 .search-input::placeholder {
@@ -867,9 +869,10 @@ details summary {
     box-sizing: border-box;
 }
 
-.form-control-inline:focus {
-    outline: none;
+.form-control-inline:focus-visible {
     box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    outline: 2px solid transparent;
+    outline-offset: 2px;
 }
 
 .records-table td {
@@ -1212,5 +1215,19 @@ details summary {
 @media (max-width: 768px) {
     .diff-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Make the transparent :focus-visible outlines visible in forced-colors
+   mode (Windows High Contrast). box-shadow rings are ignored there, so the
+   transparent outline — set per component above — is recolored to the
+   system text color, which always contrasts with the Canvas background. */
+@media (forced-colors: active) {
+    .form-group input:focus-visible,
+    .form-group select:focus-visible,
+    .form-group textarea:focus-visible,
+    .search-input:focus-visible,
+    .form-control-inline:focus-visible {
+        outline-color: CanvasText;
     }
 }
