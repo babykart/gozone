@@ -1,4 +1,38 @@
-.cache/
+# Build artifacts
 bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+.cache/
+
+# Local database / runtime data (may contain user hashes)
 data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Test coverage
+*.out
+coverage.html
+
+# Go workspace (local multi-module dev only)
+go.work
+go.work.sum
+
+# Environment / secrets (config.yaml is committed as an example;
+# local overrides and .env files may contain real credentials)
+.env
+.env.local
+.env.*.local
+
+# OS / editor cruft
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
