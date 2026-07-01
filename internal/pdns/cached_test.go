@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -583,5 +584,126 @@ func TestCachedZoneMutations_InvalidateZonesAndStats(t *testing.T) {
 
 	if requestCalls.Load() != 6 {
 		t.Errorf("expected 6 mutation calls, got %d", requestCalls.Load())
+	}
+}
+
+// TestCachedRead_SingleFlightCoalescesConcurrentMisses verifies m44: N
+// concurrent reads of a cold cache key produce a single PowerDNS call rather
+// than N. The leader's fetch is held open until all followers have piled up
+// behind the single-flight, then released — without single-flight they would
+// each have fired their own request.
+func TestCachedRead_SingleFlightCoalescesConcurrentMisses(t *testing.T) {
+	const N = 25
+	var calls atomic.Int64
+	leaderStarted := make(chan struct{})
+	releaseLeader := make(chan struct{})
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones") {
+			// Only the single-flight leader reaches here. Without single-flight
+			// multiple goroutines would, and calls would exceed 1.
+			if calls.Add(1) == 1 {
+				close(leaderStarted)
+				<-releaseLeader // hold the leader open so followers pile up
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":"z.","name":"z.","kind":"Native","serial":0}]`))
+	})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := cached.ListZones(ctx); err != nil {
+				t.Errorf("ListZones: %v", err)
+			}
+		}()
+	}
+	close(start)    // fire all N readers concurrently
+	<-leaderStarted // wait until the leader is inside the handler
+	close(releaseLeader)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 PDNS call for %d concurrent misses (single-flight m44), got %d", N, got)
+	}
+}
+
+// TestCachedRead_NoStaleRepopulationAfterInvalidation verifies m45: a read
+// whose fetch is still in flight when an invalidation lands must NOT write its
+// (now stale) result back to the cache. Without the generation guard the slow
+// reader would repopulate the cache with stale data.
+func TestCachedRead_NoStaleRepopulationAfterInvalidation(t *testing.T) {
+	var listCalls atomic.Int64
+	releaseStale := make(chan struct{})
+	staleReturned := make(chan []models.Zone, 1)
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones"):
+			n := listCalls.Add(1)
+			if n == 1 {
+				<-releaseStale // hold the stale fetch open so invalidation lands mid-fetch
+				w.Write([]byte(`[{"id":"stale.","name":"stale.","kind":"Native","serial":0}]`))
+				return
+			}
+			w.Write([]byte(`[{"id":"fresh.","name":"fresh.","kind":"Native","serial":0}]`))
+		case r.Method == http.MethodPatch:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	ctx := context.Background()
+
+	// Reader A starts a slow "stale" fetch.
+	go func() {
+		z, _ := cached.ListZones(ctx)
+		staleReturned <- z
+	}()
+	// Wait until A's fetch is actually in flight (it incremented listCalls).
+	for listCalls.Load() < 1 {
+		runtime.Gosched()
+	}
+	// An invalidation lands while A's fetch is still in flight.
+	if err := cached.CreateRecord(ctx, "x.", models.RRSet{
+		Name: "www.x.", Type: "A", TTL: 60, Records: []models.RecordInfo{{Content: "1.2.3.4"}},
+	}); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	// Release A; it returns stale data but must NOT have cached it.
+	close(releaseStale)
+	stale := <-staleReturned
+	if len(stale) == 0 || stale[0].ID != "stale." {
+		t.Fatalf("reader A should have received stale data, got %v", stale)
+	}
+
+	// Reader B reads after the invalidation: must fetch FRESH (stale not cached).
+	zones, err := cached.ListZones(ctx)
+	if err != nil {
+		t.Fatalf("ListZones B: %v", err)
+	}
+	if len(zones) == 0 || zones[0].ID != "fresh." {
+		t.Fatalf("reader B should see fresh data (stale was not cached — m45), got %v", zones)
+	}
+	if got := listCalls.Load(); got != 2 {
+		t.Errorf("expected 2 list calls (stale fetch + fresh fetch), got %d — if 1, stale data poisoned the cache (m45)", got)
+	}
+
+	// Reader C: cache hit, still fresh, no new call.
+	zones2, err := cached.ListZones(ctx)
+	if err != nil {
+		t.Fatalf("ListZones C: %v", err)
+	}
+	if len(zones2) == 0 || zones2[0].ID != "fresh." {
+		t.Errorf("reader C should hit cache and see fresh data, got %v", zones2)
+	}
+	if got := listCalls.Load(); got != 2 {
+		t.Errorf("reader C should hit cache (no new call), got %d", got)
 	}
 }
