@@ -207,6 +207,13 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"name":"example.com.","type":"CAA","ttl":3600,"records":[{"content":"0 issue \"letsencrypt.org\""}]}' \
   http://localhost:8080/api/v1/zones/example.com/records
+
+# NAPTR record (RFC 3403: order pref flags service regexp replacement; last field is dotted)
+curl -X POST \
+  -H "X-API-Key: gozone_yourkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"example.com.","type":"NAPTR","ttl":3600,"records":[{"content":"100 10 \"s\" \"SIP+D2U\" \"\" sipserver.example.com."}]}' \
+  http://localhost:8080/api/v1/zones/example.com/records
 ```
 
 | Field | Type | Required | Notes |
