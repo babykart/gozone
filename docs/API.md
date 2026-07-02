@@ -214,6 +214,20 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"name":"example.com.","type":"NAPTR","ttl":3600,"records":[{"content":"100 10 \"s\" \"SIP+D2U\" \"\" sipserver.example.com."}]}' \
   http://localhost:8080/api/v1/zones/example.com/records
+
+# PTR record (IPv4 reverse DNS) — reverse zone, name is the host octet, content is the forward hostname
+curl -X POST \
+  -H "X-API-Key: gozone_yourkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"42","type":"PTR","ttl":3600,"records":[{"content":"host.example.com."}]}' \
+  http://localhost:8080/api/v1/zones/1.168.192.in-addr.arpa/records
+
+# PTR record (IPv6 reverse DNS) — zone covers 2001:db8::/64, name is the host nibbles reversed
+curl -X POST \
+  -H "X-API-Key: gozone_yourkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0","type":"PTR","ttl":3600,"records":[{"content":"host6.example.com."}]}' \
+  http://localhost:8080/api/v1/zones/0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa/records
 ```
 
 | Field | Type | Required | Notes |
