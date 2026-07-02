@@ -19,6 +19,9 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 COPY --from=builder /gozone /gozone
+# Symlink /usr/bin/gozone → /gozone so the binary is reachable via PATH lookup
+# (docker/kubectl exec `gozone ...`); see README "Emergency recovery".
+RUN ln -s /gozone /usr/bin/gozone
 COPY config.yaml .
 
 RUN mkdir -p /app/data && \
