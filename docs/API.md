@@ -180,6 +180,13 @@ curl -X POST \
   -d '{"name":"example.com.","type":"MX","ttl":3600,"records":[{"content":"mail.example.com.","priority":10}]}' \
   http://localhost:8080/api/v1/zones/example.com/records
 
+# SRV record (priority is a separate field; content is "weight port target")
+curl -X POST \
+  -H "X-API-Key: gozone_yourkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"_sip._tcp.example.com","type":"SRV","ttl":3600,"records":[{"content":"5 5060 sipserver.example.com.","priority":10}]}' \
+  http://localhost:8080/api/v1/zones/example.com/records
+
 # CNAME record
 curl -X POST \
   -H "X-API-Key: gozone_yourkey" \
