@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -684,5 +685,89 @@ func TestGetUserAllowedZoneIDs_NoMemberships(t *testing.T) {
 	}
 	if len(zones) != 0 {
 		t.Errorf("expected 0 zone IDs for user with no groups, got %d", len(zones))
+	}
+}
+
+func TestBulkDeleteGroups_Success(t *testing.T) {
+	h := newTestHandler(t)
+	g1 := seedGroup(t, h, "g1", "")
+	g2 := seedGroup(t, h, "g2", "")
+	g3 := seedGroup(t, h, "g3", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	// Delete g1 and g2; g1 duplicated to exercise dedupe; g3 survives.
+	body := "group_id=" + strconv.FormatInt(g1, 10) + "&group_id=" + strconv.FormatInt(g2, 10) + "&group_id=" + strconv.FormatInt(g1, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteGroups(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=2 failed=[], got %+v", resp)
+	}
+
+	var remaining int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_groups WHERE id IN (?, ?)", g1, g2).Scan(&remaining)
+	if remaining != 0 {
+		t.Errorf("expected g1 and g2 gone, got %d remaining", remaining)
+	}
+	var g3Count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_groups WHERE id = ?", g3).Scan(&g3Count)
+	if g3Count != 1 {
+		t.Errorf("g3 should still exist, got count=%d", g3Count)
+	}
+}
+
+func TestBulkDeleteGroups_AlreadyGoneReported(t *testing.T) {
+	h := newTestHandler(t)
+	g1 := seedGroup(t, h, "g1", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	// g1 exists; 9999 does not — best-effort reports it as failed.
+	body := "group_id=" + strconv.FormatInt(g1, 10) + "&group_id=9999"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteGroups(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 || len(resp.Failed) != 1 || resp.Failed[0] != "9999" {
+		t.Errorf("expected deleted=1 failed=[9999], got %+v", resp)
+	}
+}
+
+func TestBulkDeleteGroups_NoSelection(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteGroups(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }

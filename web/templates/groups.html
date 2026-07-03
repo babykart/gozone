@@ -11,11 +11,18 @@
 </div>
 
 {{if .Groups}}
+<div class="bulk-actions" id="bulk-groups-bar" data-csrf="{{.CSRFToken}}">
+    <span id="bulk-groups-count" class="bulk-selected-count">0 groups selected</span>
+    <span class="bulk-actions-buttons">
+        <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-groups">Delete selected</button>
+    </span>
+</div>
 <div class="table-responsive">
 <table class="table">
     <caption class="visually-hidden">Zone groups</caption>
     <thead>
         <tr>
+            <th class="col-select"><input type="checkbox" data-action="select-all-groups" aria-label="Select all groups"></th>
             <th>Name</th>
             <th>Description</th>
             <th>Created</th>
@@ -24,7 +31,8 @@
     </thead>
     <tbody>
         {{range .Groups}}
-        <tr>
+        <tr data-group-id="{{.ID}}">
+            <td class="col-select"><input type="checkbox" class="group-select" aria-label="Select group {{.Name}}"></td>
             <td><strong>{{.Name}}</strong></td>
             <td>{{.Description}}</td>
             <td>{{.CreatedAt}}</td>
@@ -38,7 +46,7 @@
         </tr>
         {{end}}
     </tbody>
-    </table>
+</table>
 </div>
 {{if .PageInfo.TotalPages}}
 {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "groups" "Prefix" ""}}

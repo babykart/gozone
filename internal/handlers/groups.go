@@ -224,6 +224,63 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
 
+// BulkDeleteGroups deletes several zone groups by group_id
+// (POST /groups/bulk-delete).
+//
+// Admin-only. The selection arrives as repeated "group_id" form values. Child
+// rows (members, zones) are removed by the foreign-key cascade, exactly as for
+// the single DeleteGroup. The operation is best-effort: a group that no longer
+// exists (or whose DELETE fails) is reported in `failed` without aborting the
+// rest. Returns JSON {deleted, failed} for the AJAX toolbar.
+func (h *Handler) BulkDeleteGroups(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order; drop anything that is not a positive int.
+	seen := make(map[int64]struct{})
+	var groupIDs []int64
+	for _, idStr := range r.PostForm["group_id"] {
+		id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		groupIDs = append(groupIDs, id)
+	}
+
+	if len(groupIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No groups selected"})
+		return
+	}
+
+	deleted := 0
+	var failed []string
+	for _, gid := range groupIDs {
+		res, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", gid)
+		if err != nil {
+			logger.Error("bulk delete group failed", "group_id", gid, "error", err)
+			failed = append(failed, strconv.FormatInt(gid, 10))
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			failed = append(failed, strconv.FormatInt(gid, 10))
+			continue
+		}
+		deleted++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
 // AddMemberToGroup adds a user to a group (POST /groups/{group_id}/add-member).
 func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")

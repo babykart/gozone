@@ -329,6 +329,7 @@ func runServer(cfg *config.Config) error {
 				r.Get("/groups/{group_id}/edit", h.EditGroupPage)
 				r.Post("/groups/{group_id}/update", h.UpdateGroup)
 				r.Post("/groups/{group_id}/delete", h.DeleteGroup)
+				r.Post("/groups/bulk-delete", h.BulkDeleteGroups)
 				r.Post("/groups/{group_id}/add-member", h.AddMemberToGroup)
 				r.Post("/groups/{group_id}/remove-member", h.RemoveMemberFromGroup)
 				r.Post("/groups/{group_id}/add-zone", h.AddZoneToGroup)
