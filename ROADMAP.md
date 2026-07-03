@@ -84,12 +84,13 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## CLI & Tooling
 
-- [ ] **CLI password reset (`gozone reset-password`)**
-  - Companion to the existing `gozone unlock` subcommand: open the configured database directly and set a new bcrypt password hash for a user (resolved by numeric ID or username, like `unlock`)
-  - Same operator-audit trail as `unlock`: `user_id = NULL` and `operatorIdentity()` (`username@hostname`) recorded in `activity_logs` under a new action (e.g. `reset_password_cli`)
-  - Replaces the current recovery path documented in README.md, where operators must hand-roll `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database
-  - Accepts the new password via a prompt (no echo) or a flag; hash it with `bcrypt.DefaultCost` before writing
+- [x] **CLI password reset (`gozone user reset-password`)**
+  - Companion to `gozone user unlock`: open the configured database directly and set a new bcrypt password hash for a user (resolved by numeric ID or username, like `unlock`)
+  - Same operator-audit trail as `unlock`: `user_id = NULL` and `operatorIdentity()` (`username@hostname`) recorded in `activity_logs` under the action `reset_password_cli`
+  - Replaces the former recovery path documented in README.md, where operators had to hand-roll `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database
+  - Accepts the new password via a no-echo prompt (with confirmation), piped stdin, or `--password`; hashed with the configured `auth.bcrypt_cost`
   - Idempotent on the audit side: re-running with the same hash is a data no-op but still logs the operator's intervention
+  - **Delivered.** `unlock` and `reset-password` are now nested under a new `gozone user` parent command (`cmd/user.go`). Both take the target user as a positional `<id|username>` argument. Shared helpers extracted: `resolveUser` (replaces the per-command lookup; uses `errors.Is(err, sql.ErrNoRows)` — the m18 anti-pattern), `readPassword` (`--password` flag → no-echo TTY prompt via `golang.org/x/term` → piped stdin), `operatorIdentity`. `cmd/unlock.go` removed; `user.go` holds the parent + both subcommands + helpers. Vendored `golang.org/x/term` (+ `x/sys` indirect). Tests: `unlock_test.go` rewritten for the `user unlock <id>` path; `user_test.go` covers reset-password (flag, stdin pipe, not-found, empty rejected, audit log). README "Recovering a locked admin" updated to `gozone user unlock <id>`; the manual-SQL note replaced by a `gozone user reset-password` section. gosec clean, full suite green in vendor mode.
 
 - [x] **Migrate the CLI to the Cobra framework**
   - Replace the hand-rolled `flag`-based dispatch in `cmd/gozone/main.go` (`run()` switch + per-subcommand `flag.FlagSet`) with `spf13/cobra`

@@ -1,7 +1,7 @@
 // root.go defines the root Cobra command for the gozone CLI. The root is a
 // namespace: running `gozone` with no subcommand prints help. Use
-// `gozone server` to start the HTTP server and `gozone unlock` for the
-// emergency user-unlock operation.
+// `gozone server` to start the HTTP server and `gozone user <subcommand>`
+// for emergency user-account operations (unlock, reset-password).
 package cmd
 
 import (
@@ -20,7 +20,7 @@ func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gozone",
 		Short: "PowerDNS Admin Interface",
-		Long:  "GoZone — PowerDNS Admin Interface. Start the HTTP server with `gozone server`, or run `gozone <subcommand>` for administrative tasks (e.g. `gozone unlock`).",
+		Long:  "GoZone — PowerDNS Admin Interface. Start the HTTP server with `gozone server`, or run `gozone user <subcommand>` for emergency user-account operations (e.g. `gozone user unlock`).",
 		// Version enables Cobra's built-in --version flag (prints
 		// "gozone version <version>"). Use `gozone version` for the full
 		// banner (commit, build date, go version, platform).
@@ -35,7 +35,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringP("config", "c", "config.yaml", "path to YAML configuration file")
 
 	cmd.AddCommand(newServerCmd())
-	cmd.AddCommand(newUnlockCmd())
+	cmd.AddCommand(newUserCmd())
 	cmd.AddCommand(newVersionCmd())
 	return cmd
 }

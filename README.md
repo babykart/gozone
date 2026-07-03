@@ -116,27 +116,27 @@ All three authentication failure paths — unknown username, wrong password, loc
 
 #### Recovering a locked admin
 
-When the only admin account is locked (brute-force storm, manual lock, lost credentials, etc.) the Web UI is no longer reachable: the `Unlock` button on `/admin/users` requires another non-locked admin to act. The emergency recovery path is the `gozone unlock` CLI subcommand, which opens the configured database directly and clears the lockout without going through the HTTP flow.
+When the only admin account is locked (brute-force storm, manual lock, lost credentials, etc.) the Web UI is no longer reachable: the `Unlock` button on `/admin/users` requires another non-locked admin to act. The emergency recovery path is the `gozone user unlock` CLI subcommand, which opens the configured database directly and clears the lockout without going through the HTTP flow.
 
 ```bash
 # Unlock by username (case-insensitive lookup; default config.yaml).
-gozone unlock --user admin
+gozone user unlock admin
 
 # Unlock by numeric user ID — handy when the username is unknown.
-gozone unlock --user 1
+gozone user unlock 1
 
 # Custom config path (e.g. when running outside the install directory).
-gozone unlock --user admin --config /etc/gozone/config.yaml
+gozone user unlock admin --config /etc/gozone/config.yaml
 ```
 
 In containerised deployments, exec into the running container first:
 
 ```bash
 # Docker Compose (service name: gozone, see docker-compose.yml).
-docker compose exec gozone gozone unlock --user admin
+docker compose exec gozone gozone user unlock admin
 
 # Kubernetes (adjust the deployment name and namespace).
-kubectl exec -n gozone deploy/gozone -- gozone unlock --user admin
+kubectl exec -n gozone deploy/gozone -- gozone user unlock admin
 ```
 
 The action is **idempotent**: unlocking an already-unlocked user is a no-op on the database side but still writes an `unlock_user_cli` entry in the `activity_logs` table, so the audit trail always records the operator's intervention. Verify the unlock took effect by inspecting the user row:
@@ -159,11 +159,27 @@ Common failure modes:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `--user is required (use --user <id> or --user <username>)` | Flag omitted | Both `--user <id>` and `--user <username>` are accepted. |
+| `accepts 1 arg(s), received 0` | Target user argument omitted | Pass the id or username, e.g. `gozone user unlock admin`. |
 | `user "ghost" not found` | Username typo or deleted account | Resolve the ID first with a `SELECT id, username FROM users` query. |
 | `open database: ...` | Binary cannot reach the configured DB | Check `--config` points at the right file and the process has read/write access to the data directory. |
 
-> The CLI only clears the lockout — it does **not** reset the password. To recover a forgotten password without the Web UI, generate a bcrypt hash (GoZone uses `bcrypt.DefaultCost`) and run `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database.
+#### Resetting a forgotten password
+
+The `gozone user reset-password` CLI subcommand sets a new bcrypt password hash directly in the database, bypassing the HTTP flow. It is the supported counterpart to `gozone user unlock` for the "admin password lost" case.
+
+```bash
+# Interactive prompt (no echo, with confirmation) — recommended.
+gozone user reset-password admin
+
+# Non-interactive: read the password from stdin (e.g. piped from a secret store).
+gozone user reset-password admin < /run/secrets/gozone-admin-password
+
+# Non-interactive flag (convenient but the value is visible in the process
+# list and shell history; prefer the prompt or stdin).
+gozone user reset-password admin --password 's3cret!'
+```
+
+Like `unlock`, the reset writes a `reset_password_cli` entry to `activity_logs` with `user_id = NULL` (the actor is the shell operator, identified as `user@host`) so the audit trail records every intervention.
 
 ### Admin User (initial seed)
 

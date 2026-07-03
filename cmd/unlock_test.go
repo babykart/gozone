@@ -12,13 +12,13 @@ import (
 	"github.com/babykart/gozone/internal/database"
 )
 
-// executeUnlock builds a fresh root command and runs `gozone unlock` with the
-// given args, returning the resulting error. Uses a fresh command tree per
+// executeUnlock builds a fresh root command and runs `gozone user unlock` with
+// the given args, returning the resulting error. Uses a fresh command tree per
 // call so flag state is never shared between tests, and exercises the real
-// cobra dispatch path (root → unlock subcommand).
+// cobra dispatch path (root → user → unlock).
 func executeUnlock(args ...string) error {
 	cmd := newRootCmd()
-	cmd.SetArgs(append([]string{"unlock"}, args...))
+	cmd.SetArgs(append([]string{"user", "unlock"}, args...))
 	return cmd.Execute()
 }
 
@@ -70,23 +70,24 @@ func openUnlockTestDB(t *testing.T, cfgPath string) *database.DB {
 	return db
 }
 
-func TestRunUnlock_MissingUserFlag(t *testing.T) {
+func TestUnlock_RequiresUserArg(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	err := executeUnlock("--config", cfgPath)
 	if err == nil {
-		t.Fatal("expected error for missing --user")
+		t.Fatal("expected error for missing user argument")
 	}
-	if !strings.Contains(err.Error(), "--user is required") {
-		t.Errorf("expected --user required error, got: %v", err)
+	// cobra.ExactArgs(1) reports the missing positional argument.
+	if !strings.Contains(err.Error(), "arg") {
+		t.Errorf("expected an arg-count error, got: %v", err)
 	}
 }
 
-func TestRunUnlock_UserNotFound(t *testing.T) {
+func TestUnlock_UserNotFound(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	db := openUnlockTestDB(t, cfgPath)
 	_ = db // just to seed
 
-	err := executeUnlock("--config", cfgPath, "--user", "ghost")
+	err := executeUnlock("--config", cfgPath, "ghost")
 	if err == nil {
 		t.Fatal("expected error for unknown user")
 	}
@@ -95,7 +96,7 @@ func TestRunUnlock_UserNotFound(t *testing.T) {
 	}
 }
 
-func TestRunUnlock_ByID(t *testing.T) {
+func TestUnlock_ByID(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	db := openUnlockTestDB(t, cfgPath)
 
@@ -108,8 +109,8 @@ func TestRunUnlock_ByID(t *testing.T) {
 		t.Fatalf("pre-lock: %v", err)
 	}
 
-	if err := executeUnlock("--config", cfgPath, "--user", "1"); err != nil {
-		t.Fatalf("runUnlock: %v", err)
+	if err := executeUnlock("--config", cfgPath, "1"); err != nil {
+		t.Fatalf("unlock: %v", err)
 	}
 
 	locked, _, err := db.UserLockStatus(context.Background(), adminID)
@@ -117,7 +118,7 @@ func TestRunUnlock_ByID(t *testing.T) {
 		t.Fatalf("UserLockStatus: %v", err)
 	}
 	if locked {
-		t.Error("expected user to be unlocked after runUnlock")
+		t.Error("expected user to be unlocked")
 	}
 	var count int
 	if err := db.QueryRowContext(context.Background(),
@@ -129,7 +130,7 @@ func TestRunUnlock_ByID(t *testing.T) {
 	}
 }
 
-func TestRunUnlock_ByUsername(t *testing.T) {
+func TestUnlock_ByUsername(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	db := openUnlockTestDB(t, cfgPath)
 
@@ -142,8 +143,8 @@ func TestRunUnlock_ByUsername(t *testing.T) {
 		t.Fatalf("pre-lock: %v", err)
 	}
 
-	if err := executeUnlock("--config", cfgPath, "--user", "admin"); err != nil {
-		t.Fatalf("runUnlock: %v", err)
+	if err := executeUnlock("--config", cfgPath, "admin"); err != nil {
+		t.Fatalf("unlock: %v", err)
 	}
 
 	locked, _, err := db.UserLockStatus(context.Background(), adminID)
@@ -155,7 +156,7 @@ func TestRunUnlock_ByUsername(t *testing.T) {
 	}
 }
 
-func TestRunUnlock_LogsActivity(t *testing.T) {
+func TestUnlock_LogsActivity(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	db := openUnlockTestDB(t, cfgPath)
 
@@ -168,8 +169,8 @@ func TestRunUnlock_LogsActivity(t *testing.T) {
 		t.Fatalf("pre-lock: %v", err)
 	}
 
-	if err := executeUnlock("--config", cfgPath, "--user", "admin"); err != nil {
-		t.Fatalf("runUnlock: %v", err)
+	if err := executeUnlock("--config", cfgPath, "admin"); err != nil {
+		t.Fatalf("unlock: %v", err)
 	}
 
 	var (
@@ -196,8 +197,8 @@ func TestRunUnlock_LogsActivity(t *testing.T) {
 	}
 }
 
-func TestRun_RoutesToUnlock(t *testing.T) {
-	// Verify the cobra root command dispatches the "unlock" subcommand.
+func TestUser_UnlockDispatch(t *testing.T) {
+	// Verify the cobra root command dispatches the `user unlock` subcommand.
 	cfgPath, _ := writeUnlockTestConfig(t)
 	db := openUnlockTestDB(t, cfgPath)
 
@@ -210,8 +211,8 @@ func TestRun_RoutesToUnlock(t *testing.T) {
 		t.Fatalf("pre-lock: %v", err)
 	}
 
-	if err := executeUnlock("--config", cfgPath, "--user", "admin"); err != nil {
-		t.Fatalf("run unlock: %v", err)
+	if err := executeUnlock("--config", cfgPath, "admin"); err != nil {
+		t.Fatalf("run user unlock: %v", err)
 	}
 
 	locked, _, err := db.UserLockStatus(context.Background(), adminID)
@@ -219,6 +220,6 @@ func TestRun_RoutesToUnlock(t *testing.T) {
 		t.Fatalf("UserLockStatus: %v", err)
 	}
 	if locked {
-		t.Error("expected admin unlocked after run(unlock ...)")
+		t.Error("expected admin unlocked after `user unlock`")
 	}
 }

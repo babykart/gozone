@@ -232,7 +232,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // instance by spraying wrong passwords at admin accounts. Recovery paths:
 //   - another admin (or the same one, when there is one) logs in successfully
 //     (the per-IP/per-username rate limiters will throttle the attacker);
-//   - the CLI `gozone unlock --user <id|username>` command;
+//   - the CLI `gozone user unlock <id|username>` command;
 //   - the admin Lock/Unlock UI on /users.
 func (h *Handler) recordFailedAttempt(ctx context.Context, username string, userID int64, ip string, maxAttempts int, lockout time.Duration) {
 	if err := h.DB.RecordLoginAttempt(ctx, username, ip, userID, false); err != nil {
