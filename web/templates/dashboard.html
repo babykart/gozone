@@ -65,5 +65,33 @@
                 </div>
             </div>
             {{end}}
+
+            {{if .Version.Version}}
+            <div class="card">
+                <h3>GoZone</h3>
+                <div class="server-info">
+                    <div class="server-info-row">
+                        <span class="server-info-label">Version</span>
+                        <span>{{.Version.Version}}</span>
+                    </div>
+                    {{if .Version.Commit}}<div class="server-info-row">
+                        <span class="server-info-label">Commit</span>
+                        <span>{{.Version.Commit}}</span>
+                    </div>{{end}}
+                    {{if .Version.BuildDate}}<div class="server-info-row">
+                        <span class="server-info-label">Built</span>
+                        <span>{{.Version.BuildDate}}</span>
+                    </div>{{end}}
+                    <div class="server-info-row">
+                        <span class="server-info-label">Go</span>
+                        <span>{{.Version.GoVersion}}</span>
+                    </div>
+                    <div class="server-info-row">
+                        <span class="server-info-label">Platform</span>
+                        <span>{{.Version.Platform}}</span>
+                    </div>
+                </div>
+            </div>
+            {{end}}
 {{template "app_layout_end" .}}
 {{end}}

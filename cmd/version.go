@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"runtime"
-	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	versionpkg "github.com/babykart/gozone/internal/version"
 )
 
 // Build-time identifiers, overridable via -ldflags:
@@ -45,59 +45,20 @@ func newVersionCmd() *cobra.Command {
 // versionInfo returns the human-readable version banner. ldflags-injected
 // values take precedence; otherwise VCS metadata from debug.ReadBuildInfo is
 // used so that un-tagged builds still report a meaningful commit and time.
+// Resolution is shared with the UI via internal/version.Resolve.
 func versionInfo() string {
-	v, c, d := version, commit, buildDate
-	commitInjected := c != "" // ldflags provided the commit
-	dirty := false
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		if c == "" {
-			c = buildSetting(bi.Settings, "vcs.revision")
-		}
-		if d == "" {
-			d = buildSetting(bi.Settings, "vcs.time")
-		}
-		dirty = buildSetting(bi.Settings, "vcs.modified") == "true"
-	}
-	if v == "" {
-		v = "dev"
-	}
-	c = shortSHA(c)
-	// Annotate -dirty on the commit only when it was VCS-derived. When ldflags
-	// injected the commit, the version string (typically from
-	// `git describe --dirty`) already conveys the dirty status.
-	if dirty && !commitInjected {
-		c += "-dirty"
-	}
+	v := versionpkg.Resolve(version, commit, buildDate)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "gozone %s", v)
-	if c != "" {
-		fmt.Fprintf(&b, " (%s)", c)
+	fmt.Fprintf(&b, "gozone %s", v.Version)
+	if v.Commit != "" {
+		fmt.Fprintf(&b, " (%s)", v.Commit)
 	}
 	b.WriteByte('\n')
-	if d != "" {
-		fmt.Fprintf(&b, "built: %s\n", d)
+	if v.BuildDate != "" {
+		fmt.Fprintf(&b, "built: %s\n", v.BuildDate)
 	}
-	fmt.Fprintf(&b, "go:   %s\n", runtime.Version())
-	fmt.Fprintf(&b, "arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&b, "go:   %s\n", v.GoVersion)
+	fmt.Fprintf(&b, "arch: %s\n", v.Platform)
 	return b.String()
-}
-
-// buildSetting returns the value for key from a debug.BuildInfo.Settings
-// slice, or "" if absent.
-func buildSetting(s []debug.BuildSetting, key string) string {
-	for _, kv := range s {
-		if kv.Key == key {
-			return kv.Value
-		}
-	}
-	return ""
-}
-
-// shortSHA shortens a git SHA to 12 characters (git's default short form).
-func shortSHA(s string) string {
-	if len(s) > 12 {
-		return s[:12]
-	}
-	return s
 }

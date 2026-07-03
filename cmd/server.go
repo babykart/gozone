@@ -32,6 +32,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/pdns"
+	versionpkg "github.com/babykart/gozone/internal/version"
 	"github.com/babykart/gozone/web"
 )
 
@@ -152,6 +153,9 @@ func runServer(cfg *config.Config) error {
 
 	// Create handler
 	h := handlers.New(db, cachedClient, cfg, tmpl)
+	// Surface the resolved build version in the UI (dashboard). ldflags-injected
+	// values win; internal/version falls back to embedded VCS metadata.
+	h.Version = versionpkg.Resolve(version, commit, buildDate)
 
 	// Seed built-in zone templates
 	if err := h.SeedBuiltinTemplates(); err != nil {

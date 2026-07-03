@@ -17,14 +17,16 @@ import (
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/pdns"
+	"github.com/babykart/gozone/internal/version"
 )
 
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	DB   *database.DB
-	PDNS pdns.ZoneService
-	Cfg  *config.Config
-	Tmpl *template.Template
+	DB      *database.DB
+	PDNS    pdns.ZoneService
+	Cfg     *config.Config
+	Tmpl    *template.Template
+	Version version.Info
 }
 
 // New creates a new Handler with all dependencies.
@@ -105,6 +107,9 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 	}
 	if _, ok := data["AppName"]; !ok {
 		data["AppName"] = h.Cfg.Server.AppName
+	}
+	if _, ok := data["Version"]; !ok {
+		data["Version"] = h.Version
 	}
 	if _, ok := data["Section"]; !ok {
 		data["Section"] = sectionFromTemplate(name)

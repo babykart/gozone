@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -55,31 +54,5 @@ func TestVersionInfo_IncludesRuntime(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("versionInfo missing %q: %q", want, got)
 		}
-	}
-}
-
-func TestShortSHA(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"", ""},
-		{"abc123", "abc123"},
-		{"0123456789abcdef0123456789abcdef01234567", "0123456789ab"},
-	}
-	for _, c := range cases {
-		if got := shortSHA(c.in); got != c.want {
-			t.Errorf("shortSHA(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestBuildSetting(t *testing.T) {
-	settings := []debug.BuildSetting{
-		{Key: "vcs.revision", Value: "abc"},
-		{Key: "vcs.modified", Value: "true"},
-	}
-	if got := buildSetting(settings, "vcs.revision"); got != "abc" {
-		t.Errorf("buildSetting vcs.revision = %q, want %q", got, "abc")
-	}
-	if got := buildSetting(settings, "vcs.time"); got != "" {
-		t.Errorf("buildSetting missing key should return \"\", got %q", got)
 	}
 }
