@@ -12,7 +12,7 @@ default:
 
 # build the binary
 build:
-    go build -o {{ bin_dir }}/{{ app_name }} ./cmd/gozone
+    go build -o {{ bin_dir }}/{{ app_name }} .
 
 # build and run locally
 run: build

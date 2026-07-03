@@ -37,10 +37,10 @@ all reported issues regardless of the exit code.
 
 ## Architecture
 
-- **Entrypoint**: `cmd/gozone/` — CLI built on **Cobra** (`spf13/cobra`). `main.go` calls `Execute()` from `root.go`. The root command is a namespace: bare `gozone` prints help. `gozone server` (in `server.go`) starts the HTTP server via `runServer(cfg *config.Config) error` in `main.go`, which wires the chi router, loads config, seeds admin, and serves. `main.go` also defines `parseTemplates()` (FuncMap + template loading) and `relativeName()` (used by templates). Subcommands live in their own files (`server.go`, `unlock.go`); `--config`/`-c` is a persistent flag on the root, inherited by subcommands.
+- **Entrypoint**: `main.go` (repo root) is intentionally minimal — `main()` only calls `cmd.Execute()`. The CLI tree lives in package `cmd` (`cmd/`), built on **Cobra** (`spf13/cobra`). `cmd/root.go` defines the root command (a namespace: bare `gozone` prints help) and `Execute()`/`newRootCmd()`; `cmd/server.go` defines `gozone server` (cobra command `newServerCmd`) and `runServer(cfg *config.Config) error`, which wires the chi router, seeds admin, and serves — it also holds the HTTP helpers (`parseTemplates`, `relativeName`, the rate-limit/HTTPS middlewares). `cmd/unlock.go` defines the `unlock` subcommand. `--config`/`-c` is a persistent flag on the root, inherited by subcommands.
 - **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *database.DB`, `PDNS pdns.ZoneService`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
-- **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/gozone/main.go` and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`
+- **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/server.go` and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`
 - **Database**: migrations in `internal/database/database.go` and dialect files; content-hash versioning with `Dialect.LockMigrations` for multi-instance safety; exposed via `*database.DB` with raw SQL and context-aware methods (`ExecContext`, `QueryContext`, `QueryRowContext`, `BeginTx`)
 - **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`). `server.trusted_proxies` entries **must be CIDR** (e.g. `10.0.0.0/8`, `192.0.2.1/32`) — plain IPs without `/` cause a startup panic in chi's `netip.MustParsePrefix`.
 - **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface (`internal/pdns/service.go`); generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
@@ -83,7 +83,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - **Handler tests**: `newTestHandler(t)` / `newTestHandlerWithPDNS(t, handler)` build a `Handler` with mock PDNS + in-memory DB + **stub templates** (defined inline in `handler_test.go:testTemplateSet()`, NOT the real embedded templates). The stub templates must be updated when handler data shapes change — e.g. when `.Records` changed from `[]RRSet` to `[]ZoneRecordRow`, the stub `zone_view.html` had to switch from `{{range .Records}}{{range .Records}}{{.Content}}` to `{{range .Records}}{{.Record.Content}}`.
 - **FuncMap sync**: the test FuncMap in `testTemplateSet()` is a **subset** of the real one in `main.go:parseTemplates()`. If a new template func is added to `parseTemplates()`, it must also be added to `testTemplateSet()` or tests that render templates will fail.
 - **`captureRRSets(t, &sent)`**: helper in `api_test.go` that decodes the PATCH body sent to the mock PDNS, so tests can assert exactly what PowerDNS received. Use this for content-normalization regression tests.
-- **`relativeName`** lives in `cmd/gozone/main.go` (package main), so handler tests stub it out — the test FuncMap maps it to a no-op.
+- **`relativeName`** lives in `cmd/server.go` (package cmd), so handler tests stub it out — the test FuncMap maps it to a no-op.
 
 ## Key Constraints
 

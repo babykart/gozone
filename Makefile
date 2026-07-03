@@ -7,11 +7,11 @@ default: help
 
 # build the binary
 build:
-	go build -o $(BIN_DIR)/$(APP_NAME) ./cmd/gozone
+	go build -o $(BIN_DIR)/$(APP_NAME) .
 
 # build and run locally
 run: build
-	$(BIN_DIR)/$(APP_NAME) -config config.yaml
+	$(BIN_DIR)/$(APP_NAME) server --config config.yaml
 
 # run tests
 test:

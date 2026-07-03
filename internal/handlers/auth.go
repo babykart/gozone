@@ -33,7 +33,7 @@ var (
 const (
 	// #nosec G101 -- error code identifier, not a credential.
 	invalidCredentialsError = "invalid_credentials"
-	// csrfInvalidError is set by the CSRF middleware in cmd/gozone/main.go
+	// csrfInvalidError is set by the CSRF middleware in cmd/server.go
 	// when a form submission fails token validation (expired session,
 	// missing token, tampered token). It gets its own banner so the user
 	// sees an actionable message instead of a blank page.
@@ -90,7 +90,7 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 // below cover the response-time channel.
 //
 // Defences (in addition to the route-level per-IP and per-username rate
-// limiters applied in cmd/gozone/main.go):
+// limiters applied in cmd/server.go):
 //   - Persistent per-account lockout: failed_login_attempts and locked_until on
 //     users. After MaxFailedAttempts consecutive failures the account is locked
 //     for LoginLockConfig.LockoutDurationMinutes; every further failure extends

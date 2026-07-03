@@ -1,9 +1,8 @@
-// Command gozone is the PowerDNS Admin Interface CLI.
-//
-// The root command is a namespace: running `gozone` with no subcommand
-// prints help. Use `gozone server` to start the HTTP server and
-// `gozone unlock` for the emergency user-unlock operation.
-package main
+// root.go defines the root Cobra command for the gozone CLI. The root is a
+// namespace: running `gozone` with no subcommand prints help. Use
+// `gozone server` to start the HTTP server and `gozone unlock` for the
+// emergency user-unlock operation.
+package cmd
 
 import (
 	"github.com/spf13/cobra"

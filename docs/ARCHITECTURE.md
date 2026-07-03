@@ -77,7 +77,8 @@ Background goroutines (started by startPeriodicJob):
 ## Package Overview
 
 ```
-cmd/gozone/       Application entry point, wiring, route registration, periodic job orchestration Gracia shutdown
+main.go           Minimal entry point: main() calls cmd.Execute()
+cmd/              CLI tree (Cobra): root namespace, `server` (bootstrap, routing, wiring, periodic jobs, graceful shutdown), `unlock`
 web/              Embedded HTML templates, CSS, JS via //go:embed
 
 internal/
@@ -96,12 +97,12 @@ internal/
 ### Dependency Graph
 
 ```
-cmd/gozone ──► config, database, handlers, middleware, pdns, web
+cmd        ──► config, database, handlers, middleware, pdns, web
 handlers   ──► middleware, models, pdns, cache, validators, errors, database
 middleware ──► models, database
 pdns       ──► config, models, errors, cache
 database   ──► config, models
-handlers   ──► web (render-only; template.FuncMap is in cmd/gozone)
+handlers   ──► web (render-only; template.FuncMap is in cmd/server.go)
 ```
 
 The `pdns` package wraps `*Client` in a `cachedClient` (internal/cache) — both implement the same `ZoneService` interface, so handlers depend on the interface and never on a concrete cache implementation.
@@ -110,7 +111,7 @@ The `pdns` package wraps `*Client` in a `cachedClient` (internal/cache) — both
 
 | Layer | Role |
 |-------|------|
-| `cmd/gozone` | Application bootstrap: load config, open DB, create PDNS client (wrapped in cachedClient), seed admin user, parse templates, register routes, start periodic purge goroutines, start HTTP server with graceful shutdown on SIGINT/SIGTERM |
+| `main.go` + `cmd` | `main.go` is a thin entry point (`main()` → `cmd.Execute()`). `cmd` holds the Cobra tree: the `server` subcommand bootstraps the app (load config, open DB, create PDNS client wrapped in cachedClient, seed admin user, parse templates, register routes, start periodic purge goroutines, start HTTP server with graceful shutdown on SIGINT/SIGTERM); `unlock` is the emergency DB recovery path |
 | `handlers` | Business logic for each endpoint: parse input, call `ZoneService` interface (PDNS or cached), log activity, render templates or write JSON |
 | `pdns` | HTTP client for PowerDNS REST API: zone CRUD, record management (single + filtered by `rrset_name`/`rrset_type`), DNSSEC rectification, statistics; typed errors map to HTTP status codes |
 | `middleware` | Request pipeline: extract JWT/API key, load user from DB, inject into context, enforce admin role, rate limiting (per-IP / per-username / per-API-key), client IP resolution (ClientIPFrom* with trusted CIDR list), security headers |
@@ -244,7 +245,7 @@ GoZone supports two authentication mechanisms (both populate `middleware.UserCon
 chi.Middleware chain on every request
   │
   ▼
-ClientIPFrom* middleware (cmd/gozone/main.go:clientIPMiddleware)
+ClientIPFrom* middleware (cmd/server.go:clientIPMiddleware)
   │
   ├── TrustedProxies EMPTY
   │     → ClientIPFromRemoteAddr (TCP source only, fail-closed)
@@ -489,7 +490,7 @@ All HTTP handlers are methods on a single `Handler` struct holding shared depend
 
 ### html/template (Embedded with //go:embed)
 
-Templates are embedded in the binary at compile time via `//go:embed` (in `web/embed.go`) and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required. The template FuncMap (registered in `cmd/gozone/main.go`) includes `add`, `sub`, `urlquery`, `relativeName`, and `dict`.
+Templates are embedded in the binary at compile time via `//go:embed` (in `web/embed.go`) and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required. The template FuncMap (registered in `cmd/server.go`) includes `add`, `sub`, `urlquery`, `relativeName`, and `dict`.
 
 ### JWT for Web Sessions
 
@@ -598,7 +599,7 @@ DNS record names, record content, SOA numeric fields, and zone kinds are validat
 
 ### Periodic Job Orchestration
 
-Background purges (revoked JWTs, old activity logs, old login attempts) all share the `startPeriodicJob(ctx, name, interval, timeout, job)` helper in `cmd/gozone/main.go`. Each job runs once at startup, then on the configured interval, with a per-invocation timeout context. The returned `stop` function cancels the goroutine and is called via `defer` on shutdown so jobs do not outlive the process.
+Background purges (revoked JWTs, old activity logs, old login attempts) all share the `startPeriodicJob(ctx, name, interval, timeout, job)` helper in `cmd/server.go`. Each job runs once at startup, then on the configured interval, with a per-invocation timeout context. The returned `stop` function cancels the goroutine and is called via `defer` on shutdown so jobs do not outlive the process.
 
 ## Known Limitations
 

@@ -147,7 +147,7 @@ func maskKey(key string) string {
 
 // ExtractIP returns the client IP from the request context.
 //
-// It reads the IP set by the chi ClientIPFrom* middleware in cmd/gozone/main.go
+// It reads the IP set by the chi ClientIPFrom* middleware in cmd/server.go
 // (ClientIPFromRemoteAddr by default, or ClientIPFromXFF when trusted_proxies
 // is configured). When no IP has been resolved (e.g., a test request or a
 // misconfigured middleware stack) it falls back to r.RemoteAddr so the

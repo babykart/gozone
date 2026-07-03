@@ -140,7 +140,9 @@ golangci-lint run ./...
 GoZone follows a layered architecture:
 
 ```
-cmd/gozone/main.go        Entry point, routing, wiring
+main.go                   Minimal entry point (calls cmd.Execute())
+cmd/                      CLI tree (Cobra): root, server, unlock
+cmd/server.go             HTTP server bootstrap, routing, wiring
 internal/config/          Configuration (YAML + env vars)
 internal/database/        SQLite connection and migrations
 internal/handlers/          HTTP handlers (web UI + REST API)

@@ -13,7 +13,7 @@ type httpsCtxKey struct{}
 
 // WithHTTPS returns r carrying the resolver-computed effective-HTTPS flag in
 // its context. It is set by the HTTPS resolver middleware installed in the
-// global request stack (cmd/gozone), which honours X-Forwarded-Proto only when
+// global request stack (cmd/server.go), which honours X-Forwarded-Proto only when
 // the direct TCP connection comes from a configured trusted proxy (m40/M-SEC4).
 func WithHTTPS(r *http.Request, https bool) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), httpsCtxKey{}, https))
@@ -49,7 +49,7 @@ func IsHTTPS(r *http.Request) bool {
 // Callers MUST gate this on the direct TCP connection being a trusted proxy:
 // the header is client-supplied and trivially spoofable. This function performs
 // NO trust check — it only parses the value. The resolver middleware in
-// cmd/gozone calls it after the M-SEC4-style RemoteAddr ∈ trustedProxies gate.
+// cmd/server.go calls it after the M-SEC4-style RemoteAddr ∈ trustedProxies gate.
 func ForwardedProtoIsHTTPS(header string) bool {
 	if header == "" {
 		return false

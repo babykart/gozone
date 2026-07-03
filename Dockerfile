@@ -10,7 +10,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o /gozone ./cmd/gozone
+RUN CGO_ENABLED=1 GOOS=linux go build -o /gozone .
 
 # Runtime stage
 FROM alpine:3.21
