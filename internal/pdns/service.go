@@ -32,6 +32,11 @@ type ZoneService interface {
 	CreateRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error
 	UpdateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error
 	DeleteRecord(ctx context.Context, zoneID string, name, recordType string) error
+	// PatchRecords applies a batch of RRSet changes in a single PATCH. Each
+	// rrset's ChangeType is honored ("REPLACE" or "DELETE"); an empty
+	// ChangeType defaults to "REPLACE". Used for bulk operations that mix
+	// deletes and updates across several RRSets atomically.
+	PatchRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error
 
 	// DNSSEC & replication
 	RectifyZone(ctx context.Context, zoneID string) error

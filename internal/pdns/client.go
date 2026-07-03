@@ -356,6 +356,23 @@ func (c *Client) CreateRecords(ctx context.Context, zoneID string, rrsets []mode
 	return c.patchZone(ctx, zoneID, rrsets)
 }
 
+// PatchRecords applies a batch of RRSet changes in a single PATCH call. Unlike
+// CreateRecords (which forces REPLACE), it honors each rrset's ChangeType so a
+// single atomic operation can mix DELETE and REPLACE across RRSets — e.g. a
+// bulk delete that drops some RRSets entirely and trims others. An empty
+// ChangeType defaults to "REPLACE".
+func (c *Client) PatchRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error {
+	if len(rrsets) == 0 {
+		return nil
+	}
+	for i := range rrsets {
+		if rrsets[i].ChangeType == "" {
+			rrsets[i].ChangeType = "REPLACE"
+		}
+	}
+	return c.patchZone(ctx, zoneID, rrsets)
+}
+
 // patchRecord is the PATCH-body representation of a record. It carries only
 // content and disabled: PowerDNS rejects a separate "priority" element in a
 // PATCH (the priority must be embedded in the content for MX/SRV). Using a

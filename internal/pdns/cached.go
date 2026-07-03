@@ -215,6 +215,14 @@ func (c *cachedClient) DeleteRecord(ctx context.Context, zoneID string, name, re
 	return nil
 }
 
+func (c *cachedClient) PatchRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error {
+	if err := c.client.PatchRecords(ctx, zoneID, rrsets); err != nil {
+		return err
+	}
+	c.invalidateZones()
+	return nil
+}
+
 func (c *cachedClient) RectifyZone(ctx context.Context, zoneID string) error {
 	if err := c.client.RectifyZone(ctx, zoneID); err != nil {
 		return err

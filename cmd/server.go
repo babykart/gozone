@@ -282,6 +282,7 @@ func runServer(cfg *config.Config) error {
 				r.Post("/zones/{zone_id}/records/update", h.UpdateRecord)
 				r.Post("/zones/{zone_id}/records/inline-update", h.InlineUpdateRecord)
 				r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
+				r.Post("/zones/{zone_id}/records/bulk-delete", h.BulkDeleteRecords)
 				r.Post("/zones/{zone_id}/import", h.ImportZone)
 				r.Post("/zones/{zone_id}/cache/clear", h.ClearZoneCache)
 				r.Post("/zones/{zone_id}/cryptokeys/{key_id}/toggle", h.ToggleCryptokey)

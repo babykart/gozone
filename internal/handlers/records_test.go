@@ -2295,3 +2295,236 @@ func TestBatchCreateRecords_DedupRepeatedComments(t *testing.T) {
 		t.Errorf("expected content 'existing', got %q", got[0].Content)
 	}
 }
+
+// listAndCapturePDNS builds a mock PDNS handler that serves `list` for GET
+// (ListRecords) and captures the PATCH body into `got`. It is the shared
+// harness for the bulk-delete tests.
+func listAndCapturePDNS(t *testing.T, got *[]models.RRSet, list []models.RRSet) func(http.ResponseWriter, *http.Request) {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: list,
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Errorf("decode PATCH body: %v", err)
+			}
+			*got = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func TestBulkDeleteRecords_WholeRRSet(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+			{Content: "5.6.7.8", Disabled: false},
+		}},
+		{Name: "api.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "9.9.9.9", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Select BOTH records of the www A RRSet -> whole-RRSet DELETE.
+	body := "name=www&type=A&original_content=1.2.3.4&original_priority=0" +
+		"&name=www&type=A&original_content=5.6.7.8&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "DELETE" {
+		t.Fatalf("expected 1 DELETE RRSet, got %+v", sent)
+	}
+	if sent[0].Name != "www.example.com." || sent[0].Type != "A" {
+		t.Errorf("expected www.example.com. A, got %s %s", sent[0].Name, sent[0].Type)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_record'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 activity log, got %d", count)
+	}
+}
+
+func TestBulkDeleteRecords_PartialRRSet(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+			{Content: "5.6.7.8", Disabled: true},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Select only the 1.2.3.4 record -> REPLACE with 5.6.7.8 (Disabled preserved).
+	body := "name=www&type=A&original_content=1.2.3.4&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "REPLACE" {
+		t.Fatalf("expected 1 REPLACE RRSet, got %+v", sent)
+	}
+	if len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 remaining record, got %d", len(sent[0].Records))
+	}
+	if sent[0].Records[0].Content != "5.6.7.8" {
+		t.Errorf("expected remaining 5.6.7.8, got %q", sent[0].Records[0].Content)
+	}
+	if !sent[0].Records[0].Disabled {
+		t.Errorf("expected remaining record to keep Disabled=true")
+	}
+}
+
+// TestBulkDeleteRecords_MXReEmbedsPriority is the critical regression guard:
+// after SplitPriority on the read path, an MX record's content no longer
+// carries its priority. The remaining record must be re-encoded with priority
+// embedded in the content (PowerDNS rejects a separate priority element in a
+// PATCH).
+func TestBulkDeleteRecords_MXReEmbedsPriority(t *testing.T) {
+	var sent []models.RRSet
+	// Wire content as PDNS stores it: priority leads. ListRecords splits it.
+	list := []models.RRSet{
+		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "10 mail1.example.com.", Priority: 0, Disabled: false},
+			{Content: "20 mail2.example.com.", Priority: 0, Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// After read-path split the rows carry content "mail2.example.com." /
+	// priority 20 — that is exactly what the AJAX layer forwards.
+	body := "name=example.com&type=MX&original_content=mail2.example.com.&original_priority=20"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "REPLACE" || len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 REPLACE RRSet with 1 record, got %+v", sent)
+	}
+	if sent[0].Records[0].Content != "10 mail1.example.com." {
+		t.Errorf("expected priority re-embedded as '10 mail1.example.com.', got %q", sent[0].Records[0].Content)
+	}
+}
+
+func TestBulkDeleteRecords_MixedWholeAndPartial(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+		{Name: "www.example.com.", Type: "TXT", TTL: 3600, Records: []models.RecordInfo{
+			{Content: `"first"`, Disabled: false},
+			{Content: `"second"`, Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Whole A RRSet (DELETE) + one of two TXT records (REPLACE).
+	body := "name=www&type=A&original_content=1.2.3.4&original_priority=0" +
+		`&name=www&type=TXT&original_content="first"&original_priority=0`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 2 {
+		t.Fatalf("expected 2 patched RRSets, got %d", len(sent))
+	}
+	var deleteCount, replaceCount int
+	for _, rr := range sent {
+		switch rr.ChangeType {
+		case "DELETE":
+			deleteCount++
+		case "REPLACE":
+			replaceCount++
+			if len(rr.Records) != 1 || rr.Records[0].Content != `"second"` {
+				t.Errorf("expected REPLACE to keep \"second\", got %+v", rr.Records)
+			}
+		}
+	}
+	if deleteCount != 1 || replaceCount != 1 {
+		t.Errorf("expected 1 DELETE + 1 REPLACE, got %d DELETE + %d REPLACE", deleteCount, replaceCount)
+	}
+}
+
+func TestBulkDeleteRecords_NoSelection(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			t.Errorf("PDNS should not be called for an empty selection")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
+	}
+}

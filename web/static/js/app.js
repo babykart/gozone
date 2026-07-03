@@ -349,6 +349,102 @@ function initImportFeedback() {
     window.history.replaceState(null, '', clean ? '?' + clean : window.location.pathname);
 }
 
+// --- Bulk record selection ---
+//
+// The zone records table exposes per-row checkboxes plus a "select all"
+// checkbox in the header and a bulk-action toolbar. "Edit selected" flips every
+// checked row into inline edit mode (each row is then saved individually via the
+// existing inline-update flow); "Delete selected" POSTs the selection to the
+// bulk-delete endpoint and reloads the page on success.
+
+function selectedRecordRows() {
+    var boxes = document.querySelectorAll('.record-select');
+    var rows = [];
+    for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
+    }
+    return rows;
+}
+
+function updateBulkSelectedCount() {
+    var rows = selectedRecordRows();
+    var countEl = document.getElementById('bulk-selected-count');
+    if (countEl) {
+        countEl.textContent = rows.length + (rows.length === 1 ? ' record selected' : ' records selected');
+    }
+    var selectAll = document.querySelector('[data-action="select-all-records"]');
+    var boxes = document.querySelectorAll('.record-select');
+    if (selectAll) {
+        var allChecked = boxes.length > 0;
+        for (var i = 0; i < boxes.length; i++) {
+            if (!boxes[i].checked) { allChecked = false; break; }
+        }
+        selectAll.checked = allChecked;
+    }
+}
+
+function toggleSelectAllRecords(cb) {
+    var boxes = document.querySelectorAll('.record-select');
+    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
+    updateBulkSelectedCount();
+}
+
+function bulkEditSelected() {
+    var rows = selectedRecordRows();
+    if (rows.length === 0) { showNotification('Select at least one record first', 'warning'); return; }
+    for (var i = 0; i < rows.length; i++) toggleEditMode(rows[i], true);
+    showNotification(rows.length + (rows.length === 1 ? ' record' : ' records') + ' in edit mode', 'success');
+}
+
+function bulkDeleteSelected() {
+    var rows = selectedRecordRows();
+    if (rows.length === 0) { showNotification('Select at least one record first', 'warning'); return; }
+    if (!confirm('Delete ' + rows.length + ' selected record(s)? This cannot be undone.')) return;
+
+    var bar = document.getElementById('bulk-actions-bar');
+    var zoneID = bar ? bar.getAttribute('data-zone-id') : '';
+    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
+
+    var formData = new URLSearchParams();
+    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
+    for (var i = 0; i < rows.length; i++) {
+        formData.append('name', rows[i].getAttribute('data-name'));
+        formData.append('type', rows[i].getAttribute('data-type'));
+        formData.append('original_content', rows[i].getAttribute('data-original-content'));
+        formData.append('original_priority', rows[i].getAttribute('data-original-priority'));
+    }
+
+    fetch('/zones/' + zoneID + '/records/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData.toString()
+    })
+    .then(function(resp) {
+        // Session expired: the auth middleware 303-redirects to /login, which
+        // fetch follows transparently. Detect it and surface a clear message.
+        if (resp.redirected) {
+            throw new Error('Session expired. Please reload the page to log in again.');
+        }
+        var ct = resp.headers.get('Content-Type') || '';
+        if (ct.indexOf('application/json') === -1) {
+            throw new Error('Unexpected response from server (not JSON).');
+        }
+        return resp.json().then(function(data) {
+            if (!resp.ok || !data.success) {
+                throw new Error(data.error || ('HTTP ' + resp.status));
+            }
+            return data;
+        });
+    })
+    .then(function(data) {
+        showNotification('Deleted ' + data.deleted + ' record(s)', 'success');
+        window.location.reload();
+    })
+    .catch(function(err) {
+        showNotification('Delete failed: ' + err.message, 'error');
+    });
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -385,6 +481,14 @@ function initDelegatedListeners() {
                     e.preventDefault();
                     cancelEditRow(actionTarget);
                     return;
+                case 'bulk-edit-selected':
+                    e.preventDefault();
+                    bulkEditSelected();
+                    return;
+                case 'bulk-delete-selected':
+                    e.preventDefault();
+                    bulkDeleteSelected();
+                    return;
             }
         }
 
@@ -400,14 +504,29 @@ function initDelegatedListeners() {
 
     document.addEventListener('change', function(e) {
         var actionTarget = e.target.closest('[data-action]');
-        if (!actionTarget) return;
-        var action = actionTarget.getAttribute('data-action');
-        if (action === 'toggle-template-vars' || action === 'toggle-apply-template-vars') {
-            toggleTemplateVars(actionTarget);
-        } else if (action === 'per-page') {
-            applyPerPage(actionTarget);
-        } else if (action === 'toggle-priority') {
-            togglePriority(actionTarget);
+        if (actionTarget) {
+            var action = actionTarget.getAttribute('data-action');
+            if (action === 'toggle-template-vars' || action === 'toggle-apply-template-vars') {
+                toggleTemplateVars(actionTarget);
+                return;
+            }
+            if (action === 'per-page') {
+                applyPerPage(actionTarget);
+                return;
+            }
+            if (action === 'toggle-priority') {
+                togglePriority(actionTarget);
+                return;
+            }
+            if (action === 'select-all-records') {
+                toggleSelectAllRecords(actionTarget);
+                return;
+            }
+        }
+        // Per-row selection checkbox (no data-action): keep the count and the
+        // header "select all" indicator in sync as individual rows toggle.
+        if (e.target.classList && e.target.classList.contains('record-select')) {
+            updateBulkSelectedCount();
         }
     });
 }
@@ -417,9 +536,11 @@ if (document.readyState === 'loading') {
         initDelegatedListeners();
         initRecordPriority();
         initImportFeedback();
+        updateBulkSelectedCount();
     });
 } else {
     initDelegatedListeners();
     initRecordPriority();
     initImportFeedback();
+    updateBulkSelectedCount();
 }

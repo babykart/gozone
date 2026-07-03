@@ -928,6 +928,41 @@ details summary {
     width: 1%;
 }
 
+.records-table .col-select {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.col-select input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.bulk-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.6rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--bg-subtle, rgba(37, 99, 235, 0.06));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.bulk-selected-count {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted, #475569);
+}
+
+.bulk-actions-buttons {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
 .ev-prio {
     min-width: 4rem;
     width: 4rem;

@@ -23,11 +23,19 @@
 
 {{if .Records}}
 <div class="card">
+    <div class="bulk-actions" id="bulk-actions-bar" data-zone-id="{{.Zone.ID}}" data-csrf="{{.CSRFToken}}">
+        <span id="bulk-selected-count" class="bulk-selected-count">0 records selected</span>
+        <span class="bulk-actions-buttons">
+            <button type="button" class="btn btn-sm btn-secondary" data-action="bulk-edit-selected">Edit selected</button>
+            <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-selected">Delete selected</button>
+        </span>
+    </div>
     <div class="table-responsive">
     <table class="table records-table">
         <caption class="visually-hidden">Records in {{.Zone.Name}}</caption>
         <thead>
             <tr>
+                <th class="col-select"><input type="checkbox" data-action="select-all-records" aria-label="Select all records"></th>
                 <th class="col-name">Name</th>
                 <th>Type</th>
                 <th>TTL</th>
@@ -44,6 +52,7 @@
             {{$zoneName := .Zone.Name}}
             {{range .Records}}
             <tr data-name="{{.Name}}" data-type="{{.Type}}" data-zone-id="{{$zoneID}}" data-csrf="{{$csrf}}" data-original-content="{{.Record.Content}}" data-original-priority="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" data-disabled="{{.Record.Disabled}}">
+                <td class="col-select"><input type="checkbox" class="record-select" aria-label="Select record {{.Name}}"></td>
                 <td class="col-name"><span class="rv rv-name">{{relativeName .Name $zoneName}}</span><span class="ev ev-name" style="display:none">{{.Name}}</span></td>
                 <td class="nowrap"><span class="badge badge-type badge-type-{{.Type}}">{{.Type}}</span></td>
                 <td class="nowrap">

@@ -804,3 +804,173 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
+
+// recordIdentity uniquely identifies a single record within an RRSet on the
+// PowerDNS read path: content is the post-SplitPriority value and priority is
+// the detached priority (0 for non-priority types). Two MX records pointing at
+// the same target differ only by priority, so both fields are required.
+type recordIdentity struct {
+	Content  string
+	Priority int
+}
+
+// BulkDeleteRecords deletes several records from a zone in a single PATCH
+// (POST /zones/{zone_id}/records/bulk-delete).
+//
+// The selection is transmitted as parallel form arrays (name, type,
+// original_content, original_priority) — one tuple per selected row. Records
+// are grouped by name+type. When every record of an RRSet is selected the whole
+// RRSet is removed with changetype DELETE; otherwise the RRSet is REPLACEd with
+// the remaining records. Because PowerDNS rejects a separate priority element
+// in a PATCH, remaining records are re-encoded via prepareRecordContent so
+// MX/SRV priority is embedded back into the content. Returns JSON so the
+// AJAX caller can refresh the page on success.
+func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
+	zoneID := r.PathValue("zone_id")
+
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	names := r.PostForm["name"]
+	types := r.PostForm["type"]
+	contents := r.PostForm["original_content"]
+	priorities := r.PostForm["original_priority"]
+
+	// Parallel arrays; iterate only over indices present in name+type so a
+	// mismatched POST cannot index out of range. content/priority are read
+	// defensively per index.
+	count := len(names)
+	if len(types) < count {
+		count = len(types)
+	}
+
+	// removal[name|type] -> set of record identities to drop.
+	removal := make(map[string]map[recordIdentity]struct{})
+	processed := 0
+	for i := 0; i < count; i++ {
+		name := strings.TrimSpace(names[i])
+		recordType := strings.TrimSpace(types[i])
+		if name == "" || recordType == "" {
+			continue
+		}
+		if err := validators.ValidateRecordType(recordType); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record type: " + err.Error()})
+			return
+		}
+		name = normalizeRecordName(name, zoneID)
+		if err := validators.ValidateRecordName(name); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid record name: " + err.Error()})
+			return
+		}
+
+		content := ""
+		if i < len(contents) {
+			content = strings.TrimSpace(contents[i])
+		}
+		priority := 0
+		if i < len(priorities) {
+			priority, _ = strconv.Atoi(strings.TrimSpace(priorities[i]))
+		}
+
+		key := name + "|" + recordType
+		if removal[key] == nil {
+			removal[key] = make(map[recordIdentity]struct{})
+		}
+		removal[key][recordIdentity{Content: content, Priority: priority}] = struct{}{}
+		processed++
+	}
+
+	if processed == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No records selected"})
+		return
+	}
+
+	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	if err != nil {
+		logger.Error("BulkDeleteRecords: failed to list records", "zone_id", zoneID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to fetch records"})
+		return
+	}
+
+	var patch []models.RRSet
+	type removedRRSet struct {
+		Name    string
+		Type    string
+		Records []models.RecordInfo
+	}
+	var removedSnapshot []removedRRSet
+	totalRemoved := 0
+
+	for i := range allRecords {
+		rr := allRecords[i]
+		key := rr.Name + "|" + rr.Type
+		drop, ok := removal[key]
+		if !ok {
+			continue
+		}
+
+		var remaining, removed []models.RecordInfo
+		for _, rec := range rr.Records {
+			if _, hit := drop[recordIdentity{Content: rec.Content, Priority: rec.Priority}]; hit {
+				removed = append(removed, rec)
+			} else {
+				remaining = append(remaining, rec)
+			}
+		}
+		if len(removed) == 0 {
+			// Selection referenced nothing that still exists (stale row); skip.
+			continue
+		}
+
+		if len(remaining) == 0 {
+			patch = append(patch, models.RRSet{Name: rr.Name, Type: rr.Type, ChangeType: "DELETE"})
+		} else {
+			// Re-embed MX/SRV priority into content (PowerDNS rejects a separate
+			// priority element in a PATCH) and re-apply FQDN/quote normalisation
+			// idempotently before sending the trimmed RRSet back.
+			for j := range remaining {
+				remaining[j].Content, remaining[j].Priority =
+					prepareRecordContent(rr.Type, remaining[j].Content, remaining[j].Priority)
+			}
+			patch = append(patch, models.RRSet{
+				Name:       rr.Name,
+				Type:       rr.Type,
+				TTL:        rr.TTL,
+				ChangeType: "REPLACE",
+				Records:    remaining,
+			})
+		}
+
+		removedSnapshot = append(removedSnapshot, removedRRSet{Name: rr.Name, Type: rr.Type, Records: removed})
+		totalRemoved += len(removed)
+	}
+
+	if len(patch) > 0 {
+		if err := h.PDNS.PatchRecords(r.Context(), zoneID, patch); err != nil {
+			logger.Error("BulkDeleteRecords: PatchRecords failed", "zone_id", zoneID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete records"})
+			return
+		}
+	}
+
+	snapshotJSON := ""
+	if b, err := json.Marshal(removedSnapshot); err == nil {
+		snapshotJSON = string(b)
+	}
+	if _, err := h.DB.Exec(
+		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'delete_record', ?, ?, '')",
+		user.ID, zoneID,
+		fmt.Sprintf("Bulk deleted %d record(s) across %d RRSet(s)", totalRemoved, len(removedSnapshot)),
+		snapshotJSON,
+	); err != nil {
+		logger.Error("failed to log bulk delete_record activity", "zone_id", zoneID, "error", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": totalRemoved,
+	})
+}
