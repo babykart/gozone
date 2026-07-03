@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -619,5 +620,105 @@ func TestGetAllTemplates(t *testing.T) {
 	}
 	if len(templates) != 2 {
 		t.Errorf("expected 2 templates, got %d", len(templates))
+	}
+}
+
+func TestBulkDeleteTemplates_Success(t *testing.T) {
+	h := newTestHandler(t)
+	t1 := seedTemplate(t, h, "t1", "")
+	t2 := seedTemplate(t, h, "t2", "")
+	t3 := seedTemplate(t, h, "t3", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	// Delete t1 and t2; t1 duplicated to exercise dedupe; t3 survives.
+	body := "template_id=" + strconv.FormatInt(t1, 10) + "&template_id=" + strconv.FormatInt(t2, 10) + "&template_id=" + strconv.FormatInt(t1, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteTemplates(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=2 failed=[], got %+v", resp)
+	}
+
+	var remaining int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_templates WHERE id IN (?, ?)", t1, t2).Scan(&remaining)
+	if remaining != 0 {
+		t.Errorf("expected t1 and t2 gone, got %d remaining", remaining)
+	}
+	var t3Count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_templates WHERE id = ?", t3).Scan(&t3Count)
+	if t3Count != 1 {
+		t.Errorf("t3 should still exist, got count=%d", t3Count)
+	}
+}
+
+func TestBulkDeleteTemplates_BuiltinRejected(t *testing.T) {
+	h := newTestHandler(t)
+	normal := seedTemplate(t, h, "normal", "")
+	res, err := h.DB.Exec(
+		"INSERT INTO zone_templates (name, description, is_builtin) VALUES (?, ?, ?)",
+		"builtin-tmpl", "A built-in template", true,
+	)
+	if err != nil {
+		t.Fatalf("seed builtin template: %v", err)
+	}
+	builtin, _ := res.LastInsertId()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(normal, 10) + "&template_id=" + strconv.FormatInt(builtin, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteTemplates(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (best-effort), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 {
+		t.Errorf("expected deleted=1 (normal), got %d", resp.Deleted)
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0] != strconv.FormatInt(builtin, 10) {
+		t.Errorf("expected failed=[%d (builtin)], got %+v", builtin, resp.Failed)
+	}
+
+	var builtinCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_templates WHERE id = ?", builtin).Scan(&builtinCount)
+	if builtinCount != 1 {
+		t.Errorf("built-in template must not be deleted, got count=%d", builtinCount)
+	}
+}
+
+func TestBulkDeleteTemplates_NoSelection(t *testing.T) {
+	h := newTestHandler(t)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.BulkDeleteTemplates(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }

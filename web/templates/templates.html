@@ -12,15 +12,28 @@
 
             {{if .Templates}}
             <div class="card">
+                <div class="bulk-actions" id="bulk-templates-bar" data-csrf="{{.CSRFToken}}">
+                    <span id="bulk-templates-count" class="bulk-selected-count">0 templates selected</span>
+                    <span class="bulk-actions-buttons">
+                        <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-templates">Delete selected</button>
+                    </span>
+                </div>
                 <div class="table-responsive">
                 <table class="table">
                     <caption class="visually-hidden">Zone templates</caption>
                     <thead>
-                        <tr><th>Name</th><th>Description</th><th>Built-in</th><th>Actions</th></tr>
+                        <tr>
+                            <th class="col-select"><input type="checkbox" data-action="select-all-templates" aria-label="Select all deletable templates"></th>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Built-in</th>
+                            <th>Actions</th>
+                        </tr>
                     </thead>
                     <tbody>
                         {{range .Templates}}
-                        <tr>
+                        <tr data-template-id="{{.ID}}">
+                            <td class="col-select">{{if not .IsBuiltin}}<input type="checkbox" class="template-select" aria-label="Select template {{.Name}}">{{end}}</td>
                             <td><strong><a href="/templates/{{.ID}}/edit">{{.Name}}</a></strong></td>
                             <td>{{.Description}}</td>
                             <td>{{if .IsBuiltin}}<span class="badge badge-active">Built-in</span>{{else}}-{{end}}</td>

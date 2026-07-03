@@ -234,6 +234,64 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/templates", http.StatusSeeOther)
 }
 
+// BulkDeleteTemplates deletes several zone templates by template_id
+// (POST /templates/bulk-delete).
+//
+// Admin-only. The selection arrives as repeated "template_id" form values.
+// Built-in templates are never deletable: the DELETE is scoped with
+// "is_builtin = 0" so a built-in id (or one that no longer exists) is reported
+// in `failed` via RowsAffected==0 without aborting the rest. Returns JSON
+// {deleted, failed} for the AJAX toolbar.
+func (h *Handler) BulkDeleteTemplates(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order; drop anything that is not a positive int.
+	seen := make(map[int64]struct{})
+	var templateIDs []int64
+	for _, idStr := range r.PostForm["template_id"] {
+		id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		templateIDs = append(templateIDs, id)
+	}
+
+	if len(templateIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No templates selected"})
+		return
+	}
+
+	deleted := 0
+	var failed []string
+	for _, tid := range templateIDs {
+		// Built-in guard: "is_builtin = 0" refuses built-in templates atomically.
+		res, err := h.DB.Exec("DELETE FROM zone_templates WHERE id = ? AND is_builtin = 0", tid)
+		if err != nil {
+			logger.Error("bulk delete template failed", "template_id", tid, "error", err)
+			failed = append(failed, strconv.FormatInt(tid, 10))
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			failed = append(failed, strconv.FormatInt(tid, 10))
+			continue
+		}
+		deleted++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
 // AddTemplateRecord adds a record to a template.
 func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
