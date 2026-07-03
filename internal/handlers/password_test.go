@@ -182,13 +182,14 @@ func TestLogin_ExpiredPasswordForcesChange(t *testing.T) {
 }
 
 // TestCreateUser_SetsMustChangePassword verifies that an admin-created user is
-// flagged must_change_password (admin-set initial password → rotate on first login).
+// flagged must_change_password when the "force password change" option is on
+// (admin-set initial password → rotate on first login).
 func TestCreateUser_SetsMustChangePassword(t *testing.T) {
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
 
-	body := "username=svc&email=svc@example.com&password=Abcdef1!&role=user"
+	body := "username=svc&email=svc@example.com&password=Abcdef1!&role=user&force_password_change=1"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -202,6 +203,32 @@ func TestCreateUser_SetsMustChangePassword(t *testing.T) {
 	h.DB.QueryRow("SELECT must_change_password FROM users WHERE username='svc'").Scan(&mustChange)
 	if mustChange != 1 {
 		t.Errorf("admin-created user should have must_change_password=1, got %d", mustChange)
+	}
+}
+
+// TestCreateUser_NoForcePasswordChange verifies that when the admin leaves the
+// "force password change on first login" box unchecked, the new account is
+// created without the must_change_password flag so it can log straight in.
+func TestCreateUser_NoForcePasswordChange(t *testing.T) {
+	h := strictPolicyHandler(t)
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// force_password_change omitted entirely (unchecked checkbox sends nothing).
+	body := "username=svc&email=svc@example.com&password=Abcdef1!&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	var mustChange int
+	h.DB.QueryRow("SELECT must_change_password FROM users WHERE username='svc'").Scan(&mustChange)
+	if mustChange != 0 {
+		t.Errorf("user created without force flag should have must_change_password=0, got %d", mustChange)
 	}
 }
 

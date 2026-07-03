@@ -122,6 +122,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
 	lastName := strings.TrimSpace(r.FormValue("last_name"))
 	role := strings.TrimSpace(r.FormValue("role"))
+	// Optional "force password change on first login" toggle. Secure-by-default:
+	// the form renders the checkbox checked, so an admin-set initial password is
+	// rotated on first login unless the admin explicitly opts out.
+	forceChangeStr := strings.TrimSpace(r.FormValue("force_password_change"))
+	forceChange := forceChangeStr == "1" || forceChangeStr == "on" || forceChangeStr == "true"
+	mustChangeVal := 0
+	if forceChange {
+		mustChangeVal = 1
+	}
 
 	if username == "" || email == "" || password == "" {
 		http.Redirect(w, r, "/users/new", http.StatusSeeOther)
@@ -160,8 +169,8 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	result, err := tx.Exec(
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password)
-		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
-		username, email, string(hash), firstName, lastName, role,
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		username, email, string(hash), firstName, lastName, role, mustChangeVal,
 	)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to create user", err)
