@@ -445,6 +445,91 @@ function bulkDeleteSelected() {
     });
 }
 
+// --- Bulk zone selection ---
+//
+// The zones list (admin only) exposes per-row checkboxes, a "select all"
+// checkbox in the header, and a "Delete selected" toolbar button that POSTs
+// the selection to /zones/bulk-delete (best-effort) and reloads on success.
+
+function selectedZoneRows() {
+    var boxes = document.querySelectorAll('.zone-select');
+    var rows = [];
+    for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
+    }
+    return rows;
+}
+
+function updateBulkZonesCount() {
+    var rows = selectedZoneRows();
+    var countEl = document.getElementById('bulk-zones-count');
+    if (countEl) {
+        countEl.textContent = rows.length + (rows.length === 1 ? ' zone selected' : ' zones selected');
+    }
+    var selectAll = document.querySelector('[data-action="select-all-zones"]');
+    var boxes = document.querySelectorAll('.zone-select');
+    if (selectAll) {
+        var allChecked = boxes.length > 0;
+        for (var i = 0; i < boxes.length; i++) {
+            if (!boxes[i].checked) { allChecked = false; break; }
+        }
+        selectAll.checked = allChecked;
+    }
+}
+
+function toggleSelectAllZones(cb) {
+    var boxes = document.querySelectorAll('.zone-select');
+    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
+    updateBulkZonesCount();
+}
+
+function bulkDeleteZones() {
+    var rows = selectedZoneRows();
+    if (rows.length === 0) { showNotification('Select at least one zone first', 'warning'); return; }
+    if (!confirm('Delete ' + rows.length + ' selected zone(s)? This cannot be undone.')) return;
+
+    var bar = document.getElementById('bulk-zones-bar');
+    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
+
+    var formData = new URLSearchParams();
+    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
+    for (var i = 0; i < rows.length; i++) {
+        formData.append('zone_id', rows[i].getAttribute('data-zone-id'));
+    }
+
+    fetch('/zones/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData.toString()
+    })
+    .then(function(resp) {
+        if (resp.redirected) {
+            throw new Error('Session expired. Please reload the page to log in again.');
+        }
+        var ct = resp.headers.get('Content-Type') || '';
+        if (ct.indexOf('application/json') === -1) {
+            throw new Error('Unexpected response from server (not JSON).');
+        }
+        return resp.json().then(function(data) {
+            if (!resp.ok || !data.success) {
+                throw new Error(data.error || ('HTTP ' + resp.status));
+            }
+            return data;
+        });
+    })
+    .then(function(data) {
+        var msg = 'Deleted ' + data.deleted + ' zone(s)';
+        if (data.failed && data.failed.length > 0) {
+            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
+        }
+        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
+        window.location.reload();
+    })
+    .catch(function(err) {
+        showNotification('Delete failed: ' + err.message, 'error');
+    });
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -489,6 +574,10 @@ function initDelegatedListeners() {
                     e.preventDefault();
                     bulkDeleteSelected();
                     return;
+                case 'bulk-delete-zones':
+                    e.preventDefault();
+                    bulkDeleteZones();
+                    return;
             }
         }
 
@@ -522,11 +611,18 @@ function initDelegatedListeners() {
                 toggleSelectAllRecords(actionTarget);
                 return;
             }
+            if (action === 'select-all-zones') {
+                toggleSelectAllZones(actionTarget);
+                return;
+            }
         }
         // Per-row selection checkbox (no data-action): keep the count and the
         // header "select all" indicator in sync as individual rows toggle.
         if (e.target.classList && e.target.classList.contains('record-select')) {
             updateBulkSelectedCount();
+        }
+        if (e.target.classList && e.target.classList.contains('zone-select')) {
+            updateBulkZonesCount();
         }
     });
 }
@@ -537,10 +633,12 @@ if (document.readyState === 'loading') {
         initRecordPriority();
         initImportFeedback();
         updateBulkSelectedCount();
+        updateBulkZonesCount();
     });
 } else {
     initDelegatedListeners();
     initRecordPriority();
     initImportFeedback();
     updateBulkSelectedCount();
+    updateBulkZonesCount();
 }

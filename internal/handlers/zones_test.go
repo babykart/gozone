@@ -255,6 +255,122 @@ func TestDeleteZone_EmptyID(t *testing.T) {
 	}
 }
 
+func TestBulkDeleteZones_Success(t *testing.T) {
+	var deletedPaths []string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletedPaths = append(deletedPaths, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Three selected, one duplicated — dedupe must collapse it to 3 deletes.
+	body := "zone_id=a.example.com&zone_id=b.example.com&zone_id=c.example.com&zone_id=a.example.com"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteZones(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 3 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=3 failed=[], got %+v", resp)
+	}
+	if len(deletedPaths) != 3 {
+		t.Errorf("expected 3 PDNS DELETE calls, got %d (%v)", len(deletedPaths), deletedPaths)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone'").Scan(&count)
+	if count != 3 {
+		t.Errorf("expected 3 delete_zone activity logs, got %d", count)
+	}
+}
+
+func TestBulkDeleteZones_PartialFailure(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			if strings.Contains(r.URL.Path, "boom.example.com") {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "zone_id=ok.example.com&zone_id=boom.example.com"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteZones(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (best-effort), got %d", w.Code)
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 || len(resp.Failed) != 1 || resp.Failed[0] != "boom.example.com" {
+		t.Errorf("expected deleted=1 failed=[boom.example.com], got %+v", resp)
+	}
+
+	// Only the successful zone is logged.
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 delete_zone activity log (success only), got %d", count)
+	}
+}
+
+func TestBulkDeleteZones_NoSelection(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("PDNS should not be called for an empty selection")
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteZones(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
+	}
+}
+
 func TestViewZone(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

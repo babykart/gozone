@@ -371,6 +371,67 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)
 }
 
+// BulkDeleteZones deletes several zones by zone_id (POST /zones/bulk-delete).
+//
+// Admin-only. The selection arrives as repeated "zone_id" form values (one per
+// checked row). PowerDNS exposes no batch delete, so each zone is removed with
+// its own DELETE; the operation is best-effort — a failure on one zone does not
+// abort the rest, and each successfully removed zone gets its own 'delete_zone'
+// activity log entry (keyed by zone_id) so the zone-scoped activity view stays
+// correct. Returns JSON {deleted, failed} for the AJAX toolbar.
+func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
+
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order so a duplicated checkbox value can't double-
+	// delete or double-log.
+	seen := make(map[string]struct{})
+	var zoneIDs []string
+	for _, id := range r.PostForm["zone_id"] {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		zoneIDs = append(zoneIDs, id)
+	}
+
+	if len(zoneIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No zones selected"})
+		return
+	}
+
+	deleted := 0
+	var failed []string
+	for _, zoneID := range zoneIDs {
+		if err := h.PDNS.DeleteZone(r.Context(), zoneID); err != nil {
+			logger.Error("bulk delete zone failed", "zone_id", zoneID, "error", err)
+			failed = append(failed, zoneID)
+			continue
+		}
+		deleted++
+		if _, err := h.DB.Exec(
+			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_zone', ?)",
+			user.ID, zoneID, fmt.Sprintf("Deleted zone %s", zoneID),
+		); err != nil {
+			logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
 // ViewZone renders a zone detail page with its records, activity logs, and
 // metadata (GET /zones/{zone_id}).
 func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {

@@ -13,11 +13,20 @@
 </div>
 
 {{if .Zones}}
+{{if .IsAdmin}}
+<div class="bulk-actions" id="bulk-zones-bar" data-csrf="{{.CSRFToken}}">
+    <span id="bulk-zones-count" class="bulk-selected-count">0 zones selected</span>
+    <span class="bulk-actions-buttons">
+        <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-zones">Delete selected</button>
+    </span>
+</div>
+{{end}}
 <div class="table-responsive">
 <table class="table">
     <caption class="visually-hidden">DNS zones</caption>
     <thead>
         <tr>
+            {{if .IsAdmin}}<th class="col-select"><input type="checkbox" data-action="select-all-zones" aria-label="Select all zones"></th>{{end}}
             <th>Name</th>
             <th>Type</th>
             <th>Serial</th>
@@ -27,8 +36,10 @@
         </tr>
     </thead>
     <tbody>
+        {{$csrf := .CSRFToken}}
         {{range .Zones}}
-        <tr>
+        <tr data-zone-id="{{.Zone.ID}}">
+            {{if $.IsAdmin}}<td class="col-select"><input type="checkbox" class="zone-select" aria-label="Select zone {{.Zone.Name}}"></td>{{end}}
             <td><a href="/zones/{{.Zone.ID}}"><strong>{{.Zone.Name}}</strong></a></td>
             <td><span class="badge badge-kind-{{.Zone.Kind}}">{{.Zone.Kind}}</span></td>
             <td>{{.Zone.Serial}}</td>
@@ -36,6 +47,13 @@
             <td>{{if .Zone.DNSSEC}}<span class="badge badge-active">Yes</span>{{else}}<span class="badge badge-disabled">No</span>{{end}}</td>
             <td>
                 <a href="/zones/{{.Zone.ID}}" class="btn btn-sm btn-secondary">View</a>
+                {{if $.IsAdmin}}
+                <form method="POST" action="/zones/delete" style="display:inline" data-confirm="Delete zone {{.Zone.Name}}? This cannot be undone.">
+                    <input type="hidden" name="gorilla.csrf.Token" value="{{$csrf}}">
+                    <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+                {{end}}
             </td>
         </tr>
         {{end}}

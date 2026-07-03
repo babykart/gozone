@@ -299,6 +299,7 @@ func runServer(cfg *config.Config) error {
 				r.Get("/zones/new", h.CreateZonePage)
 				r.Post("/zones/create", h.CreateZone)
 				r.Post("/zones/delete", h.DeleteZone)
+				r.Post("/zones/bulk-delete", h.BulkDeleteZones)
 
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.CheckZoneAccess(db))
