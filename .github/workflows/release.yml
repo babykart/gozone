@@ -38,6 +38,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
+      # Stamp the version banner into the binary. .dockerignore excludes .git,
+      # so the Dockerfile cannot read git itself; pass the tag/SHA/date from the
+      # GitHub context via the VERSION/COMMIT/DATE build args declared in the
+      # Dockerfile.
+      - name: Build metadata
+        id: bmeta
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -45,6 +53,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.bmeta.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
