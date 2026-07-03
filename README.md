@@ -111,6 +111,10 @@ A password complexity policy is enforced whenever a password is set or changed: 
 | `password.require_digit` | `GOZONE_PASSWORD_REQUIRE_DIGIT` | `true` | Require at least one digit. |
 | `password.require_special` | `GOZONE_PASSWORD_REQUIRE_SPECIAL` | `true` | Require at least one non-letter/non-digit character (punctuation, symbol, space). |
 | `password.history_size` | `GOZONE_PASSWORD_HISTORY_SIZE` | `0` | Number of previous hashes retained per user to prevent reuse (the current password always counts as used). `0` disables history. |
+| `password.max_age_days` | `GOZONE_PASSWORD_MAX_AGE_DAYS` | `0` | Maximum password age in days. `0` (default) means passwords never expire. When a password is older than this, the user is forced to change it on next login. |
+| `password.expiry_warn_days` | `GOZONE_PASSWORD_EXPIRY_WARN_DAYS` | `0` | Show a dashboard "password expiring soon" warning this many days before expiry. `0` disables the warning. Only meaningful when `max_age_days > 0`. |
+
+An admin/operator password reset (`UpdateUser`, `gozone user reset-password`) and admin user creation both flag the account `must_change_password`: on the next login the user is redirected to **Change Password** and the session is restricted to that page (plus `/logout`) until a new password is chosen. The same forced-change flow triggers when a password expires.
 
 ### Login Lockout (brute-force protection)
 

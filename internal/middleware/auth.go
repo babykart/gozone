@@ -190,6 +190,16 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Force-change gate: a user flagged must_change_password (admin reset
+			// or password expiry) may only reach the change-password page and
+			// logout until they set a new password. Everything else redirects to
+			// /change-password so the session cannot be used until the password is
+			// rotated.
+			if user.MustChangePassword && !mustChangeAllowedPath(r.URL.Path) {
+				http.Redirect(w, r, "/change-password", http.StatusSeeOther)
+				return
+			}
+
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -278,6 +288,18 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// mustChangeAllowedPath reports the paths a forced-change user may reach
+// without having changed their password yet: the change-password form/handler
+// and logout. Every other authenticated route redirects to /change-password.
+func mustChangeAllowedPath(p string) bool {
+	switch p {
+	case "/change-password", "/logout":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetUser retrieves the currently authenticated user from the request context.
 //
 // Returns nil if no user was stored by Auth or APIKeyAuth middleware.
@@ -292,17 +314,19 @@ func GetUser(r *http.Request) *models.User {
 func loadUser(ctx context.Context, db *database.DB, userID int64) (*models.User, error) {
 	user := &models.User{}
 	var enabled int
+	var mustChange int
 	err := db.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at
+		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
 		 FROM users WHERE id = ?`, userID,
 	).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
-		&user.CreatedAt, &user.UpdatedAt,
+		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
 	)
+	user.Enabled = enabled == 1
+	user.MustChangePassword = mustChange == 1
 	if err != nil {
 		return nil, err
 	}
-	user.Enabled = enabled == 1
 	return user, nil
 }

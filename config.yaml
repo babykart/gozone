@@ -56,13 +56,20 @@ auth:
 # Defaults below are secure-by-default; relax them here or via GOZONE_PASSWORD_*
 # env vars. history_size retains that many previous hashes per user to prevent
 # reuse (0 disables; the current password always counts as "used").
+# max_age_days is the password lifetime in days (0 = no expiry, the default);
+# when a password expires the user is forced to change it on next login, and
+# expiry_warn_days shows a dashboard warning that many days before expiry.
+# Note: any admin/operator password reset AND user creation set
+# must_change_password, forcing the user to pick their own on next login.
 password:
   min_length: 8
   require_uppercase: true
   require_lowercase: true
   require_digit: true
-  require_special: false
+  require_special: true
   history_size: 0
+  max_age_days: 0
+  expiry_warn_days: 0
 
 # Login brute-force protection. /login is always protected by an in-memory
 # per-IP rate limiter (5/min). The two knobs below add defence-in-depth:

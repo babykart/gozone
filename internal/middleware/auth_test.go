@@ -851,3 +851,81 @@ func TestLoadUser_RespectsContext(t *testing.T) {
 		t.Fatal("expected loadUser to fail with a cancelled context (m37)")
 	}
 }
+
+func TestMustChangeAllowedPath(t *testing.T) {
+	cases := map[string]bool{
+		"/change-password": true,
+		"/logout":          true,
+		"/dashboard":       false,
+		"/zones":           false,
+		"/profile":         false,
+		"/api/v1/zones":    false,
+		"":                 false,
+	}
+	for p, want := range cases {
+		if got := mustChangeAllowedPath(p); got != want {
+			t.Errorf("mustChangeAllowedPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// TestAuth_MustChangePasswordGate verifies the force-change gate: a user
+// flagged must_change_password is redirected away from protected pages to
+// /change-password, but can still reach /change-password itself.
+func TestAuth_MustChangePasswordGate(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "mustchange", "user", true)
+	if _, err := db.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", userID); err != nil {
+		t.Fatal(err)
+	}
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "mustchange", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Protected path: redirected, handler not reached.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+	if reached {
+		t.Error("handler must not be reached for a must-change user on /dashboard")
+	}
+	if w.Code != http.StatusSeeOther || !strings.HasSuffix(w.Header().Get("Location"), "/change-password") {
+		t.Errorf("expected redirect to /change-password, got %d %q", w.Code, w.Header().Get("Location"))
+	}
+
+	// /change-password: allowed through.
+	reached = false
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet, "/change-password", nil)
+	r2.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w2, r2)
+	if !reached {
+		t.Error("handler should be reached for a must-change user on /change-password")
+	}
+}
+
+// TestLoadUser_PopulatesMustChangePassword verifies loadUser reads the
+// must_change_password column into the user struct.
+func TestLoadUser_PopulatesMustChangePassword(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "mc", "user", true)
+	db.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", userID)
+
+	user, err := loadUser(context.Background(), db, userID)
+	if err != nil {
+		t.Fatalf("loadUser: %v", err)
+	}
+	if !user.MustChangePassword {
+		t.Error("expected MustChangePassword=true")
+	}
+}

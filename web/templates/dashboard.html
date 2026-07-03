@@ -4,6 +4,13 @@
                 <h2>Dashboard</h2>
             </div>
 
+            {{if .PasswordExpiryWarn}}
+            <div class="alert alert-warning">
+                Your password expires in {{.PasswordExpiryWarn}} day(s). Please change it soon at
+                <a href="/change-password">Change Password</a>.
+            </div>
+            {{end}}
+
             {{if .Stats}}
             <div class="stats-grid">
                 {{range .Stats}}

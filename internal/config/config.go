@@ -130,6 +130,14 @@ type PasswordConfig struct {
 	// HistorySize is the number of previous password hashes retained per user
 	// to prevent reuse. 0 (default) disables history checking.
 	HistorySize int `yaml:"history_size"`
+	// MaxAgeDays is the maximum password age in days. 0 (default) means no
+	// expiry: passwords never expire. When > 0, a user whose password is older
+	// than MaxAgeDays is forced to change it on next login.
+	MaxAgeDays int `yaml:"max_age_days"`
+	// ExpiryWarnDays is the number of days before expiry during which the
+	// dashboard shows a "password expiring soon" warning. 0 (default) disables
+	// the warning. Only meaningful when MaxAgeDays > 0.
+	ExpiryWarnDays int `yaml:"expiry_warn_days"`
 }
 
 // Policy converts the configuration into a validators.PasswordPolicy. It lives
@@ -238,7 +246,8 @@ func DefaultConfig() *Config {
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
 // GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
 // GOZONE_ACTIVITY_BATCH_SIZE, GOZONE_PASSWORD_MIN_LENGTH,
-// GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
+// GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
+// GOZONE_PASSWORD_EXPIRY_WARN_DAYS, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
 // GOZONE_PASSWORD_REQUIRE_SPECIAL.
 //
@@ -368,6 +377,15 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.Password.HistorySize < 0 {
 		return fmt.Errorf("invalid password.history_size %d: must be non-negative", cfg.Password.HistorySize)
+	}
+	if cfg.Password.MaxAgeDays < 0 {
+		return fmt.Errorf("invalid password.max_age_days %d: must be non-negative", cfg.Password.MaxAgeDays)
+	}
+	if cfg.Password.ExpiryWarnDays < 0 {
+		return fmt.Errorf("invalid password.expiry_warn_days %d: must be non-negative", cfg.Password.ExpiryWarnDays)
+	}
+	if cfg.Password.MaxAgeDays > 0 && cfg.Password.ExpiryWarnDays >= cfg.Password.MaxAgeDays {
+		return fmt.Errorf("invalid password.expiry_warn_days %d: must be less than max_age_days %d", cfg.Password.ExpiryWarnDays, cfg.Password.MaxAgeDays)
 	}
 
 	if cfg.Server.ShutdownTimeoutSeconds <= 0 {
@@ -609,6 +627,20 @@ func applyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Password.RequireSpecial = b
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_MAX_AGE_DAYS"); v != "" {
+		n, err := envInt("GOZONE_PASSWORD_MAX_AGE_DAYS", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.MaxAgeDays = n
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_EXPIRY_WARN_DAYS"); v != "" {
+		n, err := envInt("GOZONE_PASSWORD_EXPIRY_WARN_DAYS", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.ExpiryWarnDays = n
 	}
 	return nil
 }

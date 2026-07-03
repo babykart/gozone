@@ -114,16 +114,18 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	var user models.User
 	var enabled int
+	var mustChange int
 	ensureDummyHash(h.Cfg.Auth.BcryptCost)
 	err := h.DB.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at
+		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
 		 FROM users WHERE username = ? AND enabled = 1`, username,
 	).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
-		&user.CreatedAt, &user.UpdatedAt,
+		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
 	)
 	user.Enabled = enabled == 1
+	user.MustChangePassword = mustChange == 1
 
 	if err == sql.ErrNoRows {
 		// Constant-time dummy bcrypt compare so missing-vs-wrong-password
@@ -218,7 +220,24 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to record successful login attempt", "username", username, "error", err)
 	}
 
-	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+	// Password expiry: when max_age_days is configured and the password is
+	// older than the limit, force a change. The flag is persisted so the Auth
+	// middleware's force-change gate keeps the session restricted to
+	// /change-password until the user rotates the password.
+	if !user.MustChangePassword && passwordExpired(h.Cfg.Password.MaxAgeDays, user.PasswordChangedAt) {
+		user.MustChangePassword = true
+		if _, err := h.DB.ExecContext(ctx,
+			"UPDATE users SET must_change_password = 1 WHERE id = ?", user.ID,
+		); err != nil {
+			logger.Error("failed to set must_change_password on expiry", "user_id", user.ID, "error", err)
+		}
+	}
+
+	redirectTarget := "/dashboard"
+	if user.MustChangePassword {
+		redirectTarget = "/change-password"
+	}
+	http.Redirect(w, r, redirectTarget, http.StatusSeeOther)
 }
 
 // recordFailedAttempt logs a failed login to login_attempts and, when

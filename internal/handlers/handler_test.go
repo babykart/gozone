@@ -54,6 +54,7 @@ func testTemplateSet() *template.Template {
 		{{define "user_create.html"}}Create User{{end}}
 		{{define "user_edit.html"}}Edit User{{end}}
 		{{define "profile.html"}}Profile{{end}}
+		{{define "change_password.html"}}Change Password{{end}}
 		{{define "api_keys.html"}}API Keys{{range .APIKeys}} {{.Description}}{{end}}{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}

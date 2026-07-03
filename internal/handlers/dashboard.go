@@ -14,6 +14,13 @@ import (
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
+	// Password-expiry warning: days remaining when the password is inside the
+	// configured warning window (0 otherwise — disabled or not yet imminent).
+	passwordWarnDays := 0
+	if user != nil {
+		passwordWarnDays = passwordExpiryWarnDays(h.Cfg.Password.MaxAgeDays, h.Cfg.Password.ExpiryWarnDays, user.PasswordChangedAt)
+	}
+
 	// Fetch statistics
 	stats, err := h.PDNS.GetStatistics(r.Context())
 	if err != nil {
@@ -70,14 +77,15 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":       "Dashboard - " + h.Cfg.Server.AppName,
-		"User":        user,
-		"Stats":       dashboardStats,
-		"Search":      "",
-		"Zones":       zoneCount,
-		"Server":      server,
-		"ServerStats": serverStats,
-		"IsAdmin":     user.IsAdmin(),
+		"Title":              "Dashboard - " + h.Cfg.Server.AppName,
+		"User":               user,
+		"Stats":              dashboardStats,
+		"Search":             "",
+		"Zones":              zoneCount,
+		"Server":             server,
+		"ServerStats":        serverStats,
+		"IsAdmin":            user.IsAdmin(),
+		"PasswordExpiryWarn": passwordWarnDays,
 	}
 	h.render(w, r, "dashboard.html", data)
 }

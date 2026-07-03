@@ -232,7 +232,7 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 	}
 
 	res, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1 WHERE id = ?",
 		string(hash), userID,
 	)
 	if err != nil {

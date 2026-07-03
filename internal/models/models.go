@@ -24,6 +24,12 @@ type User struct {
 	LockedUntil *time.Time `json:"locked_until,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+	// PasswordChangedAt is the timestamp the password was last set. Used to
+	// compute password age for expiry (config Password.MaxAgeDays).
+	PasswordChangedAt time.Time `json:"-"`
+	// MustChangePassword forces a password change on next login. Set when an
+	// admin/operator resets a user's password and when a password expires.
+	MustChangePassword bool `json:"-"`
 }
 
 // IsAdmin returns true if the user has the admin role.

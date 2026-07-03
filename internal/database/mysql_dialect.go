@@ -234,5 +234,7 @@ func (m *mysqlDialect) Migrations() []string {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			KEY idx_password_history_user_created (user_id, created_at DESC)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE users ADD COLUMN must_change_password TINYINT NOT NULL DEFAULT 0`,
 	}
 }

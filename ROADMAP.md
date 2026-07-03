@@ -67,11 +67,12 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Configurable via `config.yaml` + env vars (`GOZONE_PASSWORD_*`)
   - **Delivered.** `PasswordConfig` (`config.yaml` `password:` + `GOZONE_PASSWORD_*` env) drives `validators.ValidatePassword` (min length in runes + character-class checks; a zero policy accepts any non-empty password). Enforced at every password-set site: `CreateUser`, `UpdateUser`, and `gozone user reset-password`. Password history: new `password_history` table (SQLite/MySQL/PostgreSQL migrations) + `*Tx` methods `PasswordHistoryReused`/`RecordPassword`/`PrunePasswordHistory`; `history_size` retains the last N hashes per user (0 disables) and the current password always counts as used. Secure-by-default (`min_length:8`, all class requires on, `history_size:0`); the initial admin seed (`SeedAdminUser`) is exempt as a one-time bootstrap. Tests: `validators.TestValidatePassword`, `database.TestPasswordHistory_*`, handler policy/reuse tests, config defaults/env/bounds tests, CLI weak-password rejection test. gosec clean, full suite green.
 
-- [ ] **Password expiration**
-  - Maximum password age (default 90 days)
-  - Warn user N days before expiry
+- [x] **Password expiration**
+  - Maximum password age (**default 0 = no limit**; configurable via `password.max_age_days`)
+  - Warn user N days before expiry (`password.expiry_warn_days`, default 0 = no warning)
   - Force change on next login after expiry
   - Admin reset triggers forced change
+  - **Delivered.** `MaxAgeDays`/`ExpiryWarnDays` on `PasswordConfig` (`GOZONE_PASSWORD_MAX_AGE_DAYS` / `GOZONE_PASSWORD_EXPIRY_WARN_DAYS`). Two new `users` columns (`password_changed_at`, `must_change_password`, migrated across SQLite/MySQL/PostgreSQL). `Login` computes expiry via `passwordExpired` and, when expired, persists `must_change_password=1` then redirects to `/change-password` instead of `/dashboard`. New self-service `ChangePassword` handler + `change_password.html` template (current-password verify + policy + history, clears `must_change_password`). `Auth` middleware gate (`mustChangeAllowedPath`) restricts a forced-change session to `/change-password` + `/logout`. Forced-change is set on every admin/operator password reset (`CreateUser`, `UpdateUser`, `gozone user reset-password`); `SeedAdminUser` exempt. Dashboard shows a `passwordExpiryWarnDays` banner inside the warning window. Tests: `passwordExpired`/`passwordExpiryWarnDays`, `ChangePassword` (success/wrong-current), `Login` (must-change redirect, expired forces), `CreateUser`/`UpdateUser` set the flag, `Auth` gate + `mustChangeAllowedPath`, `loadUser` populates the flag. gosec clean, full suite green.
 
 - [x] **Account lockout**
   - [x] Lock account after N failed login attempts (default 5)

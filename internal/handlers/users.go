@@ -159,8 +159,8 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	result, err := tx.Exec(
-		`INSERT INTO users (username, email, password_hash, first_name, last_name, role)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password)
+		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
 		username, email, string(hash), firstName, lastName, role,
 	)
 	if err != nil {
@@ -349,7 +349,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, "Failed to hash password")
 			return
 		}
-		_, err = tx.Exec("UPDATE users SET password_hash = ? WHERE id = ?", string(hash), userID)
+		_, err = tx.Exec("UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1 WHERE id = ?", string(hash), userID)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return

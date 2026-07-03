@@ -258,6 +258,8 @@ func runServer(cfg *config.Config) error {
 			r.Get("/activity", h.ActivityPage)
 			r.Post("/logout", h.Logout)
 			r.Get("/profile", h.ProfilePage)
+			r.Get("/change-password", h.ChangePasswordPage)
+			r.Post("/change-password", h.ChangePassword)
 			r.Get("/profile/api-keys", h.ListAPIKeys)
 			r.Post("/profile/api-keys/create", h.CreateAPIKey)
 			r.Post("/profile/api-keys/delete", h.DeleteAPIKey)
