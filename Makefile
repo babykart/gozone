@@ -1,13 +1,20 @@
 APP_NAME := gozone
 BIN_DIR := ./bin
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X github.com/babykart/gozone/cmd.version=$(VERSION) \
+           -X github.com/babykart/gozone/cmd.commit=$(COMMIT) \
+           -X github.com/babykart/gozone/cmd.buildDate=$(DATE)
+
 .PHONY: default build run test test-verbose clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
 
 default: help
 
 # build the binary
 build:
-	go build -o $(BIN_DIR)/$(APP_NAME) .
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(APP_NAME) .
 
 # build and run locally
 run: build

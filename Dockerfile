@@ -1,6 +1,13 @@
 # Build stage
 FROM golang:1.26-alpine AS builder
 
+# Version metadata injected via ldflags. .dockerignore excludes .git, so these
+# default to "dev"/"none"/"unknown"; pass --build-arg VERSION=... (e.g. from
+# `git describe --tags`) in CI to stamp a real release.
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+
 RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /app
@@ -10,7 +17,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o /gozone .
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags "-X github.com/babykart/gozone/cmd.version=${VERSION} -X github.com/babykart/gozone/cmd.commit=${COMMIT} -X github.com/babykart/gozone/cmd.buildDate=${DATE}" \
+    -o /gozone .
 
 # Runtime stage
 FROM alpine:3.21

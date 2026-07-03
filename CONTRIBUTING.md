@@ -29,7 +29,7 @@ Before submitting a bug report:
 A good bug report includes:
 
 ```
-**Version**: gozone version or git commit hash
+**Version**: output of `gozone version` (version, commit, build date, platform)
 **Platform**: OS, architecture, Go version
 **PowerDNS version**: if the bug relates to zone/record operations
 **Steps to reproduce**:

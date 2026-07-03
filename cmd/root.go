@@ -21,6 +21,10 @@ func newRootCmd() *cobra.Command {
 		Use:   "gozone",
 		Short: "PowerDNS Admin Interface",
 		Long:  "GoZone — PowerDNS Admin Interface. Start the HTTP server with `gozone server`, or run `gozone <subcommand>` for administrative tasks (e.g. `gozone unlock`).",
+		// Version enables Cobra's built-in --version flag (prints
+		// "gozone version <version>"). Use `gozone version` for the full
+		// banner (commit, build date, go version, platform).
+		Version: version,
 		// Silence cobra's own error/usage printing: errors are surfaced by
 		// main() via logger.Fatal so we keep a single, structured report
 		// path and avoid stderr noise during tests.
@@ -32,6 +36,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newServerCmd())
 	cmd.AddCommand(newUnlockCmd())
+	cmd.AddCommand(newVersionCmd())
 	return cmd
 }
 

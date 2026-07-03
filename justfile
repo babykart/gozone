@@ -6,13 +6,18 @@ bin_dir := "./bin"
 git_bin := require("git")
 git_cliff_bin := require("git-cliff")
 
+version := `git describe --tags --always --dirty 2>/dev/null || echo dev`
+commit  := `git rev-parse --short HEAD 2>/dev/null`
+date    := `date -u +%Y-%m-%dT%H:%M:%SZ`
+ldflags := "-X github.com/babykart/gozone/cmd.version=" + version + " -X github.com/babykart/gozone/cmd.commit=" + commit + " -X github.com/babykart/gozone/cmd.buildDate=" + date
+
 # show available commands
 default:
     @just --list
 
 # build the binary
 build:
-    go build -o {{ bin_dir }}/{{ app_name }} .
+    go build -ldflags "{{ ldflags }}" -o {{ bin_dir }}/{{ app_name }} .
 
 # build and run locally
 run: build

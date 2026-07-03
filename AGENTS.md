@@ -46,7 +46,7 @@ all reported issues regardless of the exit code.
 - **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface (`internal/pdns/service.go`); generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
 - **Caching**: generic TTL cache in `internal/cache/cache.go`; `cachedClient` wraps `ZoneService` and caches zone lists, zone info, stats and server info; record mutations invalidate affected caches
 - **Errors**: `internal/errors.AppError` carries an HTTP status code and supports `Unwrap()` for compatibility with `errors.Is/As`
-- **CLI subcommand**: `gozone unlock --user <id|username>` (in `unlock.go`, a Cobra subcommand) clears account lockout directly via DB (emergency recovery when all admins are locked). Errors from `Execute()` are surfaced by `main()` via `logger.Fatal`; commands set `SilenceErrors`+`SilenceUsage` so cobra does not print to stderr.
+- **CLI subcommand**: `gozone unlock --user <id|username>` (in `unlock.go`, a Cobra subcommand) clears account lockout directly via DB (emergency recovery when all admins are locked). `gozone version` (in `version.go`) prints the version banner; `version`/`commit`/`buildDate` are ldflags-injected (`-X github.com/babykart/gozone/cmd.version=...`) and fall back to VCS metadata (`runtime/debug.ReadBuildInfo`) when unset. Cobra's built-in `--version` flag (one-liner) is enabled via `rootCmd.Version`. Errors from `Execute()` are surfaced by `main()` via `logger.Fatal`; commands set `SilenceErrors`+`SilenceUsage` so cobra does not print to stderr.
 
 ## Record Content Normalization
 
