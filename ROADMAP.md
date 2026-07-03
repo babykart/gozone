@@ -82,24 +82,6 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Configurable bcrypt cost (currently hardcoded, make env-configurable)
   - Consider Argon2id support as future alternative
 
-## CLI & Tooling
-
-- [x] **CLI password reset (`gozone user reset-password`)**
-  - Companion to `gozone user unlock`: open the configured database directly and set a new bcrypt password hash for a user (resolved by numeric ID or username, like `unlock`)
-  - Same operator-audit trail as `unlock`: `user_id = NULL` and `operatorIdentity()` (`username@hostname`) recorded in `activity_logs` under the action `reset_password_cli`
-  - Replaces the former recovery path documented in README.md, where operators had to hand-roll `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database
-  - Accepts the new password via a no-echo prompt (with confirmation), piped stdin, or `--password`; hashed with the configured `auth.bcrypt_cost`
-  - Idempotent on the audit side: re-running with the same hash is a data no-op but still logs the operator's intervention
-  - **Delivered.** `unlock` and `reset-password` are now nested under a new `gozone user` parent command (`cmd/user.go`). Both take the target user as a positional `<id|username>` argument. Shared helpers extracted: `resolveUser` (replaces the per-command lookup; uses `errors.Is(err, sql.ErrNoRows)` — the m18 anti-pattern), `readPassword` (`--password` flag → no-echo TTY prompt via `golang.org/x/term` → piped stdin), `operatorIdentity`. `cmd/unlock.go` removed; `user.go` holds the parent + both subcommands + helpers. Vendored `golang.org/x/term` (+ `x/sys` indirect). Tests: `unlock_test.go` rewritten for the `user unlock <id>` path; `user_test.go` covers reset-password (flag, stdin pipe, not-found, empty rejected, audit log). README "Recovering a locked admin" updated to `gozone user unlock <id>`; the manual-SQL note replaced by a `gozone user reset-password` section. gosec clean, full suite green in vendor mode.
-
-- [x] **Migrate the CLI to the Cobra framework**
-  - Replace the hand-rolled `flag`-based dispatch in `cmd/gozone/main.go` (`run()` switch + per-subcommand `flag.FlagSet`) with `spf13/cobra`
-  - Restructure into a root command (namespace: bare `gozone` prints help) plus subcommands: `server` (starts the HTTP server), existing `unlock`, the new `reset-password`, and future ones (`migrate`, `seed`, `version`, ...)
-  - Generate shell completion (bash/zsh/fish) and uniform `--help` output; keep `--config` consistent across commands
-  - Re-vendor with `just update` after adding the dependency (vendor mode — never `go get` without re-vendoring)
-  - Keep `unlock` and `reset-password` as direct DB access (no PowerDNS/HTTP dependency), preserving emergency-recovery when the server or all admins are unreachable
-  - **Delivered.** Repo layout restructured: a thin `main.go` at the repo root (`main()` → `cmd.Execute()`) plus a `cmd/` package (package `cmd`) holding the Cobra tree — `cmd/root.go` (root command = namespace, bare `gozone` prints help, persistent `--config`/`-c`, `Execute()`/`newRootCmd()`), `cmd/server.go` (`server` subcommand via `newServerCmd()` → `runServer`, plus the HTTP helpers: `parseTemplates`, `relativeName`, the rate-limit/HTTPS middlewares, periodic-job orchestrator), and `cmd/unlock.go` (`unlock` subcommand via `newUnlockCmd()`/`unlockUser()`). The former `cmd/gozone/main.go`/`server.go` were merged into `cmd/server.go`; tests moved to `cmd/` (`server_test.go`, `unlock_test.go`, `pagination_test.go`) as `package cmd`. Cobra + pflag + mousetrap vendored (`go mod tidy` + `go mod vendor`). `run()`/`runUnlock()` removed; tests rewritten to drive `newRootCmd()`+`SetArgs`+`Execute` and use `--config`/`--user` (pflag rejects single-dash long flags). Build path changed to `go build .` (Dockerfile, Makefile, justfile); `run` recipes and README "Building from Source" switched to `gozone server --config`. gosec clean, full suite green in vendor mode.
-
 ## Performance Targets
 
 - [ ] Average response time < 100ms for API endpoints
