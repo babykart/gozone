@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 func TestAPIListZones(t *testing.T) {
@@ -170,13 +174,39 @@ func TestAPIDeleteZone(t *testing.T) {
 	})
 	defer pdnsSrv.Close()
 
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/example.com", nil)
 	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
 	h.APIDeleteZone(w, r)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
+	}
+
+	// Regression: an API-driven zone delete must produce a 'delete_zone'
+	// activity log entry attributed to the API key owner.
+	var (
+		count      int
+		userID     sql.NullInt64
+		hasViaAPI  bool
+		detailsStr string
+	)
+	h.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com'`).Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 delete_zone activity log, got %d", count)
+	}
+	h.DB.QueryRow(`SELECT user_id, details FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com'`).Scan(&userID, &detailsStr)
+	if !userID.Valid || userID.Int64 != 1 {
+		t.Errorf("expected delete_zone attributed to user_id=1, got %v", userID)
+	}
+	hasViaAPI = strings.Contains(detailsStr, "via API")
+	if !hasViaAPI {
+		t.Errorf("expected details to mention 'via API', got %q", detailsStr)
 	}
 }
 
