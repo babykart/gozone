@@ -82,6 +82,22 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Configurable bcrypt cost (currently hardcoded, make env-configurable)
   - Consider Argon2id support as future alternative
 
+## CLI & Tooling
+
+- [ ] **CLI password reset (`gozone reset-password`)**
+  - Companion to the existing `gozone unlock` subcommand: open the configured database directly and set a new bcrypt password hash for a user (resolved by numeric ID or username, like `unlock`)
+  - Same operator-audit trail as `unlock`: `user_id = NULL` and `operatorIdentity()` (`username@hostname`) recorded in `activity_logs` under a new action (e.g. `reset_password_cli`)
+  - Replaces the current recovery path documented in README.md, where operators must hand-roll `UPDATE users SET password_hash = '<hash>' WHERE username = '<user>';` against the database
+  - Accepts the new password via a prompt (no echo) or a flag; hash it with `bcrypt.DefaultCost` before writing
+  - Idempotent on the audit side: re-running with the same hash is a data no-op but still logs the operator's intervention
+
+- [ ] **Migrate the CLI to the Cobra framework**
+  - Replace the hand-rolled `flag`-based dispatch in `cmd/gozone/main.go` (`run()` switch + per-subcommand `flag.FlagSet`) with `spf13/cobra`
+  - Restructure into a root command (`gozone` → server) plus subcommands: existing `unlock`, the new `reset-password`, and future ones (`migrate`, `seed`, `version`, ...)
+  - Generate shell completion (bash/zsh/fish) and uniform `--help` output; keep `--config` consistent across commands
+  - Re-vendor with `just update` after adding the dependency (vendor mode — never `go get` without re-vendoring)
+  - Keep `unlock` and `reset-password` as direct DB access (no PowerDNS/HTTP dependency), preserving emergency-recovery when the server or all admins are unreachable
+
 ## Performance Targets
 
 - [ ] Average response time < 100ms for API endpoints
