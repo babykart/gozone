@@ -530,6 +530,91 @@ function bulkDeleteZones() {
     });
 }
 
+// --- Bulk TSIG key selection ---
+//
+// The TSIG keys list exposes per-row checkboxes, a "select all" checkbox in
+// the header, and a "Delete selected" toolbar button that POSTs the selection
+// to /tsigkeys/bulk-delete (best-effort) and reloads on success.
+
+function selectedTSIGRows() {
+    var boxes = document.querySelectorAll('.tsig-select');
+    var rows = [];
+    for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
+    }
+    return rows;
+}
+
+function updateBulkTSIGCount() {
+    var rows = selectedTSIGRows();
+    var countEl = document.getElementById('bulk-tsig-count');
+    if (countEl) {
+        countEl.textContent = rows.length + (rows.length === 1 ? ' key selected' : ' keys selected');
+    }
+    var selectAll = document.querySelector('[data-action="select-all-tsig"]');
+    var boxes = document.querySelectorAll('.tsig-select');
+    if (selectAll) {
+        var allChecked = boxes.length > 0;
+        for (var i = 0; i < boxes.length; i++) {
+            if (!boxes[i].checked) { allChecked = false; break; }
+        }
+        selectAll.checked = allChecked;
+    }
+}
+
+function toggleSelectAllTSIG(cb) {
+    var boxes = document.querySelectorAll('.tsig-select');
+    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
+    updateBulkTSIGCount();
+}
+
+function bulkDeleteTSIG() {
+    var rows = selectedTSIGRows();
+    if (rows.length === 0) { showNotification('Select at least one key first', 'warning'); return; }
+    if (!confirm('Delete ' + rows.length + ' selected TSIG key(s)? This cannot be undone.')) return;
+
+    var bar = document.getElementById('bulk-tsig-bar');
+    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
+
+    var formData = new URLSearchParams();
+    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
+    for (var i = 0; i < rows.length; i++) {
+        formData.append('key_id', rows[i].getAttribute('data-key-id'));
+    }
+
+    fetch('/tsigkeys/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formData.toString()
+    })
+    .then(function(resp) {
+        if (resp.redirected) {
+            throw new Error('Session expired. Please reload the page to log in again.');
+        }
+        var ct = resp.headers.get('Content-Type') || '';
+        if (ct.indexOf('application/json') === -1) {
+            throw new Error('Unexpected response from server (not JSON).');
+        }
+        return resp.json().then(function(data) {
+            if (!resp.ok || !data.success) {
+                throw new Error(data.error || ('HTTP ' + resp.status));
+            }
+            return data;
+        });
+    })
+    .then(function(data) {
+        var msg = 'Deleted ' + data.deleted + ' key(s)';
+        if (data.failed && data.failed.length > 0) {
+            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
+        }
+        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
+        window.location.reload();
+    })
+    .catch(function(err) {
+        showNotification('Delete failed: ' + err.message, 'error');
+    });
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -578,6 +663,10 @@ function initDelegatedListeners() {
                     e.preventDefault();
                     bulkDeleteZones();
                     return;
+                case 'bulk-delete-tsig':
+                    e.preventDefault();
+                    bulkDeleteTSIG();
+                    return;
             }
         }
 
@@ -615,6 +704,10 @@ function initDelegatedListeners() {
                 toggleSelectAllZones(actionTarget);
                 return;
             }
+            if (action === 'select-all-tsig') {
+                toggleSelectAllTSIG(actionTarget);
+                return;
+            }
         }
         // Per-row selection checkbox (no data-action): keep the count and the
         // header "select all" indicator in sync as individual rows toggle.
@@ -623,6 +716,9 @@ function initDelegatedListeners() {
         }
         if (e.target.classList && e.target.classList.contains('zone-select')) {
             updateBulkZonesCount();
+        }
+        if (e.target.classList && e.target.classList.contains('tsig-select')) {
+            updateBulkTSIGCount();
         }
     });
 }
@@ -634,6 +730,7 @@ if (document.readyState === 'loading') {
         initImportFeedback();
         updateBulkSelectedCount();
         updateBulkZonesCount();
+        updateBulkTSIGCount();
     });
 } else {
     initDelegatedListeners();
@@ -641,4 +738,5 @@ if (document.readyState === 'loading') {
     initImportFeedback();
     updateBulkSelectedCount();
     updateBulkZonesCount();
+    updateBulkTSIGCount();
 }

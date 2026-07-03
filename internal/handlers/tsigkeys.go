@@ -218,6 +218,67 @@ func (h *Handler) DeleteTSIGKey(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/tsigkeys", http.StatusSeeOther)
 }
 
+// BulkDeleteTSIGKeys deletes several TSIG keys by key_id
+// (POST /tsigkeys/bulk-delete).
+//
+// Admin-only. The selection arrives as repeated "key_id" form values (one per
+// checked row). Each key is removed with its own DELETE (PowerDNS has no batch
+// API); the operation is best-effort — a failure on one key does not abort the
+// rest, and each successfully removed key gets its own 'delete_tsigkey' activity
+// log entry. Returns JSON {deleted, failed} for the AJAX toolbar.
+func (h *Handler) BulkDeleteTSIGKeys(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
+
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order so a duplicated checkbox value can't double-
+	// delete or double-log.
+	seen := make(map[string]struct{})
+	var keyIDs []string
+	for _, id := range r.PostForm["key_id"] {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		keyIDs = append(keyIDs, id)
+	}
+
+	if len(keyIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No TSIG keys selected"})
+		return
+	}
+
+	deleted := 0
+	var failed []string
+	for _, keyID := range keyIDs {
+		if err := h.PDNS.DeleteTSIGKey(r.Context(), keyID); err != nil {
+			logger.Error("bulk delete tsig key failed", "key_id", keyID, "error", err)
+			failed = append(failed, keyID)
+			continue
+		}
+		deleted++
+		if _, err := h.DB.Exec(
+			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_tsigkey', ?)",
+			user.ID, fmt.Sprintf("Deleted TSIG key %s", keyID),
+		); err != nil {
+			logger.Error("failed to log delete_tsigkey activity", "key_id", keyID, "error", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}
+
 func tsigAlgorithms() []string {
 	return []string{
 		"hmac-md5",

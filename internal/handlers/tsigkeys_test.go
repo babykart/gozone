@@ -420,6 +420,121 @@ func TestDeleteTSIGKey_PDNSError(t *testing.T) {
 	}
 }
 
+func TestBulkDeleteTSIGKeys_Success(t *testing.T) {
+	var deletedPaths []string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletedPaths = append(deletedPaths, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Three selected, one duplicated — dedupe must collapse it to 3 deletes.
+	body := "key_id=a-key.&key_id=b-key.&key_id=c-key.&key_id=a-key."
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteTSIGKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 3 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=3 failed=[], got %+v", resp)
+	}
+	if len(deletedPaths) != 3 {
+		t.Errorf("expected 3 PDNS DELETE calls, got %d (%v)", len(deletedPaths), deletedPaths)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_tsigkey'").Scan(&count)
+	if count != 3 {
+		t.Errorf("expected 3 delete_tsigkey activity logs, got %d", count)
+	}
+}
+
+func TestBulkDeleteTSIGKeys_PartialFailure(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			if strings.Contains(r.URL.Path, "boom-key.") {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "key_id=ok-key.&key_id=boom-key."
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteTSIGKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (best-effort), got %d", w.Code)
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 || len(resp.Failed) != 1 || resp.Failed[0] != "boom-key." {
+		t.Errorf("expected deleted=1 failed=[boom-key.], got %+v", resp)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_tsigkey'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 delete_tsigkey activity log (success only), got %d", count)
+	}
+}
+
+func TestBulkDeleteTSIGKeys_NoSelection(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("PDNS should not be called for an empty selection")
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteTSIGKeys(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
+	}
+}
+
 func TestGenerateTSIGSecret(t *testing.T) {
 	key1, err := generateTSIGSecret()
 	if err != nil {

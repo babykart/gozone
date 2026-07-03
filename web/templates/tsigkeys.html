@@ -12,15 +12,27 @@
 
             {{if .Keys}}
             <div class="card">
+                <div class="bulk-actions" id="bulk-tsig-bar" data-csrf="{{.CSRFToken}}">
+                    <span id="bulk-tsig-count" class="bulk-selected-count">0 keys selected</span>
+                    <span class="bulk-actions-buttons">
+                        <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-tsig">Delete selected</button>
+                    </span>
+                </div>
                 <div class="table-responsive">
                 <table class="table">
                     <caption class="visually-hidden">TSIG keys</caption>
                     <thead>
-                        <tr><th>Name</th><th>Algorithm</th><th>Actions</th></tr>
+                        <tr>
+                            <th class="col-select"><input type="checkbox" data-action="select-all-tsig" aria-label="Select all TSIG keys"></th>
+                            <th>Name</th>
+                            <th>Algorithm</th>
+                            <th>Actions</th>
+                        </tr>
                     </thead>
                     <tbody>
                         {{range .Keys}}
-                        <tr>
+                        <tr data-key-id="{{.ID}}">
+                            <td class="col-select"><input type="checkbox" class="tsig-select" aria-label="Select key {{.Name}}"></td>
                             <td><code>{{.Name}}</code></td>
                             <td><span class="badge badge-type badge-type-tsig">{{.Algorithm}}</span></td>
                             <td class="actions-cell">

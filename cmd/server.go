@@ -338,6 +338,7 @@ func runServer(cfg *config.Config) error {
 				r.Get("/tsigkeys/{key_id}/edit", h.EditTSIGKeyPage)
 				r.Post("/tsigkeys/{key_id}/update", h.UpdateTSIGKey)
 				r.Post("/tsigkeys/delete", h.DeleteTSIGKey)
+				r.Post("/tsigkeys/bulk-delete", h.BulkDeleteTSIGKeys)
 
 				r.Get("/templates", h.ListTemplates)
 				r.Get("/templates/new", h.CreateTemplatePage)
