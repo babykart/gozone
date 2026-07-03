@@ -547,14 +547,38 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
-// rrsetSnapshot serialises an RRSet to JSON for storage in activity_logs.
+// rrsetSnapshot serialises an RRSet to JSON for storage in activity_logs,
+// rendered in the logical API representation (priority as a dedicated field,
+// content without the leading priority prefix) so the activity-log "View
+// change" matches the REST API payload and the zone view rather than the
+// PowerDNS wire format.
+//
+// The write-path callers pass an RRSet already processed by
+// prepareRecordContent, which embeds MX/SRV priority into the content (PDNS
+// rejects a separate priority element in a PATCH); SplitPriority reverses that
+// for display. The read-path callers pass an RRSet straight from ListRecords,
+// which already splits the priority — SplitPriority is idempotent, so applying
+// it uniformly keeps Before and After consistent within a single entry.
+//
 // It returns an empty string for a nil RRSet (e.g. create on a new RRSet or
 // delete when the RRSet could not be fetched).
 func rrsetSnapshot(rrset *models.RRSet) string {
 	if rrset == nil {
 		return ""
 	}
-	b, err := json.Marshal(rrset)
+	// Copy rather than mutate: callers reuse this RRSet for the PDNS PATCH,
+	// whose content must keep the priority embedded.
+	records := make([]models.RecordInfo, len(rrset.Records))
+	for i, r := range rrset.Records {
+		records[i] = r
+		if p, c, ok := models.SplitPriority(rrset.Type, r.Content); ok {
+			records[i].Content = c
+			records[i].Priority = p
+		}
+	}
+	snapshot := *rrset
+	snapshot.Records = records
+	b, err := json.Marshal(snapshot)
 	if err != nil {
 		return ""
 	}

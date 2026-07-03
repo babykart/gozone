@@ -2528,3 +2528,61 @@ func TestBulkDeleteRecords_NoSelection(t *testing.T) {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }
+
+// TestRRSetSnapshot_NormalizesMXPriority verifies the activity-log snapshot
+// renders MX/SRV priority as a dedicated field (API form) instead of the
+// PowerDNS wire format (priority embedded in content), and that the input
+// RRSet is not mutated — callers reuse it for the PDNS PATCH.
+func TestRRSetSnapshot_NormalizesMXPriority(t *testing.T) {
+	rrset := &models.RRSet{
+		Name: "example.com.",
+		Type: "MX",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "10 mail.example.com.", Disabled: false},
+		},
+	}
+	got := rrsetSnapshot(rrset)
+	if !strings.Contains(got, `"priority":10`) {
+		t.Errorf("expected dedicated priority:10 in snapshot, got %s", got)
+	}
+	if !strings.Contains(got, `"content":"mail.example.com."`) {
+		t.Errorf("expected content without embedded priority, got %s", got)
+	}
+	if rrset.Records[0].Content != "10 mail.example.com." {
+		t.Errorf("rrsetSnapshot mutated the input content: %q", rrset.Records[0].Content)
+	}
+}
+
+// TestRRSetSnapshot_IdempotentOnSplitInput verifies the read-path (already
+// split) snapshot is left untouched, keeping Before and After consistent.
+func TestRRSetSnapshot_IdempotentOnSplitInput(t *testing.T) {
+	rrset := &models.RRSet{
+		Name: "example.com.",
+		Type: "MX",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "mail.example.com.", Priority: 20},
+		},
+	}
+	got := rrsetSnapshot(rrset)
+	if !strings.Contains(got, `"priority":20`) || !strings.Contains(got, `"content":"mail.example.com."`) {
+		t.Errorf("expected unchanged split form, got %s", got)
+	}
+}
+
+// TestRRSetSnapshot_NonPriorityUntouched verifies non-priority types pass
+// through unchanged.
+func TestRRSetSnapshot_NonPriorityUntouched(t *testing.T) {
+	rrset := &models.RRSet{
+		Name: "www.example.com.",
+		Type: "A",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "1.2.3.4"},
+		},
+	}
+	if got := rrsetSnapshot(rrset); !strings.Contains(got, `"content":"1.2.3.4"`) {
+		t.Errorf("expected A content unchanged, got %s", got)
+	}
+}
