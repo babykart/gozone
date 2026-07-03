@@ -16,7 +16,7 @@ build:
 
 # build and run locally
 run: build
-    {{ bin_dir }}/{{ app_name }} -config config.yaml
+    {{ bin_dir }}/{{ app_name }} server --config config.yaml
 
 # run tests
 test:

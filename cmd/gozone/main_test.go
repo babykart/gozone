@@ -19,6 +19,15 @@ import (
 	"github.com/babykart/gozone/internal/middleware"
 )
 
+// executeServer builds a fresh root command and runs `gozone server` with
+// the given args, returning the resulting error. Each call gets its own
+// command tree so flag state is never shared between tests.
+func executeServer(args ...string) error {
+	cmd := newRootCmd()
+	cmd.SetArgs(append([]string{"server"}, args...))
+	return cmd.Execute()
+}
+
 func TestParseTemplates(t *testing.T) {
 	tmpl, err := parseTemplates()
 	if err != nil {
@@ -41,7 +50,7 @@ database:
 		t.Fatalf("write config: %v", err)
 	}
 
-	err := run([]string{"-config", cfgPath})
+	err := executeServer("--config", cfgPath)
 	if err == nil {
 		t.Fatal("expected error for unsupported database driver")
 	}
@@ -57,15 +66,14 @@ func TestRun_InvalidYAML(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	err := run([]string{"-config", cfgPath})
+	err := executeServer("--config", cfgPath)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
 	}
 }
 
 func TestRun_InvalidFlag(t *testing.T) {
-	err := run([]string{"-unknown-flag"})
-	if err == nil {
+	if err := executeServer("--unknown-flag"); err == nil {
 		t.Fatal("expected error for invalid flag")
 	}
 }

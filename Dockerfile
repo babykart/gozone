@@ -33,4 +33,4 @@ USER nonroot
 
 EXPOSE 8080
 
-CMD ["/gozone", "--config", "config.yaml"]
+CMD ["/gozone", "server", "--config", "config.yaml"]

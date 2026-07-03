@@ -5,8 +5,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"flag"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -17,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"os/user"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,32 +34,13 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := Execute(); err != nil {
 		logger.Fatal("gozone failed", "error", err)
 	}
 }
 
-func run(args []string) error {
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		switch args[0] {
-		case "unlock":
-			return runUnlock(args[1:])
-		}
-	}
-
-	flags := flag.NewFlagSet("gozone", flag.ContinueOnError)
-	configPath := flags.String("config", "config.yaml", "Path to YAML configuration file")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
+func runServer(cfg *config.Config) error {
 	logger.Info("starting PowerDNS Admin interface")
-
-	// Load configuration
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
-	}
 
 	// Initialize structured logging with configured level
 	logger.Init(cfg.Logging.Level)
@@ -719,113 +697,4 @@ func loginUsernameKey(r *http.Request) string {
 		return emptyUsernameRateLimitKey
 	}
 	return username
-}
-
-// runUnlock implements the `gozone unlock` emergency CLI.
-//
-// Usage:
-//
-//	gozone unlock --user <id|username> [--config <path>]
-//
-// It opens the configured database, resolves the user (by numeric ID or
-// username), clears their lockout and failed-login counter, then exits.
-// Designed for operators who have shell access to the host but lost the
-// admin password or got themselves locked out by a brute-force storm —
-// the web UI alone is not enough to recover.
-func runUnlock(args []string) error {
-	flags := flag.NewFlagSet("gozone unlock", flag.ContinueOnError)
-	configPath := flags.String("config", "config.yaml", "Path to YAML configuration file")
-	userFlag := flags.String("user", "", "User ID or username to unlock (required)")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-	if *userFlag == "" {
-		return fmt.Errorf("--user is required (use --user <id> or --user <username>)")
-	}
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
-	}
-
-	logger.Init(cfg.Logging.Level)
-
-	db, err := database.New(&cfg.Database)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer db.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var (
-		userID     int64
-		username   string
-		resolveErr error
-	)
-	if id, perr := strconv.ParseInt(*userFlag, 10, 64); perr == nil && id > 0 {
-		userID = id
-		resolveErr = db.QueryRowContext(ctx,
-			`SELECT username FROM users WHERE id = ?`,
-			id,
-		).Scan(&username)
-		if resolveErr != nil {
-			if resolveErr == sql.ErrNoRows {
-				return fmt.Errorf("user id=%d not found", id)
-			}
-			return fmt.Errorf("lookup user id=%d: %w", id, resolveErr)
-		}
-	} else {
-		// Username lookup — case-insensitive; the Login handler does the same.
-		resolveErr = db.QueryRowContext(ctx,
-			`SELECT id, username FROM users WHERE lower(username) = lower(?)`,
-			*userFlag,
-		).Scan(&userID, &username)
-		if resolveErr != nil {
-			if resolveErr == sql.ErrNoRows {
-				return fmt.Errorf("user %q not found", *userFlag)
-			}
-			return fmt.Errorf("lookup user %q: %w", *userFlag, resolveErr)
-		}
-	}
-
-	logger.Info("unlocking user via CLI", "user_id", userID, "username", username)
-
-	if err := db.AdminUnlockUser(ctx, userID); err != nil {
-		return fmt.Errorf("unlock user %d: %w", userID, err)
-	}
-
-	// Log with user_id=NULL: the actor is the shell operator, not a GoZone
-	// user. Capture the OS identity (username@hostname) for audit (m4).
-	if _, err := db.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (NULL, 'unlock_user_cli', ?)",
-		fmt.Sprintf("Unlocked user id=%d username=%q by CLI operator %s", userID, username, operatorIdentity()),
-	); err != nil {
-		// Best-effort: the unlock itself succeeded, so we don't fail the CLI.
-		logger.Warn("failed to log CLI unlock activity", "user_id", userID, "error", err)
-	}
-
-	logger.Info("user unlocked", "user_id", userID, "username", username)
-	return nil
-}
-
-// operatorIdentity returns a string identifying the shell user running the
-// CLI, for audit purposes. Best-effort: falls back to "unknown" when the OS
-// user or hostname cannot be determined.
-func operatorIdentity() string {
-	var username, host string
-	if u, err := user.Current(); err == nil {
-		username = u.Username
-	}
-	if h, err := os.Hostname(); err == nil {
-		host = h
-	}
-	if username == "" {
-		username = "unknown"
-	}
-	if host == "" {
-		host = "unknown"
-	}
-	return username + "@" + host
 }

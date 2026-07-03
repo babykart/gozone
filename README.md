@@ -329,7 +329,7 @@ Requirements: Go 1.26+. A C compiler (gcc/clang) is required only when building 
 
 ```bash
 make build   # or: just build
-./bin/gozone -config config.yaml
+./bin/gozone server --config config.yaml
 ```
 
 ## License

@@ -37,7 +37,7 @@ all reported issues regardless of the exit code.
 
 ## Architecture
 
-- **Entrypoint**: `cmd/gozone/main.go` — wires chi router, loads config, seeds admin, starts server via `run() error`. Also defines `parseTemplates()` (FuncMap + template loading) and `relativeName()` (used by templates).
+- **Entrypoint**: `cmd/gozone/` — CLI built on **Cobra** (`spf13/cobra`). `main.go` calls `Execute()` from `root.go`. The root command is a namespace: bare `gozone` prints help. `gozone server` (in `server.go`) starts the HTTP server via `runServer(cfg *config.Config) error` in `main.go`, which wires the chi router, loads config, seeds admin, and serves. `main.go` also defines `parseTemplates()` (FuncMap + template loading) and `relativeName()` (used by templates). Subcommands live in their own files (`server.go`, `unlock.go`); `--config`/`-c` is a persistent flag on the root, inherited by subcommands.
 - **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *database.DB`, `PDNS pdns.ZoneService`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
 - **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/gozone/main.go` and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`
@@ -46,7 +46,7 @@ all reported issues regardless of the exit code.
 - **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface (`internal/pdns/service.go`); generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
 - **Caching**: generic TTL cache in `internal/cache/cache.go`; `cachedClient` wraps `ZoneService` and caches zone lists, zone info, stats and server info; record mutations invalidate affected caches
 - **Errors**: `internal/errors.AppError` carries an HTTP status code and supports `Unwrap()` for compatibility with `errors.Is/As`
-- **CLI subcommand**: `gozone unlock --user <id|username>` clears account lockout directly via DB (emergency recovery when all admins are locked).
+- **CLI subcommand**: `gozone unlock --user <id|username>` (in `unlock.go`, a Cobra subcommand) clears account lockout directly via DB (emergency recovery when all admins are locked). Errors from `Execute()` are surfaced by `main()` via `logger.Fatal`; commands set `SilenceErrors`+`SilenceUsage` so cobra does not print to stderr.
 
 ## Record Content Normalization
 

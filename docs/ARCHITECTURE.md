@@ -143,7 +143,7 @@ The `pdns` package wraps `*Client` in a `cachedClient` (internal/cache) — both
     - `srv.Shutdown(ctx)` stops accepting new connections
     - Goroutine waits on `<-shutdownDone` before returning
     - Deferred `db.Close()` and `cachedClient.Close()` run only after in-flight requests drain
-12. **`run() error`** returns errors so cleanup always executes before `logger.Fatal` in `main`
+12. **`runServer(cfg) error`** returns errors so cleanup always executes before `logger.Fatal` in `main`; the `server` Cobra subcommand's `RunE` loads config then calls `runServer`, and `Execute()` propagates the error to `main`
 
 ## Data Flow
 

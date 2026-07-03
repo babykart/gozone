@@ -91,12 +91,13 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Accepts the new password via a prompt (no echo) or a flag; hash it with `bcrypt.DefaultCost` before writing
   - Idempotent on the audit side: re-running with the same hash is a data no-op but still logs the operator's intervention
 
-- [ ] **Migrate the CLI to the Cobra framework**
+- [x] **Migrate the CLI to the Cobra framework**
   - Replace the hand-rolled `flag`-based dispatch in `cmd/gozone/main.go` (`run()` switch + per-subcommand `flag.FlagSet`) with `spf13/cobra`
-  - Restructure into a root command (`gozone` → server) plus subcommands: existing `unlock`, the new `reset-password`, and future ones (`migrate`, `seed`, `version`, ...)
+  - Restructure into a root command (namespace: bare `gozone` prints help) plus subcommands: `server` (starts the HTTP server), existing `unlock`, the new `reset-password`, and future ones (`migrate`, `seed`, `version`, ...)
   - Generate shell completion (bash/zsh/fish) and uniform `--help` output; keep `--config` consistent across commands
   - Re-vendor with `just update` after adding the dependency (vendor mode — never `go get` without re-vendoring)
   - Keep `unlock` and `reset-password` as direct DB access (no PowerDNS/HTTP dependency), preserving emergency-recovery when the server or all admins are unreachable
+  - **Delivered.** `cmd/gozone/` split into `main.go` (`main()` → `Execute()`, `runServer`, HTTP helpers), `root.go` (root Cobra command — namespace, bare `gozone` prints help — + persistent `--config`/`-c` + `Execute()`/`newRootCmd()`), `server.go` (`server` subcommand via `newServerCmd()` → `runServer`), and `unlock.go` (`unlock` subcommand via `newUnlockCmd()`/`unlockUser()`). Cobra + pflag + mousetrap vendored (`go mod tidy` + `go mod vendor`). `run()`/`runUnlock()` removed; tests in `main_test.go`/`unlock_test.go` rewritten to drive `newRootCmd()`+`SetArgs`+`Execute` and use `--config`/`--user` (pflag rejects single-dash long flags). Dockerfile CMD, `justfile run` and README "Building from Source" switched to `gozone server --config`. gosec clean, full suite green in vendor mode.
 
 ## Performance Targets
 
