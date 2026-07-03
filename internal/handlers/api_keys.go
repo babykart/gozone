@@ -231,3 +231,86 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/profile/api-keys?flash=deleted", http.StatusSeeOther)
 }
+
+// BulkDeleteAPIKeys deletes several of the current user's own API keys
+// (POST /profile/api-keys/bulk-delete).
+//
+// Not admin-only — every authenticated user manages their own keys. Ownership
+// is enforced per key via "DELETE ... WHERE id = ? AND user_id = ?": a key the
+// user does not own (or that no longer exists) is reported as failed and
+// skipped without aborting the rest. The whole batch runs in one transaction so
+// the deletes and their activity-log entries commit atomically. Returns JSON
+// {deleted, failed} for the AJAX toolbar.
+func (h *Handler) BulkDeleteAPIKeys(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := middleware.GetUser(r)
+
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order so a duplicated checkbox value can't double-
+	// delete or double-log.
+	seen := make(map[string]struct{})
+	var keyIDs []string
+	for _, id := range r.PostForm["key_id"] {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		keyIDs = append(keyIDs, id)
+	}
+
+	if len(keyIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No API keys selected"})
+		return
+	}
+
+	tx, err := h.DB.BeginTx(ctx, nil)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to begin transaction", err)
+		return
+	}
+	defer tx.Rollback()
+
+	deleted := 0
+	var failed []string
+	for _, keyID := range keyIDs {
+		// Ownership-scoped delete: RowsAffected==0 means not owned or already
+		// gone — report as failed and continue without aborting the batch.
+		res, err := tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ? AND user_id = ?", keyID, user.ID)
+		if err != nil {
+			h.renderInternalError(w, r, "Failed to delete API key", err)
+			return
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			failed = append(failed, keyID)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_api_key', ?)",
+			user.ID, fmt.Sprintf("Deleted API key %s", keyID),
+		); err != nil {
+			h.renderInternalError(w, r, "Failed to log activity", err)
+			return
+		}
+		deleted++
+	}
+
+	if err := tx.Commit(); err != nil {
+		h.renderInternalError(w, r, "Failed to commit transaction", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
+}

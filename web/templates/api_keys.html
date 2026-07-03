@@ -45,11 +45,18 @@
 {{if .APIKeys}}
 <div class="card">
     <h3>Your API Keys</h3>
+    <div class="bulk-actions" id="bulk-apikey-bar" data-csrf="{{.CSRFToken}}">
+        <span id="bulk-apikey-count" class="bulk-selected-count">0 keys selected</span>
+        <span class="bulk-actions-buttons">
+            <button type="button" class="btn btn-sm btn-danger" data-action="bulk-delete-apikeys">Delete selected</button>
+        </span>
+    </div>
     <div class="table-responsive">
     <table class="table">
         <caption class="visually-hidden">Your API keys</caption>
         <thead>
             <tr>
+                <th class="col-select"><input type="checkbox" data-action="select-all-apikeys" aria-label="Select all API keys"></th>
                 <th>Description</th>
                 <th>Created</th>
                 <th>Last Used</th>
@@ -58,7 +65,8 @@
         </thead>
         <tbody>
             {{range .APIKeys}}
-            <tr>
+            <tr data-key-id="{{.ID}}">
+                <td class="col-select"><input type="checkbox" class="apikey-select" aria-label="Select key {{.Description}}"></td>
                 <td><strong>{{.Description}}</strong></td>
                 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                 <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>

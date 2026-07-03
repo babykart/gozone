@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/babykart/gozone/internal/constants"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
@@ -134,5 +136,130 @@ func TestListAPIKeys_PaginationAndSearch(t *testing.T) {
 	}
 	if !strings.Contains(body, "PageInfo=") || !strings.Contains(body, "Search=key") {
 		t.Errorf("expected pagination info in response, body: %s", body)
+	}
+}
+
+func seedAPIKey(t *testing.T, db *database.DB, userID int64, desc, hash string) int64 {
+	t.Helper()
+	res, err := db.Exec(
+		`INSERT INTO api_keys (user_id, description, key_hash, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+		userID, desc, hash,
+	)
+	if err != nil {
+		t.Fatalf("seed api key: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+func TestBulkDeleteAPIKeys_Success(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	a := seedAPIKey(t, h.DB, 1, "alpha", "h1")
+	b := seedAPIKey(t, h.DB, 1, "beta", "h2")
+	c := seedAPIKey(t, h.DB, 1, "gamma", "h3")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Delete a and b; c is sent twice (dedupe) but c itself must survive.
+	body := fmt.Sprintf("key_id=%d&key_id=%d&key_id=%d", a, b, b)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteAPIKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=2 failed=[], got %+v", resp)
+	}
+
+	var remaining int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id=1").Scan(&remaining)
+	if remaining != 1 {
+		t.Errorf("expected 1 remaining key (gamma), got %d", remaining)
+	}
+	var gammaCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE id=?", c).Scan(&gammaCount)
+	if gammaCount != 1 {
+		t.Errorf("gamma key should still exist, got count=%d", gammaCount)
+	}
+
+	var logCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_api_key'").Scan(&logCount)
+	if logCount != 2 {
+		t.Errorf("expected 2 delete_api_key logs, got %d", logCount)
+	}
+}
+
+func TestBulkDeleteAPIKeys_RejectsNotOwned(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	// A second user owns a key the admin must not be able to delete.
+	testutil.SeedTestUser(t, h.DB, "other", "other", "user", true)
+	mine := seedAPIKey(t, h.DB, 1, "mine", "h1")
+	theirs := seedAPIKey(t, h.DB, 2, "theirs", "h2")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := fmt.Sprintf("key_id=%d&key_id=%d", mine, theirs)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteAPIKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (best-effort), got %d", w.Code)
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 {
+		t.Errorf("expected deleted=1, got %d", resp.Deleted)
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0] != fmt.Sprintf("%d", theirs) {
+		t.Errorf("expected failed=[%d], got %+v", theirs, resp.Failed)
+	}
+
+	// The other user's key must still be present.
+	var theirCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE id=?", theirs).Scan(&theirCount)
+	if theirCount != 1 {
+		t.Errorf("other user's key must not be deleted, got count=%d", theirCount)
+	}
+}
+
+func TestBulkDeleteAPIKeys_NoSelection(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteAPIKeys(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }

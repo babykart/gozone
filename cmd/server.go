@@ -267,6 +267,7 @@ func runServer(cfg *config.Config) error {
 			r.Get("/profile/api-keys", h.ListAPIKeys)
 			r.Post("/profile/api-keys/create", h.CreateAPIKey)
 			r.Post("/profile/api-keys/delete", h.DeleteAPIKey)
+			r.Post("/profile/api-keys/bulk-delete", h.BulkDeleteAPIKeys)
 
 			// Zones list (filtered by group membership for non-admin users)
 			r.Get("/zones", h.ListZones)
