@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -860,5 +861,188 @@ func TestUpdateUser_PasswordHistoryReuse(t *testing.T) {
 	// A different strong password is accepted.
 	if code := doUpdate("Str0ng!bb"); code != http.StatusSeeOther {
 		t.Errorf("different strong password expected redirect 303, got %d", code)
+	}
+}
+
+func TestBulkDeleteUsers_Success(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	u2 := testutil.SeedTestUser(t, h.DB, "user2", "p", "user", true)
+	u3 := testutil.SeedTestUser(t, h.DB, "user3", "p", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Delete u2 and u3; u2 duplicated to exercise dedupe.
+	body := fmt.Sprintf("user_id=%d&user_id=%d&user_id=%d", u2, u3, u2)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteUsers(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=2 failed=[], got %+v", resp)
+	}
+
+	var remaining int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id IN (?, ?)", u2, u3).Scan(&remaining)
+	if remaining != 0 {
+		t.Errorf("expected u2 and u3 gone, got %d remaining", remaining)
+	}
+	var logCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_user'").Scan(&logCount)
+	if logCount != 2 {
+		t.Errorf("expected 2 delete_user logs, got %d", logCount)
+	}
+}
+
+func TestBulkDeleteUsers_SelfSkipped(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	u2 := testutil.SeedTestUser(t, h.DB, "user2", "p", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Self (admin.ID) + a real user.
+	body := fmt.Sprintf("user_id=%d&user_id=%d", admin.ID, u2)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteUsers(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 {
+		t.Errorf("expected deleted=1, got %d", resp.Deleted)
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0] != fmt.Sprintf("%d", admin.ID) {
+		t.Errorf("expected failed=[%d (self)], got %+v", admin.ID, resp.Failed)
+	}
+
+	var adminCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=?", admin.ID).Scan(&adminCount)
+	if adminCount != 1 {
+		t.Errorf("admin should not have been deleted (self guard)")
+	}
+}
+
+// TestBulkDeleteUsers_LastAdminGuard verifies the per-iteration last-admin
+// guard: deleting 2 of 3 enabled admins is allowed (each check sees count>1),
+// but a disabled-admin actor cannot remove the only enabled admin.
+func TestBulkDeleteUsers_LastAdminGuard(t *testing.T) {
+	h := newTestHandler(t)
+	enabledAdmin := seedAdminUser(t, h) // id 1, enabled
+	// Disabled admin acts; they reach the handler (RequireAdmin checks role,
+	// not enabled) but the last-enabled-admin guard must still protect id 1.
+	disabledAdminID := testutil.SeedTestUser(t, h.DB, "admin2", "p", "admin", false)
+	actor := &models.User{ID: disabledAdminID, Username: "admin2", Role: "admin"}
+	u3 := testutil.SeedTestUser(t, h.DB, "user3", "p", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, actor)
+
+	// enabledAdmin (last enabled admin) must be refused; u3 (regular user) ok.
+	body := fmt.Sprintf("user_id=%d&user_id=%d", enabledAdmin.ID, u3)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteUsers(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (best-effort), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 {
+		t.Errorf("expected deleted=1 (user3), got %d", resp.Deleted)
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0] != fmt.Sprintf("%d", enabledAdmin.ID) {
+		t.Errorf("expected failed=[%d (last admin)], got %+v", enabledAdmin.ID, resp.Failed)
+	}
+
+	var stillThere int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id=?", enabledAdmin.ID).Scan(&stillThere)
+	if stillThere != 1 {
+		t.Errorf("last enabled admin must not be deleted")
+	}
+}
+
+// TestBulkDeleteUsers_MultipleAdminsAllowed verifies that selecting several
+// enabled admins still leaves at least one: each successful DELETE lowers the
+// CountEnabledAdmins seen by the next iteration.
+func TestBulkDeleteUsers_MultipleAdminsAllowed(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h) // id 1, enabled, the actor (survives)
+	a2 := testutil.SeedTestUser(t, h.DB, "admin2", "p", "admin", true)
+	a3 := testutil.SeedTestUser(t, h.DB, "admin3", "p", "admin", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := fmt.Sprintf("user_id=%d&user_id=%d", a2, a3)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteUsers(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=2 failed=[], got %+v", resp)
+	}
+
+	var enabledAdmins int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='admin' AND enabled=1").Scan(&enabledAdmins)
+	if enabledAdmins != 1 {
+		t.Errorf("expected exactly 1 enabled admin remaining (the actor), got %d", enabledAdmins)
+	}
+}
+
+func TestBulkDeleteUsers_NoSelection(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/bulk-delete", strings.NewReader(""))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteUsers(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }

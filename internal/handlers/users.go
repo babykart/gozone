@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -460,6 +461,117 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// BulkDeleteUsers deletes several users by user_id
+// (POST /users/bulk-delete).
+//
+// Admin-only. Preserves the two DeleteUser invariants per selected user:
+//   - an admin cannot delete themselves (self is reported as failed);
+//   - the last enabled admin can never be removed.
+//
+// The last-admin guard is checked per user INSIDE the single batch transaction,
+// so a selection containing several enabled admins still leaves at least one:
+// each successful DELETE lowers the CountEnabledAdmins value seen by the next
+// iteration (the transaction's own view includes its uncommitted deletes).
+// Failures (self, not-found, last admin) are skipped and reported in `failed`
+// without aborting the rest. Returns JSON {deleted, failed}.
+func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
+	admin := middleware.GetUser(r)
+
+	if err := r.ParseForm(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})
+		return
+	}
+
+	// Dedupe while preserving order; drop anything that is not a positive int.
+	seen := make(map[int64]struct{})
+	var userIDs []int64
+	for _, idStr := range r.PostForm["user_id"] {
+		id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		userIDs = append(userIDs, id)
+	}
+
+	if len(userIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No users selected"})
+		return
+	}
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		logger.Error("BulkDeleteUsers: begin tx", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to begin transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	deleted := 0
+	var failed []string
+	for _, userID := range userIDs {
+		// Guard 1: an admin cannot delete themselves.
+		if userID == admin.ID {
+			failed = append(failed, strconv.FormatInt(userID, 10))
+			continue
+		}
+		// Fetch the target to enforce the last-admin guard.
+		var role string
+		var enabled int
+		switch err := tx.QueryRow(`SELECT role, enabled FROM users WHERE id = ?`, userID).Scan(&role, &enabled); {
+		case errors.Is(err, sql.ErrNoRows):
+			failed = append(failed, strconv.FormatInt(userID, 10))
+			continue
+		case err != nil:
+			logger.Error("BulkDeleteUsers: fetch user", "user_id", userID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to fetch user"})
+			return
+		}
+		// Guard 2: never delete the last enabled admin.
+		if role == "admin" && enabled == 1 {
+			adminCount, err := tx.CountEnabledAdmins(r.Context())
+			if err != nil {
+				logger.Error("BulkDeleteUsers: count admins", "error", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to count admins"})
+				return
+			}
+			if adminCount <= 1 {
+				failed = append(failed, strconv.FormatInt(userID, 10))
+				continue
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM users WHERE id = ?", userID); err != nil {
+			logger.Error("BulkDeleteUsers: delete user", "user_id", userID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
+			return
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_user', ?)",
+			admin.ID, fmt.Sprintf("Deleted user %d", userID),
+		); err != nil {
+			logger.Error("BulkDeleteUsers: log activity", "user_id", userID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to log activity"})
+			return
+		}
+		deleted++
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.Error("BulkDeleteUsers: commit", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to commit transaction"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"deleted": deleted,
+		"failed":  failed,
+	})
 }
 
 // LockUser locks a user account for the configured auto-lockout duration

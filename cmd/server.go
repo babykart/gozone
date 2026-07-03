@@ -321,6 +321,7 @@ func runServer(cfg *config.Config) error {
 				r.Post("/users/{user_id}/lock", h.LockUser)
 				r.Post("/users/{user_id}/unlock", h.UnlockUser)
 				r.Post("/users/delete", h.DeleteUser)
+				r.Post("/users/bulk-delete", h.BulkDeleteUsers)
 
 				r.Get("/groups", h.ListGroups)
 				r.Get("/groups/new", h.CreateGroupPage)
