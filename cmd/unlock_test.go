@@ -43,6 +43,12 @@ admin:
   username: admin
   password: admin
   email: admin@test.local
+password:
+  min_length: 0
+  require_uppercase: false
+  require_lowercase: false
+  require_digit: false
+  require_special: false
 `
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config: %v", err)

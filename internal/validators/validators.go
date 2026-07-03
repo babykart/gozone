@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -783,6 +784,58 @@ func ValidateRecordPriority(recordType string, priority int) error {
 		if priority < 0 || priority > 65535 {
 			return fmt.Errorf("%s priority %d is out of range (0-65535)", strings.ToUpper(recordType), priority)
 		}
+	}
+	return nil
+}
+
+// PasswordPolicy describes the password complexity rules. It mirrors the
+// config.PasswordConfig fields without importing config (which would create a
+// cycle, since config imports validators). Callers convert via
+// config.PasswordConfig.Policy().
+type PasswordPolicy struct {
+	MinLength        int
+	RequireUppercase bool
+	RequireLowercase bool
+	RequireDigit     bool
+	RequireSpecial   bool
+}
+
+// ValidatePassword checks a candidate password against the policy. A rule with
+// a zero value is treated as disabled: a fully zero policy accepts any
+// non-empty password. "Special" means any rune that is neither a letter nor a
+// digit (punctuation, symbols, spaces). Length is measured in runes so
+// multi-byte passwords are not penalised.
+func ValidatePassword(password string, p PasswordPolicy) error {
+	if password == "" {
+		return fmt.Errorf("password must not be empty")
+	}
+	if p.MinLength > 0 && utf8.RuneCountInString(password) < p.MinLength {
+		return fmt.Errorf("password must be at least %d characters long", p.MinLength)
+	}
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, r := range password {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+	if p.RequireUppercase && !hasUpper {
+		return fmt.Errorf("password must contain at least one uppercase letter")
+	}
+	if p.RequireLowercase && !hasLower {
+		return fmt.Errorf("password must contain at least one lowercase letter")
+	}
+	if p.RequireDigit && !hasDigit {
+		return fmt.Errorf("password must contain at least one digit")
+	}
+	if p.RequireSpecial && !hasSpecial {
+		return fmt.Errorf("password must contain at least one special character")
 	}
 	return nil
 }

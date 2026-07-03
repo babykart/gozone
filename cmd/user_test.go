@@ -74,6 +74,22 @@ func TestResetPassword_NotFound(t *testing.T) {
 	}
 }
 
+func TestResetPassword_WeakPasswordRejected(t *testing.T) {
+	cfgPath, _ := writeUnlockTestConfig(t)
+	openUnlockTestDB(t, cfgPath)
+
+	// Force the strict production policy via env; it overrides the lenient
+	// password: block baked into the test config.
+	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "8")
+	t.Setenv("GOZONE_PASSWORD_REQUIRE_UPPERCASE", "true")
+	t.Setenv("GOZONE_PASSWORD_REQUIRE_DIGIT", "true")
+
+	err := executeResetPassword("--config", cfgPath, "--password", "weak", "admin")
+	if err == nil {
+		t.Fatal("expected weak password to be rejected by the policy")
+	}
+}
+
 func TestResetPassword_EmptyRejected(t *testing.T) {
 	cfgPath, _ := writeUnlockTestConfig(t)
 	openUnlockTestDB(t, cfgPath)

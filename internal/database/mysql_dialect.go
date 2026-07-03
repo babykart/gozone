@@ -226,5 +226,13 @@ func (m *mysqlDialect) Migrations() []string {
 		// fresh and existing databases. (MySQL < 8.0 parses DESC but ignores
 		// it; MySQL 8.0+ / modern MariaDB build a real descending index.)
 		`ALTER TABLE activity_logs DROP INDEX idx_activity_logs_zone_created, ADD INDEX idx_activity_logs_zone_created (zone_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS password_history (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			password_hash TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			KEY idx_password_history_user_created (user_id, created_at DESC)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

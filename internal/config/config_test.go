@@ -845,6 +845,74 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoad_PasswordDefaults(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Password.MinLength != 8 {
+		t.Errorf("default min_length = %d, want 8", cfg.Password.MinLength)
+	}
+	if !cfg.Password.RequireUppercase || !cfg.Password.RequireLowercase || !cfg.Password.RequireDigit || !cfg.Password.RequireSpecial {
+		t.Errorf("default class requires should all be true, got %+v", cfg.Password)
+	}
+	if cfg.Password.HistorySize != 0 {
+		t.Errorf("default history_size = %d, want 0 (disabled)", cfg.Password.HistorySize)
+	}
+}
+
+func TestLoad_PasswordEnvOverrides(t *testing.T) {
+	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "12")
+	t.Setenv("GOZONE_PASSWORD_HISTORY_SIZE", "5")
+	t.Setenv("GOZONE_PASSWORD_REQUIRE_UPPERCASE", "false")
+	t.Setenv("GOZONE_PASSWORD_REQUIRE_SPECIAL", "0")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Password.MinLength != 12 {
+		t.Errorf("min_length = %d, want 12", cfg.Password.MinLength)
+	}
+	if cfg.Password.HistorySize != 5 {
+		t.Errorf("history_size = %d, want 5", cfg.Password.HistorySize)
+	}
+	if cfg.Password.RequireUppercase {
+		t.Errorf("require_uppercase should be false via env")
+	}
+	if cfg.Password.RequireSpecial {
+		t.Errorf("require_special should be false via env")
+	}
+	// Unset envs keep their defaults.
+	if !cfg.Password.RequireLowercase || !cfg.Password.RequireDigit {
+		t.Errorf("unset class requires should keep default true, got %+v", cfg.Password)
+	}
+}
+
+func TestLoad_RejectsBadPasswordBounds(t *testing.T) {
+	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "-1")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for negative password.min_length, got nil")
+	}
+	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "1000")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for password.min_length > 256, got nil")
+	}
+	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "") // clear
+	t.Setenv("GOZONE_PASSWORD_HISTORY_SIZE", "-3")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for negative password.history_size, got nil")
+	}
+}
+
+func TestPasswordConfig_Policy(t *testing.T) {
+	p := PasswordConfig{MinLength: 10, RequireUppercase: true, RequireDigit: true}.Policy()
+	if p.MinLength != 10 || !p.RequireUppercase || !p.RequireDigit {
+		t.Errorf("Policy() did not mirror fields: %+v", p)
+	}
+	// HistorySize is intentionally not part of the validators policy.
+}
+
 func TestLoad_RejectsBadTrustedProxy(t *testing.T) {
 	t.Setenv("GOZONE_TRUSTED_PROXIES", "not-an-ip")
 	_, err := Load("")

@@ -76,6 +76,13 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 | API | API key SHA-256 hash in `Authorization: Bearer <key>` header |
 | Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` |
 
+## Password Policy
+
+- `config.PasswordConfig` (`password:` in YAML, `GOZONE_PASSWORD_*` env) drives `validators.ValidatePassword(password, cfg.Password.Policy())` — min length (runes) + character-class requires. Secure-by-default (`min_length:8`, all four classes on). A zero policy accepts any non-empty password.
+- Enforced at every password-set site: `CreateUser`, `UpdateUser` (when a new password is submitted), and `gozone user reset-password`. The initial admin seed (`SeedAdminUser`) is exempt (one-time bootstrap).
+- Password history (`password.history_size`, default 0 = disabled): the `password_history` table + `*Tx` methods `PasswordHistoryReused`/`RecordPassword`/`PrunePasswordHistory` retain the last N hashes per user; the current password always counts as "used". History writes reuse-check happen inside the handler/CLI transaction.
+- Handler unit tests relax the policy (`h.Cfg.Password = config.PasswordConfig{}` in `newTestHandler`) so existing weak test passwords pass; dedicated policy/reuse tests build their own strict handler.
+
 ## Test Infrastructure
 
 - **In-memory SQLite**: `testutil.NewTestDB(t)` auto-migrates the schema and auto-closes via `t.Cleanup`.

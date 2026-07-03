@@ -664,3 +664,51 @@ func TestValidateTSIGAlgorithm(t *testing.T) {
 		})
 	}
 }
+
+func TestValidatePassword(t *testing.T) {
+	strict := PasswordPolicy{
+		MinLength:        8,
+		RequireUppercase: true,
+		RequireLowercase: true,
+		RequireDigit:     true,
+		RequireSpecial:   true,
+	}
+	tests := []struct {
+		name     string
+		password string
+		policy   PasswordPolicy
+		wantErr  bool
+	}{
+		// Strict policy (the DefaultConfig values).
+		{"strict valid", "Abcdef1!", strict, false},
+		{"strict too short", "Ab1!", strict, true},
+		{"strict no upper", "abcdef1!", strict, true},
+		{"strict no lower", "ABCDEF1!", strict, true},
+		{"strict no digit", "Abcdefg!", strict, true},
+		{"strict no special", "Abcdefg1", strict, true},
+		{"strict empty", "", strict, true},
+		{"special can be space", "Abcdef1 ", strict, false},
+
+		// Length is measured in runes (multi-byte safe).
+		{"unicode length", "Äbcdef1!", strict, false}, // Ä + 7 = 8 runes
+
+		// A fully zero policy accepts any non-empty password.
+		{"zero policy short", "a", PasswordPolicy{}, false},
+		{"zero policy empty", "", PasswordPolicy{}, true},
+
+		// Selective policy: only min length.
+		{"min length only ok", "abcdefgh", PasswordPolicy{MinLength: 8}, false},
+		{"min length only fail", "abc", PasswordPolicy{MinLength: 8}, true},
+
+		// MinLength 0 disables the length check even with class requires on.
+		{"no min with classes", "aA1!", PasswordPolicy{RequireUppercase: true, RequireLowercase: true, RequireDigit: true, RequireSpecial: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePassword(tt.password, tt.policy)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidatePassword(%q) error = %v, wantErr = %v", tt.password, err, tt.wantErr)
+			}
+		})
+	}
+}

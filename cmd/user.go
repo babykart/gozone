@@ -20,7 +20,15 @@ import (
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/logger"
+	"github.com/babykart/gozone/internal/validators"
 )
+
+// rowQuerier is the subset of *database.DB / *database.Tx that resolveUser
+// needs. Accepting either lets unlock run on a bare DB handle while
+// reset-password runs inside a transaction.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 // newUserCmd builds the `gozone user` parent command. It is a namespace for
 // emergency user-account operations that bypass the HTTP flow and talk
@@ -95,6 +103,9 @@ func newResetPasswordCmd() *cobra.Command {
 			if password == "" {
 				return fmt.Errorf("password must not be empty")
 			}
+			if err := validators.ValidatePassword(password, cfg.Password.Policy()); err != nil {
+				return err
+			}
 			return resetUserPassword(cfg, args[0], password)
 		},
 	}
@@ -104,11 +115,12 @@ func newResetPasswordCmd() *cobra.Command {
 
 // resolveUser resolves a user by numeric ID or (case-insensitive) username,
 // returning the numeric ID and the canonical username. It is shared by the
-// unlock and reset-password subcommands.
-func resolveUser(ctx context.Context, db *database.DB, ident string) (int64, string, error) {
+// unlock and reset-password subcommands and accepts either a *database.DB or
+// a *database.Tx so reset-password can run it inside its transaction.
+func resolveUser(ctx context.Context, q rowQuerier, ident string) (int64, string, error) {
 	if id, perr := strconv.ParseInt(ident, 10, 64); perr == nil && id > 0 {
 		var username string
-		err := db.QueryRowContext(ctx, `SELECT username FROM users WHERE id = ?`, id).Scan(&username)
+		err := q.QueryRowContext(ctx, `SELECT username FROM users WHERE id = ?`, id).Scan(&username)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, "", fmt.Errorf("user id=%d not found", id)
@@ -122,7 +134,7 @@ func resolveUser(ctx context.Context, db *database.DB, ident string) (int64, str
 		userID   int64
 		username string
 	)
-	err := db.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT id, username FROM users WHERE lower(username) = lower(?)`,
 		ident,
 	).Scan(&userID, &username)
@@ -175,8 +187,10 @@ func unlockUser(cfg *config.Config, ident string) error {
 }
 
 // resetUserPassword resolves the target user, hashes the new password with the
-// configured bcrypt cost, writes it, and records an audit entry attributing
-// the action to the shell operator.
+// configured bcrypt cost, writes it (rejecting recent reuse when history is
+// enabled), and records an audit entry attributing the action to the shell
+// operator. The lookup, reuse check, update and history write run in a single
+// transaction.
 func resetUserPassword(cfg *config.Config, ident, password string) error {
 	logger.Init(cfg.Logging.Level)
 
@@ -189,9 +203,27 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	userID, username, err := resolveUser(ctx, db, ident)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() // #nosec G104 -- committed explicitly on success
+
+	userID, username, err := resolveUser(ctx, tx, ident)
 	if err != nil {
 		return err
+	}
+
+	// Reject reuse of a recent password (includes the current one, which is
+	// part of the history).
+	if cfg.Password.HistorySize > 0 {
+		reused, err := tx.PasswordHistoryReused(ctx, userID, password, cfg.Password.HistorySize)
+		if err != nil {
+			return fmt.Errorf("check password history: %w", err)
+		}
+		if reused {
+			return fmt.Errorf("password was used recently; choose a different one")
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), cfg.Auth.BcryptCost)
@@ -199,7 +231,7 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 		return fmt.Errorf("hash password: %w", err)
 	}
 
-	res, err := db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		string(hash), userID,
 	)
@@ -210,14 +242,27 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 		return fmt.Errorf("user id=%d not found", userID)
 	}
 
+	if cfg.Password.HistorySize > 0 {
+		if err := tx.RecordPassword(ctx, userID, string(hash)); err != nil {
+			return err
+		}
+		if err := tx.PrunePasswordHistory(ctx, userID, cfg.Password.HistorySize); err != nil {
+			return err
+		}
+	}
+
 	// Log with user_id=NULL: the actor is the shell operator, not a GoZone
 	// user. Capture the OS identity (username@hostname) for audit (m4).
-	if _, err := db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (NULL, 'reset_password_cli', ?)",
 		fmt.Sprintf("Reset password for user id=%d username=%q by CLI operator %s", userID, username, operatorIdentity()),
 	); err != nil {
 		// Best-effort: the reset itself succeeded, so we don't fail the CLI.
 		logger.Warn("failed to log CLI reset-password activity", "user_id", userID, "error", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	logger.Info("password reset via CLI", "user_id", userID, "username", username)

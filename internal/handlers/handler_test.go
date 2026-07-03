@@ -76,12 +76,18 @@ func newTestHandler(t *testing.T) *Handler {
 	})
 	db := newTestDB(t)
 
-	return &Handler{
+	h := &Handler{
 		DB:   db,
 		PDNS: pdnsClient,
 		Cfg:  config.DefaultConfig(),
 		Tmpl: testTemplateSet(),
 	}
+	// Handler unit tests exercise handler logic, not the password policy, so
+	// relax it (no length/class requirements, no history) to let the existing
+	// weak test passwords through. Dedicated policy tests build their own
+	// strict handler.
+	h.Cfg.Password = config.PasswordConfig{}
+	return h
 }
 
 func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Handler, *httptest.Server) {
@@ -89,12 +95,14 @@ func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Ha
 	srv, client := testutil.NewTestPDNSServer(t, handler)
 	db := newTestDB(t)
 
-	return &Handler{
+	h := &Handler{
 		DB:   db,
 		PDNS: client,
 		Cfg:  config.DefaultConfig(),
 		Tmpl: testTemplateSet(),
-	}, srv
+	}
+	h.Cfg.Password = config.PasswordConfig{}
+	return h, srv
 }
 
 func TestGetRecordTypes(t *testing.T) {

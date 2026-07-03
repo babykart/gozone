@@ -736,3 +736,129 @@ func TestUnlockUser_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", w.Code)
 	}
 }
+
+// strictPolicyHandler returns a test handler with the production-default
+// strict password policy (min 8 + all character classes) applied.
+func strictPolicyHandler(t *testing.T) *Handler {
+	t.Helper()
+	h := newTestHandler(t)
+	h.Cfg.Password.MinLength = 8
+	h.Cfg.Password.RequireUppercase = true
+	h.Cfg.Password.RequireLowercase = true
+	h.Cfg.Password.RequireDigit = true
+	h.Cfg.Password.RequireSpecial = true
+	return h
+}
+
+func TestCreateUser_WeakPasswordRejected(t *testing.T) {
+	h := strictPolicyHandler(t)
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := "username=weakuser&email=weak@example.com&password=short&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+
+	// Must NOT redirect (success path) and the user must not have been created.
+	if w.Code == http.StatusSeeOther {
+		t.Errorf("weak password should not be accepted (got redirect 303)")
+	}
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='weakuser'").Scan(&count)
+	if count != 0 {
+		t.Errorf("weak-password user should not have been created, got count=%d", count)
+	}
+}
+
+func TestCreateUser_StrongPasswordRecordsHistory(t *testing.T) {
+	h := strictPolicyHandler(t)
+	h.Cfg.Password.HistorySize = 3 // enable history retention
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := "username=stronguser&email=strong@example.com&password=Abcdef1!&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303 for strong password, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	// The initial password must be recorded in history so future changes can
+	// detect reuse.
+	var histCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM password_history WHERE user_id=2").Scan(&histCount)
+	if histCount != 1 {
+		t.Errorf("expected 1 password_history row for the new user, got %d", histCount)
+	}
+}
+
+func TestUpdateUser_WeakPasswordRejected(t *testing.T) {
+	h := strictPolicyHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := "email=u2@e.com&first_name=&last_name=&role=user&password=weak"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Errorf("weak password should not be accepted (got redirect 303)")
+	}
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id=2").Scan(&hash)
+	if hash != "oldhash" {
+		t.Errorf("password hash should be unchanged after weak-password rejection, got %q", hash)
+	}
+}
+
+func TestUpdateUser_PasswordHistoryReuse(t *testing.T) {
+	h := strictPolicyHandler(t)
+	h.Cfg.Password.HistorySize = 3
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	doUpdate := func(password string) int {
+		body := "email=u2@e.com&first_name=&last_name=&role=user&password=" + password
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("user_id", "2")
+		r = r.WithContext(ctx)
+		h.UpdateUser(w, r)
+		return w.Code
+	}
+
+	// First change to a strong password: accepted and recorded in history.
+	if code := doUpdate("Str0ng!aa"); code != http.StatusSeeOther {
+		t.Fatalf("first change expected redirect 303, got %d", code)
+	}
+	var hashAfterFirst string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id=2").Scan(&hashAfterFirst)
+
+	// Reusing the same password must be rejected by the history check.
+	if code := doUpdate("Str0ng!aa"); code == http.StatusSeeOther {
+		t.Errorf("reusing the same password should be rejected (got redirect 303)")
+	}
+	var hashAfterReuse string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id=2").Scan(&hashAfterReuse)
+	if hashAfterReuse != hashAfterFirst {
+		t.Errorf("password hash should be unchanged after a rejected reuse, got %q (want %q)", hashAfterReuse, hashAfterFirst)
+	}
+
+	// A different strong password is accepted.
+	if code := doUpdate("Str0ng!bb"); code != http.StatusSeeOther {
+		t.Errorf("different strong password expected redirect 303, got %d", code)
+	}
+}

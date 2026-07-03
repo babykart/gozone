@@ -50,6 +50,20 @@ auth:
   session_duration_hours: 24
   bcrypt_cost: 12
 
+# Password policy. Enforced whenever a password is set or changed (user
+# creation, admin user update, `gozone user reset-password`). The initial
+# admin seed is exempt (it is a one-time bootstrap that warns to be changed).
+# Defaults below are secure-by-default; relax them here or via GOZONE_PASSWORD_*
+# env vars. history_size retains that many previous hashes per user to prevent
+# reuse (0 disables; the current password always counts as "used").
+password:
+  min_length: 8
+  require_uppercase: true
+  require_lowercase: true
+  require_digit: true
+  require_special: false
+  history_size: 0
+
 # Login brute-force protection. /login is always protected by an in-memory
 # per-IP rate limiter (5/min). The two knobs below add defence-in-depth:
 #   - username_rate_limit_per_minute: an in-memory per-username limiter,

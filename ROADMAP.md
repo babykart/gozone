@@ -60,11 +60,12 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## Password Enforcement
 
-- [ ] **Password policy configuration**
+- [x] **Password policy configuration**
   - Minimum length (default 8)
   - Require uppercase, lowercase, digits, special characters
   - Password history (prevent reuse of last N passwords)
   - Configurable via `config.yaml` + env vars (`GOZONE_PASSWORD_*`)
+  - **Delivered.** `PasswordConfig` (`config.yaml` `password:` + `GOZONE_PASSWORD_*` env) drives `validators.ValidatePassword` (min length in runes + character-class checks; a zero policy accepts any non-empty password). Enforced at every password-set site: `CreateUser`, `UpdateUser`, and `gozone user reset-password`. Password history: new `password_history` table (SQLite/MySQL/PostgreSQL migrations) + `*Tx` methods `PasswordHistoryReused`/`RecordPassword`/`PrunePasswordHistory`; `history_size` retains the last N hashes per user (0 disables) and the current password always counts as used. Secure-by-default (`min_length:8`, all class requires on, `history_size:0`); the initial admin seed (`SeedAdminUser`) is exempt as a one-time bootstrap. Tests: `validators.TestValidatePassword`, `database.TestPasswordHistory_*`, handler policy/reuse tests, config defaults/env/bounds tests, CLI weak-password rejection test. gosec clean, full suite green.
 
 - [ ] **Password expiration**
   - Maximum password age (default 90 days)

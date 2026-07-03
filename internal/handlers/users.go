@@ -136,6 +136,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid email: "+err.Error())
 		return
 	}
+	if err := validators.ValidatePassword(password, h.Cfg.Password.Policy()); err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 
 	if role != "admin" && role != "user" {
 		role = "user"
@@ -172,6 +176,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
+	}
+
+	// Record the initial password in history so future changes can detect
+	// reuse (no reuse check here — this is the account's first password).
+	if h.Cfg.Password.HistorySize > 0 {
+		if err := tx.RecordPassword(r.Context(), userID, string(hash)); err != nil {
+			h.renderInternalError(w, r, "Failed to record password history", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -248,6 +261,12 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if newPassword != "" {
+		if err := validators.ValidatePassword(newPassword, h.Cfg.Password.Policy()); err != nil {
+			h.renderError(w, r, err.Error())
+			return
+		}
+	}
 
 	// Fetch the target user to compare current role/enabled and enforce guards.
 	var target models.User
@@ -312,6 +331,19 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Update password if provided
 	if newPassword != "" {
+		// Prevent reuse of a recent password (includes the current one, which
+		// is part of the history). Checked inside the transaction.
+		if h.Cfg.Password.HistorySize > 0 {
+			reused, err := tx.PasswordHistoryReused(r.Context(), userID, newPassword, h.Cfg.Password.HistorySize)
+			if err != nil {
+				h.renderInternalError(w, r, "Failed to check password history", err)
+				return
+			}
+			if reused {
+				h.renderError(w, r, "Password was used recently; choose a different one")
+				return
+			}
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), h.Cfg.Auth.BcryptCost)
 		if err != nil {
 			h.renderError(w, r, "Failed to hash password")
@@ -321,6 +353,16 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return
+		}
+		if h.Cfg.Password.HistorySize > 0 {
+			if err := tx.RecordPassword(r.Context(), userID, string(hash)); err != nil {
+				h.renderInternalError(w, r, "Failed to record password history", err)
+				return
+			}
+			if err := tx.PrunePasswordHistory(r.Context(), userID, h.Cfg.Password.HistorySize); err != nil {
+				h.renderInternalError(w, r, "Failed to prune password history", err)
+				return
+			}
 		}
 	}
 

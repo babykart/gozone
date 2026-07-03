@@ -32,6 +32,7 @@ type Config struct {
 	Admin     AdminConfig     `yaml:"admin"`
 	Activity  ActivityConfig  `yaml:"activity"`
 	LoginLock LoginLockConfig `yaml:"login_lock"`
+	Password  PasswordConfig  `yaml:"password"`
 }
 
 // LoginLockConfig holds settings for the login brute-force protection.
@@ -112,6 +113,38 @@ type AuthConfig struct {
 	BcryptCost           int `yaml:"bcrypt_cost"`
 }
 
+// PasswordConfig holds the password policy enforced whenever a password is set
+// or changed (user creation, admin update, `gozone user reset-password`). The
+// initial admin seed (SeedAdminUser) bypasses the policy — it is a one-time
+// bootstrap that already warns to change the default password.
+type PasswordConfig struct {
+	// MinLength is the minimum password length in runes. 0 disables the check.
+	MinLength int `yaml:"min_length"`
+	// RequireUppercase/Lowercase/Digit/Special require at least one character
+	// of each class. "Special" means any non-letter, non-digit rune (punctuation,
+	// symbols, spaces).
+	RequireUppercase bool `yaml:"require_uppercase"`
+	RequireLowercase bool `yaml:"require_lowercase"`
+	RequireDigit     bool `yaml:"require_digit"`
+	RequireSpecial   bool `yaml:"require_special"`
+	// HistorySize is the number of previous password hashes retained per user
+	// to prevent reuse. 0 (default) disables history checking.
+	HistorySize int `yaml:"history_size"`
+}
+
+// Policy converts the configuration into a validators.PasswordPolicy. It lives
+// here (and not on the handler) to keep the single config→validators mapping
+// in one place and avoid a validators→config import cycle.
+func (p PasswordConfig) Policy() validators.PasswordPolicy {
+	return validators.PasswordPolicy{
+		MinLength:        p.MinLength,
+		RequireUppercase: p.RequireUppercase,
+		RequireLowercase: p.RequireLowercase,
+		RequireDigit:     p.RequireDigit,
+		RequireSpecial:   p.RequireSpecial,
+	}
+}
+
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
 	Level string `yaml:"level"`
@@ -179,6 +212,14 @@ func DefaultConfig() *Config {
 			UsernameRateLimitPerMinute: 5,
 			AttemptsRetentionHours:     24,
 		},
+		Password: PasswordConfig{
+			MinLength:        8,
+			RequireUppercase: true,
+			RequireLowercase: true,
+			RequireDigit:     true,
+			RequireSpecial:   true,
+			HistorySize:      0,
+		},
 	}
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
 	return cfg
@@ -196,7 +237,10 @@ func DefaultConfig() *Config {
 // GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
 // GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
-// GOZONE_ACTIVITY_BATCH_SIZE.
+// GOZONE_ACTIVITY_BATCH_SIZE, GOZONE_PASSWORD_MIN_LENGTH,
+// GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
+// GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
+// GOZONE_PASSWORD_REQUIRE_SPECIAL.
 //
 // Parameters:
 //   - path: filesystem path to the YAML configuration file
@@ -314,6 +358,16 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.LoginLock.AttemptsRetentionHours < 0 {
 		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must be non-negative", cfg.LoginLock.AttemptsRetentionHours)
+	}
+
+	if cfg.Password.MinLength < 0 {
+		return fmt.Errorf("invalid password.min_length %d: must be non-negative", cfg.Password.MinLength)
+	}
+	if cfg.Password.MinLength > 256 {
+		return fmt.Errorf("invalid password.min_length %d: must be at most 256", cfg.Password.MinLength)
+	}
+	if cfg.Password.HistorySize < 0 {
+		return fmt.Errorf("invalid password.history_size %d: must be non-negative", cfg.Password.HistorySize)
 	}
 
 	if cfg.Server.ShutdownTimeoutSeconds <= 0 {
@@ -513,6 +567,48 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("GOZONE_TRUSTED_PROXIES"); v != "" {
 		cfg.Server.TrustedProxies = splitNonEmpty(v, ",")
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_MIN_LENGTH"); v != "" {
+		n, err := envInt("GOZONE_PASSWORD_MIN_LENGTH", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.MinLength = n
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_HISTORY_SIZE"); v != "" {
+		n, err := envInt("GOZONE_PASSWORD_HISTORY_SIZE", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.HistorySize = n
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_UPPERCASE"); v != "" {
+		b, err := envBool("GOZONE_PASSWORD_REQUIRE_UPPERCASE", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.RequireUppercase = b
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_LOWERCASE"); v != "" {
+		b, err := envBool("GOZONE_PASSWORD_REQUIRE_LOWERCASE", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.RequireLowercase = b
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_DIGIT"); v != "" {
+		b, err := envBool("GOZONE_PASSWORD_REQUIRE_DIGIT", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.RequireDigit = b
+	}
+	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_SPECIAL"); v != "" {
+		b, err := envBool("GOZONE_PASSWORD_REQUIRE_SPECIAL", v)
+		if err != nil {
+			return err
+		}
+		cfg.Password.RequireSpecial = b
 	}
 	return nil
 }

@@ -99,6 +99,19 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
 | `auth.bcrypt_cost` | — | `12` |
 
+### Password policy
+
+A password complexity policy is enforced whenever a password is set or changed: user creation, the admin user-edit form, and `gozone user reset-password`. The initial admin seed is exempt (one-time bootstrap). Defaults are secure-by-default; relax them here or via the `GOZONE_PASSWORD_*` env vars.
+
+| YAML Path | Environment Variable | Default | Description |
+|-----------|---------------------|---------|-------------|
+| `password.min_length` | `GOZONE_PASSWORD_MIN_LENGTH` | `8` | Minimum length in runes. `0` disables the length check. |
+| `password.require_uppercase` | `GOZONE_PASSWORD_REQUIRE_UPPERCASE` | `true` | Require at least one uppercase letter. |
+| `password.require_lowercase` | `GOZONE_PASSWORD_REQUIRE_LOWERCASE` | `true` | Require at least one lowercase letter. |
+| `password.require_digit` | `GOZONE_PASSWORD_REQUIRE_DIGIT` | `true` | Require at least one digit. |
+| `password.require_special` | `GOZONE_PASSWORD_REQUIRE_SPECIAL` | `true` | Require at least one non-letter/non-digit character (punctuation, symbol, space). |
+| `password.history_size` | `GOZONE_PASSWORD_HISTORY_SIZE` | `0` | Number of previous hashes retained per user to prevent reuse (the current password always counts as used). `0` disables history. |
+
 ### Login Lockout (brute-force protection)
 
 `/login` is always protected by an in-memory per-IP rate limiter (5/min). The knobs below add defence-in-depth against credential-stuffing and distributed brute-force:
