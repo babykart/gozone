@@ -108,8 +108,19 @@ func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "group_edit.html", data)
 }
 
-// CreateGroup inserts a new zone group (POST /groups/create).
+// CreateGroup inserts a new zone group and attaches the members and zones
+// selected on the create page (POST /groups/create).
+//
+// The create form posts name + description plus, optionally, repeated
+// "user_ids" and "zone_ids" values from the multi-select dropdowns. Selections
+// are attached best-effort after the group row is inserted: an invalid or
+// duplicate entry is skipped (INSERT OR IGNORE / ON CONFLICT DO NOTHING) and
+// logged, it never aborts the create.
 func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.renderError(w, r, "Invalid form data")
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	description := strings.TrimSpace(r.FormValue("description"))
 
@@ -136,7 +147,55 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Failed to get group ID")
 		return
 	}
+
+	h.attachGroupSelections(r, id)
+
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(id, 10)+"/edit", http.StatusSeeOther)
+}
+
+// attachGroupSelections inserts the multi-select members (user_ids) and zones
+// (zone_ids) carried by the create form into the just-created group. User IDs
+// are validated as positive ints; zone IDs are trimmed strings. Both lists are
+// de-duplicated while preserving order. Each row uses InsertIgnore so a stale
+// or repeated selection is tolerated. Errors are logged, not fatal.
+func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) {
+	seenUsers := make(map[int64]struct{})
+	for _, raw := range r.PostForm["user_ids"] {
+		uid, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || uid <= 0 {
+			continue
+		}
+		if _, dup := seenUsers[uid]; dup {
+			continue
+		}
+		seenUsers[uid] = struct{}{}
+		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members",
+			[]string{"group_id", "user_id"},
+			[]string{"group_id", "user_id"},
+			groupID, uid); err != nil {
+			logger.Error("failed to add member to group on create",
+				"group_id", groupID, "user_id", uid, "error", err)
+		}
+	}
+
+	seenZones := make(map[string]struct{})
+	for _, raw := range r.PostForm["zone_ids"] {
+		zoneID := strings.TrimSpace(raw)
+		if zoneID == "" {
+			continue
+		}
+		if _, dup := seenZones[zoneID]; dup {
+			continue
+		}
+		seenZones[zoneID] = struct{}{}
+		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_zones",
+			[]string{"group_id", "zone_id"},
+			[]string{"group_id", "zone_id"},
+			groupID, zoneID); err != nil {
+			logger.Error("failed to add zone to group on create",
+				"group_id", groupID, "zone_id", zoneID, "error", err)
+		}
+	}
 }
 
 // EditGroupPage renders the group edit form with members and zones (GET /groups/{group_id}/edit).

@@ -2,7 +2,7 @@
 {{template "app_layout_start" .}}
 <div class="page-header">
     <div>
-        <a href="/groups" class="breadcrumb">Groups</a> / <h2>{{.Group.Name}}</h2>
+        <a href="/groups" class="breadcrumb">Groups</a> / <h2>{{if .Group.ID}}{{.Group.Name}}{{else}}New Group{{end}}</h2>
     </div>
 </div>
 
@@ -16,9 +16,34 @@
         <label for="description">Description</label>
         <input type="text" id="description" name="description" value="{{.Group.Description}}" class="form-control">
     </div>
+
+    {{/* Multi-select members + zones are part of the create flow only. */}}
+    {{if eq .Group.ID 0}}
+    <div class="form-group">
+        <label for="user_ids">Members</label>
+        <select id="user_ids" name="user_ids" multiple class="form-control" size="6">
+            {{range .AllUsers}}
+            <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
+            {{end}}
+        </select>
+        <small class="form-hint">Hold Ctrl (Cmd on macOS) to select multiple members.</small>
+    </div>
+    <div class="form-group">
+        <label for="zone_ids">Zones</label>
+        <select id="zone_ids" name="zone_ids" multiple class="form-control" size="6">
+            {{range .AllZones}}
+            <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
+            {{end}}
+        </select>
+        <small class="form-hint">Hold Ctrl (Cmd on macOS) to select multiple zones.</small>
+    </div>
+    {{end}}
+
     <button type="submit" class="btn btn-primary">Save</button>
 </form>
 
+{{/* Edit flow: per-member / per-zone tables with incremental add + remove. */}}
+{{if ne .Group.ID 0}}
 <div class="card" style="margin-bottom:2rem">
     <h3>Members</h3>
     {{if .Members}}
@@ -106,5 +131,6 @@
         <button type="submit" class="btn btn-secondary">Add</button>
     </form>
 </div>
+{{end}}
 {{template "app_layout_end" .}}
 {{end}}

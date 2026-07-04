@@ -165,6 +165,92 @@ func TestCreateGroup_Success(t *testing.T) {
 	}
 }
 
+func TestCreateGroup_WithMembersAndZones(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	uid1 := seedUserWithHash(t, h, "alice", "pass", "user")
+	uid2 := seedUserWithHash(t, h, "bob", "pass", "user")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "name=multi-group&description=with+selections" +
+		"&user_ids=" + strconv.FormatInt(uid1, 10) +
+		"&user_ids=" + strconv.FormatInt(uid2, 10) +
+		"&user_ids=" + strconv.FormatInt(uid1, 10) + // duplicate, must be ignored
+		"&user_ids=bogus" + // invalid, must be skipped
+		"&zone_ids=zone-a.com." +
+		"&zone_ids=zone-b.com." +
+		"&zone_ids=zone-a.com." // duplicate, must be ignored
+	r := withUserContext(httptest.NewRequest(http.MethodPost, "/groups/create", strings.NewReader(body)), user)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateGroup(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d: %s", w.Code, w.Body.String())
+	}
+
+	loc := w.Header().Get("Location")
+	parts := strings.Split(strings.TrimSuffix(loc, "/edit"), "/")
+	groupIDStr := parts[len(parts)-1]
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil {
+		t.Fatalf("parse group id from %q: %v", loc, err)
+	}
+
+	var memberCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&memberCount)
+	if memberCount != 2 {
+		t.Errorf("expected 2 members, got %d", memberCount)
+	}
+	for _, uid := range []int64{uid1, uid2} {
+		var n int
+		h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?", groupID, uid).Scan(&n)
+		if n != 1 {
+			t.Errorf("expected member %d to be attached", uid)
+		}
+	}
+
+	var zoneCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE group_id = ?", groupID).Scan(&zoneCount)
+	if zoneCount != 2 {
+		t.Errorf("expected 2 zones, got %d", zoneCount)
+	}
+	for _, zid := range []string{"zone-a.com.", "zone-b.com."} {
+		var n int
+		h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE group_id = ? AND zone_id = ?", groupID, zid).Scan(&n)
+		if n != 1 {
+			t.Errorf("expected zone %q to be attached", zid)
+		}
+	}
+}
+
+func TestCreateGroup_NoSelections(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "name=bare-group"
+	r := withUserContext(httptest.NewRequest(http.MethodPost, "/groups/create", strings.NewReader(body)), user)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateGroup(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d: %s", w.Code, w.Body.String())
+	}
+
+	loc := w.Header().Get("Location")
+	groupID, _ := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(loc, "/groups/"), "/edit"), 10, 64)
+
+	var memberCount, zoneCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&memberCount)
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE group_id = ?", groupID).Scan(&zoneCount)
+	if memberCount != 0 || zoneCount != 0 {
+		t.Errorf("expected 0 members and 0 zones, got %d members, %d zones", memberCount, zoneCount)
+	}
+}
+
 func TestCreateGroup_EmptyName(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
