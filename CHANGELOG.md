@@ -1,37 +1,19 @@
 
-## [v0.14.0] - 2026-07-03
-
-### ⚙️  Build Tasks
-
-- **(docker)** ([8355898](https://github.com/babykart/gozone/commit/8355898d41e54d9a792239c31ac9d25b5bb2b68e)) - [gozone] symlink /usr/bin/gozone to /gozone for PATH looku - ([babykart](https://github.com/babykart))
+## [v0.15.0] - 2026-07-04
 
 ### 🚀 Features
 
-- **(auth)** ([b69da24](https://github.com/babykart/gozone/commit/b69da24fbb6405ccf8f49b25b30d9516919c2ba1)) - [gozone] enforce configurable password policy + history - ([babykart](https://github.com/babykart))
-- **(auth)** ([c1191c9](https://github.com/babykart/gozone/commit/c1191c95f19f3f09a2bf2de178cc8639c6a5ffd6)) - password expiration + forced-change on reset - ([babykart](https://github.com/babykart))
-- **(cli)** ([4aad110](https://github.com/babykart/gozone/commit/4aad1103526f345a1d55c9cb24679a2ef035dfc0)) - [gozone] add version and --version - ([babykart](https://github.com/babykart))
-- **(cli)** ([974cc8f](https://github.com/babykart/gozone/commit/974cc8fd1c57c3e24c388e1397e26b0e71a7f90a)) - [gozone] add gozone user command tree with reset-password - ([babykart](https://github.com/babykart))
-- **(dashboard)** ([86dc52e](https://github.com/babykart/gozone/commit/86dc52e47d7678c3fac6fb20cfc16a1ae54ba5b9)) - [gozone] show gozone version on the dashboard - ([babykart](https://github.com/babykart))
-- **(records)** ([3186ae2](https://github.com/babykart/gozone/commit/3186ae231102d352e358557fec9350fc3bbff31b)) - [gozone] add multi-select bulk delete and edit in zone view - ([babykart](https://github.com/babykart))
-- **(users)** ([eb88132](https://github.com/babykart/gozone/commit/eb881322de93af0c4bdc0fa3ba93dd5afeff95d3)) - [gozone] make first-login password change optional at creation - ([babykart](https://github.com/babykart))
+- **(apikeys)** ([cd05aa2](https://github.com/babykart/gozone/commit/cd05aa21e083622da8ce0c917ae29fef66b8ac0b)) - [gozone] add bulk selection and delete for API keys - ([babykart](https://github.com/babykart))
+- **(groups)** ([98b6bed](https://github.com/babykart/gozone/commit/98b6beda4845fca351260a8b258abd654c8b072f)) - [gozone] add bulk selection and delete for zone groups - ([babykart](https://github.com/babykart))
+- **(groups)** ([2579473](https://github.com/babykart/gozone/commit/2579473dc997d7a24f393f237e34c77cd926ab25)) - [gozone] allow multi-select members and zones on group creation - ([babykart](https://github.com/babykart))
+- **(templates)** ([1708232](https://github.com/babykart/gozone/commit/1708232bf2c7b6234dee0f749909893c1b4827d0)) - [gozone] add bulk selection and delete for zone templates - ([babykart](https://github.com/babykart))
+- **(tsig)** ([6ce584c](https://github.com/babykart/gozone/commit/6ce584c8d0247790d0643ac39466ecf2b36099df)) - [gozone] add bulk selection and delete for TSIG keys - ([babykart](https://github.com/babykart))
+- **(users)** ([3fb05ad](https://github.com/babykart/gozone/commit/3fb05ad55ed81111018e03f644629e6b12df7aa3)) - [gozone] add bulk selection and delete for users - ([babykart](https://github.com/babykart))
+- **(zones)** ([32eab7b](https://github.com/babykart/gozone/commit/32eab7bc2895cb53e56164b8fd19489a1ed9814c)) - [gozone] add per-zone delete and bulk zone deletion - ([babykart](https://github.com/babykart))
 
-### 🚜 Refactor
+### 🐛 Bug Fixes
 
-- **(cli)** ([46ac000](https://github.com/babykart/gozone/commit/46ac000b29b445afdc4a0d78e2e5a8c4ea099fc7)) - [gozone] migrate the CLI to the Cobra framework - ([babykart](https://github.com/babykart))
-- **(cmd)** ([371d639](https://github.com/babykart/gozone/commit/371d6394311f350cf29c0c9d51f6698d3ea8ab12)) - [gozone] flatten layout to root main.go + cmd/ package - ([babykart](https://github.com/babykart))
-
-### 📚 Documentation
-
-- **(api)** ([4f3aca3](https://github.com/babykart/gozone/commit/4f3aca3145a2fc64bc8f5c9eeb37711c05f9ea7e)) - [gozone] add CAA record creation example - ([babykart](https://github.com/babykart))
-- **(api)** ([54ca23b](https://github.com/babykart/gozone/commit/54ca23b755db995fdfedf11c54900987008663b6)) - [gozone] add SRV record creation example - ([babykart](https://github.com/babykart))
-- **(api)** ([6d89a5e](https://github.com/babykart/gozone/commit/6d89a5e3d31c2536ce9e7165e0fdb16165886bf3)) - [gozone] add NAPTR record creation example - ([babykart](https://github.com/babykart))
-- **(api)** ([9ec136d](https://github.com/babykart/gozone/commit/9ec136da36c2f7ad3553808777d17f2e5655edcb)) - [gozone] add PTR record creation example - ([babykart](https://github.com/babykart))
-- **(roadmap)** ([f708bea](https://github.com/babykart/gozone/commit/f708bea6dec33804316f4b732e976532be79be93)) - [gozone] plan CLI password reset and Cobra migration - ([babykart](https://github.com/babykart))
-- **(roadmap)** ([cd6713c](https://github.com/babykart/gozone/commit/cd6713c08728c29c7866c80d21e53ecc7eae3db1)) - [gozone] drop delivered CLI & Tooling section - ([babykart](https://github.com/babykart))
-- **(roadmap)** ([7a3346c](https://github.com/babykart/gozone/commit/7a3346cdbfd9746606e20aeb1caf3a35e1ef1fc1)) - [gozone] retire la section Password Enforcement - ([babykart](https://github.com/babykart))
-
-### 🌀 Miscellaneous Tasks
-
-- **(release)** ([8e3a10d](https://github.com/babykart/gozone/commit/8e3a10d806a146f289bdb6146aa0942c3fbc3387)) - [gozone] stamp version into Docker image via build-args - ([babykart](https://github.com/babykart))
+- **(api)** ([9d5b0df](https://github.com/babykart/gozone/commit/9d5b0df5e923d0026f1c41a81a773e895aaa7ad6)) - [gozone] log delete_zone activity for API-driven zone deletion - ([babykart](https://github.com/babykart))
+- **(records)** ([3c9db4f](https://github.com/babykart/gozone/commit/3c9db4f93dce041ca803ccae4c508f81de8a632c)) - [gozone] render activity-log snapshots with priority as a field - ([babykart](https://github.com/babykart))
 
 <!-- generated by git-cliff -->
