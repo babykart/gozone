@@ -30,6 +30,34 @@ func generateAPIKey() (string, string, error) {
 	return raw, hashAPIKey(raw), nil
 }
 
+// apiKeyValidFlashCodes / apiKeyValidErrorCodes are the allow-lists of ?flash
+// and ?error query codes the server actually emits for /profile/api-keys
+// (CreateAPIKey -> flash=created, DeleteAPIKey -> flash=deleted /
+// error=not_found). ListAPIKeys validates the incoming query params against
+// these sets so a crafted link such as ?flash=Your+account+is+compromised
+// cannot inject arbitrary text into the page — the handler is the trust
+// boundary, mirroring loginErrorBanner (REVIEW.md L-1). The template already
+// gates display on {{if eq .Flash "…"}} so this is defence-in-depth against a
+// future template edit that renders the value verbatim.
+var (
+	apiKeyValidFlashCodes = map[string]struct{}{
+		"created": {},
+		"deleted": {},
+	}
+	apiKeyValidErrorCodes = map[string]struct{}{
+		"not_found": {},
+	}
+)
+
+// allowListedCode returns code only if it is present in allowed, "" otherwise.
+// Used to filter untrusted query-string codes before they reach the template.
+func allowListedCode(code string, allowed map[string]struct{}) string {
+	if _, ok := allowed[code]; ok {
+		return code
+	}
+	return ""
+}
+
 func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
@@ -89,9 +117,9 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		keys = []models.APIKey{}
 	}
 
-	flash := r.URL.Query().Get("flash")
+	flash := allowListedCode(r.URL.Query().Get("flash"), apiKeyValidFlashCodes)
 	newKey := ""
-	errorMsg := r.URL.Query().Get("error")
+	errorMsg := allowListedCode(r.URL.Query().Get("error"), apiKeyValidErrorCodes)
 
 	if c, err := r.Cookie(constants.NewAPIKeyCookieName); err == nil && c.Value != "" {
 		newKey = c.Value

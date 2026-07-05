@@ -354,3 +354,48 @@ func TestDeleteAPIKey_NotFoundAndForbiddenCollapsed(t *testing.T) {
 		t.Errorf("expected 0 delete logs for failed attempts, got %d", logCount)
 	}
 }
+
+// TestListAPIKeys_AllowListsFlashErrorCodes guards REVIEW.md L-1: the ?flash
+// and ?error query params are validated against a server-side allow-list
+// (flash=created|deleted, error=not_found) so a crafted link such as
+// ?flash=Your+account+compromised cannot inject arbitrary text into the page.
+// Valid codes pass through; crafted codes are dropped at the handler trust
+// boundary.
+func TestListAPIKeys_AllowListsFlashErrorCodes(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Valid codes flow through to the template.
+	r := httptest.NewRequest(http.MethodGet, "/profile/api-keys?flash=created&error=not_found", nil)
+	r = r.WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.ListAPIKeys(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Flash=created") {
+		t.Errorf("expected Flash=created in body, got %s", body)
+	}
+	if !strings.Contains(body, "Error=not_found") {
+		t.Errorf("expected Error=not_found in body, got %s", body)
+	}
+
+	// Crafted codes are dropped — a phishing link cannot inject arbitrary text.
+	r2 := httptest.NewRequest(http.MethodGet, "/profile/api-keys?flash=Your+account+compromised&error=evil_code", nil)
+	r2 = r2.WithContext(ctx)
+	w2 := httptest.NewRecorder()
+	h.ListAPIKeys(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w2.Code)
+	}
+	body2 := w2.Body.String()
+	for _, needle := range []string{"compromised", "evil_code", "Flash=Your", "Error=evil"} {
+		if strings.Contains(body2, needle) {
+			t.Errorf("unknown flash/error code leaked into body: %q in %s", needle, body2)
+		}
+	}
+}
