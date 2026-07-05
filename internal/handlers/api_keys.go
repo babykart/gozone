@@ -186,22 +186,6 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	keyID := strings.TrimSpace(r.FormValue("key_id"))
 
-	var keyUserID int64
-	err := h.DB.QueryRowContext(ctx, "SELECT user_id FROM api_keys WHERE id = ?", keyID).Scan(&keyUserID)
-	if err == sql.ErrNoRows {
-		http.Redirect(w, r, "/profile/api-keys?error=not_found", http.StatusSeeOther)
-		return
-	}
-	if err != nil {
-		h.renderInternalError(w, r, "Failed to find API key", err)
-		return
-	}
-
-	if keyUserID != user.ID {
-		http.Redirect(w, r, "/profile/api-keys?error=forbidden", http.StatusSeeOther)
-		return
-	}
-
 	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
@@ -209,9 +193,19 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ?", keyID)
+	// Ownership-scoped delete mirrors BulkDeleteAPIKeys (DELETE ... WHERE
+	// id = ? AND user_id = ?). RowsAffected==0 means the key does not exist
+	// OR belongs to another user; both cases collapse into the same
+	// ?error=not_found so a probing user cannot distinguish them (REVIEW.md
+	// M-2 — IDOR existence oracle). The prior SELECT + distinct
+	// ?error=forbidden branch leaked key-id existence regardless of ownership.
+	res, err := tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ? AND user_id = ?", keyID, user.ID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete API key", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		http.Redirect(w, r, "/profile/api-keys?error=not_found", http.StatusSeeOther)
 		return
 	}
 

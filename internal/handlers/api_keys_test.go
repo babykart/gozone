@@ -263,3 +263,94 @@ func TestBulkDeleteAPIKeys_NoSelection(t *testing.T) {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }
+
+func TestDeleteAPIKey_OwnKey(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	id := seedAPIKey(t, h.DB, 1, "mine", "h1")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := fmt.Sprintf("key_id=%d", id)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteAPIKey(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.Contains(loc, "flash=deleted") {
+		t.Errorf("expected flash=deleted redirect, got %s", loc)
+	}
+
+	var remaining int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE id=?", id).Scan(&remaining)
+	if remaining != 0 {
+		t.Errorf("expected key deleted, remaining=%d", remaining)
+	}
+	var logCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_api_key'").Scan(&logCount)
+	if logCount != 1 {
+		t.Errorf("expected 1 delete_api_key log, got %d", logCount)
+	}
+}
+
+// TestDeleteAPIKey_NotFoundAndForbiddenCollapsed guards REVIEW.md M-2: a
+// nonexistent key id and a foreign user's key id must yield the identical
+// ?error=not_found redirect so the handler is not an IDOR existence oracle
+// (the prior ?error=forbidden branch leaked key-id existence regardless of
+// ownership). Mirrors the BulkDeleteAPIKeys ownership-scoped DELETE pattern.
+func TestDeleteAPIKey_NotFoundAndForbiddenCollapsed(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	testutil.SeedTestUser(t, h.DB, "other", "other", "user", true)
+	theirs := seedAPIKey(t, h.DB, 2, "theirs", "h2")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	cases := []struct {
+		name  string
+		keyID string
+	}{
+		{"nonexistent id", "999999"},
+		{"foreign-owned id", fmt.Sprintf("%d", theirs)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "key_id=" + tc.keyID
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/delete", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r = r.WithContext(ctx)
+			h.DeleteAPIKey(w, r)
+
+			if w.Code != http.StatusSeeOther {
+				t.Fatalf("expected 303, got %d", w.Code)
+			}
+			loc := w.Header().Get("Location")
+			if !strings.Contains(loc, "error=not_found") {
+				t.Errorf("expected error=not_found, got %s", loc)
+			}
+			if strings.Contains(loc, "error=forbidden") {
+				t.Errorf("error=forbidden must not be emitted (existence oracle), got %s", loc)
+			}
+		})
+	}
+
+	// The foreign key must survive both attempts.
+	var theirCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE id=?", theirs).Scan(&theirCount)
+	if theirCount != 1 {
+		t.Errorf("foreign key must survive, count=%d", theirCount)
+	}
+	// No delete_api_key log should have been written for the failed attempts.
+	var logCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_api_key'").Scan(&logCount)
+	if logCount != 0 {
+		t.Errorf("expected 0 delete logs for failed attempts, got %d", logCount)
+	}
+}
