@@ -187,5 +187,10 @@ func (s *sqliteDialect) Migrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_password_history_user_created ON password_history(user_id, created_at DESC)`,
 		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
+		// REVIEW.md M-6: covering index for ListAPIKeys (WHERE user_id = ?
+		// ORDER BY created_at DESC). Without it the only index on api_keys is
+		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
+		// a full table scan as the table grows across all users.
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
 	}
 }

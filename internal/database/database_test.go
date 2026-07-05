@@ -220,6 +220,13 @@ func TestIndexUsage(t *testing.T) {
 			"SELECT user_id, expires_at FROM api_keys WHERE key_hash = 'test'",
 		},
 		{
+			// REVIEW.md M-6: ListAPIKeys filters by user_id and orders by
+			// created_at DESC — must be served by idx_api_keys_user_created,
+			// not a full table scan.
+			"api_keys list by user",
+			"SELECT id, user_id, description, last_used_at, created_at, expires_at FROM api_keys WHERE user_id = 1 ORDER BY created_at DESC",
+		},
+		{
 			"zone activity",
 			"SELECT al.id, u.username FROM activity_logs al LEFT JOIN users u ON al.user_id = u.id WHERE al.zone_id = 'test' ORDER BY al.created_at DESC LIMIT 50",
 		},

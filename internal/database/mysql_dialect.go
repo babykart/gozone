@@ -236,5 +236,12 @@ func (m *mysqlDialect) Migrations() []string {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN must_change_password TINYINT NOT NULL DEFAULT 0`,
+		// REVIEW.md M-6: covering index for ListAPIKeys (WHERE user_id = ?
+		// ORDER BY created_at DESC). Without it the only index on api_keys is
+		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
+		// a full table scan as the table grows across all users. MySQL < 8.0
+		// parses DESC but ignores it; MySQL 8.0+ / modern MariaDB build a real
+		// descending index (see m21 note above).
+		`CREATE INDEX idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
 	}
 }
