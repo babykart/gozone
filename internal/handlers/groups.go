@@ -348,13 +348,21 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid group ID")
 		return
 	}
-	userIDStr := r.FormValue("user_id")
+	// Validate user_id as a positive int — the column is typed INTEGER, so an
+	// unvalidated string yields a 500 on Postgres (and a confusing partial
+	// insert on MySQL/SQLite). Mirrors attachGroupSelections (REVIEW.md M-4).
+	userIDStr := strings.TrimSpace(r.FormValue("user_id"))
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil || userID <= 0 {
+		h.renderError(w, r, "Invalid user ID")
+		return
+	}
 
 	if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members",
 		[]string{"group_id", "user_id"},
 		[]string{"group_id", "user_id"}, // PK on this table
-		groupID, userIDStr); err != nil {
-		logger.Error("failed to add member to group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
+		groupID, userID); err != nil {
+		logger.Error("failed to add member to group", "group_id", groupID, "user_id", userID, "error", err)
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
@@ -367,13 +375,19 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, "Invalid group ID")
 		return
 	}
-	userIDStr := r.FormValue("user_id")
+	// Validate user_id as a positive int (REVIEW.md M-4).
+	userIDStr := strings.TrimSpace(r.FormValue("user_id"))
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil || userID <= 0 {
+		h.renderError(w, r, "Invalid user ID")
+		return
+	}
 
 	if _, err := h.DB.Exec(
 		"DELETE FROM zone_group_members WHERE group_id = ? AND user_id = ?",
-		groupID, userIDStr,
+		groupID, userID,
 	); err != nil {
-		logger.Error("failed to remove member from group", "group_id", groupIDStr, "user_id", userIDStr, "error", err)
+		logger.Error("failed to remove member from group", "group_id", groupID, "user_id", userID, "error", err)
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }

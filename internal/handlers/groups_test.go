@@ -505,6 +505,63 @@ func TestRemoveMemberFromGroup(t *testing.T) {
 	}
 }
 
+// TestAddMemberToGroup_InvalidUserID guards REVIEW.md M-4: a non-numeric (or
+// non-positive) user_id must yield HTTP 400 instead of leaking a driver-level
+// error as 500 on Postgres. No row must be inserted.
+func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	for _, bad := range []string{"abc", "", "-3", "0", "1.5"} {
+		w := httptest.NewRecorder()
+		body := "user_id=" + bad
+		r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-member", strings.NewReader(body))
+		r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = withUserContext(r, user)
+		h.AddMemberToGroup(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("user_id=%q: expected 400, got %d", bad, w.Code)
+		}
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&n)
+	if n != 0 {
+		t.Errorf("expected 0 members inserted for invalid user_ids, got %d", n)
+	}
+}
+
+// TestRemoveMemberFromGroup_InvalidUserID is the remove counterpart: a
+// non-numeric user_id must yield 400, not a 500 driver error.
+func TestRemoveMemberFromGroup_InvalidUserID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	for _, bad := range []string{"abc", "", "-3", "0"} {
+		w := httptest.NewRecorder()
+		body := "user_id=" + bad
+		r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/remove-member", strings.NewReader(body))
+		r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = withUserContext(r, user)
+		h.RemoveMemberFromGroup(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("user_id=%q: expected 400, got %d", bad, w.Code)
+		}
+	}
+}
+
 func TestAddZoneToGroup(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
