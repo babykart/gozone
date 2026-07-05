@@ -161,14 +161,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.DB.Begin()
+	ctx := r.Context()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
 	}
 	defer tx.Rollback()
 
-	result, err := tx.Exec(
+	result, err := tx.ExecContext(ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username, email, string(hash), firstName, lastName, role, mustChangeVal,
@@ -179,7 +180,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, _ := result.LastInsertId()
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_user', ?)",
 		admin.ID, fmt.Sprintf("Created user %s (id: %d)", username, userID),
 	)
@@ -191,7 +192,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Record the initial password in history so future changes can detect
 	// reuse (no reuse check here — this is the account's first password).
 	if h.Cfg.Password.HistorySize > 0 {
-		if err := tx.RecordPassword(r.Context(), userID, string(hash)); err != nil {
+		if err := tx.RecordPassword(ctx, userID, string(hash)); err != nil {
 			h.renderInternalError(w, r, "Failed to record password history", err)
 			return
 		}
@@ -306,7 +307,8 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		enabledVal = 1
 	}
 
-	tx, err := h.DB.Begin()
+	ctx := r.Context()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
@@ -318,7 +320,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// concurrent UpdateUser calls demoting the last two admins must not both
 	// observe adminCount==2 and proceed, leaving zero admins.
 	if target.Role == "admin" && target.Enabled && (requestedRole != "admin" || !requestedEnabled) {
-		adminCount, err := tx.CountEnabledAdmins(r.Context())
+		adminCount, err := tx.CountEnabledAdmins(ctx)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to count admins", err)
 			return
@@ -329,7 +331,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		`UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		email, firstName, lastName, requestedRole, enabledVal, userID,
@@ -344,7 +346,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		// Prevent reuse of a recent password (includes the current one, which
 		// is part of the history). Checked inside the transaction.
 		if h.Cfg.Password.HistorySize > 0 {
-			reused, err := tx.PasswordHistoryReused(r.Context(), userID, newPassword, h.Cfg.Password.HistorySize)
+			reused, err := tx.PasswordHistoryReused(ctx, userID, newPassword, h.Cfg.Password.HistorySize)
 			if err != nil {
 				h.renderInternalError(w, r, "Failed to check password history", err)
 				return
@@ -359,24 +361,24 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, "Failed to hash password")
 			return
 		}
-		_, err = tx.Exec("UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1 WHERE id = ?", string(hash), userID)
+		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1 WHERE id = ?", string(hash), userID)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return
 		}
 		if h.Cfg.Password.HistorySize > 0 {
-			if err := tx.RecordPassword(r.Context(), userID, string(hash)); err != nil {
+			if err := tx.RecordPassword(ctx, userID, string(hash)); err != nil {
 				h.renderInternalError(w, r, "Failed to record password history", err)
 				return
 			}
-			if err := tx.PrunePasswordHistory(r.Context(), userID, h.Cfg.Password.HistorySize); err != nil {
+			if err := tx.PrunePasswordHistory(ctx, userID, h.Cfg.Password.HistorySize); err != nil {
 				h.renderInternalError(w, r, "Failed to prune password history", err)
 				return
 			}
 		}
 	}
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'update_user', ?)",
 		admin.ID, fmt.Sprintf("Updated user %d", userID),
 	)
@@ -408,7 +410,8 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.DB.Begin()
+	ctx := r.Context()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
@@ -418,7 +421,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	// Fetch the target user and verify they exist.
 	var target models.User
 	var targetEnabled int
-	if err := tx.QueryRow(
+	if err := tx.QueryRowContext(ctx,
 		`SELECT id, username, role, enabled FROM users WHERE id = ?`,
 		userID,
 	).Scan(&target.ID, &target.Username, &target.Role, &targetEnabled); err != nil {
@@ -429,7 +432,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	// Last enabled admin guard: refuse to delete the only enabled admin.
 	if target.Role == "admin" && target.Enabled {
-		adminCount, err := tx.CountEnabledAdmins(r.Context())
+		adminCount, err := tx.CountEnabledAdmins(ctx)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to count admins", err)
 			return
@@ -440,13 +443,13 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err = tx.Exec("DELETE FROM users WHERE id = ?", userID)
+	_, err = tx.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete user", err)
 		return
 	}
 
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_user', ?)",
 		admin.ID, fmt.Sprintf("Deleted user %d", userID),
 	)
@@ -504,7 +507,8 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.DB.Begin()
+	ctx := r.Context()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		logger.Error("BulkDeleteUsers: begin tx", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to begin transaction"})
@@ -523,7 +527,7 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 		// Fetch the target to enforce the last-admin guard.
 		var role string
 		var enabled int
-		switch err := tx.QueryRow(`SELECT role, enabled FROM users WHERE id = ?`, userID).Scan(&role, &enabled); {
+		switch err := tx.QueryRowContext(ctx, `SELECT role, enabled FROM users WHERE id = ?`, userID).Scan(&role, &enabled); {
 		case errors.Is(err, sql.ErrNoRows):
 			failed = append(failed, strconv.FormatInt(userID, 10))
 			continue
@@ -534,7 +538,7 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		// Guard 2: never delete the last enabled admin.
 		if role == "admin" && enabled == 1 {
-			adminCount, err := tx.CountEnabledAdmins(r.Context())
+			adminCount, err := tx.CountEnabledAdmins(ctx)
 			if err != nil {
 				logger.Error("BulkDeleteUsers: count admins", "error", err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to count admins"})
@@ -545,12 +549,12 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		if _, err := tx.Exec("DELETE FROM users WHERE id = ?", userID); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id = ?", userID); err != nil {
 			logger.Error("BulkDeleteUsers: delete user", "user_id", userID, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
 			return
 		}
-		if _, err := tx.Exec(
+		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_user', ?)",
 			admin.ID, fmt.Sprintf("Deleted user %d", userID),
 		); err != nil {

@@ -64,7 +64,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	tx, err := h.DB.Begin()
+	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to begin transaction", err)
 		return
@@ -89,7 +89,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0 WHERE id = ?",
 		string(hash), user.ID,
 	); err != nil {
@@ -108,7 +108,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'change_password', ?)",
 		user.ID, "User changed their own password",
 	); err != nil {
