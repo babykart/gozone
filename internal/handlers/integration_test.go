@@ -201,6 +201,9 @@ func TestIntegration_NonAdminBlockedFromAdminEndpoints(t *testing.T) {
 		{"EditUserPage", h.EditUserPage},
 		{"RectifyZone", h.RectifyZone},
 		{"NotifyZone", h.NotifyZone},
+		{"CreateCryptokey", h.CreateCryptokey},
+		{"ToggleCryptokey", h.ToggleCryptokey},
+		{"DeleteCryptokey", h.DeleteCryptokey},
 	}
 
 	for _, tt := range tests {

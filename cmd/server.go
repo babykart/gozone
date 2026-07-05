@@ -290,7 +290,6 @@ func runServer(cfg *config.Config) error {
 				r.Post("/zones/{zone_id}/records/bulk-delete", h.BulkDeleteRecords)
 				r.Post("/zones/{zone_id}/import", h.ImportZone)
 				r.Post("/zones/{zone_id}/cache/clear", h.ClearZoneCache)
-				r.Post("/zones/{zone_id}/cryptokeys/{key_id}/toggle", h.ToggleCryptokey)
 			})
 
 			// Admin-only routes
@@ -310,6 +309,7 @@ func runServer(cfg *config.Config) error {
 					r.Post("/zones/{zone_id}/metadata/create", h.CreateMetadata)
 					r.Post("/zones/{zone_id}/metadata/delete", h.DeleteMetadata)
 					r.Post("/zones/{zone_id}/cryptokeys/create", h.CreateCryptokey)
+					r.Post("/zones/{zone_id}/cryptokeys/{key_id}/toggle", h.ToggleCryptokey)
 					r.Post("/zones/{zone_id}/cryptokeys/{key_id}/delete", h.DeleteCryptokey)
 				})
 
