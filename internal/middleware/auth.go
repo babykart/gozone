@@ -142,7 +142,12 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			claims, err := ParseToken(tokenString, secret)
 			if err != nil {
 				// Clear invalid cookie
-				// #nosec G124 -- clearing cookie on HTTP, Secure set dynamically
+				// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r)
+				// (trusted-proxy-gated X-Forwarded-Proto, m40/M-SEC4) so it
+				// matches the Secure flag the Login handler used to issue the
+				// cookie. With r.TLS != nil a TLS-terminating proxy left the
+				// clearing cookie non-Secure and browsers refused to drop the
+				// revoked original (REVIEW.md M-1).
 				http.SetCookie(w, &http.Cookie{
 					Name:     constants.SessionCookieName,
 					Value:    "",
@@ -150,7 +155,7 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 					Expires:  time.Unix(0, 0),
 					HttpOnly: true,
 					SameSite: http.SameSiteStrictMode,
-					Secure:   r.TLS != nil,
+					Secure:   IsHTTPS(r),
 				})
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
@@ -169,7 +174,12 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			}
 			if revoked {
 				// Clear revoked cookie
-				// #nosec G124 -- clearing cookie on HTTP, Secure set dynamically
+				// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r)
+				// (trusted-proxy-gated X-Forwarded-Proto, m40/M-SEC4) so it
+				// matches the Secure flag the Login handler used to issue the
+				// cookie. With r.TLS != nil a TLS-terminating proxy left the
+				// clearing cookie non-Secure and browsers refused to drop the
+				// revoked original (REVIEW.md M-1).
 				http.SetCookie(w, &http.Cookie{
 					Name:     constants.SessionCookieName,
 					Value:    "",
@@ -177,7 +187,7 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 					Expires:  time.Unix(0, 0),
 					HttpOnly: true,
 					SameSite: http.SameSiteStrictMode,
-					Secure:   r.TLS != nil,
+					Secure:   IsHTTPS(r),
 				})
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return

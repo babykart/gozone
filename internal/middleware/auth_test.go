@@ -714,6 +714,98 @@ func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
 	}
 }
 
+// TestAuth_InvalidTokenClearsCookieSecureBehindTrustedProxy guards REVIEW.md M-1:
+// the clearing cookie must carry the Secure flag when the request is effectively
+// HTTPS via the trusted-proxy-gated resolver (WithHTTPS), even though r.TLS is
+// nil behind a TLS-terminating reverse proxy. With the previous r.TLS != nil
+// check the clearing cookie was non-Secure and browsers refused to overwrite the
+// Secure cookie issued by Login, leaving the revoked session cookie in place.
+func TestAuth_InvalidTokenClearsCookieSecureBehindTrustedProxy(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: "invalid-token"})
+	// Simulate a TLS-terminating trusted proxy: transport is plain HTTP (r.TLS
+	// == nil) but the resolver stashed an effective-HTTPS decision.
+	r = WithHTTPS(r, true)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	cookies := w.Result().Cookies()
+	var clearing *http.Cookie
+	for _, c := range cookies {
+		if c.Name == constants.SessionCookieName {
+			clearing = c
+		}
+	}
+	if clearing == nil {
+		t.Fatal("expected clearing Set-Cookie for gozone_session")
+	}
+	if !clearing.Secure {
+		t.Errorf("expected clearing cookie Secure=true behind trusted proxy, got Secure=%v", clearing.Secure)
+	}
+}
+
+// TestAuth_RevokedTokenClearsCookieSecureBehindTrustedProxy is the revoked-token
+// counterpart of the invalid-token test above, exercising the second clear-cookie
+// site in Auth (the revoked_tokens hit path).
+func TestAuth_RevokedTokenClearsCookieSecureBehindTrustedProxy(t *testing.T) {
+	db := newTestAuthDB(t)
+	seedTestUser(t, db, "revoked-web", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: 1, Username: "revoked-web", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := ParseToken(token, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RevokeToken(context.Background(), claims.ID, claims.UserID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for revoked token")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	r = WithHTTPS(r, true)
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	cookies := w.Result().Cookies()
+	var clearing *http.Cookie
+	for _, c := range cookies {
+		if c.Name == constants.SessionCookieName {
+			clearing = c
+		}
+	}
+	if clearing == nil {
+		t.Fatal("expected clearing Set-Cookie for gozone_session")
+	}
+	if !clearing.Secure {
+		t.Errorf("expected clearing cookie Secure=true behind trusted proxy, got Secure=%v", clearing.Secure)
+	}
+}
+
 func TestAuth_ExpiredTokenClearsCookie(t *testing.T) {
 	db := newTestAuthDB(t)
 	seedTestUser(t, db, "expired-web", "user", true)
