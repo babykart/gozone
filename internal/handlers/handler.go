@@ -80,15 +80,30 @@ func (h *Handler) renderInternalError(w http.ResponseWriter, r *http.Request, ms
 	h.renderErrorStatus(w, r, http.StatusInternalServerError, msg)
 }
 
-// pdnsUserFacingStatus returns the HTTP status and a user-facing message for
-// known PowerDNS errors that should be treated as validation/configuration
-// failures rather than internal server errors. It returns (0, "") for any
-// other error.
+// pdnsUserFacingStatus returns the HTTP status and a user-facing message for a
+// PowerDNS client error. It never includes the raw upstream error text — only
+// category-level, fixed strings — so a backend error surfacing SQL fragments or
+// internal paths through PDNS's {"error":...} body cannot reach the user
+// (REVIEW.md M-3). The detailed cause is logged server-side by the caller
+// (renderInternalError).
+//
+// Returns (0, "") for any non-PowerDNS error (e.g. a DB failure), in which case
+// the caller falls back to a generic 500.
 func pdnsUserFacingStatus(err error) (int, string) {
-	if errors.Is(err, pdns.ErrLuaUpdatesDisabled) {
+	switch {
+	case errors.Is(err, pdns.ErrValidation):
+		return http.StatusBadRequest, "PowerDNS rejected one or more records as invalid."
+	case errors.Is(err, pdns.ErrConflict):
+		return http.StatusConflict, "PowerDNS reported a conflict for the requested change."
+	case errors.Is(err, pdns.ErrNotFound):
+		return http.StatusNotFound, "PowerDNS could not find the target resource."
+	case errors.Is(err, pdns.ErrUnauthorized):
+		return http.StatusUnauthorized, "PowerDNS rejected the operation (authentication failure)."
+	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return http.StatusBadRequest, "LUA record updates are disabled on the PowerDNS server. Ask the administrator to set enable-lua-record-updates=yes."
+	default:
+		return 0, ""
 	}
-	return 0, ""
 }
 
 // render executes a template and automatically injects the CSRF token,

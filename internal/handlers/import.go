@@ -26,13 +26,15 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	// #nosec G120 — Form size limited to 10MB via ParseMultipartForm argument
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		h.renderError(w, r, "Failed to parse upload: "+err.Error())
+		logger.Warn("ImportZone: parse multipart failed", "zone", zoneID, "error", err)
+		h.renderError(w, r, "Failed to parse upload. Ensure the request is a valid multipart form under 10 MB.")
 		return
 	}
 
 	file, header, err := r.FormFile("zonefile")
 	if err != nil {
-		h.renderError(w, r, "No file uploaded: "+err.Error())
+		logger.Warn("ImportZone: no file in upload", "zone", zoneID, "error", err)
+		h.renderError(w, r, "No file uploaded or the form did not include a zonefile field.")
 		return
 	}
 	defer file.Close()
@@ -64,7 +66,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		logger.Error("ImportZone: parse failed", "zone", zoneID, "format", format, "error", err)
-		h.renderError(w, r, "Failed to parse file: "+err.Error())
+		h.renderError(w, r, "Failed to parse the uploaded file. Verify the format and record syntax.")
 		return
 	}
 
@@ -73,9 +75,13 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Route every PowerDNS failure through renderInternalError so the raw
+	// upstream error text (which may quote SQL fragments or internal paths on a
+	// backend failure) never reaches the user; pdnsUserFacingStatus maps each
+	// sentinel to a fixed, category-level message and the cause is logged
+	// server-side (REVIEW.md M-3).
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
-		logger.Error("ImportZone: CreateRecords failed", "zone", zoneID, "error", err)
-		h.renderErrorStatus(w, r, pdnsErrorHTTPStatus(err), "Failed to create records: "+err.Error())
+		h.renderInternalError(w, r, "Failed to create records", err)
 		return
 	}
 

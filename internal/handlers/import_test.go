@@ -133,6 +133,46 @@ func TestImportZone_PDNSError_NoLogs(t *testing.T) {
 	}
 }
 
+// TestImportZone_PDNSError_NoRawErrorLeak guards REVIEW.md M-3: when PowerDNS
+// returns a backend error whose body carries internal detail (e.g. a SQL
+// fragment), that detail must NOT be surfaced to the user. The cause is logged
+// server-side; the response body carries only a generic message.
+func TestImportZone_PDNSError_NoRawErrorLeak(t *testing.T) {
+	leak := "Error while executing query: SELECT password_hash FROM users WHERE id=1"
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"` + leak + `"}`))
+	})
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	csvContent := "name,type,content\nwww,A,192.0.2.1"
+	body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.csv\"\r\nContent-Type: text/csv\r\n\r\n%s\r\n--boundary--\r\n", csvContent)
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	h.ImportZone(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+
+	// The raw upstream detail (SQL fragment, table/column names) must never
+	// reach the response body. Only a generic message is rendered.
+	respBody := w.Body.String()
+	for _, needle := range []string{leak, "SELECT", "password_hash", "unexpected status"} {
+		if strings.Contains(respBody, needle) {
+			t.Errorf("response body leaks upstream detail %q: %s", needle, respBody)
+		}
+	}
+	if !strings.Contains(respBody, "Failed to create records") {
+		t.Errorf("expected generic user-facing message, got: %s", respBody)
+	}
+}
+
 func TestImportZone_PDNSValidationError(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {

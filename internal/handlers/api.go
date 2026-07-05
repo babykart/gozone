@@ -50,14 +50,6 @@ func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 	}
 }
 
-// pdnsErrorHTTPStatus returns the HTTP status code for a PowerDNS client error.
-// HTML handlers that do not need an API error code should call this helper so
-// the error mapping stays centralized in pdnsErrorStatus.
-func pdnsErrorHTTPStatus(err error) int {
-	status, _ := pdnsErrorStatus(err, "")
-	return status
-}
-
 // apiError is the standardized error response body.
 type apiError struct {
 	Error   string `json:"error"`
