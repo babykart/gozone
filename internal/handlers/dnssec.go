@@ -75,9 +75,14 @@ func (h *Handler) ToggleCryptokey(w http.ResponseWriter, r *http.Request) {
 	if active {
 		action = "activate"
 	}
+	// Bind the action column as a parameter rather than concatenating it into
+	// the SQL string. Safe today (action is one of two hardcoded literals
+	// derived from the active bool), but binding it removes the footgun if a
+	// future refactor lets user input reach action (REVIEW.md L-2).
+	actionName := "cryptokey_" + action
 	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'cryptokey_"+action+"', ?)",
-		user.ID, zoneID, fmt.Sprintf("%s key %d", action, keyID),
+		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, ?, ?)",
+		user.ID, zoneID, actionName, fmt.Sprintf("%s key %d", action, keyID),
 	); err != nil {
 		logger.Error("failed to log cryptokey toggle", "zone_id", zoneID, "error", err)
 	}

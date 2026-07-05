@@ -115,6 +115,14 @@ func TestToggleCryptokey_Activate(t *testing.T) {
 	if rectifyCalls != 1 {
 		t.Errorf("expected 1 rectify call after toggle, got %d", rectifyCalls)
 	}
+
+	// The activity log must carry the exact action string produced by binding
+	// actionName (cryptokey_activate), not a concatenated fragment (REVIEW.md L-2).
+	var action string
+	h.DB.QueryRow("SELECT action FROM activity_logs WHERE action='cryptokey_activate' LIMIT 1").Scan(&action)
+	if action != "cryptokey_activate" {
+		t.Errorf("expected activity_logs.action='cryptokey_activate', got %q", action)
+	}
 }
 
 func TestToggleCryptokey_Deactivate(t *testing.T) {
@@ -140,6 +148,14 @@ func TestToggleCryptokey_Deactivate(t *testing.T) {
 
 	if rectifyCalls != 1 {
 		t.Errorf("expected 1 rectify call after toggle, got %d", rectifyCalls)
+	}
+
+	// The activity log must carry the exact action string produced by binding
+	// actionName (cryptokey_deactivate), not a concatenated fragment (REVIEW.md L-2).
+	var action string
+	h.DB.QueryRow("SELECT action FROM activity_logs WHERE action='cryptokey_deactivate' LIMIT 1").Scan(&action)
+	if action != "cryptokey_deactivate" {
+		t.Errorf("expected activity_logs.action='cryptokey_deactivate', got %q", action)
 	}
 }
 
