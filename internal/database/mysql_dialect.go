@@ -107,6 +107,22 @@ func (m *mysqlDialect) IsAlreadyExistsError(err error) bool {
 	return false
 }
 
+// mysqlUniqueViolationNumber is the MySQL error number for a unique-key
+// violation: ER_DUP_ENTRY (1062) — "Duplicate entry '...' for key ...".
+// Used by IsUniqueViolation (REVIEW.md L-7).
+const mysqlUniqueViolationNumber = 1062
+
+// IsUniqueViolation reports whether err is a MySQL ER_DUP_ENTRY (1062),
+// detected via the typed *mysql.MySQLError so the check is independent of
+// the driver message wording (REVIEW.md L-7).
+func (m *mysqlDialect) IsUniqueViolation(err error) bool {
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) {
+		return myErr.Number == mysqlUniqueViolationNumber
+	}
+	return false
+}
+
 func (m *mysqlDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (

@@ -231,13 +231,54 @@ func TestUpdateTemplate_Success(t *testing.T) {
 	h.UpdateTemplate(w, r)
 
 	if w.Code != http.StatusSeeOther {
-		t.Errorf("expected 303, got %d", w.Code)
+		t.Errorf("expected 303, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var name string
 	h.DB.QueryRow("SELECT name FROM zone_templates WHERE id = ?", templateID).Scan(&name)
 	if name != "new-name" {
 		t.Errorf("expected name 'new-name', got %q", name)
+	}
+}
+
+// TestUpdateTemplate_DuplicateName covers the second site of REVIEW.md L-7
+// (templates.go UpdateTemplate): renaming a template to a name that already
+// exists must surface a 400 with a friendly message via the dialect-aware
+// database.ErrUniqueViolation sentinel instead of driver-specific text
+// matching.
+func TestUpdateTemplate_DuplicateName(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	seedTemplate(t, h, "existing-template", "")
+	templateID := seedTemplate(t, h, "my-template", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/"+strconv.FormatInt(templateID, 10)+"/update", strings.NewReader("name=existing-template"))
+	r.SetPathValue("template_id", strconv.FormatInt(templateID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.UpdateTemplate(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "already exists") {
+		t.Errorf("expected duplicate name error, got %s", w.Body.String())
+	}
+
+	// The renamed template must NOT have taken the colliding name; the
+	// original owner of the colliding name is unchanged.
+	var myName string
+	h.DB.QueryRow("SELECT name FROM zone_templates WHERE id = ?", templateID).Scan(&myName)
+	if myName != "my-template" {
+		t.Errorf("rename must be rolled back; expected 'my-template', got %q", myName)
+	}
+	var dupCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_templates WHERE name = ?", "existing-template").Scan(&dupCount)
+	if dupCount != 1 {
+		t.Errorf("expected exactly one 'existing-template' row, got %d", dupCount)
 	}
 }
 

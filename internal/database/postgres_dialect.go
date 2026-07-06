@@ -103,6 +103,22 @@ func (p *postgresDialect) IsAlreadyExistsError(err error) bool {
 	return false
 }
 
+// postgresUniqueViolationSQLSTATE is the PostgreSQL SQLSTATE code for a
+// unique-constraint violation: unique_violation (23505). Used by
+// IsUniqueViolation (REVIEW.md L-7).
+const postgresUniqueViolationSQLSTATE = "23505"
+
+// IsUniqueViolation reports whether err is a PostgreSQL unique_violation
+// (SQLSTATE 23505), detected via the typed *pq.Error so the check is
+// independent of the driver message wording (REVIEW.md L-7).
+func (p *postgresDialect) IsUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == postgresUniqueViolationSQLSTATE
+	}
+	return false
+}
+
 func (p *postgresDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (

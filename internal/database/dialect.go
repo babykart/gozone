@@ -67,6 +67,15 @@ type Dialect interface {
 	// changed (e.g. a typo fix), so a non-idempotent ALTER TABLE ADD COLUMN no
 	// longer aborts startup. See REVIEW.md m22.
 	IsAlreadyExistsError(err error) bool
+	// IsUniqueViolation reports whether err indicates a DML UNIQUE-constraint
+	// violation (an INSERT/UPDATE collided with a unique index or primary
+	// key). Detection is dialect-aware: MySQL via *mysql.MySQLError code 1062,
+	// PostgreSQL via *pq.Error SQLSTATE 23505, SQLite via the stable
+	// "UNIQUE constraint failed: ..." message prefix. Exposed so handlers can
+	// map a duplicate-key failure to a user-friendly 400 via
+	// errors.Is(err, database.ErrUniqueViolation) instead of pattern-matching
+	// driver-specific error strings (REVIEW.md L-7).
+	IsUniqueViolation(err error) bool
 }
 
 // placeholders returns a comma-separated list of n question-mark placeholders.

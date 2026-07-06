@@ -32,12 +32,59 @@ type DB struct {
 	dialect Dialect
 }
 
+// ErrUniqueViolation is the sentinel error wrapping any driver-level
+// UNIQUE-constraint violation returned by DB.ExecContext / Tx.ExecContext
+// (the code paths that run INSERT/UPDATE/DELETE statements where such
+// violations arise). Handlers can detect it idiomatically with
+// errors.Is(err, database.ErrUniqueViolation) instead of pattern-matching
+// driver-specific error text ("UNIQUE constraint failed", "Duplicate entry",
+// "duplicate key value violates unique constraint"). See REVIEW.md L-7.
+//
+// The wrapping uses fmt.Errorf("%w: %w", ErrUniqueViolation, err) so that
+// errors.As against the underlying typed driver error (e.g. *mysql.MySQLError,
+// *pq.Error) still traverses the chain, preserving existing call sites that
+// surface the driver error to logs or typed branches.
+var ErrUniqueViolation = errors.New("unique constraint violation")
+
+// wrapUniqueViolation returns an error that wraps both ErrUniqueViolation and
+// the original driver error when the active dialect classifies the latter as
+// a UNIQUE-constraint violation. Returns nil for a nil err and returns err
+// unchanged when the dialect does not match — so non-unique errors
+// (constraint-check, deadlock, connection-lost, ...) keep their original
+// identity. Used by the DB / Tx ExecContext wrappers (REVIEW.md L-7).
+func wrapUniqueViolation(d Dialect, err error) error {
+	if err == nil {
+		return nil
+	}
+	if d.IsUniqueViolation(err) {
+		return fmt.Errorf("%w: %w", ErrUniqueViolation, err)
+	}
+	return err
+}
+
 // isNoRows reports whether err is (or wraps) sql.ErrNoRows. Using errors.Is
 // instead of a direct == comparison keeps the check correct when a driver or
 // an intermediate wrapper layers an error around sql.ErrNoRows (REVIEW.md
 // m18).
 func isNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
+}
+
+// IsUniqueViolation reports whether err is (or wraps) a driver-level
+// UNIQUE-constraint violation according to the active dialect. Convenience
+// helper for callers that hold a *DB and prefer a boolean check; equivalent
+// to errors.Is(err, database.ErrUniqueViolation) for errors returned by
+// DB.Exec / DB.ExecContext / Tx equivalents, but also classifies raw driver
+// errors that have not been wrapped (e.g. obtained via *sql.Row.Scan)
+// (REVIEW.md L-7).
+func (db *DB) IsUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUniqueViolation) {
+		return true
+	}
+	return db.dialect.IsUniqueViolation(err)
 }
 
 // New opens a database connection and runs migrations.
@@ -95,9 +142,12 @@ func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 // ExecContext executes a query with automatic placeholder rebinding and
-// supports cancellation through the provided context.
+// supports cancellation through the provided context. A driver-level
+// UNIQUE-constraint violation is wrapped so callers can detect it with
+// errors.Is(err, database.ErrUniqueViolation) (REVIEW.md L-7).
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return db.Conn.ExecContext(ctx, db.dialect.Rebind(query), args...)
+	res, err := db.Conn.ExecContext(ctx, db.dialect.Rebind(query), args...)
+	return res, wrapUniqueViolation(db.dialect, err)
 }
 
 // Query executes a query that returns rows with automatic placeholder rebinding.
@@ -505,9 +555,12 @@ func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 // ExecContext executes a query within the transaction with automatic placeholder
-// rebinding and supports cancellation through the provided context.
+// rebinding and supports cancellation through the provided context. A
+// driver-level UNIQUE-constraint violation is wrapped so callers can detect it
+// with errors.Is(err, database.ErrUniqueViolation) (REVIEW.md L-7).
 func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return tx.Tx.ExecContext(ctx, tx.dialect.Rebind(query), args...)
+	res, err := tx.Tx.ExecContext(ctx, tx.dialect.Rebind(query), args...)
+	return res, wrapUniqueViolation(tx.dialect, err)
 }
 
 // Query executes a query within the transaction that returns rows with

@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -134,7 +136,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		name, description,
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if errors.Is(err, database.ErrUniqueViolation) {
 			h.renderError(w, r, "A group with that name already exists")
 			return
 		}
@@ -263,7 +265,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		name, description, groupID,
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if errors.Is(err, database.ErrUniqueViolation) {
 			h.renderError(w, r, "A group with that name already exists")
 			return
 		}

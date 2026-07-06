@@ -107,3 +107,32 @@ func TestSQLiteDialect_IsAlreadyExistsError(t *testing.T) {
 		})
 	}
 }
+
+// TestSQLiteDialect_IsUniqueViolation verifies the message-text matching used
+// to classify a UNIQUE-constraint violation (REVIEW.md L-7). The go-sqlite3
+// driver exposes no typed error code, so detection relies on the stable
+// "UNIQUE constraint failed: ..." prefix that every SQLite version emits.
+func TestSQLiteDialect_IsUniqueViolation(t *testing.T) {
+	d := &sqliteDialect{}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unique constraint failed", errors.New("UNIQUE constraint failed: zone_groups.name"), true},
+		{"wrapped unique", fmt.Errorf("insert: %w", errors.New("UNIQUE constraint failed: users.email")), true},
+		{"lowercase unique", errors.New("unique constraint failed: zone_groups.name"), false},
+		{"foreign key", errors.New("FOREIGN KEY constraint failed"), false},
+		{"not null", errors.New("NOT NULL constraint failed: users.id"), false},
+		{"unrelated", errors.New("no such table: x"), false},
+		{"empty", errors.New(""), false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := d.IsUniqueViolation(tt.err); got != tt.want {
+				t.Errorf("IsUniqueViolation(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}

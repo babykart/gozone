@@ -176,6 +176,41 @@ func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_IsUniqueViolation verifies the typed-error matching used
+// to classify a UNIQUE-constraint violation (REVIEW.md L-7). MySQL surfaces
+// these as ER_DUP_ENTRY (1062).
+func TestMySQLDialect_IsUniqueViolation(t *testing.T) {
+	d := &mysqlDialect{}
+	codes := []struct {
+		number uint16
+		want   bool
+	}{
+		{1062, true},  // ER_DUP_ENTRY — unique violation
+		{1050, false}, // ER_TABLE_EXISTS_ERROR — DDL, not DML unique
+		{1060, false}, // ER_DUP_FIELDNAME — DDL, not DML unique
+		{1061, false}, // ER_DUP_KEYNAME — DDL, not DML unique
+		{1146, false}, // ER_NO_SUCH_TABLE
+		{1064, false}, // ER_PARSE_ERROR
+	}
+	for _, c := range codes {
+		err := &mysql.MySQLError{Number: c.number}
+		if got := d.IsUniqueViolation(err); got != c.want {
+			t.Errorf("IsUniqueViolation(code %d) = %v, want %v", c.number, got, c.want)
+		}
+	}
+	// Wrapped error still matched via errors.As.
+	wrapped := fmt.Errorf("exec: %w", &mysql.MySQLError{Number: 1062})
+	if !d.IsUniqueViolation(wrapped) {
+		t.Error("IsUniqueViolation must detect a wrapped *mysql.MySQLError")
+	}
+	if d.IsUniqueViolation(nil) {
+		t.Error("IsUniqueViolation(nil) must be false")
+	}
+	if d.IsUniqueViolation(errors.New("connection refused")) {
+		t.Error("IsUniqueViolation must not match unrelated errors")
+	}
+}
+
 // TestMySQLDialect_InsertIgnore_IgnoresConflictColumns verifies the contract
 // from the Dialect interface: MySQL's INSERT IGNORE catches any unique
 // violation, so the conflictColumns parameter is intentionally unused. The

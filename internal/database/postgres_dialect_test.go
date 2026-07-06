@@ -82,6 +82,42 @@ func TestPostgresDialect_IsAlreadyExistsError(t *testing.T) {
 	}
 }
 
+// TestPostgresDialect_IsUniqueViolation verifies the SQLSTATE matching used
+// to classify a UNIQUE-constraint violation (REVIEW.md L-7). PostgreSQL
+// surfaces these as unique_violation (23505).
+func TestPostgresDialect_IsUniqueViolation(t *testing.T) {
+	d := &postgresDialect{}
+	codes := []struct {
+		code string
+		want bool
+	}{
+		{"23505", true},  // unique_violation
+		{"42701", false}, // duplicate_column — DDL, not DML unique
+		{"42P07", false}, // duplicate_table — DDL
+		{"42710", false}, // duplicate_object — DDL
+		{"23503", false}, // foreign_key_violation
+		{"42P01", false}, // undefined_table
+		{"42601", false}, // syntax_error
+	}
+	for _, c := range codes {
+		err := &pq.Error{Code: pq.ErrorCode(c.code)}
+		if got := d.IsUniqueViolation(err); got != c.want {
+			t.Errorf("IsUniqueViolation(SQLSTATE %q) = %v, want %v", c.code, got, c.want)
+		}
+	}
+	// Wrapped error still matched via errors.As.
+	wrapped := fmt.Errorf("exec: %w", &pq.Error{Code: "23505"})
+	if !d.IsUniqueViolation(wrapped) {
+		t.Error("IsUniqueViolation must detect a wrapped *pq.Error")
+	}
+	if d.IsUniqueViolation(nil) {
+		t.Error("IsUniqueViolation(nil) must be false")
+	}
+	if d.IsUniqueViolation(errors.New("connection refused")) {
+		t.Error("IsUniqueViolation must not match unrelated errors")
+	}
+}
+
 func TestPostgresDialect_Rebind(t *testing.T) {
 	d := &postgresDialect{}
 	q := "SELECT * FROM users WHERE id = ? AND name = ?"

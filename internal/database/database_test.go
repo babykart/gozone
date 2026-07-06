@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -176,6 +177,107 @@ func TestClose(t *testing.T) {
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+// TestDB_ExecContext_UniqueViolationWrapped is the regression test for L-7:
+// DB.ExecContext wraps any driver-level UNIQUE-constraint violation with
+// database.ErrUniqueViolation so handlers can detect it idiomatically via
+// errors.Is instead of pattern-matching driver-specific error text. Also
+// verifies the helper *DB.IsUniqueViolation and that non-unique errors pass
+// through unwrapped (so unrelated failures keep their original identity).
+func TestDB_ExecContext_UniqueViolationWrapped(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Seed one row.
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"setting-a", "v1",
+	); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	// Duplicate key — driver returns a UNIQUE-constraint-failed error.
+	_, err = db.ExecContext(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"setting-a", "v2",
+	)
+	if err == nil {
+		t.Fatal("expected UNIQUE violation error, got nil")
+	}
+	if !errors.Is(err, ErrUniqueViolation) {
+		t.Errorf("errors.Is(err, ErrUniqueViolation) = false; driver error: %v", err)
+	}
+	if !db.IsUniqueViolation(err) {
+		t.Errorf("db.IsUniqueViolation(err) = false; driver error: %v", err)
+	}
+	// The original driver error text must remain visible in err.Error() so
+	// server-side logs keep the forensic detail.
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Errorf("wrapped error must preserve the driver message; got: %v", err)
+	}
+
+	// A non-unique error (missing table) must NOT be classified as a unique
+	// violation, confirming the wrapping is targeted.
+	_, err = db.ExecContext(ctx, "INSERT INTO no_such_table (k) VALUES (?)", "x")
+	if err == nil {
+		t.Fatal("expected no-such-table error, got nil")
+	}
+	if errors.Is(err, ErrUniqueViolation) {
+		t.Errorf("errors.Is(err, ErrUniqueViolation) must be false for a non-unique error; got: %v", err)
+	}
+	if db.IsUniqueViolation(err) {
+		t.Errorf("db.IsUniqueViolation must be false for a non-unique error; got: %v", err)
+	}
+
+	// nil is never a unique violation.
+	if db.IsUniqueViolation(nil) {
+		t.Error("db.IsUniqueViolation(nil) must be false")
+	}
+}
+
+// TestTx_ExecContext_UniqueViolationWrapped mirrors
+// TestDB_ExecContext_UniqueViolationWrapped for the transactional path so
+// the Tx.ExecContext wrapper stays consistent with the DB one (REVIEW.md L-7).
+func TestTx_ExecContext_UniqueViolationWrapped(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"tx-key", "v1",
+	); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104 -- best-effort cleanup
+
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"tx-key", "v2",
+	)
+	if err == nil {
+		t.Fatal("expected UNIQUE violation error, got nil")
+	}
+	if !errors.Is(err, ErrUniqueViolation) {
+		t.Errorf("errors.Is(err, ErrUniqueViolation) = false for tx; driver error: %v", err)
 	}
 }
 

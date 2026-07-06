@@ -69,6 +69,17 @@ func (s *sqliteDialect) IsAlreadyExistsError(err error) bool {
 		strings.Contains(msg, "already exists")
 }
 
+// IsUniqueViolation matches go-sqlite3's UNIQUE-constraint-failed error. The
+// driver exposes no typed error code for this, so we match on the stable
+// message prefix "UNIQUE constraint failed: ..." that every SQLite version
+// emits (sqlite3.c azType table + sqlite3VdbeMakeReady). See REVIEW.md L-7.
+func (s *sqliteDialect) IsUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 func (s *sqliteDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (
