@@ -29,7 +29,8 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 			}
 
 			var exists int
-			err := db.QueryRow(
+			err := db.QueryRowContext(
+				r.Context(),
 				`SELECT 1 FROM zone_group_members m
 				 JOIN zone_group_zones z ON m.group_id = z.group_id
 				 WHERE m.user_id = ? AND z.zone_id = ?
