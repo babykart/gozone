@@ -66,7 +66,19 @@ func loginErrorBanner(code string) string {
 
 func ensureDummyHash(cost int) {
 	dummyHashOnce.Do(func() {
-		dummyHash, _ = bcrypt.GenerateFromPassword([]byte("constant-time-dummy"), cost)
+		h, err := bcrypt.GenerateFromPassword([]byte("constant-time-dummy"), cost)
+		if err != nil {
+			// bcrypt.GenerateFromPassword only fails on an out-of-range cost
+			// (the config loader validates cost ∈ [4,31], so this branch is
+			// unreachable in practice). Fail the process closed rather than
+			// leaving dummyHash nil: a nil hash would make the
+			// CompareHashAndPassword calls on the unknown-user and locked-
+			// account login paths return immediately, reopening the
+			// username-enumeration timing channel the dummy compare exists
+			// to close (REVIEW.md L-3).
+			logger.Fatal("failed to generate constant-time dummy bcrypt hash", "cost", cost, "error", err)
+		}
+		dummyHash = h
 	})
 }
 
