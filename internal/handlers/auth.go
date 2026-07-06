@@ -114,7 +114,15 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 //     bounded.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	username := r.FormValue("username")
+	// Normalise the username the same way the per-username rate limiter does
+	// (cmd/server.go loginUsernameKey: trim + lowercase). The DB lookup below
+	// uses LOWER(username) = ? so the match is case-insensitive — without this,
+	// Postgres (case-sensitive =) resolves "Admin" and "admin" to different
+	// rows while the rate limiter treats them as one bucket, and a user who
+	// registered as "Admin" could not log in as "admin" (REVIEW.md L-5).
+	// Lowercasing the input also keeps login_attempts.username aligned with the
+	// rate-limit bucket for forensics.
+	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	password := r.FormValue("password")
 	clientIP := chimw.GetClientIP(r.Context())
 	if clientIP == "" {
@@ -130,7 +138,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	ensureDummyHash(h.Cfg.Auth.BcryptCost)
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
-		 FROM users WHERE username = ? AND enabled = 1`, username,
+		 FROM users WHERE LOWER(username) = ? AND enabled = 1`, username,
 	).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,

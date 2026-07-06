@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,44 @@ func TestLogin_Success(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='login'").Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 login activity log, got %d", count)
+	}
+}
+
+// TestLogin_CaseInsensitiveAndTrimmedUsername guards REVIEW.md L-5: the DB
+// lookup must be case-insensitive (LOWER(username) = ?) and the input must be
+// trimmed, matching the per-username rate limiter's normalisation
+// (cmd/server.go loginUsernameKey). A user who registered as "TestUser" must be
+// able to log in as "testuser", "TESTUSER", or " TestUser ". Without the
+// case-insensitive lookup, Postgres (case-sensitive =) would resolve these to
+// different rows / no row while the rate limiter treats them as one bucket.
+func TestLogin_CaseInsensitiveAndTrimmedUsername(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("testpass"), 4)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"TestUser", "test@example.com", string(hash), "user",
+	)
+
+	for _, raw := range []string{"testuser", "TESTUSER", " TestUser "} {
+		body := url.Values{"username": {raw}, "password": {"testpass"}}.Encode()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+
+		if w.Code != http.StatusSeeOther {
+			t.Errorf("username=%q: expected 303 redirect, got %d", raw, w.Code)
+		}
+		var found bool
+		for _, c := range w.Result().Cookies() {
+			if c.Name == constants.SessionCookieName {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("username=%q: expected gozone_session cookie", raw)
+		}
 	}
 }
 
