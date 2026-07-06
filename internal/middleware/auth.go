@@ -321,15 +321,25 @@ func GetUser(r *http.Request) *models.User {
 	return user
 }
 
+// loadUser fetches the user record needed by request-time middleware
+// (Auth / APIKeyAuth). It deliberately does NOT select password_hash: the
+// hash is only required at the ChangePassword site, which refetches it inside
+// its own transaction (REVIEW.md L-9). Carrying the hash in the per-request
+// *models.User stored in the context exposed it for the whole request
+// lifetime on every authenticated call — including API requests that never
+// need it — for no benefit (json:"-" already excluded it from responses, but
+// defence-in-depth wants the secret out of memory unless it is actively
+// used). Login and admin user-management load the hash via their own
+// dedicated SELECTs and are unaffected.
 func loadUser(ctx context.Context, db *database.DB, userID int64) (*models.User, error) {
 	user := &models.User{}
 	var enabled int
 	var mustChange int
 	err := db.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
+		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
 		 FROM users WHERE id = ?`, userID,
 	).Scan(
-		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
+		&user.ID, &user.Username, &user.Email,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
 	)

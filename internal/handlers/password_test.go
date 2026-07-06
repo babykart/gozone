@@ -132,6 +132,52 @@ func TestChangePassword_WrongCurrentRejected(t *testing.T) {
 	}
 }
 
+// TestChangePassword_WorksWithoutHashInContext is the L-9 regression test:
+// loadUser no longer selects password_hash, so the *models.User placed in
+// the request context carries an empty PasswordHash. ChangePassword must
+// refetch the hash inside its transaction rather than reading the context,
+// otherwise every forced-change / self-service change would compare against
+// an empty hash and reject every submission. This test seeds the user the
+// same way production does (no hash in the context struct) and asserts the
+// flow still succeeds.
+func TestChangePassword_WorksWithoutHashInContext(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target2", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+
+	// Mirror what the Auth middleware now stores: user WITHOUT PasswordHash.
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target2", Role: "user", MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var newHash string
+	var mustChange int
+	h.DB.QueryRow("SELECT password_hash, must_change_password FROM users WHERE id = ?", uid).Scan(&newHash, &mustChange)
+	if newHash == hash {
+		t.Error("expected password hash to change even when context carried no hash")
+	}
+	if mustChange != 0 {
+		t.Errorf("expected must_change_password cleared (0), got %d", mustChange)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(newHash), []byte("Newpass2!")); err != nil {
+		t.Errorf("new hash should validate the new password: %v", err)
+	}
+}
+
 // TestLogin_MustChangePassword_RedirectsToChangePassword verifies the login
 // flow redirects a forced-change user to /change-password instead of /dashboard.
 func TestLogin_MustChangePassword_RedirectsToChangePassword(t *testing.T) {

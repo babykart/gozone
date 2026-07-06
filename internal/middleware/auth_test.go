@@ -1021,3 +1021,32 @@ func TestLoadUser_PopulatesMustChangePassword(t *testing.T) {
 		t.Error("expected MustChangePassword=true")
 	}
 }
+
+// TestLoadUser_DoesNotLoadPasswordHash is the L-9 regression test: the hash
+// must NOT be carried in the per-request *models.User stored in the context.
+// loadUser feeds Auth/APIKeyAuth which run on every authenticated request,
+// and carrying the secret for the whole request lifetime — including API
+// requests that never need it — was unnecessary exposure. The hash has to
+// stay empty here so any downstream code that mistakenly reads it fails
+// loudly instead of silently reading a populated secret. ChangePassword
+// refetches the hash inside its own transaction (see change_password.go).
+func TestLoadUser_DoesNotLoadPasswordHash(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "ph", "user", true)
+
+	// Sanity: the row really has a hash in DB, so an empty struct field below
+	// proves loadUser skipped the column rather than the row being empty.
+	var dbHash string
+	db.QueryRow("SELECT password_hash FROM users WHERE id = ?", userID).Scan(&dbHash)
+	if dbHash == "" {
+		t.Fatal("seeded user has empty password_hash in DB; test setup is broken")
+	}
+
+	user, err := loadUser(context.Background(), db, userID)
+	if err != nil {
+		t.Fatalf("loadUser: %v", err)
+	}
+	if user.PasswordHash != "" {
+		t.Errorf("loadUser must not populate PasswordHash (L-9); got %q", user.PasswordHash)
+	}
+}

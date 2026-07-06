@@ -33,6 +33,12 @@ func (h *Handler) ChangePasswordPage(w http.ResponseWriter, r *http.Request) {
 // It verifies the current password, validates the new one against the policy
 // and history, writes the new hash, and clears must_change_password so the
 // force-change gate reopens. The whole operation runs in a transaction.
+//
+// The current password hash is refetched inside the transaction rather than
+// read from the request context: loadUser no longer selects password_hash
+// (REVIEW.md L-9), and reading it under the tx closes the TOCTOU window
+// between the verify and the UPDATE — the hash we compare is the same one we
+// will overwrite a few statements down.
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	if user == nil {
@@ -43,13 +49,8 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	newPassword := strings.TrimSpace(r.FormValue("new_password"))
 	confirm := strings.TrimSpace(r.FormValue("confirm_password"))
 
-	// Verify the current password. This is meaningful for both flows: a user
-	// whose password an admin reset knows the temp password (enter it as
-	// "current"), and an expired-password user knows their old password.
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
-		h.renderError(w, r, "Current password is incorrect")
-		return
-	}
+	// Validate the form first (cheap, no DB) so an invalid submission does
+	// not needlessly open a transaction or run bcrypt.
 	if newPassword == "" {
 		h.renderError(w, r, "New password must not be empty")
 		return
@@ -70,6 +71,25 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+
+	// Refetch the current hash inside the tx so the verify-and-replace
+	// sequence is atomic (REVIEW.md L-9): loadUser no longer carries the
+	// hash in the request context, and reading it under the transaction
+	// means the hash we bcrypt-compare is the same row we UPDATE below.
+	var currentHash string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT password_hash FROM users WHERE id = ?", user.ID,
+	).Scan(&currentHash); err != nil {
+		h.renderInternalError(w, r, "Failed to verify current password", err)
+		return
+	}
+	// Verify the current password. This is meaningful for both flows: a user
+	// whose password an admin reset knows the temp password (enter it as
+	// "current"), and an expired-password user knows their old password.
+	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(currentPassword)); err != nil {
+		h.renderError(w, r, "Current password is incorrect")
+		return
+	}
 
 	if h.Cfg.Password.HistorySize > 0 {
 		reused, err := tx.PasswordHistoryReused(ctx, user.ID, newPassword, h.Cfg.Password.HistorySize)
