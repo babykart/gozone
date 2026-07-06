@@ -59,7 +59,7 @@ func (h *Handler) ToggleCryptokey(w http.ResponseWriter, r *http.Request) {
 
 	keyIDStr := r.PathValue("key_id")
 	keyID, err := strconv.Atoi(keyIDStr)
-	if err != nil {
+	if err != nil || keyID <= 0 {
 		h.renderError(w, r, "Invalid key ID")
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handler) DeleteCryptokey(w http.ResponseWriter, r *http.Request) {
 
 	keyIDStr := r.PathValue("key_id")
 	keyID, err := strconv.Atoi(keyIDStr)
-	if err != nil {
+	if err != nil || keyID <= 0 {
 		h.renderError(w, r, "Invalid key ID")
 		return
 	}

@@ -189,6 +189,44 @@ func TestDeleteCryptokey(t *testing.T) {
 	}
 }
 
+// TestToggleDeleteCryptokey_RejectsNonPositiveKeyID guards REVIEW.md L-6:
+// cryptokey IDs must be positive integers. A key_id of 0, -1 (which
+// strconv.Atoi happily parses), or a non-numeric value must be rejected with
+// 400 rather than forwarded to PowerDNS — mirroring the ParseInt → <= 0 → 400
+// pattern used for user IDs. Validation runs before any PDNS contact.
+func TestToggleDeleteCryptokey_RejectsNonPositiveKeyID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	for _, bad := range []string{"0", "-1", "abc"} {
+		t.Run("toggle/"+bad, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com./cryptokeys/"+bad+"/toggle", strings.NewReader("active=true"))
+			r.SetPathValue("zone_id", "example.com.")
+			r.SetPathValue("key_id", bad)
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r = withUserContext(r, user)
+			h.ToggleCryptokey(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("key_id=%q: expected 400, got %d", bad, w.Code)
+			}
+		})
+		t.Run("delete/"+bad, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com./cryptokeys/"+bad+"/delete", nil)
+			r.SetPathValue("zone_id", "example.com.")
+			r.SetPathValue("key_id", bad)
+			r = withUserContext(r, user)
+			h.DeleteCryptokey(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("key_id=%q: expected 400, got %d", bad, w.Code)
+			}
+		})
+	}
+}
+
 func TestCreateCryptokey_InvalidType(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
