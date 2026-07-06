@@ -49,14 +49,27 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	comment := r.FormValue("comment")
 	commentClear := r.FormValue("comment_clear") == "1" || r.FormValue("comment_clear") == "true"
 
-	ttl, err := strconv.Atoi(ttlStr)
-	if err != nil || ttl <= 0 {
-		ttl = 3600
+	// Empty TTL defaults to 3600; an explicit non-numeric or non-positive
+	// value is rejected so the activity log records what the user actually
+	// typed, not a silent substitution (REVIEW.md L-4).
+	ttl := 3600
+	if ttlStr != "" {
+		v, err := strconv.Atoi(ttlStr)
+		if err != nil || v <= 0 {
+			h.renderError(w, r, "Invalid TTL: must be a positive integer")
+			return
+		}
+		ttl = v
 	}
 
 	priority := 0
 	if priorityStr != "" {
-		priority, _ = strconv.Atoi(priorityStr)
+		v, err := strconv.Atoi(priorityStr)
+		if err != nil || v < 0 {
+			h.renderError(w, r, "Invalid priority: must be a non-negative integer")
+			return
+		}
+		priority = v
 	}
 
 	if name == "" || recordType == "" || content == "" {
@@ -279,7 +292,10 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 
 	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid record form: %w", err)
+		// parseRecordForm returns *recordValidationError for bad TTL/priority;
+		// pass it through so the caller renders a 400 rather than wrapping it
+		// into a generic error that would render as a 500 (REVIEW.md L-4).
+		return nil, nil, err
 	}
 	if name == "" || recordType == "" || content == "" {
 		return nil, nil, &recordValidationError{Message: "Name, type, and content are required"}
@@ -763,15 +779,27 @@ func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, pr
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
 	disabled = r.FormValue("disabled") == "on" || r.FormValue("disabled") == "true"
 
-	ttl, err = strconv.Atoi(ttlStr)
-	if err != nil || ttl <= 0 {
-		ttl = 3600
-		err = nil
+	// Empty TTL defaults to 3600; an explicit non-numeric or non-positive
+	// value is rejected so the activity log records what the user actually
+	// typed, not a silent substitution (REVIEW.md L-4).
+	ttl = 3600
+	if ttlStr != "" {
+		v, parseErr := strconv.Atoi(ttlStr)
+		if parseErr != nil || v <= 0 {
+			err = &recordValidationError{Message: "Invalid TTL: must be a positive integer"}
+			return
+		}
+		ttl = v
 	}
 
 	priority = 0
 	if priorityStr != "" {
-		priority, _ = strconv.Atoi(priorityStr)
+		v, parseErr := strconv.Atoi(priorityStr)
+		if parseErr != nil || v < 0 {
+			err = &recordValidationError{Message: "Invalid priority: must be a non-negative integer"}
+			return
+		}
+		priority = v
 	}
 	return
 }

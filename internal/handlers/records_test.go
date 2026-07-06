@@ -94,6 +94,91 @@ func TestCreateRecord_Success(t *testing.T) {
 	}
 }
 
+// TestCreateRecord_RejectsInvalidTTLOrPriority guards REVIEW.md L-4: a
+// non-numeric or non-positive TTL, or a non-numeric/negative priority, must be
+// rejected with 400 rather than silently substituted with the defaults (which
+// left the audit log showing a TTL/priority the user never typed). Validation
+// runs before any PowerDNS contact.
+func TestCreateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"non-numeric ttl", "name=www.example.com&type=A&content=1.2.3.4&ttl=abc"},
+		{"zero ttl", "name=www.example.com&type=A&content=1.2.3.4&ttl=0"},
+		{"negative ttl", "name=www.example.com&type=A&content=1.2.3.4&ttl=-5"},
+		{"non-numeric priority", "name=www.example.com&type=A&content=1.2.3.4&ttl=300&priority=abc"},
+		{"negative priority", "name=www.example.com&type=A&content=1.2.3.4&ttl=300&priority=-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("zone_id", "example.com")
+			r = r.WithContext(ctx)
+			h.CreateRecord(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d", w.Code)
+			}
+		})
+	}
+
+	// No record should have been created (validation fails before PDNS contact).
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record'").Scan(&n)
+	if n != 0 {
+		t.Errorf("expected 0 create_record logs for rejected inputs, got %d", n)
+	}
+}
+
+// TestUpdateRecord_RejectsInvalidTTLOrPriority is the parseRecordForm
+// counterpart of the CreateRecord test above (REVIEW.md L-4 second site).
+func TestUpdateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"non-numeric ttl", "name=www.example.com&type=A&content=5.6.7.8&ttl=abc&original_content=1.2.3.4&original_priority=0"},
+		{"zero ttl", "name=www.example.com&type=A&content=5.6.7.8&ttl=0&original_content=1.2.3.4&original_priority=0"},
+		{"non-numeric priority", "name=www.example.com&type=A&content=5.6.7.8&ttl=600&priority=abc&original_content=1.2.3.4&original_priority=0"},
+		{"negative priority", "name=www.example.com&type=A&content=5.6.7.8&ttl=600&priority=-1&original_content=1.2.3.4&original_priority=0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/update", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("zone_id", "example.com")
+			r = r.WithContext(ctx)
+			h.UpdateRecord(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d", w.Code)
+			}
+		})
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='update_record'").Scan(&n)
+	if n != 0 {
+		t.Errorf("expected 0 update_record logs for rejected inputs, got %d", n)
+	}
+}
+
 func TestCreateRecord_LogsOldNewSnapshot(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
