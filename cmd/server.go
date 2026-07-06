@@ -226,6 +226,21 @@ func runServer(cfg *config.Config) error {
 		loginUsernameLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
 	}
 
+	// Stop the background cleanup goroutines each limiter spawns. In
+	// production the process exits shortly after runServer returns and the
+	// goroutines die with it, but the explicit Close keeps the lifecycle
+	// symmetrical with db.Close / cachedClient.Close /
+	// stopCleanupRevokedTokens and — crucially — stops the leak in tests
+	// that build a server and return without os.Exit (REVIEW.md L-10).
+	// LIFO order: these run BEFORE db.Close on shutdown, which is fine — the
+	// limiters hold no DB state.
+	defer loginLimiter.Close()
+	defer apiLimiter.Close()
+	defer apiIPLimiter.Close()
+	if loginUsernameLimiter != nil {
+		defer loginUsernameLimiter.Close()
+	}
+
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
