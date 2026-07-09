@@ -171,6 +171,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// M-SEC5: recordFailedAttempt is called even on an already-locked account
 	// so each further failure extends the lockout window (sliding expiration).
 	// Without this an attacker gets one free guess per lockout window.
+	//
+	// This whole block (status check + lock enforcement + sliding-window
+	// extension) is gated on MaxFailedAttempts > 0 by design (REVIEW.md I-2):
+	// when an operator sets max_failed_attempts = 0 the persistent-lockout
+	// feature is considered fully off, so existing locks are not honoured
+	// either — a previously locked account (locked while the setting was > 0,
+	// or manually via the admin "Lock user" action) can log in again without
+	// clearing the lock. The per-IP and per-username rate limiters still apply,
+	// and clearing a specific lock without disabling the feature is available
+	// via the admin Unlock action or `gozone user unlock`. See
+	// config.LoginLockConfig.MaxFailedAttempts for the full rationale.
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {

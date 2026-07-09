@@ -46,6 +46,15 @@ type LoginLockConfig struct {
 	// MaxFailedAttempts is the number of consecutive failed login attempts per
 	// account before the account is locked. Set to 0 to disable persistent
 	// lockout (the rate limiters still protect the endpoint).
+	//
+	// Disabling lockout (0) disables it completely: no new locks are recorded
+	// AND existing locks are no longer enforced at login. A previously locked
+	// account (locked while this setting was > 0, or manually via the admin
+	// "Lock user" action) becomes immediately able to log in again. This is
+	// intentional — 0 means "the persistent-lockout feature is off" — but
+	// operators toggling it off should be aware of the consequence. To clear a
+	// specific lock without disabling the feature, use the admin Unlock action
+	// or `gozone user unlock <id|username>`.
 	MaxFailedAttempts int `yaml:"max_failed_attempts"`
 	// LockoutDurationMinutes is how long the account stays locked after the
 	// threshold is reached. Subsequent failed attempts reset the window.

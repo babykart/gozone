@@ -77,6 +77,11 @@ password:
 #     compounded with the per-IP one at the route level (both must allow).
 #   - max_failed_attempts / lockout_duration_minutes: persistent per-account
 #     lockout that survives restarts and is shared across cluster instances.
+#     Set max_failed_attempts to 0 to disable the feature entirely: no new
+#     locks are recorded AND existing ones stop being enforced at login (a
+#     previously locked account can log in again). To clear a single lock
+#     without disabling the feature, use the admin Unlock action or
+#     `gozone user unlock <id|username>`.
 login_lock:
   max_failed_attempts: 10
   lockout_duration_minutes: 15
