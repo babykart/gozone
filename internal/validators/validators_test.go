@@ -545,6 +545,30 @@ func TestValidateZoneKind(t *testing.T) {
 	}
 }
 
+func TestValidateRole(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"admin", "admin", false},
+		{"user", "user", false},
+		{"empty", "", true},
+		{"invalid", "superadmin", true},
+		{"uppercase", "Admin", true},
+		{"whitespace", " user ", true},
+		{"sql-ish", "user;--", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRole(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRole(%q) error = %v, wantErr = %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRecordContent_SOANumericFields(t *testing.T) {
 	base := "ns1.example.com admin.example.com"
 	tests := []struct {

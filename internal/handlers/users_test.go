@@ -141,6 +141,42 @@ func TestCreateUser_Success(t *testing.T) {
 	}
 }
 
+// TestCreateUser_RejectsInvalidRole is the I-3 regression test: an unsupported
+// role must be rejected with 400 instead of being silently downgraded to "user".
+func TestCreateUser_RejectsInvalidRole(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	for _, role := range []string{"superadmin", "", "Admin", "user;--"} {
+		w := httptest.NewRecorder()
+		body := "username=validuser&email=valid@example.com&password=testpass&role=" + role
+		r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.CreateUser(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("role=%q: expected 400, got %d", role, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "Invalid role") {
+			t.Errorf("role=%q: expected 'Invalid role' in error page, got: %s", role, w.Body.String())
+		}
+	}
+
+	// No user must have been created.
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE username='validuser'").Scan(&count)
+	if count != 0 {
+		t.Errorf("expected no user created for invalid role, got %d", count)
+	}
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_user'").Scan(&count)
+	if count != 0 {
+		t.Errorf("expected no activity log for invalid role, got %d", count)
+	}
+}
+
 func TestCreateUser_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
@@ -238,6 +274,44 @@ func TestUpdateUser_Success(t *testing.T) {
 	h.DB.QueryRow("SELECT email FROM users WHERE id=2").Scan(&email)
 	if email != "updated@example.com" {
 		t.Errorf("expected updated@example.com, got %s", email)
+	}
+}
+
+// TestUpdateUser_RejectsInvalidRole is the I-3 regression test: an unsupported
+// role must be rejected with 400 instead of being silently downgraded to "user".
+// The existing role must be left untouched.
+func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"user2", "user2@example.com", "hash", "admin",
+	)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	for _, role := range []string{"superadmin", "", "Admin", "user;--"} {
+		w := httptest.NewRecorder()
+		body := "email=user2@example.com&first_name=&last_name=&role=" + role
+		r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("user_id", "2")
+		r = r.WithContext(ctx)
+		h.UpdateUser(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("role=%q: expected 400, got %d", role, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "Invalid role") {
+			t.Errorf("role=%q: expected 'Invalid role' in error page, got: %s", role, w.Body.String())
+		}
+	}
+
+	// The existing role must be unchanged (not silently downgraded to "user").
+	var storedRole string
+	h.DB.QueryRow("SELECT role FROM users WHERE id=2").Scan(&storedRole)
+	if storedRole != "admin" {
+		t.Errorf("expected role to remain 'admin' after invalid-role rejection, got %q", storedRole)
 	}
 }
 

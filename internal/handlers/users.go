@@ -150,9 +150,9 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err.Error())
 		return
 	}
-
-	if role != "admin" && role != "user" {
-		role = "user"
+	if err := validators.ValidateRole(role); err != nil {
+		h.renderError(w, r, "Invalid role: "+err.Error())
+		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), h.Cfg.Auth.BcryptCost)
@@ -262,8 +262,9 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	enabled := enabledStr == "1" || enabledStr == "on" || enabledStr == "true"
 	newPassword := strings.TrimSpace(r.FormValue("password"))
 
-	if role != "admin" && role != "user" {
-		role = "user"
+	if err := validators.ValidateRole(role); err != nil {
+		h.renderError(w, r, "Invalid role: "+err.Error())
+		return
 	}
 
 	if email != "" {

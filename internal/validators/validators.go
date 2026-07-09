@@ -313,6 +313,26 @@ func ValidateEmail(email string) error {
 	return nil
 }
 
+// roleWhitelist is the set of roles recognised by GoZone. Kept in sync with
+// the user_create.html / user_edit.html role <select> options and
+// models.User.IsAdmin.
+var roleWhitelist = map[string]bool{
+	"admin": true,
+	"user":  true,
+}
+
+// ValidateRole checks that the given user role is one of the supported values
+// ("admin" or "user"). Returns nil if valid, an error otherwise.
+func ValidateRole(role string) error {
+	if role == "" {
+		return fmt.Errorf("role must not be empty")
+	}
+	if !roleWhitelist[role] {
+		return fmt.Errorf("unsupported role %q", role)
+	}
+	return nil
+}
+
 // ValidateIPAddress checks that a string is a valid IPv4 or IPv6 address.
 //
 // Returns nil if valid, an error otherwise.
