@@ -1,31 +1,17 @@
 
-## [v0.15.1] - 2026-07-06
+## [v0.15.2] - 2026-07-09
 
 ### 🐛 Bug Fixes
 
-- **(api_keys)** ([d6801a8](https://github.com/babykart/gozone/commit/d6801a869963eb7a877c06e97640aaff5817d867)) - [gozone] collapse DeleteAPIKey error codes to block existence oracle - ([babykart](https://github.com/babykart))
-- **(api_keys)** ([856b3d5](https://github.com/babykart/gozone/commit/856b3d59bc63270b59f7a617073c722f96789161)) - [gozone] allow-list flash/error query codes at the handler - ([babykart](https://github.com/babykart))
-- **(auth)** ([558e126](https://github.com/babykart/gozone/commit/558e126d6a01c9f7e6c182c9d4990e777c717113)) - [gozone] align session cookie-clear Secure flag with Login/Logout - ([babykart](https://github.com/babykart))
-- **(auth)** ([d0f1352](https://github.com/babykart/gozone/commit/d0f1352a45d01a83e365e30dcd91d7ffd2322d5e)) - [gozone] fail closed if the dummy bcrypt hash cannot be generated - ([babykart](https://github.com/babykart))
-- **(auth)** ([e103ed7](https://github.com/babykart/gozone/commit/e103ed7ec42b53c98bb8392bfaa1fe2b86fbce89)) - [gozone] case-insensitive username lookup in Login - ([babykart](https://github.com/babykart))
-- **(auth)** ([201d14f](https://github.com/babykart/gozone/commit/201d14ffdb70e1ebfceb2c2eab2dbea7a3a9545f)) - [gozone] drop password_hash from per-request user context - ([babykart](https://github.com/babykart))
-- **(cmd)** ([144180b](https://github.com/babykart/gozone/commit/144180bc70b00280b55d722b3e67347328a7421a)) - [gozone] close rate limiters on server shutdown - ([babykart](https://github.com/babykart))
-- **(database)** ([0d259e8](https://github.com/babykart/gozone/commit/0d259e85a2e855bc30cff558c502ef13f9f4b36b)) - [gozone] dialect-aware UNIQUE-violation detection - ([babykart](https://github.com/babykart))
-- **(dnssec)** ([5574721](https://github.com/babykart/gozone/commit/5574721c8493d4256a3d57a2f27faa6b7405221e)) - [gozone] gate cryptokey toggle behind RequireAdmin - ([babykart](https://github.com/babykart))
-- **(dnssec)** ([1791538](https://github.com/babykart/gozone/commit/179153876a1871dd0786ac89be698e07d8908c71)) - [gozone] reject non-positive cryptokey IDs - ([babykart](https://github.com/babykart))
-- **(groups)** ([d109efc](https://github.com/babykart/gozone/commit/d109efcd3f262ed6473fc97244553a4e1ba225bb)) - [gozone] validate user_id as integer in group member handlers - ([babykart](https://github.com/babykart))
-- **(import)** ([5ecd3f2](https://github.com/babykart/gozone/commit/5ecd3f2590dd7f13f33d8dc94f0ab29637a56f9c)) - [gozone] stop leaking raw PowerDNS error text to the user - ([babykart](https://github.com/babykart))
-- **(middleware)** ([c2fa754](https://github.com/babykart/gozone/commit/c2fa75461cf27493e6a022fe8820ea0f8d224c82)) - [gozone] use QueryRowContext in CheckZoneAccess - ([babykart](https://github.com/babykart))
-- **(middleware)** ([2f911a8](https://github.com/babykart/gozone/commit/2f911a81a01466e5a0f45afd66ca0a759f615170)) - [gozone] use QueryRowContext in CheckZoneAccess - ([babykart](https://github.com/babykart))
-- **(records)** ([3647705](https://github.com/babykart/gozone/commit/3647705c465c1ebb1853be88d409a50c769fd567)) - [gozone] reject invalid TTL/priority instead of silent substitution - ([babykart](https://github.com/babykart))
+- **(config)** ([2004704](https://github.com/babykart/gozone/commit/200470405ab036da9df962f84f9456f934712c62)) - [gozone] return error from deriveKeys instead of panicking - ([babykart](https://github.com/babykart))
+- **(db)** ([4b3335c](https://github.com/babykart/gozone/commit/4b3335c2a92decf41c70d4532f2ec0fda0869331)) - [gozone] compare all password-history hashes to hide reuse rank - ([babykart](https://github.com/babykart))
+- **(db)** ([6417562](https://github.com/babykart/gozone/commit/6417562eca61fe13f43a576acc232325f65c4f6c)) - [gozone] cascade-delete revoked_tokens on user deletion - ([babykart](https://github.com/babykart))
+- **(security)** ([9090b24](https://github.com/babykart/gozone/commit/9090b245d276d7b1642a52799e3d82909299117a)) - [gozone] add Permissions-Policy, pin MaxHeaderBytes, doc HSTS preload - ([babykart](https://github.com/babykart))
+- **(tsig)** ([7711cb4](https://github.com/babykart/gozone/commit/7711cb4c871a2c7868837da21e40e8cd9506f465)) - [gozone] stop re-exposing TSIG key material in edit form - ([babykart](https://github.com/babykart))
+- **(users)** ([82ca8e0](https://github.com/babykart/gozone/commit/82ca8e0803b2b88b0378e9705b6e1420dcbc7db8)) - [gozone] reject invalid roles with 400 instead of silent coerce - ([babykart](https://github.com/babykart))
 
-### 🚜 Refactor
+### 📚 Documentation
 
-- **(dnssec)** ([7d46115](https://github.com/babykart/gozone/commit/7d461158d725ebf0d2cf11f7aa2d3ac7862e14b2)) - [gozone] bind cryptokey toggle action as SQL parameter - ([babykart](https://github.com/babykart))
-- **(handlers)** ([dabd5b0](https://github.com/babykart/gozone/commit/dabd5b09fae9b53d2b6ff9b62270758f76eb8295)) - [gozone] propagate request context through user/password tx - ([babykart](https://github.com/babykart))
-
-### ⚡ Performance
-
-- **(database)** ([648c218](https://github.com/babykart/gozone/commit/648c218bdb4d02239aafbdf4c6b7e6f18e1f2cd5)) - [gozone] add covering index for api_keys per-user listing - ([babykart](https://github.com/babykart))
+- **(login)** ([2be831f](https://github.com/babykart/gozone/commit/2be831f3aac355099765f2368442c756053a031d)) - [gozone] document MaxFailedAttempts=0 disabling existing locks - ([babykart](https://github.com/babykart))
 
 <!-- generated by git-cliff -->
