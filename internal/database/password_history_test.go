@@ -124,6 +124,50 @@ func TestPasswordHistory_RespectsLimit(t *testing.T) {
 	}
 }
 
+// TestPasswordHistory_DetectsReuseAtAnyPosition is the I-4 regression test: a
+// reuse must be detected no matter where it sits in the history window. The
+// function must compare every loaded hash — it must not short-circuit on the
+// first match, otherwise the response time would leak the rank of the reuse.
+// Detecting a match at the oldest (last-scanned) position proves the scan
+// reaches the final row.
+func TestPasswordHistory_DetectsReuseAtAnyPosition(t *testing.T) {
+	db, uid := newHistoryTestDB(t)
+	ctx := context.Background()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104
+
+	// Recorded oldest -> newest; ORDER BY id DESC scans newest first.
+	for _, p := range []string{"p_oldest", "p_middle", "p_newest"} {
+		if err := tx.RecordPassword(ctx, uid, mustHash(t, p)); err != nil {
+			t.Fatalf("record %s: %v", p, err)
+		}
+	}
+
+	cases := []struct {
+		name     string
+		pwd      string
+		wantUsed bool
+	}{
+		{"newest (first scanned)", "p_newest", true},
+		{"middle", "p_middle", true},
+		{"oldest (last scanned)", "p_oldest", true},
+		{"no match", "p_fresh", false},
+	}
+	for _, c := range cases {
+		reused, err := tx.PasswordHistoryReused(ctx, uid, c.pwd, 3)
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		}
+		if reused != c.wantUsed {
+			t.Errorf("%s: expected reused=%v, got %v", c.name, c.wantUsed, reused)
+		}
+	}
+}
+
 func TestPasswordHistory_Prune(t *testing.T) {
 	db, uid := newHistoryTestDB(t)
 	ctx := context.Background()

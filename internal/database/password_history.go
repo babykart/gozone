@@ -17,6 +17,14 @@ import (
 // Because every password (including the very first one set on an account) is
 // recorded via RecordPassword, the current password is part of the history —
 // so reusing the current password is rejected too.
+//
+// I-4: every loaded hash is compared — the loop does NOT short-circuit on the
+// first match. The number of bcrypt comparisons therefore depends only on the
+// number of history rows (capped at limit), never on the position of a reuse.
+// Returning at the first match would let an authenticated user infer "how
+// recently this password was last used" from the response time. The extra cost
+// (comparing the remaining hashes after a match) is confined to the rejection
+// path; the happy (no-reuse) path already compares every hash.
 func (tx *Tx) PasswordHistoryReused(ctx context.Context, userID int64, newPassword string, limit int) (bool, error) {
 	if limit <= 0 {
 		return false, nil
@@ -29,18 +37,21 @@ func (tx *Tx) PasswordHistoryReused(ctx context.Context, userID int64, newPasswo
 		return false, fmt.Errorf("load password history: %w", err)
 	}
 	defer rows.Close()
+	// OR the result of every comparison so timing reveals only the row count,
+	// not the rank of a reuse (I-4).
+	reused := false
 	for rows.Next() {
 		var hash string
 		if err := rows.Scan(&hash); err != nil {
 			return false, fmt.Errorf("scan password history: %w", err)
 		}
 		// bcrypt.CompareHashAndPassword returns nil on a match. A mismatch
-		// (or a corrupt hash) is non-fatal: just keep checking the rest.
+		// (or a corrupt hash) is non-fatal: keep checking the rest.
 		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(newPassword)) == nil {
-			return true, nil
+			reused = true
 		}
 	}
-	return false, rows.Err()
+	return reused, rows.Err()
 }
 
 // RecordPassword stores a password hash in the user's history. Called on every
