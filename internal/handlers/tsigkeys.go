@@ -141,6 +141,11 @@ func (h *Handler) EditTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// I-1: never re-expose the TSIG key material in the edit form. GoZone has no
+	// need for the plaintext after creation (PowerDNS is the consumer); an empty
+	// key field on submit is treated as "keep current" by UpdateTSIGKey.
+	tsigKey.Key = ""
+
 	data := map[string]interface{}{
 		"Title":      "Edit TSIG Key - " + h.Cfg.Server.AppName,
 		"User":       user,
@@ -151,6 +156,9 @@ func (h *Handler) EditTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateTSIGKey updates an existing TSIG key (POST /tsigkeys/{key_id}/update).
+// The key material field is optional: leaving it blank keeps the current secret
+// (I-1) — PowerDNS PUT replaces the whole resource, so the existing material is
+// re-fetched and forwarded unchanged.
 func (h *Handler) UpdateTSIGKey(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
@@ -167,8 +175,14 @@ func (h *Handler) UpdateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if key == "" {
-		h.renderError(w, r, "Key material is required")
-		return
+		// I-1: blank key material = keep current secret. PowerDNS's PUT replaces
+		// the resource, so re-fetch the existing material and forward it back.
+		existing, err := h.PDNS.GetTSIGKey(r.Context(), keyID)
+		if err != nil {
+			h.renderInternalError(w, r, "Failed to fetch current TSIG key", err)
+			return
+		}
+		key = existing.Key
 	}
 
 	tsigKey := models.TSIGKey{

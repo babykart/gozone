@@ -280,6 +280,15 @@ func TestEditTSIGKeyPage(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
+
+	// I-1: the key material must never be rendered in the edit form.
+	body := w.Body.String()
+	if strings.Contains(body, "secret") {
+		t.Errorf("TSIG key material leaked into edit page: %s", body)
+	}
+	if !strings.Contains(body, "Key=") || !strings.Contains(body, "Alg=hmac-sha256") {
+		t.Errorf("expected blank key + algorithm in edit page, got: %s", body)
+	}
 }
 
 func TestUpdateTSIGKey_Success(t *testing.T) {
@@ -305,6 +314,59 @@ func TestUpdateTSIGKey_Success(t *testing.T) {
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='update_tsigkey'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 activity log, got %d", count)
+	}
+}
+
+// TestUpdateTSIGKey_BlankKeyKeepsCurrent is the I-1 regression test: an empty
+// key material on submit must keep the current secret. PowerDNS's PUT replaces
+// the whole resource, so the handler re-fetches the existing material and
+// forwards it back unchanged (no rotation, no exposure).
+func TestUpdateTSIGKey_BlankKeyKeepsCurrent(t *testing.T) {
+	var putBody string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(models.TSIGKey{
+				Name: "my-key.", ID: "my-key.", Algorithm: "hmac-sha256",
+				Key: "preserved-secret", Type: "TSIGKey",
+			})
+		case http.MethodPut:
+			buf := make([]byte, r.ContentLength)
+			r.Body.Read(buf)
+			putBody = string(buf)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Empty key material → keep current.
+	body := "algorithm=hmac-sha256&key="
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/my-key./update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("key_id", "my-key.")
+	r = r.WithContext(ctx)
+	h.UpdateTSIGKey(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(putBody, "preserved-secret") {
+		t.Errorf("expected PUT to forward existing key material, got body: %s", putBody)
 	}
 
 	var count int
