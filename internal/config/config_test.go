@@ -625,19 +625,20 @@ func TestLoad_DoesNotCreateHardcodedDataDir(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_HasDerivedKeys(t *testing.T) {
+// TestDefaultConfig_DeferKeyDerivation verifies the I-7 contract: DefaultConfig
+// returns the master SecretKey but leaves the derived JWTKey/CSRFKey empty —
+// derivation is Load()'s job (it has an error return and runs after env
+// overrides). See TestLoad_HasDerivedKeys for the derived-keys coverage.
+func TestDefaultConfig_DeferKeyDerivation(t *testing.T) {
 	cfg := DefaultConfig()
-	if len(cfg.Server.JWTKey) != 32 {
-		t.Errorf("expected 32-byte JWTKey, got %d bytes", len(cfg.Server.JWTKey))
+	if cfg.Server.SecretKey == "" {
+		t.Error("DefaultConfig must populate the master SecretKey (Load derives from it)")
 	}
-	if len(cfg.Server.CSRFKey) != 32 {
-		t.Errorf("expected 32-byte CSRFKey, got %d bytes", len(cfg.Server.CSRFKey))
+	if len(cfg.Server.JWTKey) != 0 {
+		t.Errorf("DefaultConfig must not derive JWTKey (Load's job), got %d bytes", len(cfg.Server.JWTKey))
 	}
-	if bytes.Equal(cfg.Server.JWTKey, cfg.Server.CSRFKey) {
-		t.Error("JWTKey and CSRFKey must be different")
-	}
-	if bytes.Equal(cfg.Server.JWTKey, []byte(cfg.Server.SecretKey)) {
-		t.Error("JWTKey must differ from the master secret")
+	if len(cfg.Server.CSRFKey) != 0 {
+		t.Errorf("DefaultConfig must not derive CSRFKey (Load's job), got %d bytes", len(cfg.Server.CSRFKey))
 	}
 }
 
@@ -659,8 +660,14 @@ func TestLoad_HasDerivedKeys(t *testing.T) {
 
 func TestDeriveKeys_Deterministic(t *testing.T) {
 	master := []byte("test-master-key-for-derivation-test")
-	jwt1, csrf1 := deriveKeys(master)
-	jwt2, csrf2 := deriveKeys(master)
+	jwt1, csrf1, err := deriveKeys(master)
+	if err != nil {
+		t.Fatalf("deriveKeys: %v", err)
+	}
+	jwt2, csrf2, err := deriveKeys(master)
+	if err != nil {
+		t.Fatalf("deriveKeys: %v", err)
+	}
 
 	if !bytes.Equal(jwt1, jwt2) {
 		t.Error("JWTKey must be deterministic")
@@ -677,8 +684,14 @@ func TestDeriveKeys_Deterministic(t *testing.T) {
 }
 
 func TestDeriveKeys_DifferentMaster(t *testing.T) {
-	jwt1, _ := deriveKeys([]byte("master-one"))
-	jwt2, _ := deriveKeys([]byte("master-two"))
+	jwt1, _, err := deriveKeys([]byte("master-one"))
+	if err != nil {
+		t.Fatalf("deriveKeys: %v", err)
+	}
+	jwt2, _, err := deriveKeys([]byte("master-two"))
+	if err != nil {
+		t.Fatalf("deriveKeys: %v", err)
+	}
 
 	if bytes.Equal(jwt1, jwt2) {
 		t.Error("different master secrets must produce different JWT keys")

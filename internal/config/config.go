@@ -186,6 +186,10 @@ type AdminConfig struct {
 //
 // The default admin credentials are admin/admin. Override via the YAML config
 // file or environment variables in production.
+//
+// Note: Server.JWTKey and Server.CSRFKey are left empty. They are derived from
+// Server.SecretKey by Load() (which can report an HKDF failure); direct callers
+// of DefaultConfig that need a usable key pair should call Load("").
 func DefaultConfig() *Config {
 	cfg := &Config{
 		Server: ServerConfig{
@@ -238,7 +242,10 @@ func DefaultConfig() *Config {
 			HistorySize:      0,
 		},
 	}
-	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
+	// JWTKey/CSRFKey are intentionally NOT derived here: DefaultConfig has no
+	// error return, and derivation must run after env overrides / placeholder
+	// handling anyway. Load() derives them from Server.SecretKey. Direct
+	// DefaultConfig() callers get the master SecretKey and an empty key pair.
 	return cfg
 }
 
@@ -302,8 +309,16 @@ func Load(path string) (*Config, error) {
 			"Set server.secret_key or GOZONE_SECRET_KEY to a persistent value (openssl rand -hex 32)")
 	}
 
-	// Derive independent keys for JWT and CSRF from the master secret
-	cfg.Server.JWTKey, cfg.Server.CSRFKey = deriveKeys([]byte(cfg.Server.SecretKey))
+	// Derive independent keys for JWT and CSRF from the master secret. Key
+	// derivation lives here (not in DefaultConfig) so that it always runs after
+	// env overrides and the placeholder-secret auto-generation above, and so a
+	// (theoretically impossible) HKDF failure is reported through Load's error
+	// return instead of aborting the process (REVIEW.md I-7).
+	jwtKey, csrfKey, err := deriveKeys([]byte(cfg.Server.SecretKey))
+	if err != nil {
+		return nil, fmt.Errorf("derive jwt/csrf keys: %w", err)
+	}
+	cfg.Server.JWTKey, cfg.Server.CSRFKey = jwtKey, csrfKey
 
 	if err := cfg.validate(); err != nil {
 		return cfg, err
@@ -741,17 +756,21 @@ func isPlaceholderSecret(key string) bool {
 // deriveKeys splits a master secret into two independent 32-byte sub-keys
 // using HKDF-SHA256, one for JWT signing and one for CSRF token protection.
 // Compromise of one sub-key does not reveal the other or the master secret.
-func deriveKeys(master []byte) (jwtKey, csrfKey []byte) {
-	var err error
+//
+// With sha256 and a 32-byte output the expansion cannot fail in practice —
+// HKDF-SHA256 only errors on programming mistakes (nil hash, illegal length) —
+// but returning the error (instead of panicking, REVIEW.md I-7) keeps this
+// consistent with the rest of Load, which reports errors rather than aborting.
+func deriveKeys(master []byte) (jwtKey, csrfKey []byte, err error) {
 	jwtKey, err = hkdf.Key(sha256.New, master, nil, "gozone-jwt", 32)
 	if err != nil {
-		panic("hkdf: " + err.Error())
+		return nil, nil, fmt.Errorf("derive jwt key: %w", err)
 	}
 	csrfKey, err = hkdf.Key(sha256.New, master, nil, "gozone-csrf", 32)
 	if err != nil {
-		panic("hkdf: " + err.Error())
+		return nil, nil, fmt.Errorf("derive csrf key: %w", err)
 	}
-	return jwtKey, csrfKey
+	return jwtKey, csrfKey, nil
 }
 
 // generateSecretKey produces a cryptographically random 32-byte key
