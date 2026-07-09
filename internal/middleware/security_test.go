@@ -39,6 +39,11 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 		t.Errorf("X-XSS-Protection must not be set (deprecated, m39), got %q", xss)
 	}
 
+	// I-5: Permissions-Policy must be emitted on every response.
+	if pp := w.Header().Get("Permissions-Policy"); pp == "" {
+		t.Error("Permissions-Policy header is missing")
+	}
+
 	if hsts := w.Header().Get("Strict-Transport-Security"); hsts != "" {
 		t.Errorf("HSTS must not be set on plain HTTP, got %q", hsts)
 	}
@@ -60,6 +65,81 @@ func TestSecurityHeaders_HSTSOnTLS(t *testing.T) {
 	}
 	if hsts != "max-age=31536000; includeSubDomains" {
 		t.Errorf("HSTS: got %q, want %q", hsts, "max-age=31536000; includeSubDomains")
+	}
+}
+
+// TestSecurityHeaders_HSTSNoPreload is the I-5 regression test: HSTS must NOT
+// carry "preload". preload is an irreversible opt-in to the browser HSTS preload
+// list that forces HTTPS for all subdomains for years; it must only be added by
+// an operator who owns the domain and has submitted it to hstspreload.org.
+// Emitting it unconditionally would risk bricking a deployment.
+func TestSecurityHeaders_HSTSNoPreload(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.TLS = &tls.ConnectionState{}
+	handler.ServeHTTP(w, r)
+
+	hsts := w.Header().Get("Strict-Transport-Security")
+	if hsts == "" {
+		t.Fatal("HSTS must be set on TLS connection")
+	}
+	if strings.Contains(hsts, "preload") {
+		t.Errorf("HSTS must not contain \"preload\" (irreversible opt-in), got %q", hsts)
+	}
+}
+
+// TestSecurityHeaders_PermissionsPolicy is the I-5 regression test: the
+// Permissions-Policy header must deny the powerful device features GoZone never
+// uses. Each named feature is checked individually so the test pinpoints which
+// one regressed.
+func TestSecurityHeaders_PermissionsPolicy(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(w, r)
+
+	pp := w.Header().Get("Permissions-Policy")
+	if pp == "" {
+		t.Fatal("Permissions-Policy header is missing")
+	}
+
+	// Parse "feature=(), other=()" into a map of feature -> raw value.
+	policies := map[string]string{}
+	for _, part := range strings.Split(pp, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key := part
+		val := ""
+		if eq := strings.IndexByte(part, '='); eq >= 0 {
+			key = strings.TrimSpace(part[:eq])
+			val = strings.TrimSpace(part[eq+1:])
+		}
+		policies[key] = val
+	}
+
+	// Every sensitive device/browser feature must be denied ("()").
+	denied := []string{
+		"accelerometer", "ambient-light-sensor", "camera", "geolocation",
+		"gyroscope", "magnetometer", "microphone", "payment", "usb",
+	}
+	for _, feat := range denied {
+		got, ok := policies[feat]
+		if !ok {
+			t.Errorf("Permissions-Policy missing feature %q (full: %q)", feat, pp)
+			continue
+		}
+		if got != "()" {
+			t.Errorf("Permissions-Policy %q: got %q, want \"()\"", feat, got)
+		}
 	}
 }
 

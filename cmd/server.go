@@ -439,6 +439,12 @@ func runServer(cfg *config.Config) error {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
+		// Explicit bound on the request header bytes (REVIEW.md I-5). Go's
+		// default is http.DefaultMaxHeaderBytes (1 MiB), which is correct for
+		// this app; setting it explicitly documents the limit rather than
+		// relying on an implicit zero → default fallback, and pins it if a
+		// future Go release ever changed the default.
+		MaxHeaderBytes: http.DefaultMaxHeaderBytes,
 	}
 
 	// Bind the listener BEFORE starting the signal-watcher goroutine so a
