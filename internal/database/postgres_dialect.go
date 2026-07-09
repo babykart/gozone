@@ -241,5 +241,12 @@ func (p *postgresDialect) Migrations() []string {
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users.
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
+		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// left orphan revocation rows until the expiry cleanup — unlike
+		// password_history / api_keys / group_members which all cascade. Add a
+		// real FK with ON DELETE CASCADE, matching the other user_id tables.
+		// Pre-existing orphans are removed first so the constraint can be added.
+		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
+		ALTER TABLE revoked_tokens ADD CONSTRAINT fk_revoked_tokens_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
 	}
 }

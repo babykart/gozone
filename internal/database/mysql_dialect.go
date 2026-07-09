@@ -259,5 +259,12 @@ func (m *mysqlDialect) Migrations() []string {
 		// parses DESC but ignores it; MySQL 8.0+ / modern MariaDB build a real
 		// descending index (see m21 note above).
 		`CREATE INDEX idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
+		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// left orphan revocation rows until the expiry cleanup — unlike
+		// password_history / api_keys / group_members which all cascade. Add a
+		// real FK with ON DELETE CASCADE, matching the other user_id tables.
+		// Pre-existing orphans are removed first so the constraint can be added.
+		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
+		ALTER TABLE revoked_tokens ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
 	}
 }

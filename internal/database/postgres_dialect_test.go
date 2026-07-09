@@ -292,10 +292,12 @@ func TestPostgresIntegration_RevokeToken(t *testing.T) {
 	db := newIntegrationDB(t, "postgres", dsn)
 	ctx := context.Background()
 
+	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9).
+	uid := seedIntegrationUser(t, db, "revokepg")
 	jti := "test-jti-pg"
 	expires := time.Now().Add(1 * time.Hour)
 
-	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+	if err := db.RevokeToken(ctx, jti, uid, expires); err != nil {
 		t.Fatalf("RevokeToken failed: %v", err)
 	}
 	revoked, err := db.IsTokenRevoked(ctx, jti)
@@ -305,7 +307,7 @@ func TestPostgresIntegration_RevokeToken(t *testing.T) {
 	if !revoked {
 		t.Error("expected token to be revoked")
 	}
-	if err := db.RevokeToken(ctx, jti, 1, expires); err != nil {
+	if err := db.RevokeToken(ctx, jti, uid, expires); err != nil {
 		t.Errorf("duplicate RevokeToken should be a no-op, got: %v", err)
 	}
 }

@@ -57,7 +57,10 @@ func TestGenerateAndParseToken(t *testing.T) {
 
 func TestParseToken_Revoked(t *testing.T) {
 	db := newTestAuthDB(t)
-	user := &models.User{ID: 1, Username: "revoked", Role: "user"}
+	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9), so the user
+	// must exist before a token can be revoked for them.
+	uid := seedTestUser(t, db, "revoked", "user", true)
+	user := &models.User{ID: uid, Username: "revoked", Role: "user"}
 
 	token, err := GenerateToken(user, testSecret, time.Hour)
 	if err != nil {

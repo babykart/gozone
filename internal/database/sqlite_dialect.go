@@ -203,5 +203,24 @@ func (s *sqliteDialect) Migrations() []string {
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users.
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
+		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// left orphan revocation rows until the expiry cleanup — unlike
+		// password_history / api_keys / group_members which all cascade. SQLite
+		// cannot ALTER TABLE to add a FK, so the table is rebuilt with the FK.
+		// Pre-existing orphans are removed first so the FK can be added; on a
+		// fresh DB both steps are no-ops. Mirrors the ON DELETE CASCADE used by
+		// the other user_id tables.
+		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
+		CREATE TABLE revoked_tokens_new (
+			jti TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			expires_at DATETIME NOT NULL,
+			revoked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+		INSERT INTO revoked_tokens_new (jti, user_id, expires_at, revoked_at) SELECT jti, user_id, expires_at, revoked_at FROM revoked_tokens;
+		DROP TABLE revoked_tokens;
+		ALTER TABLE revoked_tokens_new RENAME TO revoked_tokens;
+		CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
 	}
 }
