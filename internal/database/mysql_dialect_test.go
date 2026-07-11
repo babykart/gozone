@@ -238,6 +238,42 @@ func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 	}
 }
 
+// TestMySQLGetLockResult covers the GET_LOCK return-value classifier that
+// LockMigrations relies on. Previously only ExecContext's error was inspected,
+// so a NULL (internal error) or 0 (timeout) result silently let migrations run
+// without the lock (REVIEW.md M-1).
+func TestMySQLGetLockResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		got     sql.NullInt64
+		wantErr bool
+		wantSub string
+	}{
+		{"acquired", sql.NullInt64{Int64: 1, Valid: true}, false, ""},
+		{"timeout_zero", sql.NullInt64{Int64: 0, Valid: true}, true, "timed out"},
+		{"null_internal_error", sql.NullInt64{}, true, "NULL"},
+		{"unexpected_value", sql.NullInt64{Int64: 2, Valid: true}, true, "unexpected value 2"},
+		{"negative_value", sql.NullInt64{Int64: -1, Valid: true}, true, "unexpected value -1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := mysqlGetLockResult(tc.got)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantSub) {
+					t.Errorf("error %q must contain %q", err.Error(), tc.wantSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected nil error for acquired lock, got: %v", err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests (require GOZONE_TEST_MYSQL_DSN)
 // ---------------------------------------------------------------------------

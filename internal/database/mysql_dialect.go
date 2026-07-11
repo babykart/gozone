@@ -73,7 +73,18 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire connection for migration lock: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx, "SELECT GET_LOCK('gozone_migrations', -1)"); err != nil {
+	// GET_LOCK returns 1 on success, 0 on timeout (impossible with timeout -1
+	// but handled defensively), or NULL on an internal error such as out of
+	// memory or reaching the thread limit. Neither 0 nor NULL is a driver
+	// error, so scanning the result row is required — calling ExecContext and
+	// inspecting only its error would silently proceed without holding the
+	// lock (REVIEW.md M-1).
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK('gozone_migrations', -1)").Scan(&got); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
+		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if err := mysqlGetLockResult(got); err != nil {
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("acquire migration lock: %w", err)
 	}
@@ -89,6 +100,24 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
+}
+
+// mysqlGetLockResult classifies the integer returned by MySQL's GET_LOCK:
+// 1 = lock acquired, 0 = timed out (not the lock owner), NULL = internal
+// error (e.g. out of memory or the thread limit was reached). It returns a
+// non-nil error for any value other than 1, so LockMigrations never proceeds
+// without holding the lock. Extracted as a pure function so the classification
+// is unit-testable without a live MySQL (REVIEW.md M-1).
+func mysqlGetLockResult(got sql.NullInt64) error {
+	switch {
+	case !got.Valid:
+		return errors.New("GET_LOCK returned NULL (internal MySQL error, e.g. out of memory or thread limit)")
+	case got.Int64 == 0:
+		return errors.New("GET_LOCK timed out")
+	case got.Int64 != 1:
+		return fmt.Errorf("GET_LOCK returned unexpected value %d", got.Int64)
+	}
+	return nil
 }
 
 // mysqlAlreadyExistsCodes are MySQL error numbers that indicate a DDL operation
