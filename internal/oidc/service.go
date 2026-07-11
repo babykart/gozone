@@ -60,9 +60,10 @@ type ProviderInstance struct {
 // stateless, PKCE-backed authorization flow. The zero value is a disabled
 // service (Enabled() == false, every provider lookup misses).
 type Service struct {
-	providers map[string]*ProviderInstance
-	stateKey  []byte
-	keySets   []*cachedKeySet // started background refresh goroutines; Close stops them
+	providers  map[string]*ProviderInstance
+	stateKey   []byte
+	keySets    []*cachedKeySet // started background refresh goroutines; Close stops them
+	usedStates *stateStore     // L-3: server-side single-use enforcement for OIDC state tokens
 }
 
 // ErrDisabled is returned by NewService/Service methods when OIDC is not
@@ -87,6 +88,9 @@ func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Servi
 	}
 	jwksTTL := time.Duration(cfg.OIDC.JWKSCacheTTLMinutes) * time.Minute
 	svc.providers = make(map[string]*ProviderInstance)
+	// L-3: track consumed state tokens so a captured state cannot be replayed
+	// within its TTL. Started only when OIDC is actually configured.
+	svc.usedStates = newStateStore()
 	for i := range cfg.OIDC.Providers {
 		pc := &cfg.OIDC.Providers[i]
 		inst, keySet, err := discover(ctx, pc, cfg.OIDC.Scopes, jwksTTL)
@@ -116,6 +120,9 @@ func (s *Service) Close() {
 		k.Close()
 	}
 	s.keySets = nil
+	if s.usedStates != nil {
+		s.usedStates.Close()
+	}
 }
 
 // Enabled reports whether at least one provider was successfully discovered.
@@ -269,6 +276,15 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 		// replayed callback. Reject rather than risk authenticating against the
 		// wrong IdP identity.
 		return nil, fmt.Errorf("state provider mismatch: got %q want %q", payload.Provider, provider)
+	}
+
+	// L-3: enforce single-use semantics. A captured state token would otherwise
+	// be replayable within its TTL. Once consumed, any replay is rejected before
+	// the token exchange begins. The existing mitigations (OAuth2 authorization-
+	// code single-use at the IdP, PKCE, nonce binding) make the practical risk
+	// negligible, but consuming the state closes the gap entirely.
+	if !s.usedStates.consume(state) {
+		return nil, fmt.Errorf("state: already consumed (possible replay)")
 	}
 
 	inst.oauth2.RedirectURL = callbackURL

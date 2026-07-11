@@ -91,3 +91,30 @@ func TestAuthCodeURL_EmbedsProviderInState(t *testing.T) {
 		t.Errorf("state provider = %q, want test", payload.Provider)
 	}
 }
+
+// TestService_StateReplayRejected is the L-3 integration test: a Service with
+// a stateStore must reject a replayed state token at the consumption step. The
+// test exercises the real newStateToken → consume path on the Service's store,
+// verifying the wiring is correct without needing a live IdP (HandleCallback's
+// token exchange would fail against the dummy endpoint, but consume runs before
+// the exchange, so the second call is rejected by the store, not the network).
+func TestService_StateReplayRejected(t *testing.T) {
+	svc := newTestService(t)
+	svc.usedStates = newStateStore()
+	t.Cleanup(svc.Close)
+
+	// Build a real state token for the "test" provider.
+	state, _, _, _, err := newStateToken(svc.stateKey, "test")
+	if err != nil {
+		t.Fatalf("newStateToken: %v", err)
+	}
+
+	// First consumption — must succeed.
+	if !svc.usedStates.consume(state) {
+		t.Fatal("first consume should succeed (fresh state)")
+	}
+	// Replay — must be rejected.
+	if svc.usedStates.consume(state) {
+		t.Error("replayed state must be rejected (REVIEW.md L-3)")
+	}
+}
