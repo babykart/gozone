@@ -274,8 +274,10 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
 	if _, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupIDStr); err != nil {
-		logger.Error("failed to delete group", "group_id", groupIDStr, "error", err)
+		h.renderInternalError(w, r, "Failed to delete group", err)
+		return
 	}
+	// #nosec G710 -- groupIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
 
