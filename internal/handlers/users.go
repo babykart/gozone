@@ -265,11 +265,9 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if email != "" {
-		if err := validators.ValidateEmail(email); err != nil {
-			h.renderError(w, r, "Invalid email: "+err.Error())
-			return
-		}
+	if err := validators.ValidateEmail(email); err != nil {
+		h.renderError(w, r, "Invalid email: "+err.Error())
+		return
 	}
 	if newPassword != "" {
 		if err := validators.ValidatePassword(newPassword, h.Cfg.Password.Policy()); err != nil {

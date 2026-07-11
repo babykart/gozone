@@ -315,6 +315,43 @@ func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
 	}
 }
 
+// TestUpdateUser_RejectsEmptyEmail is the L-6 regression test: UpdateUser must
+// require a non-empty email, consistent with CreateUser. Before the fix, an
+// empty email bypassed ValidateEmail entirely and could overwrite a valid
+// address with "".
+func TestUpdateUser_RejectsEmptyEmail(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"user2", "user2@example.com", "hash", "user",
+	)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	body := "email=&first_name=&last_name=&role=user"
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty email, got %d (REVIEW.md L-6)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid email") {
+		t.Errorf("expected 'Invalid email' in error page, got: %s", w.Body.String())
+	}
+
+	// The existing email must be unchanged.
+	var stored string
+	h.DB.QueryRow("SELECT email FROM users WHERE id=2").Scan(&stored)
+	if stored != "user2@example.com" {
+		t.Errorf("email was overwritten to %q; must remain user2@example.com", stored)
+	}
+}
+
 func TestUpdateUser_WithPassword(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
