@@ -232,7 +232,7 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 	if !ok {
 		return "", ErrUnknownProvider
 	}
-	state, _, challenge, _, err := newStateToken(s.stateKey, provider)
+	state, _, challenge, nonce, err := newStateToken(s.stateKey, provider)
 	if err != nil {
 		return "", fmt.Errorf("build state: %w", err)
 	}
@@ -244,6 +244,10 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 	return inst.oauth2.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+		// Send the nonce to the IdP so it echoes it back in the id_token; the
+		// callback verifies it against the value embedded in the signed state
+		// to block token replay (REVIEW.md C-1).
+		oidc.Nonce(nonce),
 	), nil
 }
 
