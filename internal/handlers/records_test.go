@@ -837,6 +837,96 @@ func TestBatchCreateRecords_Success(t *testing.T) {
 	}
 }
 
+// TestBatchCreateRecords_RejectsInvalidTTLOrPriority is the M-5 regression: the
+// batch path used to silently substitute an invalid TTL (→3600) or priority
+// (→0), contradicting the single-record CreateRecord which rejects them (L-4).
+// It must now reject with a 400, and no record must reach PowerDNS.
+func TestBatchCreateRecords_RejectsInvalidTTLOrPriority(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"non-numeric ttl", "name=www&type=A&content=1.2.3.4&ttl=abc"},
+		{"zero ttl", "name=www&type=A&content=1.2.3.4&ttl=0"},
+		{"negative ttl", "name=www&type=A&content=1.2.3.4&ttl=-5"},
+		{"non-numeric priority", "name=www&type=A&content=1.2.3.4&ttl=300&priority=abc"},
+		{"negative priority", "name=www&type=A&content=1.2.3.4&ttl=300&priority=-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("zone_id", "example.com")
+			r = r.WithContext(ctx)
+			h.BatchCreateRecords(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d", w.Code)
+			}
+		})
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record'").Scan(&n)
+	if n != 0 {
+		t.Errorf("expected 0 create_record logs for rejected inputs, got %d", n)
+	}
+}
+
+// TestBatchCreateRecords_AcceptsZeroPriorityMX confirms that priority=0 (a
+// valid MX priority) is no longer treated as "not provided" by a > 0 guard —
+// the empty-string presence check accepts it (REVIEW.md M-5).
+func TestBatchCreateRecords_AcceptsZeroPriorityMX(t *testing.T) {
+	type patchBody struct {
+		RRSets []models.RRSet `json:"rrsets"`
+	}
+	var body patchBody
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"}})
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	formBody := "name=mail&type=MX&content=mail.example.com.&priority=0&ttl=600"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(formBody))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 for priority=0 MX, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(body.RRSets) != 1 || len(body.RRSets[0].Records) != 1 {
+		t.Fatalf("expected 1 rrset/record, got %+v", body)
+	}
+	if got := body.RRSets[0].Records[0].Content; got != "0 mail.example.com." {
+		t.Errorf("expected content '0 mail.example.com.' (priority 0 embedded), got %q", got)
+	}
+}
+
 func TestBatchCreateRecords_MX(t *testing.T) {
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`

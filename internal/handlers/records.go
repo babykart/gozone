@@ -418,16 +418,33 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// TTL/priority validation mirrors the single-record CreateRecord path:
+		// an empty field means "use the default" (3600 / 0), but an explicit
+		// non-numeric or out-of-range value is rejected rather than silently
+		// substituted, so the activity log records what the user actually
+		// typed (REVIEW.md L-4, M-5). Priority 0 is a valid MX value, so the
+		// presence check ("0 provided" vs "not provided") is the empty-string
+		// test, not a > 0 test.
 		ttl := 3600
 		if i < len(ttls) {
-			if t, err := strconv.Atoi(strings.TrimSpace(ttls[i])); err == nil && t > 0 {
-				ttl = t
+			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
+				v, err := strconv.Atoi(ttlStr)
+				if err != nil || v <= 0 {
+					h.renderError(w, r, "Invalid TTL: must be a positive integer")
+					return
+				}
+				ttl = v
 			}
 		}
 		priority := 0
 		if i < len(priorities) {
-			if p, err := strconv.Atoi(strings.TrimSpace(priorities[i])); err == nil && p > 0 {
-				priority = p
+			if priorityStr := strings.TrimSpace(priorities[i]); priorityStr != "" {
+				v, err := strconv.Atoi(priorityStr)
+				if err != nil || v < 0 {
+					h.renderError(w, r, "Invalid priority: must be a non-negative integer")
+					return
+				}
+				priority = v
 			}
 		}
 
