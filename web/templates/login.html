@@ -15,6 +15,17 @@
             {{if .Error}}
             <div class="alert alert-error">{{.Error}}</div>
             {{end}}
+            {{if .OIDCProviders}}
+            <div class="sso-providers">
+                {{range .OIDCProviders}}
+                <a class="btn btn-secondary btn-block sso-btn sso-btn-{{.Icon}}" href="/auth/oidc/{{.Name}}/login">
+                    Sign in with {{.DisplayName}}
+                </a>
+                {{end}}
+            </div>
+            {{if not .HideLocalLogin}}<div class="sso-divider"><span>or</span></div>{{end}}
+            {{end}}
+            {{if not .HideLocalLogin}}
             <form method="POST" action="/login">
                 <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
                 <div class="form-group">
@@ -27,6 +38,7 @@
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">Sign In</button>
             </form>
+            {{end}}
         </div>
     </div>
     <script src="/static/js/app.js"></script>

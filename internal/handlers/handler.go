@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"html/template"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/oidc"
 	"github.com/babykart/gozone/internal/pdns"
 	"github.com/babykart/gozone/internal/version"
 )
@@ -27,6 +29,26 @@ type Handler struct {
 	Cfg     *config.Config
 	Tmpl    *template.Template
 	Version version.Info
+	// OIDC is the single sign-on service. It is nil/disabled when SSO is not
+	// configured; the OIDC handlers no-op (redirect to /login) in that case.
+	// Declared as an interface so tests can substitute a fake without spinning
+	// up a live identity provider.
+	OIDC SSOService
+}
+
+// SSOService is the subset of the OIDC service used by the handlers. The
+// concrete implementation lives in internal/oidc; this interface keeps the
+// handler package decoupled and unit-testable without a live IdP.
+type SSOService interface {
+	// Enabled reports whether at least one provider is configured.
+	Enabled() bool
+	// Providers returns the configured providers (login-button rendering).
+	Providers() []*oidc.ProviderInstance
+	// AuthCodeURL builds the IdP authorization-endpoint redirect URL.
+	AuthCodeURL(provider, callbackURL string) (string, error)
+	// HandleCallback verifies the state, exchanges the code, verifies the ID
+	// token and returns the normalized user claims.
+	HandleCallback(ctx context.Context, provider, code, state, callbackURL string) (*oidc.Claims, error)
 }
 
 // New creates a new Handler with all dependencies.

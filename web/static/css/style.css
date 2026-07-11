@@ -527,6 +527,38 @@ body.sidebar-collapsed .main-content {
     background: #334155;
 }
 
+.sso-providers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.sso-btn {
+    text-decoration: none;
+    display: inline-block;
+    text-align: center;
+}
+
+.sso-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    margin: 0.75rem 0;
+    color: var(--text-muted, #64748b);
+}
+
+.sso-divider::before,
+.sso-divider::after {
+    content: "";
+    flex: 1;
+    border-bottom: 1px solid var(--border, #cbd5e1);
+}
+
+.sso-divider span {
+    padding: 0 0.75rem;
+}
+
 .btn-danger {
     background: var(--danger);
     color: white;

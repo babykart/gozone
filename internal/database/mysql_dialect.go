@@ -266,5 +266,17 @@ func (m *mysqlDialect) Migrations() []string {
 		// Pre-existing orphans are removed first so the constraint can be added.
 		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
 		ALTER TABLE revoked_tokens ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+		// OpenID Connect / OAuth2: see sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS external_identities (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			issuer VARCHAR(255) NOT NULL,
+			subject VARCHAR(255) NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_external_identities_issuer_subject (issuer, subject),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			KEY idx_external_identities_user (user_id),
+			KEY idx_external_identities_issuer_subject (issuer, subject)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

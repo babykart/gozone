@@ -38,6 +38,10 @@ const (
 	// missing token, tampered token). It gets its own banner so the user
 	// sees an actionable message instead of a blank page.
 	csrfInvalidError = "csrf_invalid"
+	// ssoError is set by the OIDC handlers when the SSO flow fails (state
+	// mismatch, token verification, disabled account, provisioning refused).
+	// A single generic message avoids leaking which step failed.
+	ssoError = "sso_error"
 )
 
 // loginErrorMessages maps a query-string error code to the user-facing banner.
@@ -49,6 +53,7 @@ const (
 var loginErrorMessages = map[string]string{
 	invalidCredentialsError: "Invalid username or password.",
 	csrfInvalidError:        "Session expired or security token invalid. Please try again.",
+	ssoError:                "Single sign-on failed. Please try again or contact an administrator.",
 }
 
 // loginErrorRedirect builds the /login?error=<code> redirect target. Used by
@@ -88,6 +93,15 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 		"Title":   "Login - " + h.Cfg.Server.AppName,
 		"Error":   loginErrorBanner(r.URL.Query().Get("error")),
 		"AppName": h.Cfg.Server.AppName,
+	}
+	// Expose SSO providers so the template can render "Sign in with X" buttons.
+	// When SSO is enabled and allow_local_login is false, the local form is
+	// hidden (the POST /login endpoint stays wired for existing tooling).
+	if h.OIDC != nil && h.OIDC.Enabled() {
+		data["OIDCProviders"] = h.OIDC.Providers()
+		if !h.Cfg.OIDC.AllowLocalLogin {
+			data["HideLocalLogin"] = true
+		}
 	}
 	h.render(w, r, "login.html", data)
 }

@@ -4,12 +4,12 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## OpenID Connect / OAuth2
 
-- [ ] **OAuth2 / OIDC provider configuration**
+- [x] **OAuth2 / OIDC provider configuration**
   - Configurable provider URL, client ID, client secret via `config.yaml` + env vars (`GOZONE_OIDC_*`)
   - Well-known discovery endpoint (`/.well-known/openid-configuration`) for automatic metadata retrieval
-  - Support for standard providers: Google, GitHub, GitLab, Keycloak, Authentik, Azure AD
+  - Support for standard providers: Google, GitHub, GitLab, Keycloak, Authentik, Azure AD, **Gitea**
 
-- [ ] **Login flow**
+- [x] **Login flow**
   - "Sign in with SSO" button on login page, redirects to provider authorization endpoint
   - Authorization code flow with PKCE (`S256`) for public clients
   - State parameter with HMAC signature to prevent CSRF
@@ -21,15 +21,15 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Just-in-time (JIT) user provisioning: auto-create user on first login if allowed by config
   - Role mapping: map provider roles/groups/realm_access claims to GoZone roles (admin/user)
   - Group mapping: map provider groups/teams to GoZone zone groups
-  - Existing local user linking by email match (prompt to connect accounts)
+  - [x] Existing local user linking by email match (auto-link when `email_verified`)
 
 - [ ] **Session management**
-  - JWT session issued after successful OIDC authentication, same as local login
+  - [x] JWT session issued after successful OIDC authentication, same as local login
   - Refresh token support with configurable TTL
   - Idle session timeout with forced re-authentication
   - Single logout (RP-Initiated Logout) with `end_session_endpoint` when available
 
-- [ ] **Configuration options**
+- [x] **Configuration options**
   - `oidc.enabled` — master switch for SSO
   - `oidc.allow_local_login` — keep local username/password login alongside SSO
   - `oidc.auto_provision` — create users on first SSO login
@@ -37,7 +37,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - `oidc.scopes` — requested scopes (openid, profile, email, groups)
   - `oidc.claim_mappings` — custom claim-to-attribute mapping
 
-- [ ] **Security**
+- [x] **Security**
   - Token signature verification with JWKS endpoint (`id_token_signing_alg_values_supported`)
   - Claims validation: `iss`, `aud`, `exp`, `iat`, `nbf`, `nonce`
   - JWKS caching with configurable TTL (default 1 hour)

@@ -104,3 +104,37 @@ admin:
   email: "admin@gozone.local"
   first_name: "Admin"
   last_name: "User"
+
+# OpenID Connect / OAuth2 single sign-on. Disabled by default. When enabled,
+# "Sign in with <provider>" buttons appear on the login page. The flow is the
+# authorization-code flow with PKCE (S256), a signed state parameter (CSRF) and
+# a nonce (ID-token replay protection).
+#
+# Each provider is discovered via its issuer_url
+# (/.well-known/openid-configuration). Known provider names (gitea, google,
+# github, gitlab, keycloak, authentik, azure) supply default display names and
+# scopes; any other name is treated as a generic OIDC provider.
+#
+# Override everything via GOZONE_OIDC_* env vars; a single provider can be
+# declared entirely from env (GOZONE_OIDC_PROVIDER_NAME / _ISSUER_URL /
+# _CLIENT_ID / _CLIENT_SECRET) without this file.
+oidc:
+  enabled: false
+  # Keep the local username/password form alongside SSO buttons.
+  allow_local_login: true
+  # Auto-create a local user on first successful SSO login.
+  auto_provision: false
+  # Role assigned to auto-provisioned users (admin|user).
+  default_role: "user"
+  # Global fallback scopes when a provider declares none. "openid" is always
+  # added and deduplicated.
+  scopes: ["openid", "profile", "email"]
+  providers: []
+  # Example: Gitea as an OIDC identity provider.
+  # providers:
+  #   - name: gitea
+  #     issuer_url: "https://gitea.example.com"
+  #     client_id: "gozone"
+  #     client_secret: "changeme"
+  #     # display_name: "Gitea"   # optional override
+  #     # scopes: ["openid", "profile", "email", "groups"]  # optional override

@@ -31,6 +31,7 @@ import (
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/oidc"
 	"github.com/babykart/gozone/internal/pdns"
 	versionpkg "github.com/babykart/gozone/internal/version"
 	"github.com/babykart/gozone/web"
@@ -157,6 +158,16 @@ func runServer(cfg *config.Config) error {
 	// values win; internal/version falls back to embedded VCS metadata.
 	h.Version = versionpkg.Resolve(version, commit, buildDate)
 
+	// Initialize OpenID Connect / OAuth2 single sign-on. Discovery is best-effort
+	// per provider (a temporarily unreachable IdP is skipped, not fatal); the
+	// returned service is disabled when OIDC is not configured or no provider
+	// could be discovered.
+	oidcSvc := oidc.NewService(context.Background(), cfg, cfg.Server.OIDCStateKey)
+	h.OIDC = oidcSvc
+	if oidcSvc.Enabled() {
+		logger.Info("oidc single sign-on enabled")
+	}
+
 	// Seed built-in zone templates
 	if err := h.SeedBuiltinTemplates(); err != nil {
 		return fmt.Errorf("seed builtin templates: %w", err)
@@ -265,6 +276,16 @@ func runServer(cfg *config.Config) error {
 			loginChain = append(loginChain, loginUsernameLimiter.Limit(loginUsernameKey))
 		}
 		r.With(loginChain...).Post("/login", h.Login)
+
+		// OpenID Connect / OAuth2 SSO endpoints. These are public (the user
+		// is not authenticated yet): the login endpoint redirects to the IdP,
+		// and the callback completes the flow and establishes a session. They
+		// share the login rate limiter to throttle callback brute-forcing of
+		// the state parameter (ROADMAP "Security").
+		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+			Get("/auth/oidc/{provider}/login", h.OIDCLogin)
+		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+			Get("/auth/oidc/{provider}/callback", h.OIDCCallback)
 
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
