@@ -281,6 +281,53 @@ auth:
 	}
 }
 
+func TestOIDCJWKSCacheTTLDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.OIDC.JWKSCacheTTLMinutes != 60 {
+		t.Errorf("default jwks_cache_ttl_minutes = %d, want 60", cfg.OIDC.JWKSCacheTTLMinutes)
+	}
+}
+
+func TestOIDCJWKSCacheTTLEnvOverride(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", testSecret)
+	t.Setenv("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", "15")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.OIDC.JWKSCacheTTLMinutes != 15 {
+		t.Errorf("JWKSCacheTTLMinutes = %d, want 15", cfg.OIDC.JWKSCacheTTLMinutes)
+	}
+}
+
+func TestOIDCJWKSCacheTTLRejectsNegative(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `
+server:
+  secret_key: ` + testSecret + `
+powerdns:
+  api_url: http://localhost:8081
+  api_key: changeme
+  server_id: localhost
+oidc:
+  enabled: true
+  jwks_cache_ttl_minutes: -5
+  providers:
+    - name: gitea
+      issuer_url: "https://gitea.example.com"
+      client_id: cid
+      client_secret: sec
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "jwks_cache_ttl_minutes") {
+		t.Fatalf("expected negative jwks_cache_ttl_minutes error, got %v", err)
+	}
+}
+
 func TestOIDCLoadFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

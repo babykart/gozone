@@ -5,13 +5,10 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 ## OpenID Connect / OAuth2
 
 The feature is delivered end-to-end (discovery, PKCE+state+nonce, JWKS ID-token
-verification, JIT provisioning, role/group mapping, RP-initiated logout,
-idle/absolute sessions). See [docs/SSO.md](docs/SSO.md). Two implementation
-caveats remain as follow-up work:
+verification with operator-tunable cache TTL, JIT provisioning, role/group
+mapping, RP-initiated logout, idle/absolute sessions). See
+[docs/SSO.md](docs/SSO.md). One implementation caveat remains as follow-up work:
 
-- [ ] **JWKS caching & rotation** — expose an operator-tunable JWKS cache TTL
-  (e.g. `oidc.jwks_cache_ttl`, default 1h). Today key rotation/caching is
-  handled entirely by `coreos/go-oidc` and is not configurable.
 - [ ] **Idle/absolute session enforcement** — share the session tracker across
   instances (DB-backed or Redis). Today it is in-memory and single-instance
   (consistent with the rate limiters), so multi-instance MySQL/PostgreSQL

@@ -164,6 +164,8 @@ func runServer(cfg *config.Config) error {
 	// could be discovered.
 	oidcSvc := oidc.NewService(context.Background(), cfg, cfg.Server.OIDCStateKey)
 	h.OIDC = oidcSvc
+	// Stop the per-provider JWKS background refresh goroutines on shutdown.
+	defer oidcSvc.Close()
 	if oidcSvc.Enabled() {
 		logger.Info("oidc single sign-on enabled")
 	}

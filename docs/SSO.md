@@ -70,6 +70,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 | `oidc.admin_role_values` | `GOZONE_OIDC_ADMIN_ROLE_VALUES` | `[]` | Claim values (at `role_claim`) that grant the GoZone `admin` role. |
 | `oidc.group_claim` | `GOZONE_OIDC_GROUP_CLAIM` | *(none)* | Dotted claim path inspected for zone-group mapping. Empty disables group mapping. |
 | `oidc.group_mapping` | *(YAML only)* | `{}` | Maps an IdP claim value → a GoZone `zone_group` name. |
+| `oidc.jwks_cache_ttl_minutes` | `GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES` | `60` | How long a provider's signing keys are cached before a proactive background refresh (so key rotation is picked up without a verification miss). `0` disables proactive refresh (keys are still fetched on first use and on an unknown kid). |
 
 ### Per-provider fields (`oidc.providers[]`)
 

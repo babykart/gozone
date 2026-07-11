@@ -188,6 +188,13 @@ type OIDCConfig struct {
 	// every mapped group that exists; groups that do not exist are skipped with
 	// a warning. Memberships are never auto-removed — revoke manually.
 	GroupMapping map[string]string `yaml:"group_mapping"`
+	// JWKSCacheTTLMinutes is how long a provider's signing keys are cached
+	// before a proactive background refresh, in minutes. A background goroutine
+	// re-fetches the JWKS on this cadence so key rotation is picked up without
+	// waiting for an unknown key ID. 0 disables the proactive refresh (keys are
+	// still fetched on first use and on an unknown kid — the library's
+	// behaviour). Default 60 (1 hour).
+	JWKSCacheTTLMinutes int `yaml:"jwks_cache_ttl_minutes"`
 }
 
 // OIDCProviderConfig describes a single identity provider. Name maps to a
@@ -334,11 +341,12 @@ func DefaultConfig() *Config {
 			HistorySize:      0,
 		},
 		OIDC: OIDCConfig{
-			Enabled:         false,
-			AllowLocalLogin: true,
-			AutoProvision:   false,
-			DefaultRole:     "user",
-			Scopes:          []string{"openid", "profile", "email"},
+			Enabled:             false,
+			AllowLocalLogin:     true,
+			AutoProvision:       false,
+			DefaultRole:         "user",
+			Scopes:              []string{"openid", "profile", "email"},
+			JWKSCacheTTLMinutes: 60,
 		},
 	}
 	// JWTKey/CSRFKey are intentionally NOT derived here: DefaultConfig has no
@@ -679,6 +687,9 @@ func (cfg *Config) validateOIDC() error {
 	if cfg.OIDC.GroupClaim != "" && len(cfg.OIDC.GroupMapping) == 0 {
 		return fmt.Errorf("oidc.group_claim %q is set but group_mapping is empty", cfg.OIDC.GroupClaim)
 	}
+	if cfg.OIDC.JWKSCacheTTLMinutes < 0 {
+		return fmt.Errorf("invalid oidc.jwks_cache_ttl_minutes %d: must be non-negative", cfg.OIDC.JWKSCacheTTLMinutes)
+	}
 	return nil
 }
 
@@ -928,6 +939,13 @@ func applyOIDCEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("GOZONE_OIDC_GROUP_CLAIM"); v != "" {
 		cfg.OIDC.GroupClaim = v
+	}
+	if v := os.Getenv("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES"); v != "" {
+		n, err := envInt("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", v)
+		if err != nil {
+			return err
+		}
+		cfg.OIDC.JWKSCacheTTLMinutes = n
 	}
 	// Single-provider env declaration, only when YAML declared none.
 	if len(cfg.OIDC.Providers) == 0 {

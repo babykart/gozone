@@ -124,6 +124,7 @@ Azure AD (any other name is treated as a generic OIDC provider).
 | `oidc.admin_role_values` | `GOZONE_OIDC_ADMIN_ROLE_VALUES` | `[]` |
 | `oidc.group_claim` | `GOZONE_OIDC_GROUP_CLAIM` | *(none)* |
 | `oidc.group_mapping` | *(YAML only)* | `{}` |
+| `oidc.jwks_cache_ttl_minutes` | `GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES` | `60` |
 
 Each entry in `oidc.providers[]` needs `name`, `issuer_url`, `client_id`, and
 `client_secret` (plus optional `display_name` and `scopes`). The redirect URI

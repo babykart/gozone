@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -61,6 +62,7 @@ type ProviderInstance struct {
 type Service struct {
 	providers map[string]*ProviderInstance
 	stateKey  []byte
+	keySets   []*cachedKeySet // started background refresh goroutines; Close stops them
 }
 
 // ErrDisabled is returned by NewService/Service methods when OIDC is not
@@ -83,20 +85,37 @@ func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Servi
 	if cfg == nil || !cfg.OIDC.Enabled || len(cfg.OIDC.Providers) == 0 {
 		return svc
 	}
+	jwksTTL := time.Duration(cfg.OIDC.JWKSCacheTTLMinutes) * time.Minute
 	svc.providers = make(map[string]*ProviderInstance)
 	for i := range cfg.OIDC.Providers {
 		pc := &cfg.OIDC.Providers[i]
-		inst, err := discover(ctx, pc, cfg.OIDC.Scopes)
+		inst, keySet, err := discover(ctx, pc, cfg.OIDC.Scopes, jwksTTL)
 		if err != nil {
 			logger.Warn("oidc provider discovery failed; skipping",
 				"provider", pc.Name, "issuer", pc.IssuerURL, "error", err)
 			continue
 		}
 		svc.providers[pc.Name] = inst
+		if keySet != nil {
+			svc.keySets = append(svc.keySets, keySet)
+		}
 		logger.Info("oidc provider ready",
-			"provider", pc.Name, "issuer", pc.IssuerURL)
+			"provider", pc.Name, "issuer", pc.IssuerURL,
+			"jwks_ttl_minutes", cfg.OIDC.JWKSCacheTTLMinutes)
 	}
 	return svc
+}
+
+// Close stops every provider's JWKS background refresh goroutine. It is safe to
+// call on a disabled/zero service (no-op) and to call multiple times.
+func (s *Service) Close() {
+	if s == nil {
+		return
+	}
+	for _, k := range s.keySets {
+		k.Close()
+	}
+	s.keySets = nil
 }
 
 // Enabled reports whether at least one provider was successfully discovered.
@@ -137,19 +156,22 @@ func (s *Service) Providers() []*ProviderInstance {
 }
 
 // discover performs OIDC discovery for a single provider config and builds the
-// oauth2 client + ID-token verifier.
-func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes []string) (*ProviderInstance, error) {
+// oauth2 client + ID-token verifier. jwksTTL controls the signing-key cache
+// TTL (proactive background refresh); 0 disables proactive refresh.
+func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes []string, jwksTTL time.Duration) (*ProviderInstance, *cachedKeySet, error) {
 	provider, err := oidc.NewProvider(ctx, pc.IssuerURL)
 	if err != nil {
-		return nil, fmt.Errorf("discover %s: %w", pc.Name, err)
+		return nil, nil, fmt.Errorf("discover %s: %w", pc.Name, err)
 	}
 	// The authoritative issuer is the "iss" claim in the discovery document
 	// (which the ID-token verifier also enforces); it is the link key half
 	// (issuer, subject) → local user, so prefer it over the configured URL.
-	// Capture end_session_endpoint too for RP-initiated logout.
+	// Capture jwks_uri, end_session_endpoint and the advertised signing algs.
 	var meta struct {
-		Issuer        string `json:"issuer"`
-		EndSessionURL string `json:"end_session_endpoint"`
+		Issuer                           string   `json:"issuer"`
+		EndSessionURL                    string   `json:"end_session_endpoint"`
+		JWKSURL                          string   `json:"jwks_uri"`
+		IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 	}
 	_ = provider.Claims(&meta)
 	issuer := meta.Issuer
@@ -165,6 +187,23 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 	if displayName == "" {
 		displayName = pc.Name
 	}
+
+	// Build the verifier. When the discovery document advertises a jwks_uri we
+	// use our own TTL-cached key set (proactive rotation); otherwise we fall
+	// back to the library's default verifier (reactive, indefinite cache).
+	var verifier *oidc.IDTokenVerifier
+	var keySet *cachedKeySet
+	vcfg := &oidc.Config{ClientID: pc.ClientID}
+	if len(meta.IDTokenSigningAlgValuesSupported) > 0 {
+		vcfg.SupportedSigningAlgs = meta.IDTokenSigningAlgValuesSupported
+	}
+	if meta.JWKSURL != "" {
+		keySet = newCachedKeySet(meta.JWKSURL, jwksTTL)
+		verifier = oidc.NewVerifier(issuer, keySet, vcfg)
+	} else {
+		verifier = provider.Verifier(vcfg)
+	}
+
 	inst := &ProviderInstance{
 		Name:          pc.Name,
 		DisplayName:   displayName,
@@ -179,9 +218,9 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 			Endpoint:     provider.Endpoint(),
 			Scopes:       scopes,
 		},
-		verifier: provider.Verifier(&oidc.Config{ClientID: pc.ClientID}),
+		verifier: verifier,
 	}
-	return inst, nil
+	return inst, keySet, nil
 }
 
 // AuthCodeURL builds the authorization-endpoint redirect URL for the given

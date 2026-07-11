@@ -366,7 +366,7 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
   ▼ oidc.Service.HandleCallback
   ├── verifyStateToken: HMAC signature + exp + provider match (else sso_error)
   ├── oauth2.Exchange(code, code_verifier) → {access_token, id_token, …}
-  ├── idToken.Verify: JWKS signature + iss/aud/exp/nonce (coreos/go-oidc)
+  ├── idToken.Verify: JWKS signature (TTL-cached key set, proactively refreshed every oidc.jwks_cache_ttl_minutes) + iss/aud/exp/nonce (coreos/go-oidc)
   └── normalize claims → {sub, iss, email, email_verified, preferred_username, name, Raw}
   │
   ▼ resolveSSOUser

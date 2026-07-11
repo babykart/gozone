@@ -156,6 +156,11 @@ oidc:
   # group_claim is empty by default (mapping disabled).
   group_claim: ""
   group_mapping: {}
+  # JWKS signing-key cache TTL (minutes). A background goroutine re-fetches each
+  # provider's JWKS on this cadence so key rotation is picked up without waiting
+  # for an unknown key ID. 0 disables proactive refresh (keys are still fetched
+  # on first use and on an unknown kid). Default 60 (1 hour).
+  jwks_cache_ttl_minutes: 60
   providers: []
   # Example: Gitea as an OIDC identity provider, with role + group mapping.
   # providers:
