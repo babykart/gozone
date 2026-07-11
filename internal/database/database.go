@@ -545,7 +545,19 @@ func (tx *Tx) CountEnabledAdmins(ctx context.Context) (int, error) {
 // false if the user does not exist, is not an admin, or is not enabled, or
 // if there is at least one other enabled admin. Used by the login lockout
 // to refuse to lock the last admin out of the instance.
+//
+// Lock order: the enabled-admin set is acquired FIRST (via CountEnabledAdmins'
+// FOR UPDATE) and the target row second. This matches UpdateUser/DeleteUser/
+// BulkDeleteUsers, which all call CountEnabledAdmins before touching their
+// target row. Acquiring the target row first and the admin set second (the
+// previous order) inverted this and could deadlock against a concurrent
+// UpdateUser/DeleteUser when each held one lock and waited on the other
+// (REVIEW.md M-2).
 func (tx *Tx) IsLastEnabledAdmin(ctx context.Context, userID int64) (bool, error) {
+	count, err := tx.CountEnabledAdmins(ctx)
+	if err != nil {
+		return false, err
+	}
 	query := "SELECT role, enabled FROM users WHERE id = ?"
 	if tx.dialect.DriverName() != "sqlite3" {
 		query += " FOR UPDATE"
@@ -560,10 +572,6 @@ func (tx *Tx) IsLastEnabledAdmin(ctx context.Context, userID int64) (bool, error
 	}
 	if role != "admin" || enabled != 1 {
 		return false, nil
-	}
-	count, err := tx.CountEnabledAdmins(ctx)
-	if err != nil {
-		return false, err
 	}
 	return count <= 1, nil
 }

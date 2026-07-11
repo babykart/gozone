@@ -451,3 +451,88 @@ func TestIsLastEnabledAdmin_DisabledAdmin(t *testing.T) {
 		t.Error("expected IsLastEnabledAdmin=true when only one admin is enabled")
 	}
 }
+
+// TestIsLastEnabledAdmin_ConcurrentLockOrder exercises the lock-ordering
+// invariant fixed in REVIEW.md M-2: IsLastEnabledAdmin must acquire the
+// enabled-admin set lock (CountEnabledAdmins' FOR UPDATE) BEFORE the target
+// row, matching UpdateUser/DeleteUser. Some goroutines repeatedly call
+// IsLastEnabledAdmin while others open a tx, call CountEnabledAdmins (the
+// UpdateUser lock pattern) and toggle a target's role — the two lock
+// acquisition orders must not deadlock.
+//
+// SQLite serializes writers via MaxOpenConns=1, so (per the convention in
+// TestIncrementFailedLogins_ConcurrentNoLostIncrements) this mainly guards
+// against deadlocks and confirms the final state is consistent; the cycle is
+// only reachable on MySQL/PostgreSQL where writers truly overlap.
+func TestIsLastEnabledAdmin_ConcurrentLockOrder(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	id1 := insertUserForLoginTests(t, db, "admin1")
+	id2 := insertUserForLoginTests(t, db, "admin2")
+	for _, id := range []int64{id1, id2} {
+		if _, err := db.ExecContext(ctx,
+			"UPDATE users SET role='admin' WHERE id = ?", id); err != nil {
+			t.Fatalf("set role: %v", err)
+		}
+	}
+
+	const goroutines = 40
+	var wg sync.WaitGroup
+	var failures atomic.Int64
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			target := id1
+			if n%2 == 0 {
+				target = id2
+			}
+			if n%3 == 0 {
+				// Reader path: IsLastEnabledAdmin (admin-set lock then target).
+				tx, err := db.BeginTx(ctx, nil)
+				if err != nil {
+					failures.Add(1)
+					return
+				}
+				defer tx.Rollback() //nolint:errcheck
+				if _, err := tx.IsLastEnabledAdmin(ctx, target); err != nil {
+					failures.Add(1)
+					return
+				}
+			} else {
+				// Writer path mirroring UpdateUser: CountEnabledAdmins (admin-set
+				// lock first) then UPDATE the target row.
+				tx, err := db.BeginTx(ctx, nil)
+				if err != nil {
+					failures.Add(1)
+					return
+				}
+				defer tx.Rollback() //nolint:errcheck
+				if _, err := tx.CountEnabledAdmins(ctx); err != nil {
+					failures.Add(1)
+					return
+				}
+				if _, err := tx.ExecContext(ctx,
+					"UPDATE users SET first_name = ? WHERE id = ?", "x", target); err != nil {
+					failures.Add(1)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if n := failures.Load(); n != 0 {
+		t.Fatalf("%d concurrent IsLastEnabledAdmin/CountEnabledAdmins calls returned an error", n)
+	}
+	// Both admins must still be enabled admins — the writer path only touched
+	// first_name, never role/enabled.
+	var role string
+	var enabled int
+	if err := db.QueryRowContext(ctx, "SELECT role, enabled FROM users WHERE id = ?", id1).Scan(&role, &enabled); err != nil {
+		t.Fatalf("select admin1: %v", err)
+	}
+	if role != "admin" || enabled != 1 {
+		t.Errorf("admin1 unexpectedly changed: role=%q enabled=%d", role, enabled)
+	}
+}
