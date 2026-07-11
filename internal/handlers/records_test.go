@@ -451,8 +451,8 @@ func TestEditRecordPage_RecordRetrievalError(t *testing.T) {
 	r = r.WithContext(ctx)
 	h.EditRecordPage(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d (L-5: PowerDNS failure is a server error, not 400)", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "Failed to fetch records") {
 		t.Errorf("expected 'Failed to fetch records' error message, got: %s", w.Body.String())

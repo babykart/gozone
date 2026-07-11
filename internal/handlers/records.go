@@ -171,7 +171,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		h.renderError(w, r, "Failed to fetch records")
+		h.renderInternalError(w, r, "Failed to fetch records", err)
 		return
 	}
 
