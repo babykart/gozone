@@ -12,6 +12,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // ImportZone handles file upload for zone import (BIND or CSV).
@@ -49,7 +50,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rrsets []models.RRSet
-	var skipped []skippedBindLine
+	var skipped []skippedLine
 	switch format {
 	case "bind":
 		data, readErr := io.ReadAll(io.LimitReader(file, 10<<20))
@@ -61,7 +62,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		rrsets, skipped, err = parseBindZone(data, zoneID)
 	case "csv":
 		cr := csv.NewReader(file)
-		rrsets, err = parseCSVZone(cr)
+		rrsets, skipped, err = parseCSVZone(cr)
 	}
 
 	if err != nil {
@@ -131,17 +132,37 @@ type bindRecord struct {
 	data  string
 }
 
-// skippedBindLine records a zone-file line that could not be parsed into a
-// record, so the importer can surface feedback instead of silently dropping it.
-type skippedBindLine struct {
+// skippedLine records an input line that could not be turned into a record
+// (parse failure or validation failure), so the importer can surface feedback
+// instead of silently dropping it. Used for both BIND and CSV imports.
+type skippedLine struct {
 	Line   string
 	Reason string
+}
+
+// validateParsedRecord validates a parsed record's type, name, content and
+// priority. contentBare must be the content WITHOUT an embedded priority (the
+// caller must SplitPriority first for MX/SRV). It lets the BIND and CSV
+// importers reject invalid records before they reach PowerDNS, producing a
+// specific reason per line instead of a generic "failed to create records"
+// (REVIEW.md M-6).
+func validateParsedRecord(rtype, name, contentBare string, priority int) error {
+	if err := validators.ValidateRecordType(rtype); err != nil {
+		return err
+	}
+	if err := validators.ValidateRecordName(name); err != nil {
+		return err
+	}
+	if err := validators.ValidateRecordContent(rtype, contentBare); err != nil {
+		return err
+	}
+	return validators.ValidateRecordPriority(rtype, priority)
 }
 
 // parseBindZone parses an RFC 1035 BIND zone file and returns RRSets plus any
 // lines that could not be parsed (so the caller can surface feedback instead of
 // silently dropping them).
-func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedBindLine, error) {
+func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, error) {
 	origin := zoneID
 	if !strings.HasSuffix(origin, ".") {
 		origin += "."
@@ -150,7 +171,7 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedBindLin
 
 	lines := normalizeBindLines(string(data))
 	raw := make([]bindRecord, 0)
-	var skipped []skippedBindLine
+	var skipped []skippedLine
 	lastOwner := "" // owner of the previous record, for RFC 1035 inheritance
 
 	for _, bl := range lines {
@@ -189,7 +210,15 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedBindLin
 
 		rec, err := parseBindLine(line, origin, defaultTTL)
 		if err != nil {
-			skipped = append(skipped, skippedBindLine{Line: bl.text, Reason: err.Error()})
+			skipped = append(skipped, skippedLine{Line: bl.text, Reason: err.Error()})
+			continue
+		}
+		// Validate the parsed record before accepting it. BIND data is wire
+		// format (priority embedded for MX/SRV), so split the priority out
+		// first and validate the bare content (REVIEW.md M-6).
+		prio, rest, _ := models.SplitPriority(rec.rtype, rec.data)
+		if verr := validateParsedRecord(rec.rtype, rec.name, rest, prio); verr != nil {
+			skipped = append(skipped, skippedLine{Line: bl.text, Reason: verr.Error()})
 			continue
 		}
 		raw = append(raw, rec)
@@ -428,14 +457,16 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 	return rrsets
 }
 
-// parseCSVZone parses CSV zone data and returns RRSets.
-func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
+// parseCSVZone parses CSV zone data and returns RRSets plus any rows that
+// failed validation (so the caller can surface feedback instead of silently
+// dropping them, matching the BIND path — REVIEW.md M-6).
+func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
 	rows, err := reader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(rows) < 2 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	headers := make(map[string]int)
@@ -451,6 +482,7 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 	// The export duplicates the comment on every record row, so we dedup here
 	// while preserving insertion order across rows.
 	groupComments := make(map[key][]string)
+	var skipped []skippedLine
 
 	for _, row := range rows[1:] {
 		if len(row) == 0 || (len(row) == 1 && strings.TrimSpace(row[0]) == "") {
@@ -471,6 +503,16 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 		disabled := getCSVField(row, headers, "disabled") == "true"
 
 		if name == "" || rtype == "" || content == "" {
+			continue
+		}
+
+		// Validate before normalizing so an invalid row is reported with a
+		// specific reason rather than a generic PowerDNS failure (REVIEW.md
+		// M-6). CSV content is bare (priority is a separate column). The name
+		// is validated in its raw form (before the trailing-dot append below)
+		// so the apex shorthand "@" is accepted by ValidateRecordName.
+		if verr := validateParsedRecord(rtype, name, content, priority); verr != nil {
+			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: verr.Error()})
 			continue
 		}
 
@@ -516,7 +558,7 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, error) {
 		})
 	}
 
-	return rrsets, nil
+	return rrsets, skipped, nil
 }
 
 // parseCSVComments turns the deduplicated per-RRSet comment cells collected by

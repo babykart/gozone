@@ -15,6 +15,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
 )
 
 // TemplateVariables are the substitution variables available in template records.
@@ -292,7 +293,11 @@ func (h *Handler) BulkDeleteTemplates(w http.ResponseWriter, r *http.Request) {
 // AddTemplateRecord adds a record to a template.
 func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
-	rec := parseTemplateRecordForm(r, templateIDStr)
+	rec, err := parseTemplateRecordForm(r, templateIDStr)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 
 	if _, err := h.DB.Exec(
 		"INSERT INTO zone_template_records (template_id, name, type, content, ttl, priority, disabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -309,7 +314,11 @@ func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
 	recordIDStr := r.PathValue("record_id")
-	rec := parseTemplateRecordForm(r, templateIDStr)
+	rec, err := parseTemplateRecordForm(r, templateIDStr)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 
 	if _, err := h.DB.Exec(
 		"UPDATE zone_template_records SET name = ?, type = ?, content = ?, ttl = ?, priority = ?, disabled = ? WHERE id = ? AND template_id = ?",
@@ -501,25 +510,70 @@ func (h *Handler) collectTemplateVars(r *http.Request) map[string]string {
 	return vars
 }
 
-// parseTemplateRecordForm extracts a template record from form values.
-func parseTemplateRecordForm(r *http.Request, templateIDStr string) models.ZoneTemplateRecord {
+// parseTemplateRecordForm extracts and validates a template record from form
+// values. It applies the same validation as the live record paths so an admin
+// cannot store a template with an unknown type or a structurally invalid
+// content that would only fail at zone-creation time (REVIEW.md M-6).
+//
+// Template variables ("{{ZONE}}", "{{IP}}", …) make the literal name/content
+// invalid until substitution, so name/content validation is skipped when the
+// field contains a "{{" placeholder. Type and TTL/priority are always
+// validated (they never carry variables).
+func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.ZoneTemplateRecord, error) {
 	templateID, _ := strconv.ParseInt(templateIDStr, 10, 64)
-	ttl, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("ttl")))
-	if ttl <= 0 {
-		ttl = 3600
+	name := strings.TrimSpace(r.FormValue("name"))
+	rtype := strings.TrimSpace(r.FormValue("type"))
+	content := strings.TrimSpace(r.FormValue("content"))
+
+	ttlStr := strings.TrimSpace(r.FormValue("ttl"))
+	ttl := 3600
+	if ttlStr != "" {
+		v, err := strconv.Atoi(ttlStr)
+		if err != nil || v <= 0 {
+			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid TTL: must be a positive integer")
+		}
+		ttl = v
 	}
-	priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
+	priorityStr := strings.TrimSpace(r.FormValue("priority"))
+	priority := 0
+	if priorityStr != "" {
+		v, err := strconv.Atoi(priorityStr)
+		if err != nil || v < 0 {
+			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid priority: must be a non-negative integer")
+		}
+		priority = v
+	}
 	disabled := r.FormValue("disabled") == "on"
+
+	if err := validators.ValidateRecordType(rtype); err != nil {
+		return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record type '%s': %w", rtype, err)
+	}
+	if err := validators.ValidateRecordPriority(rtype, priority); err != nil {
+		return models.ZoneTemplateRecord{}, err
+	}
+	// Skip name/content validation when template variables are present — the
+	// literal value is invalid until "{{ZONE}}"/"{{IP}}"/… are substituted at
+	// zone-creation time.
+	if !strings.Contains(name, "{{") {
+		if err := validators.ValidateRecordName(name); err != nil {
+			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record name: %w", err)
+		}
+	}
+	if !strings.Contains(content, "{{") {
+		if err := validators.ValidateRecordContent(rtype, content); err != nil {
+			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record content: %w", err)
+		}
+	}
 
 	return models.ZoneTemplateRecord{
 		TemplateID: templateID,
-		Name:       strings.TrimSpace(r.FormValue("name")),
-		Type:       strings.TrimSpace(r.FormValue("type")),
-		Content:    strings.TrimSpace(r.FormValue("content")),
+		Name:       name,
+		Type:       rtype,
+		Content:    content,
 		TTL:        ttl,
 		Priority:   priority,
 		Disabled:   disabled,
-	}
+	}, nil
 }
 
 // SeedBuiltinTemplates creates the built-in zone templates if they don't exist.

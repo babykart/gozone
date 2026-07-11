@@ -627,7 +627,10 @@ func TestParseTemplateRecordForm(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.ParseForm()
 
-	rec := parseTemplateRecordForm(r, "42")
+	rec, err := parseTemplateRecordForm(r, "42")
+	if err != nil {
+		t.Fatalf("parseTemplateRecordForm: unexpected error: %v", err)
+	}
 	if rec.TemplateID != 42 {
 		t.Errorf("TemplateID: got %d, want 42", rec.TemplateID)
 	}
@@ -645,6 +648,54 @@ func TestParseTemplateRecordForm(t *testing.T) {
 	}
 	if !rec.Disabled {
 		t.Error("Disabled should be true")
+	}
+}
+
+// TestParseTemplateRecordForm_RejectsInvalid is the M-6 regression: the
+// template record form used to accept any type/content and silently substitute
+// a bad TTL, so an admin could store a template (e.g. type "FOO" or an A record
+// with "not-an-ip") that only PowerDNS would reject at apply time. It now
+// validates like the live record paths; template variables ("{{…}}") bypass
+// name/content validation since they are invalid until substitution.
+func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"unknown type", "name=www&type=FOO&content=1.2.3.4&ttl=300"},
+		{"invalid A content", "name=www&type=A&content=not-an-ip&ttl=300"},
+		{"non-numeric ttl", "name=www&type=A&content=1.2.3.4&ttl=abc"},
+		{"zero ttl", "name=www&type=A&content=1.2.3.4&ttl=0"},
+		{"negative priority", "name=www&type=A&content=1.2.3.4&ttl=300&priority=-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.ParseForm()
+			if _, err := parseTemplateRecordForm(r, "1"); err == nil {
+				t.Error("expected validation error, got nil")
+			}
+		})
+	}
+}
+
+// TestParseTemplateRecordForm_AcceptsVariables confirms template variables in
+// name/content bypass validation so legitimate variable-laden templates are
+// preserved (REVIEW.md M-6).
+func TestParseTemplateRecordForm_AcceptsVariables(t *testing.T) {
+	// A record whose content is the {{IP}} variable — invalid as a literal IP,
+	// valid as a template placeholder.
+	body := "name=@&type=A&content={{IP}}&ttl=3600"
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.ParseForm()
+	rec, err := parseTemplateRecordForm(r, "1")
+	if err != nil {
+		t.Fatalf("variable-laden template must be accepted: %v", err)
+	}
+	if rec.Content != "{{IP}}" {
+		t.Errorf("Content: got %q, want {{IP}}", rec.Content)
 	}
 }
 

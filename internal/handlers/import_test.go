@@ -443,7 +443,7 @@ txt.example.com.,TXT,v=DMARC1; p=quarantine,3600,0,false
 spf.example.com.,SPF,v=spf1 -all,3600,0,false
 preq.example.com.,TXT,"""already"" quoted",3600,0,false`
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestParseCSVZone(t *testing.T) {
 example.com.,NS,ns1.example.com.,3600,0,false
 www.example.com.,A,192.0.2.1,3600,0,false`
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -482,12 +482,54 @@ www.example.com.,A,192.0.2.1,3600,0,false`
 
 func TestParseCSVZone_NoData(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled`
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(rrsets) != 0 {
 		t.Errorf("expected 0 rrsets, got %d", len(rrsets))
+	}
+}
+
+// TestParseCSVZone_SkipsInvalidRecords is the M-6 regression: invalid record
+// types/contents are now validated and skipped (with a reason) instead of being
+// forwarded to PowerDNS, which would surface a generic "failed to create
+// records". A valid A row alongside is still imported.
+func TestParseCSVZone_SkipsInvalidRecords(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+www.example.com.,A,not-an-ip,3600,0,false
+www.example.com.,FOO,whatever,3600,0,false
+mail.example.com.,A,192.0.2.5,3600,0,false`
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 valid rrset, got %d", len(rrsets))
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("expected 2 skipped rows, got %d", len(skipped))
+	}
+}
+
+// TestParseBindZone_SkipsInvalidRecords is the BIND counterpart: an invalid A
+// content and an unknown type are skipped with a reason rather than sent to
+// PowerDNS (REVIEW.md M-6).
+func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
+	input := strings.Join([]string{
+		"www.example.com. 300 IN A not-an-ip",
+		"www.example.com. 300 IN FOO whatever",
+		"mail.example.com. 300 IN A 192.0.2.5",
+	}, "\n")
+	rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 valid rrset, got %d", len(rrsets))
+	}
+	if len(skipped) != 2 {
+		t.Fatalf("expected 2 skipped lines, got %d", len(skipped))
 	}
 }
 
@@ -543,7 +585,7 @@ mail.example.com.,A,192.0.2.11,3600,0,false,line
 api.example.com.,A,192.0.2.20,3600,0,false,
 txt.example.com.,TXT,"v=DMARC1; p=none",3600,0,false,"quoted, comment"`
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -585,7 +627,7 @@ func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
 	input := "name,type,content,ttl,priority,disabled,comment\n" +
 		"www.example.com.,A,192.0.2.1,3600,0,false,\"first line\nsecond line\nthird line\""
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -644,7 +686,7 @@ www.example.com.,CNAME,target.example.com,3600,0,false
 example.com.,NS,ns1.example.com,3600,0,false
 mail.example.com.,MX,mail.example.com,3600,10,false`
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -676,7 +718,7 @@ func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled
 @,SOA,"ns1.example.com hostmaster.example.com 2024010100 3600 900 1209600 3600",3600,0,false`
 
-	rrsets, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
