@@ -965,12 +965,7 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var patch []models.RRSet
-	type removedRRSet struct {
-		Name    string
-		Type    string
-		Records []models.RecordInfo
-	}
-	var removedSnapshot []removedRRSet
+	var removedSnapshot []models.RRSet
 	totalRemoved := 0
 
 	for i := range allRecords {
@@ -1013,7 +1008,12 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		removedSnapshot = append(removedSnapshot, removedRRSet{Name: rr.Name, Type: rr.Type, Records: removed})
+		removedSnapshot = append(removedSnapshot, models.RRSet{
+			Name:    rr.Name,
+			Type:    rr.Type,
+			TTL:     rr.TTL,
+			Records: removed,
+		})
 		totalRemoved += len(removed)
 	}
 

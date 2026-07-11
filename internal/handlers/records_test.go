@@ -2704,6 +2704,57 @@ func TestBulkDeleteRecords_NoSelection(t *testing.T) {
 	}
 }
 
+// TestBulkDeleteRecords_ActivityLogUsesLogicalFormat is the L-9 regression
+// test: the activity-log snapshot for bulk-deleted MX records must store the
+// priority in a dedicated field (logical form) — not embedded in the content
+// string (wire form) — consistent with rrsetSnapshot used by single
+// CreateRecord/UpdateRecord/DeleteRecord.
+func TestBulkDeleteRecords_ActivityLogUsesLogicalFormat(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "10 mail1.example.com.", Priority: 0, Disabled: false},
+			{Content: "20 mail2.example.com.", Priority: 0, Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Delete the mail2 record (after read-path split: content=mail2.example.com., priority=20).
+	body := "name=example.com&type=MX&original_content=mail2.example.com.&original_priority=20"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var oldValue string
+	h.DB.QueryRow(
+		"SELECT old_value FROM activity_logs WHERE action='delete_record' ORDER BY id DESC LIMIT 1",
+	).Scan(&oldValue)
+
+	if oldValue == "" {
+		t.Fatal("expected non-empty old_value in activity log")
+	}
+	if !strings.Contains(oldValue, `"priority":20`) {
+		t.Errorf("expected dedicated priority:20 in snapshot (L-9 logical format), got %s", oldValue)
+	}
+	if !strings.Contains(oldValue, `"content":"mail2.example.com."`) {
+		t.Errorf("expected bare content without embedded priority, got %s", oldValue)
+	}
+	if !strings.Contains(oldValue, `"ttl":3600`) {
+		t.Errorf("expected TTL in snapshot (full RRSet format), got %s", oldValue)
+	}
+}
+
 // TestRRSetSnapshot_NormalizesMXPriority verifies the activity-log snapshot
 // renders MX/SRV priority as a dedicated field (API form) instead of the
 // PowerDNS wire format (priority embedded in content), and that the input
