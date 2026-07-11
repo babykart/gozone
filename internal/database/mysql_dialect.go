@@ -278,5 +278,14 @@ func (m *mysqlDialect) Migrations() []string {
 			KEY idx_external_identities_user (user_id),
 			KEY idx_external_identities_issuer_subject (issuer, subject)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		// Session lifetime tracking (idle/absolute enforcement, shared across
+		// instances). See sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id VARCHAR(255) PRIMARY KEY,
+			first_seen DATETIME NOT NULL,
+			last_seen DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL,
+			KEY idx_sessions_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

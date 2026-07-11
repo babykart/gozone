@@ -51,8 +51,9 @@ auth:
   bcrypt_cost: 12
   # Idle inactivity timeout (minutes). A session untouched for longer than this
   # is forced to re-authenticate, even if the JWT has not expired. 0 (default)
-  # disables the idle check. Applies to both local and SSO sessions. Tracked in
-  # memory per instance (like the rate limiters); a restart resets idle windows.
+  # disables the idle check. Applies to both local and SSO sessions. Enforced
+  # cluster-wide via the sessions table (an in-memory cache coarsens writes, so
+  # cross-instance idle lags by at most ~1 minute).
   idle_timeout_minutes: 0
   # Absolute session cap (hours) across transparent refreshes. While a session
   # stays active (within the idle window) and below this cap, the access JWT is

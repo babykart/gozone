@@ -4,15 +4,10 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## OpenID Connect / OAuth2
 
-The feature is delivered end-to-end (discovery, PKCE+state+nonce, JWKS ID-token
-verification with operator-tunable cache TTL, JIT provisioning, role/group
-mapping, RP-initiated logout, idle/absolute sessions). See
-[docs/SSO.md](docs/SSO.md). One implementation caveat remains as follow-up work:
-
-- [ ] **Idle/absolute session enforcement** — share the session tracker across
-  instances (DB-backed or Redis). Today it is in-memory and single-instance
-  (consistent with the rate limiters), so multi-instance MySQL/PostgreSQL
-  deployments do not share the idle/absolute window.
+Delivered end-to-end: discovery, PKCE+state+nonce, JWKS ID-token verification
+with operator-tunable cache TTL, JIT provisioning, role/group mapping,
+RP-initiated logout, and idle/absolute session enforcement shared across
+instances (DB-backed `sessions` table). See [docs/SSO.md](docs/SSO.md).
 
 ## Monitoring and Observability
 

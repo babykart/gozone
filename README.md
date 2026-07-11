@@ -102,7 +102,7 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `0` (disabled) |
 | `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `0` (disabled) |
 
-`idle_timeout_minutes` forces re-authentication after that many minutes of inactivity (even if the JWT has not expired). `absolute_session_timeout_hours` caps the total session lifetime across transparent refreshes: while a session stays active and below the cap, the access JWT is silently refreshed near its expiry (the session "slides" up to the cap). For refresh to trigger it must be greater than `session_duration_hours`. Both apply to local **and** SSO sessions and are tracked in memory per instance (a restart resets idle windows). Leave both `0` for the classic behaviour: a session lives exactly `session_duration_hours`.
+`idle_timeout_minutes` forces re-authentication after that many minutes of inactivity (even if the JWT has not expired). `absolute_session_timeout_hours` caps the total session lifetime across transparent refreshes: while a session stays active and below the cap, the access JWT is silently refreshed near its expiry (the session "slides" up to the cap). For refresh to trigger it must be greater than `session_duration_hours`. Both apply to local **and** SSO sessions and are enforced cluster-wide via the `sessions` table (an in-memory cache coarsens writes, so cross-instance idle lags by at most ~1 minute). Leave both `0` for the classic behaviour: a session lives exactly `session_duration_hours`.
 
 ### Single Sign-On (OpenID Connect / OAuth2)
 

@@ -260,5 +260,14 @@ func (p *postgresDialect) Migrations() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
+		// Session lifetime tracking (idle/absolute enforcement, shared across
+		// instances). See sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id VARCHAR(255) PRIMARY KEY,
+			first_seen TIMESTAMP NOT NULL,
+			last_seen TIMESTAMP NOT NULL,
+			expires_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }

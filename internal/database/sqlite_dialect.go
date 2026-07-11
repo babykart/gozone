@@ -239,5 +239,16 @@ func (s *sqliteDialect) Migrations() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
+		// Session lifetime tracking (idle/absolute enforcement). Shared state so
+		// multi-instance deployments enforce the same idle/absolute window: each
+		// instance throttled-writes last_seen here and reads other instances'
+		// activity on a cache miss. Purged by expires_at.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id TEXT PRIMARY KEY,
+			first_seen DATETIME NOT NULL,
+			last_seen DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }

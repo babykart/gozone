@@ -392,9 +392,10 @@ IdP round-trip.
 
 Session policy (applies to local **and** SSO sessions): when
 `auth.idle_timeout_minutes` / `auth.absolute_session_timeout_hours` are set, the
-`SessionTracker` (in-memory, keyed by the JWT `sid`) enforces an idle window
-and an absolute refresh cap, transparently re-issuing the access JWT near its
-expiry up to the absolute cap.
+`SessionTracker` enforces an idle window and an absolute refresh cap, with the
+state persisted in the `sessions` table so multiple GoZone instances share the
+same window (an in-memory cache coarsens per-session DB writes to ~1/min). It
+transparently re-issues the access JWT near its expiry up to the absolute cap.
 
 ### REST API (API Keys)
 

@@ -262,8 +262,9 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 		sid = claims.ID
 	}
 	now := time.Now()
+	ctx := r.Context()
 
-	if !tracker.Touch(sid, claims.IssuedAt.Time, now) {
+	if !tracker.Touch(ctx, sid, claims.IssuedAt.Time, now) {
 		// Idle window exceeded → force re-authentication.
 		clearSessionCookie(w, r)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -273,7 +274,7 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	if tracker.policy.Absolute <= 0 {
 		return true
 	}
-	firstSeen := tracker.FirstSeen(sid, claims.IssuedAt.Time, now)
+	firstSeen := tracker.FirstSeen(ctx, sid, claims.IssuedAt.Time, now)
 	if now.Sub(firstSeen) >= tracker.policy.Absolute {
 		// Absolute cap reached → force re-authentication.
 		clearSessionCookie(w, r)
@@ -304,7 +305,7 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 		logger.Error("failed to revoke refreshed token", "user_id", user.ID, "error", err)
 	}
 	setSessionCookie(w, r, newToken, now.Add(accessTTL))
-	tracker.remember(sid, firstSeen, now)
+	tracker.remember(ctx, sid, firstSeen, now)
 	return true
 }
 

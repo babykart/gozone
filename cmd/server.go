@@ -259,8 +259,9 @@ func runServer(cfg *config.Config) error {
 	// exactly like the legacy Auth middleware. When either is > 0 a
 	// SessionTracker is created to enforce idle/absolute limits and to
 	// transparently refresh the access JWT near expiry (sliding the session up
-	// to the absolute cap). The tracker is single-instance (like the rate
-	// limiters); a restart resets idle windows.
+	// to the absolute cap). The tracker state is persisted in the sessions table
+	// so multi-instance deployments share the same idle/absolute window; an
+	// in-memory cache coarsens writes to keep the hot path cheap.
 	accessTTL := time.Duration(cfg.Auth.SessionDurationHours) * time.Hour
 	sessionPolicy := middleware.SessionPolicy{
 		Idle:      time.Duration(cfg.Auth.IdleTimeoutMinutes) * time.Minute,
@@ -269,7 +270,7 @@ func runServer(cfg *config.Config) error {
 	}
 	var sessionTracker *middleware.SessionTracker
 	if sessionPolicy.Idle > 0 || sessionPolicy.Absolute > 0 {
-		sessionTracker = middleware.NewSessionTracker(sessionPolicy)
+		sessionTracker = middleware.NewSessionTracker(db, sessionPolicy)
 		defer sessionTracker.Close()
 	}
 	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL)

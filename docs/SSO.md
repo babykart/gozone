@@ -387,7 +387,10 @@ auth:
 
 When `absolute_session_timeout_hours` is set (and greater than
 `session_duration_hours`), the access JWT is **transparently refreshed** near
-its expiry while the session stays active and under the cap.
+its expiry while the session stays active and under the cap. Idle and absolute
+state is persisted in the `sessions` table, so the limits are enforced
+**cluster-wide** across multiple GoZone instances (an in-memory cache coarsens
+writes, so cross-instance idle lags by at most ~1 minute).
 
 ---
 
