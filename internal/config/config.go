@@ -126,6 +126,20 @@ type PowerDNSConfig struct {
 type AuthConfig struct {
 	SessionDurationHours int `yaml:"session_duration_hours"`
 	BcryptCost           int `yaml:"bcrypt_cost"`
+	// IdleTimeoutMinutes bounds session inactivity: a session untouched for
+	// longer than this is forced to re-authenticate, even if the JWT has not
+	// expired. 0 (default) disables the idle check. Applies to both local and
+	// SSO sessions. Tracked in memory per instance (consistent with the rate
+	// limiters); a server restart resets idle windows.
+	IdleTimeoutMinutes int `yaml:"idle_timeout_minutes"`
+	// AbsoluteSessionTimeoutHours caps the total lifetime of a session across
+	// refreshes. While a session stays active (within the idle window) and
+	// below this cap, the access JWT is transparently refreshed near its
+	// expiry — i.e. the session "slides" up to this absolute TTL. After it,
+	// full re-authentication is required. 0 (default) disables the cap AND
+	// refresh: the session lives exactly SessionDurationHours. For refresh to
+	// ever trigger, this must be greater than SessionDurationHours.
+	AbsoluteSessionTimeoutHours int `yaml:"absolute_session_timeout_hours"`
 }
 
 // OIDCConfig holds OpenID Connect / OAuth2 single sign-on settings. When
@@ -345,7 +359,8 @@ func DefaultConfig() *Config {
 // GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES,
 // GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
-// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
+// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
+// GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS, GOZONE_ACTIVITY_RETENTION_DAYS,
 // GOZONE_ACTIVITY_BATCH_SIZE, GOZONE_PASSWORD_MIN_LENGTH,
 // GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
 // GOZONE_PASSWORD_EXPIRY_WARN_DAYS, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
@@ -455,6 +470,21 @@ func (cfg *Config) validate() error {
 
 	if cfg.Auth.SessionDurationHours <= 0 {
 		return fmt.Errorf("invalid session_duration_hours %d: must be a positive integer", cfg.Auth.SessionDurationHours)
+	}
+
+	if cfg.Auth.IdleTimeoutMinutes < 0 {
+		return fmt.Errorf("invalid auth.idle_timeout_minutes %d: must be non-negative", cfg.Auth.IdleTimeoutMinutes)
+	}
+	if cfg.Auth.AbsoluteSessionTimeoutHours < 0 {
+		return fmt.Errorf("invalid auth.absolute_session_timeout_hours %d: must be non-negative", cfg.Auth.AbsoluteSessionTimeoutHours)
+	}
+	// An absolute cap shorter than the access-token TTL is contradictory: the
+	// token would already be dead (or about to die) before the cap could ever
+	// enable a refresh, and the absolute gate would just shorten the session
+	// silently. Reject it so the operator's intent is surfaced loudly.
+	if cfg.Auth.AbsoluteSessionTimeoutHours > 0 && cfg.Auth.AbsoluteSessionTimeoutHours < cfg.Auth.SessionDurationHours {
+		return fmt.Errorf("invalid auth.absolute_session_timeout_hours %d: must be >= session_duration_hours (%d) for refresh to be meaningful",
+			cfg.Auth.AbsoluteSessionTimeoutHours, cfg.Auth.SessionDurationHours)
 	}
 
 	if cfg.Database.Driver == "" {
@@ -710,6 +740,20 @@ func applyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Auth.SessionDurationHours = n
+	}
+	if v := os.Getenv("GOZONE_IDLE_TIMEOUT_MINUTES"); v != "" {
+		n, err := envInt("GOZONE_IDLE_TIMEOUT_MINUTES", v)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.IdleTimeoutMinutes = n
+	}
+	if v := os.Getenv("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS"); v != "" {
+		n, err := envInt("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", v)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.AbsoluteSessionTimeoutHours = n
 	}
 	if v := os.Getenv("GOZONE_BCRYPT_COST"); v != "" {
 		n, err := envInt("GOZONE_BCRYPT_COST", v)

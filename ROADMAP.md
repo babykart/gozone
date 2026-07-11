@@ -23,10 +23,10 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Group mapping: map provider groups/teams to GoZone zone groups
   - [x] Existing local user linking by email match (auto-link when `email_verified`)
 
-- [ ] **Session management**
+- [x] **Session management**
   - [x] JWT session issued after successful OIDC authentication, same as local login
-  - Refresh token support with configurable TTL
-  - Idle session timeout with forced re-authentication
+  - [x] Refresh token support with configurable TTL (transparent sliding refresh of the access JWT, bounded by `auth.absolute_session_timeout_hours`; applies to all sessions)
+  - [x] Idle session timeout with forced re-authentication (`auth.idle_timeout_minutes`; in-memory per-instance tracker)
   - [x] Single logout (RP-Initiated Logout) with `end_session_endpoint` when available
 
 - [x] **Configuration options**

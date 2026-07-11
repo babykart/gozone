@@ -234,6 +234,53 @@ func TestOIDCStateKeyDerived(t *testing.T) {
 	}
 }
 
+func TestSessionPolicyEnvOverrides(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", testSecret)
+	t.Setenv("GOZONE_IDLE_TIMEOUT_MINUTES", "15")
+	t.Setenv("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", "48")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Auth.IdleTimeoutMinutes != 15 {
+		t.Errorf("IdleTimeoutMinutes = %d, want 15", cfg.Auth.IdleTimeoutMinutes)
+	}
+	if cfg.Auth.AbsoluteSessionTimeoutHours != 48 {
+		t.Errorf("AbsoluteSessionTimeoutHours = %d, want 48", cfg.Auth.AbsoluteSessionTimeoutHours)
+	}
+}
+
+func TestSessionPolicyRejectsNegative(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", testSecret)
+	t.Setenv("GOZONE_IDLE_TIMEOUT_MINUTES", "-5")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for negative idle_timeout_minutes")
+	}
+}
+
+func TestSessionPolicyAbsoluteMustExceedSessionDuration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `
+server:
+  secret_key: ` + testSecret + `
+powerdns:
+  api_url: http://localhost:8081
+  api_key: changeme
+  server_id: localhost
+auth:
+  session_duration_hours: 24
+  absolute_session_timeout_hours: 12
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "absolute_session_timeout_hours") {
+		t.Fatalf("expected absolute < session_duration error, got %v", err)
+	}
+}
+
 func TestOIDCLoadFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

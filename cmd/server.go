@@ -252,6 +252,26 @@ func runServer(cfg *config.Config) error {
 		defer loginUsernameLimiter.Close()
 	}
 
+	// Session lifetime policy: idle inactivity timeout and/or an absolute
+	// refresh cap. Both default to 0 (disabled) → AuthWithPolicy behaves
+	// exactly like the legacy Auth middleware. When either is > 0 a
+	// SessionTracker is created to enforce idle/absolute limits and to
+	// transparently refresh the access JWT near expiry (sliding the session up
+	// to the absolute cap). The tracker is single-instance (like the rate
+	// limiters); a restart resets idle windows.
+	accessTTL := time.Duration(cfg.Auth.SessionDurationHours) * time.Hour
+	sessionPolicy := middleware.SessionPolicy{
+		Idle:      time.Duration(cfg.Auth.IdleTimeoutMinutes) * time.Minute,
+		Absolute:  time.Duration(cfg.Auth.AbsoluteSessionTimeoutHours) * time.Hour,
+		AccessTTL: accessTTL,
+	}
+	var sessionTracker *middleware.SessionTracker
+	if sessionPolicy.Idle > 0 || sessionPolicy.Absolute > 0 {
+		sessionTracker = middleware.NewSessionTracker(sessionPolicy)
+		defer sessionTracker.Close()
+	}
+	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL)
+
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
@@ -289,7 +309,7 @@ func runServer(cfg *config.Config) error {
 
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(db, cfg.Server.JWTKey))
+			r.Use(authMiddleware)
 
 			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
