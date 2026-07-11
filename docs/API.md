@@ -237,6 +237,8 @@ curl -X POST \
   http://localhost:8080/api/v1/zones/0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa/records
 ```
 
+> **POST appends, PUT replaces.** `POST /records` **merges** the supplied record(s) into any existing RRSet with the same `name` + `type`: sibling records already present are preserved, and the new ones are appended. This matches the web UI's "Add record" flow and the REST convention `POST = create/append`. To **replace** an entire RRSet (discarding its existing records), use `PUT /records`, which sends a PowerDNS `REPLACE`. Because POST reads the current RRSet before writing, adding a record to a busy RRSet is not atomic against a concurrent writer — for deterministic results use GET → modify → PUT.
+
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `name` | string | **yes** | Relative (`www`), absolute (`www.example.com.`), or `@` for apex |

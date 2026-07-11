@@ -364,8 +364,15 @@ func TestAPIListRecords_Filtered_EmptyResult(t *testing.T) {
 
 func TestAPICreateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			t.Errorf("expected PATCH, got %s", r.Method)
+		// APICreateRecord now issues a GET (ListRecords) to merge with any
+		// existing RRSet before the PATCH (REVIEW.md M-4).
+		if r.Method != http.MethodGet && r.Method != http.MethodPatch {
+			t.Errorf("expected GET or PATCH, got %s", r.Method)
+		}
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -380,6 +387,45 @@ func TestAPICreateRecord(t *testing.T) {
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected 201, got %d", w.Code)
+	}
+}
+
+// TestAPICreateRecord_MergesWithExisting is the REVIEW.md M-4 regression test:
+// POST /records must append to an existing RRSet (preserving sibling records)
+// instead of silently replacing it. The mock serves an existing A record on
+// GET; the POST of a second A record must result in a PATCH carrying both.
+func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// Existing RRSet with one record.
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		captureRRSets(t, &sent)(w, r)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"5.6.7.8"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 2 {
+		t.Fatalf("expected 1 rrset with 2 records (existing + new), got %+v", sent)
+	}
+	got := map[string]bool{}
+	for _, rec := range sent[0].Records {
+		got[rec.Content] = true
+	}
+	if !got["1.2.3.4"] || !got["5.6.7.8"] {
+		t.Errorf("PATCH must preserve the existing record and add the new one; got %+v", got)
 	}
 }
 
@@ -416,8 +462,14 @@ func captureRRSets(t *testing.T, got *[]models.RRSet) func(http.ResponseWriter, 
 				t.Errorf("decode PATCH body: %v", err)
 			}
 			*got = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		// Non-PATCH (e.g. the GET ListRecords that APICreateRecord now issues
+		// to merge with the existing RRSet): return an empty rrsets list so the
+		// client unmarshals cleanly (REVIEW.md M-4).
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
 	}
 }
 

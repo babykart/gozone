@@ -275,11 +275,43 @@ func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 	return nil
 }
 
+// validateAPIRecordSet validates the RRSet fields and normalizes the name, but
+// does NOT normalize record content (priority embedding / quoting / trailing
+// dots). APICreateRecord uses it before merging the new records into an
+// existing RRSet: content normalization must run AFTER the merge so each
+// record keeps its original priority in the Priority field until the single
+// final prepareRecordContent pass (prepareRecordContent is not idempotent for
+// MX/SRV — a second pass would strip the embedded priority and re-embed the
+// now-zeroed Priority field). prepareAPIRecordSet above remains the
+// validate+normalize path for APIUpdateRecord, which does a plain REPLACE
+// (REVIEW.md M-4).
+func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
+	if err := validators.ValidateRecordType(rrset.Type); err != nil {
+		return err
+	}
+	if err := validators.ValidateRecordName(rrset.Name); err != nil {
+		return err
+	}
+	for i := range rrset.Records {
+		if err := validators.ValidateRecordContent(rrset.Type, rrset.Records[i].Content); err != nil {
+			return err
+		}
+		if err := validators.ValidateRecordPriority(rrset.Type, rrset.Records[i].Priority); err != nil {
+			return err
+		}
+	}
+	rrset.Name = normalizeRecordName(rrset.Name, zoneID)
+	return nil
+}
+
 // APICreateRecord creates a record (RRSet) in a zone from a JSON body (POST /api/v1/zones/{zone_id}/records).
 //
-// Expects a models.RRSet payload. For MX/SRV, the priority is taken from each
-// record's "priority" field and embedded into the content for PowerDNS. Returns
-// HTTP 201 on success.
+// Expects a models.RRSet payload. POST appends to an existing RRSet (preserving
+// sibling records) rather than replacing it, matching the web UI and REST
+// POST=append semantics; PUT /records remains the explicit REPLACE operation.
+// For MX/SRV, the priority is taken from each record's "priority" field and
+// embedded into the content for PowerDNS. Returns HTTP 201 on success
+// (REVIEW.md M-4).
 func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 	var rrset models.RRSet
@@ -288,12 +320,34 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := prepareAPIRecordSet(&rrset, zoneID); err != nil {
+	if err := validateAPIRecordSet(&rrset, zoneID); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
 		return
 	}
 
-	if err := h.PDNS.CreateRecord(r.Context(), zoneID, rrset); err != nil {
+	// Merge with any existing RRSet so sibling records are preserved. This
+	// mirrors the web CreateRecord flow: list, append, normalize once. Content
+	// normalization runs AFTER the merge so each record keeps its original
+	// priority in the Priority field until the final prepareRecordContent pass
+	// (prepareRecordContent is not idempotent for MX/SRV, so normalizing the
+	// new records before the merge would lose their priority).
+	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	if err != nil {
+		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to fetch existing records", err)
+		return
+	}
+	for _, rr := range allRecords {
+		if rr.Name == rrset.Name && rr.Type == rrset.Type {
+			rrset.Records = append(append([]models.RecordInfo{}, rr.Records...), rrset.Records...)
+			break
+		}
+	}
+	for i := range rrset.Records {
+		rrset.Records[i].Content, rrset.Records[i].Priority =
+			prepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
+	}
+
+	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
 		return
