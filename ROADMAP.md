@@ -4,57 +4,18 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 
 ## OpenID Connect / OAuth2
 
-- [x] **OAuth2 / OIDC provider configuration**
-  - Configurable provider URL, client ID, client secret via `config.yaml` + env vars (`GOZONE_OIDC_*`)
-  - Well-known discovery endpoint (`/.well-known/openid-configuration`) for automatic metadata retrieval
-  - Support for standard providers: Google, GitHub, GitLab, Keycloak, Authentik, Azure AD, Gitea
+The feature is delivered end-to-end (discovery, PKCE+state+nonce, JWKS ID-token
+verification, JIT provisioning, role/group mapping, RP-initiated logout,
+idle/absolute sessions). See [docs/SSO.md](docs/SSO.md). Two implementation
+caveats remain as follow-up work:
 
-- [x] **Login flow**
-  - "Sign in with SSO" button on login page, redirects to provider authorization endpoint
-  - Authorization code flow with PKCE (`S256`) for public clients
-  - State parameter with HMAC signature to prevent CSRF
-  - Nonce parameter for OpenID Connect ID token replay protection
-  - Redirect URI validation against configured base URL
-
-- [x] **User mapping and provisioning**
-  - Map OIDC claims to GoZone user attributes: `sub` → external ID, `email` → email, `preferred_username` → username, `name` → display name
-  - Just-in-time (JIT) user provisioning: auto-create user on first login if allowed by config
-  - Role mapping: map provider roles/groups/realm_access claims to GoZone roles (admin/user)
-  - Group mapping: map provider groups/teams to GoZone zone groups
-  - [x] Existing local user linking by email match (auto-link when `email_verified`)
-
-- [x] **Session management**
-  - [x] JWT session issued after successful OIDC authentication, same as local login
-  - [x] Refresh token support with configurable TTL (transparent sliding refresh of the access JWT, bounded by `auth.absolute_session_timeout_hours`; applies to all sessions)
-  - [x] Idle session timeout with forced re-authentication (`auth.idle_timeout_minutes`; in-memory per-instance tracker)
-  - [x] Single logout (RP-Initiated Logout) with `end_session_endpoint` when available
-
-- [x] **Configuration options**
-  - `oidc.enabled` — master switch for SSO
-  - `oidc.allow_local_login` — keep local username/password login alongside SSO
-  - `oidc.auto_provision` — create users on first SSO login
-  - `oidc.default_role` — role assigned to auto-provisioned users
-  - `oidc.scopes` — requested scopes (openid, profile, email, groups)
-  - `oidc.role_claim` / `oidc.admin_role_values` — map IdP roles/groups claims to the GoZone admin role (delivers the ROADMAP's "claim-to-attribute mapping" for roles via a dotted claim path, e.g. `realm_access.roles`)
-  - `oidc.group_claim` / `oidc.group_mapping` — map IdP groups/teams to GoZone zone groups
-
-- [x] **Security**
-  - Token signature verification with JWKS endpoint (`id_token_signing_alg_values_supported`)
-  - Claims validation: `iss`, `aud`, `exp`, `iat`, `nbf`, `nonce`
-  - JWKS caching (library-managed key rotation; not operator-tunable — see notes)
-  - Rate limiting on callback endpoint to prevent brute-force state guessing
-
-> **Implementation notes (honest gaps)** — the feature is functional end-to-end
-> and every box above is delivered, with these caveats:
-> - GoZone's flow strictly requires an OIDC **id_token** (it is not a plain
->   OAuth2 client). Providers that only do OAuth2 without an id_token (e.g.
->   GitHub user OAuth) are not usable directly — front them with an OIDC-capable
->   IdP (Dex/Keycloak/Authentik). See [docs/SSO.md](docs/SSO.md).
-> - JWKS caching & rotation are handled by `coreos/go-oidc`; the cache TTL is
->   not operator-tunable today.
-> - Idle/absolute session enforcement is in-memory and single-instance
->   (consistent with the rate limiters); multi-instance deployments do not
->   share the idle window.
+- [ ] **JWKS caching & rotation** — expose an operator-tunable JWKS cache TTL
+  (e.g. `oidc.jwks_cache_ttl`, default 1h). Today key rotation/caching is
+  handled entirely by `coreos/go-oidc` and is not configurable.
+- [ ] **Idle/absolute session enforcement** — share the session tracker across
+  instances (DB-backed or Redis). Today it is in-memory and single-instance
+  (consistent with the rate limiters), so multi-instance MySQL/PostgreSQL
+  deployments do not share the idle/absolute window.
 
 ## Monitoring and Observability
 
