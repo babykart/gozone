@@ -1,7 +1,9 @@
 package oidc
 
 import (
+	"fmt"
 	"net/url"
+	"sync"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -117,4 +119,59 @@ func TestService_StateReplayRejected(t *testing.T) {
 	if svc.usedStates.consume(state) {
 		t.Error("replayed state must be rejected (REVIEW.md L-3)")
 	}
+}
+
+// TestAuthCodeURL_DoesNotMutateSharedConfig is the L-4 regression test:
+// AuthCodeURL must not mutate the shared ProviderInstance.oauth2.RedirectURL.
+// Before the fix, inst.oauth2.RedirectURL = callbackURL was written directly on
+// the shared instance, racing with concurrent calls and leaking the last
+// callback URL into subsequent requests.
+func TestAuthCodeURL_DoesNotMutateSharedConfig(t *testing.T) {
+	svc := newTestService(t)
+	const cb = "https://gozone.example.com/auth/oidc/test/callback"
+
+	if _, err := svc.AuthCodeURL("test", cb); err != nil {
+		t.Fatalf("AuthCodeURL: %v", err)
+	}
+
+	inst, _ := svc.Provider("test")
+	if inst.oauth2.RedirectURL != "" {
+		t.Errorf("shared oauth2.Config.RedirectURL was mutated to %q; must remain empty (REVIEW.md L-4)",
+			inst.oauth2.RedirectURL)
+	}
+}
+
+// TestAuthCodeURL_ConcurrentNoRace verifies that concurrent AuthCodeURL calls
+// with distinct callback URLs each produce the correct redirect_uri, and that
+// no data race occurs (run under -race). Before the L-4 fix, two concurrent
+// calls overwrote each other's RedirectURL on the shared oauth2.Config, so one
+// of them would carry the wrong redirect_uri.
+func TestAuthCodeURL_ConcurrentNoRace(t *testing.T) {
+	svc := newTestService(t)
+	const goroutines = 30
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(n int) {
+			defer wg.Done()
+			cb := fmt.Sprintf("https://host%d.example.com/auth/oidc/test/callback", n)
+			authURL, err := svc.AuthCodeURL("test", cb)
+			if err != nil {
+				t.Errorf("goroutine %d: AuthCodeURL: %v", n, err)
+				return
+			}
+			parsed, err := url.Parse(authURL)
+			if err != nil {
+				t.Errorf("goroutine %d: parse: %v", n, err)
+				return
+			}
+			got := parsed.Query().Get("redirect_uri")
+			if got != cb {
+				t.Errorf("goroutine %d: redirect_uri = %q, want %q (shared config mutation — REVIEW.md L-4)",
+					n, got, cb)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

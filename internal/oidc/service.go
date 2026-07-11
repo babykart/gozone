@@ -48,12 +48,23 @@ type ProviderInstance struct {
 	Issuer      string
 	Scopes      []string
 	// EndSessionURL is the provider's RP-initiated logout endpoint
-	// (discovery "end_session_endpoint"), or empty when the provider does not
-	// advertise one. Used by the Logout handler to redirect the browser back
+	// (discovery "end_session_endpoint"), or empty when the provider does
+	// not advertise one. Used by the Logout handler to redirect the browser back
 	// to the IdP so its SSO cookie is also cleared.
 	EndSessionURL string
 	oauth2        *oauth2.Config
 	verifier      *oidc.IDTokenVerifier
+}
+
+// cloneOAuth2Config returns a copy of the provider's oauth2.Config with
+// RedirectURL set to callbackURL. The shared instance is never mutated, so
+// concurrent calls to AuthCodeURL / HandleCallback cannot race on RedirectURL
+// (REVIEW.md L-4). The Scopes slice is shared (read-only after discovery), all
+// other fields are value types.
+func (inst *ProviderInstance) cloneOAuth2Config(callbackURL string) oauth2.Config {
+	cfg := *inst.oauth2
+	cfg.RedirectURL = callbackURL
+	return cfg
 }
 
 // Service holds the set of discovered OIDC providers and provides the
@@ -221,7 +232,7 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 		oauth2: &oauth2.Config{
 			ClientID:     pc.ClientID,
 			ClientSecret: pc.ClientSecret,
-			RedirectURL:  "", // set per request in AuthCodeURL/Exchange
+			RedirectURL:  "", // set per-request via cloneOAuth2Config (L-4), never mutated here
 			Endpoint:     provider.Endpoint(),
 			Scopes:       scopes,
 		},
@@ -243,12 +254,12 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 	if err != nil {
 		return "", fmt.Errorf("build state: %w", err)
 	}
-	// RedirectURL is set per request because the external URL depends on the
-	// request host/scheme (resolved via the trusted-proxy HTTPS resolver). The
-	// value must be byte-identical between the auth request and the token
-	// exchange, so Exchange() receives the same callbackURL.
-	inst.oauth2.RedirectURL = callbackURL
-	return inst.oauth2.AuthCodeURL(state,
+	// Clone the oauth2.Config per request instead of mutating the shared
+	// instance — concurrent AuthCodeURL/Exchange calls would otherwise race on
+	// RedirectURL (REVIEW.md L-4). The callbackURL must be byte-identical
+	// between the auth request and the token exchange.
+	cfg := inst.cloneOAuth2Config(callbackURL)
+	return cfg.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		// Send the nonce to the IdP so it echoes it back in the id_token; the
@@ -287,8 +298,9 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 		return nil, fmt.Errorf("state: already consumed (possible replay)")
 	}
 
-	inst.oauth2.RedirectURL = callbackURL
-	token, err := inst.oauth2.Exchange(ctx, code,
+	// Clone the oauth2.Config per request (REVIEW.md L-4 — see AuthCodeURL).
+	cfg := inst.cloneOAuth2Config(callbackURL)
+	token, err := cfg.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", payload.Verifier),
 	)
 	if err != nil {
