@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"html/template"
@@ -154,7 +155,19 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 	if _, ok := data["Section"]; !ok {
 		data["Section"] = sectionFromTemplate(name)
 	}
-	if err := h.Tmpl.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+	// Render into a buffer first so a mid-template error never streams a
+	// half-written page to the client (which would also make the subsequent
+	// 500 status a no-op, since headers are committed on the first Write).
+	// The full error is logged server-side; the client gets a generic message
+	// so internal details (template paths, field/type names) are not leaked
+	// (REVIEW.md L-1).
+	var buf bytes.Buffer
+	if err := h.Tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+		logger.Error("template render failed", "template", name, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
 	}
+	// #nosec G104 -- writing the fully-rendered page to the ResponseWriter;
+	// an error here only means the client went away mid-transfer.
+	_, _ = w.Write(buf.Bytes())
 }
