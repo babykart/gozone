@@ -77,10 +77,11 @@ type ServerConfig struct {
 	SecretKey string `yaml:"secret_key"`
 	// AppName is the human-readable application name displayed in the web UI.
 	AppName string `yaml:"app_name"`
-	// SecureCookies marks the CSRF cookie with the Secure flag so browsers only
-	// send it over HTTPS. Enable it when GoZone is served over HTTPS (directly
-	// or behind a TLS-terminating reverse proxy). Leave it false for plain-HTTP
-	// development, otherwise browsers will not return the CSRF cookie.
+	// SecureCookies was previously used to set the Secure flag on the CSRF cookie
+	// at startup. It is now derived per-request from the effective TLS context
+	// (middleware.IsHTTPS), matching the session cookie — so this field is no
+	// longer read by the server. Retained for backward compatibility with
+	// existing YAML/env configurations.
 	SecureCookies bool `yaml:"secure_cookies"`
 	// TrustedProxies is the list of CIDR ranges from which X-Forwarded-For
 	// headers are trusted. When empty, XFF headers are ignored entirely and
