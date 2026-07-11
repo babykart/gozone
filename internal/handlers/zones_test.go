@@ -842,9 +842,9 @@ func TestPaginate(t *testing.T) {
 		t.Errorf("page 99 clamps to 2: current=%d len=%d", info.Current, len(paged))
 	}
 
-	// Empty slice
+	// Empty slice — totalPages clamped to 1 (L-11: "page 1 sur 1" not "page 1 sur 0")
 	paged, info = paginate([]int{}, 1, 10)
-	if len(paged) != 0 || info.TotalPages != 0 || info.Total != 0 {
+	if len(paged) != 0 || info.TotalPages != 1 || info.Total != 0 {
 		t.Errorf("empty: len=%d pages=%d total=%d", len(paged), info.TotalPages, info.Total)
 	}
 
@@ -893,6 +893,12 @@ func TestPageInfoFromTotal(t *testing.T) {
 	info = pageInfoFromTotal(100, 5, 0)
 	if info.PerPage != 0 || info.TotalPages != 1 {
 		t.Errorf("pageInfoFromTotal(100,5,0) = %+v", info)
+	}
+
+	// Empty set — totalPages clamped to 1 (L-11).
+	info = pageInfoFromTotal(0, 1, 10)
+	if info.TotalPages != 1 || info.Current != 1 || info.Total != 0 {
+		t.Errorf("pageInfoFromTotal(0,1,10): expected totalPages=1 current=1 total=0, got %+v", info)
 	}
 }
 

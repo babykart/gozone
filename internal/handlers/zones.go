@@ -90,6 +90,9 @@ func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
 		perPage = 0
 		totalPages = 1
 	}
+	if totalPages < 1 {
+		totalPages = 1 // L-11: "page 1 sur 1" instead of "page 1 sur 0"
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -155,6 +158,9 @@ func pageInfoFromTotal(total, page, perPage int) PageInfo {
 	} else {
 		perPage = 0
 		totalPages = 1
+	}
+	if totalPages < 1 {
+		totalPages = 1 // L-11: "page 1 sur 1" instead of "page 1 sur 0"
 	}
 	if page < 1 {
 		page = 1
