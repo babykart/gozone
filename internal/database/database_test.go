@@ -281,6 +281,108 @@ func TestTx_ExecContext_UniqueViolationWrapped(t *testing.T) {
 	}
 }
 
+// TestDB_ExecReturnID verifies that ExecReturnID returns the new row's "id"
+// primary key and that a UNIQUE-constraint violation is wrapped in
+// ErrUniqueViolation. On SQLite/PostgreSQL the RETURNING path is exercised
+// here; on MySQL the LastInsertId fallback applies (REVIEW.md H-1).
+func TestDB_ExecReturnID(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	id, err := db.ExecReturnID(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"retid-1", "v1",
+	)
+	if err != nil {
+		t.Fatalf("ExecReturnID: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	// The returned id matches what the database actually stored.
+	var got string
+	if err := db.QueryRowContext(ctx,
+		"SELECT value FROM settings WHERE id = ?", id,
+	).Scan(&got); err != nil {
+		t.Fatalf("lookup by returned id: %v", err)
+	}
+	if got != "v1" {
+		t.Fatalf("value mismatch: got %q want %q", got, "v1")
+	}
+
+	// A second insert returns a strictly greater id (autoincrement).
+	id2, err := db.ExecReturnID(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"retid-2", "v2",
+	)
+	if err != nil {
+		t.Fatalf("ExecReturnID #2: %v", err)
+	}
+	if id2 <= id {
+		t.Fatalf("expected id2 > id; got id2=%d id=%d", id2, id)
+	}
+
+	// UNIQUE violation must still be wrapped in ErrUniqueViolation on the
+	// RETURNING path (QueryRowContext does not wrap, so ExecReturnID must).
+	_, err = db.ExecReturnID(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"retid-1", "dup",
+	)
+	if err == nil {
+		t.Fatal("expected UNIQUE violation error, got nil")
+	}
+	if !errors.Is(err, ErrUniqueViolation) {
+		t.Errorf("errors.Is(err, ErrUniqueViolation) = false; driver error: %v", err)
+	}
+}
+
+// TestTx_ExecReturnID mirrors TestDB_ExecReturnID for the transactional path.
+func TestTx_ExecReturnID(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104 -- best-effort cleanup
+
+	id, err := tx.ExecReturnID(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"tx-retid-1", "v1",
+	)
+	if err != nil {
+		t.Fatalf("Tx.ExecReturnID: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	// UNIQUE violation wrapped on the RETURNING path.
+	_, err = tx.ExecReturnID(ctx,
+		"INSERT INTO settings (key, value) VALUES (?, ?)",
+		"tx-retid-1", "dup",
+	)
+	if err == nil {
+		t.Fatal("expected UNIQUE violation error, got nil")
+	}
+	if !errors.Is(err, ErrUniqueViolation) {
+		t.Errorf("errors.Is(err, ErrUniqueViolation) = false for tx; driver error: %v", err)
+	}
+}
+
 func TestForeignKeyEnforcement(t *testing.T) {
 	cfg := &config.DatabaseConfig{
 		Driver: "sqlite3",

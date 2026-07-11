@@ -33,6 +33,11 @@ func (p *postgresDialect) ConnMaxLifetime() time.Duration { return defaultConnMa
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
 
+// SupportsInsertReturning returns true: PostgreSQL supports RETURNING and
+// lib/pq does NOT implement sql.Result.LastInsertId, so RETURNING is the only
+// portable way to obtain the inserted row's id (REVIEW.md H-1).
+func (p *postgresDialect) SupportsInsertReturning() bool { return true }
+
 func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []string) string {
 	// conflictColumns is REQUIRED for PostgreSQL: ON CONFLICT (col1, col2, ...)
 	// must match an existing UNIQUE constraint or PRIMARY KEY on the table.

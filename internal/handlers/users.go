@@ -169,7 +169,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	result, err := tx.ExecContext(ctx,
+	userID, err := tx.ExecReturnID(ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username, email, string(hash), firstName, lastName, role, mustChangeVal,
@@ -178,8 +178,6 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to create user", err)
 		return
 	}
-
-	userID, _ := result.LastInsertId()
 	_, err = tx.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_user', ?)",
 		admin.ID, fmt.Sprintf("Created user %s (id: %d)", username, userID),

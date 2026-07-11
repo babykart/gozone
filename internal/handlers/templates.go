@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -127,7 +128,7 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.Exec(
+	id, err := h.DB.ExecReturnID(r.Context(),
 		"INSERT INTO zone_templates (name, description) VALUES (?, ?)",
 		name, description,
 	)
@@ -137,12 +138,6 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.renderInternalError(w, r, "Failed to create template", err)
-		return
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		h.renderError(w, r, "Failed to get template ID")
 		return
 	}
 	http.Redirect(w, r, "/templates/"+strconv.FormatInt(id, 10)+"/edit", http.StatusSeeOther)
@@ -589,17 +584,12 @@ func (h *Handler) SeedBuiltinTemplates() error {
 			continue
 		}
 
-		result, err := h.DB.Exec(
+		templateID, err := h.DB.ExecReturnID(context.Background(),
 			"INSERT INTO zone_templates (name, description, is_builtin) VALUES (?, ?, 1)",
 			b.name, b.desc,
 		)
 		if err != nil {
 			return fmt.Errorf("insert builtin template %s: %w", b.name, err)
-		}
-
-		templateID, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("get builtin template ID: %w", err)
 		}
 
 		for _, rec := range b.records {

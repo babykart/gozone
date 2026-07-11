@@ -56,6 +56,13 @@ type Dialect interface {
 	// explicitly so the Postgres dialect cannot silently fall back to the
 	// wrong index when columns != unique constraint.
 	InsertIgnore(table string, columns, conflictColumns []string) string
+	// SupportsInsertReturning reports whether the dialect supports the
+	// INSERT ... RETURNING <col> clause. PostgreSQL requires it (lib/pq does
+	// not implement sql.Result.LastInsertId), SQLite supports it since 3.35,
+	// and MySQL (Oracle) has no RETURNING clause so it keeps using
+	// LastInsertId. DB/Tx.ExecReturnID use this to pick the portable path
+	// (REVIEW.md H-1).
+	SupportsInsertReturning() bool
 	// LockMigrations acquires a cluster-wide lock so that only one instance
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.

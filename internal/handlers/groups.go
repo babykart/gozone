@@ -131,7 +131,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.DB.Exec(
+	id, err := h.DB.ExecReturnID(r.Context(),
 		"INSERT INTO zone_groups (name, description) VALUES (?, ?)",
 		name, description,
 	)
@@ -141,12 +141,6 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.renderInternalError(w, r, "Failed to create group", err)
-		return
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		h.renderError(w, r, "Failed to get group ID")
 		return
 	}
 

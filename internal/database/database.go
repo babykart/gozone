@@ -191,6 +191,43 @@ func (db *DB) InsertIgnore(ctx context.Context, table string, columns, conflictC
 	return db.ExecContext(ctx, query, values...)
 }
 
+// ExecReturnID executes an INSERT statement and returns the auto-generated
+// primary key of the inserted row. It abstracts the dialect difference that
+// made raw result.LastInsertId() non-portable (REVIEW.md H-1):
+//
+//   - On dialects supporting INSERT ... RETURNING (PostgreSQL, SQLite) the
+//     clause " RETURNING id" is appended and the id is read back via
+//     QueryRowContext. PostgreSQL's lib/pq does not implement
+//     sql.Result.LastInsertId at all, so RETURNING is the only option there;
+//     routing SQLite through the same path also exercises it under the
+//     in-memory test suite.
+//   - On MySQL (Oracle), which has no RETURNING clause, the statement runs via
+//     ExecContext and result.LastInsertId() is used (go-sql-driver/mysql
+//     supports it).
+//
+// query must be an INSERT without a trailing semicolon or RETURNING clause;
+// every GoZone table uses an integer primary key named "id". A driver-level
+// UNIQUE-constraint violation is wrapped in ErrUniqueViolation on both paths
+// so callers can keep using errors.Is(err, database.ErrUniqueViolation).
+func (db *DB) ExecReturnID(ctx context.Context, query string, args ...any) (int64, error) {
+	if db.dialect.SupportsInsertReturning() {
+		var id int64
+		if err := db.QueryRowContext(ctx, query+" RETURNING id", args...).Scan(&id); err != nil {
+			return 0, wrapUniqueViolation(db.dialect, err)
+		}
+		return id, nil
+	}
+	res, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("read inserted id: %w", err)
+	}
+	return id, nil
+}
+
 // Ping verifies a connection to the database.
 func (db *DB) Ping() error {
 	return db.Conn.Ping()
@@ -596,6 +633,30 @@ func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *s
 func (tx *Tx) InsertIgnore(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
 	query := tx.dialect.InsertIgnore(table, columns, conflictColumns)
 	return tx.ExecContext(ctx, query, values...)
+}
+
+// ExecReturnID runs an INSERT inside the transaction and returns the new row's
+// auto-generated "id" primary key. It is the transaction-scoped counterpart of
+// DB.ExecReturnID and abstracts the same lib/pq vs. LastInsertId portability
+// issue (REVIEW.md H-1). See DB.ExecReturnID for the dialect strategy and the
+// query contract (INSERT without RETURNING; integer PK named "id").
+func (tx *Tx) ExecReturnID(ctx context.Context, query string, args ...any) (int64, error) {
+	if tx.dialect.SupportsInsertReturning() {
+		var id int64
+		if err := tx.QueryRowContext(ctx, query+" RETURNING id", args...).Scan(&id); err != nil {
+			return 0, wrapUniqueViolation(tx.dialect, err)
+		}
+		return id, nil
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("read inserted id: %w", err)
+	}
+	return id, nil
 }
 
 // migrationVersion returns a stable identifier for a migration based on the

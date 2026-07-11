@@ -49,6 +49,13 @@ func (s *sqliteDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT OR IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 
+// SupportsInsertReturning returns true: the bundled SQLite is 3.53.2, well past
+// the 3.35 release that added RETURNING. This also exercises the RETURNING code
+// path under the in-memory SQLite test suite, giving confidence that the
+// PostgreSQL path (which lacks LastInsertId support) works identically
+// (REVIEW.md H-1).
+func (s *sqliteDialect) SupportsInsertReturning() bool { return true }
+
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
 // database-file level and MaxOpenConns is set to 1, so concurrent migration
 // races from a single process are impossible. Cross-process access is handled

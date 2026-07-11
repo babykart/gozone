@@ -53,6 +53,11 @@ func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 
+// SupportsInsertReturning returns false: Oracle MySQL has no RETURNING clause
+// (only MariaDB 10.5+ does), so DB/Tx.ExecReturnID falls back to
+// sql.Result.LastInsertId, which go-sql-driver/mysql supports (REVIEW.md H-1).
+func (m *mysqlDialect) SupportsInsertReturning() bool { return false }
+
 // LockMigrations acquires a named MySQL lock so only one instance runs
 // migrations at a time. The lock is released by the returned function.
 //

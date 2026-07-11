@@ -107,17 +107,13 @@ func (db *DB) CreateExternalUser(ctx context.Context, username, email, firstName
 		return nil, fmt.Errorf("generate placeholder hash: %w", err)
 	}
 
-	result, err := tx.ExecContext(ctx,
+	userID, err := tx.ExecReturnID(ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled)
 		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
 		username, email, placeholder, firstName, lastName, role,
 	)
 	if err != nil {
 		return nil, err
-	}
-	userID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("read new user id: %w", err)
 	}
 	if err := tx.LinkExternalIdentity(ctx, userID, issuer, subject); err != nil {
 		return nil, err
