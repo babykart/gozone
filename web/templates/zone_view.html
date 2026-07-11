@@ -68,12 +68,12 @@
                     <textarea class="ev ev-content" style="display:none" rows="2">{{.Record.Content}}</textarea>
                 </td>
                 <td class="col-comment">
-                    {{if .Comments.Items}}
+                    {{if .Comments}}{{if .Comments.Items}}
                     <div class="rv rv-comments record-comments">{{range .Comments.Items}}{{.Content}}
 {{end}}</div>
-                    {{end}}
-                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{range .Comments.Items}}{{.Content}}
-{{end}}</textarea>
+                    {{end}}{{end}}
+                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{if .Comments}}{{range .Comments.Items}}{{.Content}}
+{{end}}{{end}}</textarea>
                     <label class="ev ev-comment-clear" style="display:none;margin-top:0.25rem;font-size:0.8rem">
                         <input type="checkbox" class="ev-comment-clear-cb" value="1">
                         Clear all comments
