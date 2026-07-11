@@ -589,6 +589,15 @@ func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	return tx.Tx.QueryRowContext(ctx, tx.dialect.Rebind(query), args...)
 }
 
+// InsertIgnore runs a dialect-portable INSERT that silently skips a row that
+// would violate a unique constraint, executed within the transaction. Mirrors
+// DB.InsertIgnore for use inside a Tx (e.g. provisioning an SSO user and
+// linking its external identity atomically).
+func (tx *Tx) InsertIgnore(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
+	query := tx.dialect.InsertIgnore(table, columns, conflictColumns)
+	return tx.ExecContext(ctx, query, values...)
+}
+
 // migrationVersion returns a stable identifier for a migration based on the
 // SHA-256 hash of its SQL content. Using a content hash instead of a slice
 // index means reordering or renaming the migrations slice does not corrupt

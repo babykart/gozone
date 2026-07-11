@@ -31,6 +31,7 @@ import (
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/oidc"
 	"github.com/babykart/gozone/internal/pdns"
 	versionpkg "github.com/babykart/gozone/internal/version"
 	"github.com/babykart/gozone/web"
@@ -157,6 +158,18 @@ func runServer(cfg *config.Config) error {
 	// values win; internal/version falls back to embedded VCS metadata.
 	h.Version = versionpkg.Resolve(version, commit, buildDate)
 
+	// Initialize OpenID Connect / OAuth2 single sign-on. Discovery is best-effort
+	// per provider (a temporarily unreachable IdP is skipped, not fatal); the
+	// returned service is disabled when OIDC is not configured or no provider
+	// could be discovered.
+	oidcSvc := oidc.NewService(context.Background(), cfg, cfg.Server.OIDCStateKey)
+	h.OIDC = oidcSvc
+	// Stop the per-provider JWKS background refresh goroutines on shutdown.
+	defer oidcSvc.Close()
+	if oidcSvc.Enabled() {
+		logger.Info("oidc single sign-on enabled")
+	}
+
 	// Seed built-in zone templates
 	if err := h.SeedBuiltinTemplates(); err != nil {
 		return fmt.Errorf("seed builtin templates: %w", err)
@@ -241,6 +254,27 @@ func runServer(cfg *config.Config) error {
 		defer loginUsernameLimiter.Close()
 	}
 
+	// Session lifetime policy: idle inactivity timeout and/or an absolute
+	// refresh cap. Both default to 0 (disabled) → AuthWithPolicy behaves
+	// exactly like the legacy Auth middleware. When either is > 0 a
+	// SessionTracker is created to enforce idle/absolute limits and to
+	// transparently refresh the access JWT near expiry (sliding the session up
+	// to the absolute cap). The tracker state is persisted in the sessions table
+	// so multi-instance deployments share the same idle/absolute window; an
+	// in-memory cache coarsens writes to keep the hot path cheap.
+	accessTTL := time.Duration(cfg.Auth.SessionDurationHours) * time.Hour
+	sessionPolicy := middleware.SessionPolicy{
+		Idle:      time.Duration(cfg.Auth.IdleTimeoutMinutes) * time.Minute,
+		Absolute:  time.Duration(cfg.Auth.AbsoluteSessionTimeoutHours) * time.Hour,
+		AccessTTL: accessTTL,
+	}
+	var sessionTracker *middleware.SessionTracker
+	if sessionPolicy.Idle > 0 || sessionPolicy.Absolute > 0 {
+		sessionTracker = middleware.NewSessionTracker(db, sessionPolicy)
+		defer sessionTracker.Close()
+	}
+	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL)
+
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
@@ -266,9 +300,19 @@ func runServer(cfg *config.Config) error {
 		}
 		r.With(loginChain...).Post("/login", h.Login)
 
+		// OpenID Connect / OAuth2 SSO endpoints. These are public (the user
+		// is not authenticated yet): the login endpoint redirects to the IdP,
+		// and the callback completes the flow and establishes a session. They
+		// share the login rate limiter to throttle callback brute-forcing of
+		// the state parameter (ROADMAP "Security").
+		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+			Get("/auth/oidc/{provider}/login", h.OIDCLogin)
+		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+			Get("/auth/oidc/{provider}/callback", h.OIDCCallback)
+
 		// Authenticated routes (web UI)
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(db, cfg.Server.JWTKey))
+			r.Use(authMiddleware)
 
 			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/dashboard", http.StatusSeeOther)

@@ -222,5 +222,33 @@ func (s *sqliteDialect) Migrations() []string {
 		DROP TABLE revoked_tokens;
 		ALTER TABLE revoked_tokens_new RENAME TO revoked_tokens;
 		CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at)`,
+		// OpenID Connect / OAuth2: link table mapping an external identity
+		// (issuer, subject) to a local GoZone user. A single user may be linked
+		// to several providers (one row per issuer), and each (issuer, subject)
+		// pair maps to at most one local user. The issuer column stores the IdP
+		// issuer URL as reported in the ID token "iss" claim, NOT the provider
+		// name, so renaming a configured provider does not break the linkage.
+		`CREATE TABLE IF NOT EXISTS external_identities (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			issuer TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (issuer, subject),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
+		// Session lifetime tracking (idle/absolute enforcement). Shared state so
+		// multi-instance deployments enforce the same idle/absolute window: each
+		// instance throttled-writes last_seen here and reads other instances'
+		// activity on a cache miss. Purged by expires_at.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id TEXT PRIMARY KEY,
+			first_seen DATETIME NOT NULL,
+			last_seen DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }

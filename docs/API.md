@@ -16,6 +16,13 @@ Authorization: Bearer gozone_<base64-encoded-key>
 
 All examples below use the `X-API-Key` header.
 
+> **Note:** the REST API authenticates exclusively with API keys. OpenID
+> Connect single sign-on is a web-session feature (`/login` and
+> `/auth/oidc/*`); it does not apply to `/api/v1`. Programs that need
+> headless access should provision an API key for the user via the Web UI
+> (or directly in the `api_keys` table). See [docs/SSO.md](./SSO.md) for SSO
+> configuration.
+
 ## Rate Limiting
 
 API requests are rate-limited to **100 requests per minute** per API key. Exceeding the limit returns HTTP 429 with a `Retry-After` header.

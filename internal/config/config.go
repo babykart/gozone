@@ -33,6 +33,7 @@ type Config struct {
 	Activity  ActivityConfig  `yaml:"activity"`
 	LoginLock LoginLockConfig `yaml:"login_lock"`
 	Password  PasswordConfig  `yaml:"password"`
+	OIDC      OIDCConfig      `yaml:"oidc"`
 }
 
 // LoginLockConfig holds settings for the login brute-force protection.
@@ -97,6 +98,11 @@ type ServerConfig struct {
 	JWTKey []byte `yaml:"-"`
 	// CSRFKey is derived from SecretKey via HKDF-SHA256 for CSRF tokens.
 	CSRFKey []byte `yaml:"-"`
+	// OIDCStateKey is derived from SecretKey via HKDF-SHA256 and signs the
+	// OIDC state parameter (CSRF protection for the SSO redirect dance). It
+	// is independent of JWTKey/CSRFKey so compromise of one does not reveal
+	// the others.
+	OIDCStateKey []byte `yaml:"-"`
 	// ShutdownTimeoutSeconds is the maximum time to wait for in-flight
 	// requests to finish during graceful shutdown (SIGINT/SIGTERM). Must
 	// be positive. Default: 30.
@@ -120,6 +126,99 @@ type PowerDNSConfig struct {
 type AuthConfig struct {
 	SessionDurationHours int `yaml:"session_duration_hours"`
 	BcryptCost           int `yaml:"bcrypt_cost"`
+	// IdleTimeoutMinutes bounds session inactivity: a session untouched for
+	// longer than this is forced to re-authenticate, even if the JWT has not
+	// expired. 0 (default) disables the idle check. Applies to both local and
+	// SSO sessions. Tracked in memory per instance (consistent with the rate
+	// limiters); a server restart resets idle windows.
+	IdleTimeoutMinutes int `yaml:"idle_timeout_minutes"`
+	// AbsoluteSessionTimeoutHours caps the total lifetime of a session across
+	// refreshes. While a session stays active (within the idle window) and
+	// below this cap, the access JWT is transparently refreshed near its
+	// expiry — i.e. the session "slides" up to this absolute TTL. After it,
+	// full re-authentication is required. 0 (default) disables the cap AND
+	// refresh: the session lives exactly SessionDurationHours. For refresh to
+	// ever trigger, this must be greater than SessionDurationHours.
+	AbsoluteSessionTimeoutHours int `yaml:"absolute_session_timeout_hours"`
+}
+
+// OIDCConfig holds OpenID Connect / OAuth2 single sign-on settings. When
+// Enabled is false (the default) the whole subsystem is inert: no SSO buttons
+// are rendered, no /auth/oidc routes are active, and local username/password
+// login is the only authentication path. See the GoZone ROADMAP "OpenID Connect
+// / OAuth2" section for the design rationale.
+type OIDCConfig struct {
+	// Enabled is the master switch for SSO. When false, all other OIDC fields
+	// are ignored.
+	Enabled bool `yaml:"enabled"`
+	// AllowLocalLogin keeps the local username/password login form available
+	// alongside SSO. When false and SSO is enabled, the local form is hidden
+	// (but the POST /login endpoint remains wired so existing sessions and
+	// API tooling keep working). Default true.
+	AllowLocalLogin bool `yaml:"allow_local_login"`
+	// AutoProvision creates a local user automatically on first successful SSO
+	// login. When false, a matching local user (linked by email or a
+	// pre-existing external identity) is required; otherwise login is refused.
+	// Default false — operators must opt in to JIT provisioning.
+	AutoProvision bool `yaml:"auto_provision"`
+	// DefaultRole is the role assigned to auto-provisioned users ("admin" or
+	// "user"). Default "user".
+	DefaultRole string `yaml:"default_role"`
+	// Scopes is the global fallback scope list requested when a provider does
+	// not specify its own. "openid" is always added. Default [openid, profile,
+	// email].
+	Scopes []string `yaml:"scopes"`
+	// Providers is the list of configured identity providers. Each entry
+	// becomes a /auth/oidc/{name} route pair and a login button.
+	Providers []OIDCProviderConfig `yaml:"providers"`
+	// RoleClaim is the dotted path of the ID-token claim inspected for role
+	// mapping (e.g. "groups", "roles", "realm_access.roles"). When empty (the
+	// default) role mapping is disabled and DefaultRole governs provisioning.
+	RoleClaim string `yaml:"role_claim"`
+	// AdminRoleValues lists claim values (at RoleClaim) that grant the GoZone
+	// admin role. Any user whose claim set contains one of these values is
+	// mapped to "admin"; otherwise the DefaultRole applies. Case-sensitive.
+	AdminRoleValues []string `yaml:"admin_role_values"`
+	// GroupClaim is the dotted path of the ID-token claim inspected for zone-
+	// group mapping (e.g. "groups", "teams"). When empty (the default) group
+	// mapping is disabled.
+	GroupClaim string `yaml:"group_claim"`
+	// GroupMapping maps an IdP claim value (at GroupClaim) to a GoZone
+	// zone_group name. On each SSO login the user is added (additively) to
+	// every mapped group that exists; groups that do not exist are skipped with
+	// a warning. Memberships are never auto-removed — revoke manually.
+	GroupMapping map[string]string `yaml:"group_mapping"`
+	// JWKSCacheTTLMinutes is how long a provider's signing keys are cached
+	// before a proactive background refresh, in minutes. A background goroutine
+	// re-fetches the JWKS on this cadence so key rotation is picked up without
+	// waiting for an unknown key ID. 0 disables the proactive refresh (keys are
+	// still fetched on first use and on an unknown kid — the library's
+	// behaviour). Default 60 (1 hour).
+	JWKSCacheTTLMinutes int `yaml:"jwks_cache_ttl_minutes"`
+}
+
+// OIDCProviderConfig describes a single identity provider. Name maps to a
+// well-known preset (gitea, google, github, gitlab, keycloak, authentik,
+// azure) that supplies defaults (display name, scopes); any other name is
+// treated as a generic OIDC provider using standard discovery.
+type OIDCProviderConfig struct {
+	// Name is the unique provider slug: the URL key (/auth/oidc/{name}/...),
+	// the preset lookup key, and the cookie/state prefix. Must be unique within
+	// the providers list.
+	Name string `yaml:"name"`
+	// DisplayName overrides the preset's button label. Empty falls back to the
+	// preset display name, or the Name when no preset matches.
+	DisplayName string `yaml:"display_name"`
+	// IssuerURL is the provider's issuer identifier, used for OIDC discovery
+	// (/.well-known/openid-configuration) and as the "iss" claim to validate.
+	IssuerURL string `yaml:"issuer_url"`
+	// ClientID is the OAuth2 client identifier registered at the provider.
+	ClientID string `yaml:"client_id"`
+	// ClientSecret is the OAuth2 client secret. Required for the confidential
+	// authorization-code flow GoZone uses.
+	ClientSecret string `yaml:"client_secret"`
+	// Scopes optionally overrides the global/preset scopes for this provider.
+	Scopes []string `yaml:"scopes"`
 }
 
 // PasswordConfig holds the password policy enforced whenever a password is set
@@ -241,6 +340,14 @@ func DefaultConfig() *Config {
 			RequireSpecial:   true,
 			HistorySize:      0,
 		},
+		OIDC: OIDCConfig{
+			Enabled:             false,
+			AllowLocalLogin:     true,
+			AutoProvision:       false,
+			DefaultRole:         "user",
+			Scopes:              []string{"openid", "profile", "email"},
+			JWKSCacheTTLMinutes: 60,
+		},
 	}
 	// JWTKey/CSRFKey are intentionally NOT derived here: DefaultConfig has no
 	// error return, and derivation must run after env overrides / placeholder
@@ -260,12 +367,18 @@ func DefaultConfig() *Config {
 // GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES,
 // GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
-// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_ACTIVITY_RETENTION_DAYS,
+// GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
+// GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS, GOZONE_ACTIVITY_RETENTION_DAYS,
 // GOZONE_ACTIVITY_BATCH_SIZE, GOZONE_PASSWORD_MIN_LENGTH,
 // GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
 // GOZONE_PASSWORD_EXPIRY_WARN_DAYS, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
-// GOZONE_PASSWORD_REQUIRE_SPECIAL.
+// GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_OIDC_ENABLED,
+// GOZONE_OIDC_ALLOW_LOCAL_LOGIN, GOZONE_OIDC_AUTO_PROVISION,
+// GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
+// GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
+// GOZONE_OIDC_PROVIDER_NAME,
+// GOZONE_OIDC_ISSUER_URL, GOZONE_OIDC_CLIENT_ID, GOZONE_OIDC_CLIENT_SECRET.
 //
 // Parameters:
 //   - path: filesystem path to the YAML configuration file
@@ -320,6 +433,12 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Server.JWTKey, cfg.Server.CSRFKey = jwtKey, csrfKey
 
+	oidcStateKey, err := hkdf.Key(sha256.New, []byte(cfg.Server.SecretKey), nil, "gozone-oidc-state", 32)
+	if err != nil {
+		return nil, fmt.Errorf("derive oidc state key: %w", err)
+	}
+	cfg.Server.OIDCStateKey = oidcStateKey
+
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}
@@ -359,6 +478,21 @@ func (cfg *Config) validate() error {
 
 	if cfg.Auth.SessionDurationHours <= 0 {
 		return fmt.Errorf("invalid session_duration_hours %d: must be a positive integer", cfg.Auth.SessionDurationHours)
+	}
+
+	if cfg.Auth.IdleTimeoutMinutes < 0 {
+		return fmt.Errorf("invalid auth.idle_timeout_minutes %d: must be non-negative", cfg.Auth.IdleTimeoutMinutes)
+	}
+	if cfg.Auth.AbsoluteSessionTimeoutHours < 0 {
+		return fmt.Errorf("invalid auth.absolute_session_timeout_hours %d: must be non-negative", cfg.Auth.AbsoluteSessionTimeoutHours)
+	}
+	// An absolute cap shorter than the access-token TTL is contradictory: the
+	// token would already be dead (or about to die) before the cap could ever
+	// enable a refresh, and the absolute gate would just shorten the session
+	// silently. Reject it so the operator's intent is surfaced loudly.
+	if cfg.Auth.AbsoluteSessionTimeoutHours > 0 && cfg.Auth.AbsoluteSessionTimeoutHours < cfg.Auth.SessionDurationHours {
+		return fmt.Errorf("invalid auth.absolute_session_timeout_hours %d: must be >= session_duration_hours (%d) for refresh to be meaningful",
+			cfg.Auth.AbsoluteSessionTimeoutHours, cfg.Auth.SessionDurationHours)
 	}
 
 	if cfg.Database.Driver == "" {
@@ -481,6 +615,81 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("invalid admin.username: %w", err)
 	}
 
+	if err := cfg.validateOIDC(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateOIDC checks the OIDC configuration. It only enforces constraints
+// when SSO is enabled (or at least one provider is declared), so a default
+// disabled config (empty providers, Enabled=false) is always accepted.
+func (cfg *Config) validateOIDC() error {
+	// Treat a non-empty providers list as an implicit enable so a config that
+	// lists providers but omits "enabled: true" still validates the entries.
+	declared := len(cfg.OIDC.Providers) > 0
+	if !cfg.OIDC.Enabled && !declared {
+		return nil
+	}
+
+	if cfg.OIDC.DefaultRole != "" {
+		if err := validators.ValidateRole(cfg.OIDC.DefaultRole); err != nil {
+			return fmt.Errorf("invalid oidc.default_role: %w", err)
+		}
+	} else {
+		cfg.OIDC.DefaultRole = "user"
+	}
+
+	seen := make(map[string]bool, len(cfg.OIDC.Providers))
+	for i := range cfg.OIDC.Providers {
+		p := &cfg.OIDC.Providers[i]
+		if p.Name == "" {
+			return fmt.Errorf("invalid oidc.providers[%d].name: must not be empty", i)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("invalid oidc.providers[%d].name %q: duplicate provider name", i, p.Name)
+		}
+		seen[p.Name] = true
+		if p.IssuerURL == "" {
+			return fmt.Errorf("invalid oidc.providers[%d] (%s): issuer_url is required", i, p.Name)
+		}
+		u, err := url.Parse(p.IssuerURL)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("invalid oidc.providers[%d] (%s).issuer_url %q: must be an absolute URL with a host", i, p.Name, p.IssuerURL)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("invalid oidc.providers[%d] (%s).issuer_url %q: scheme must be http or https", i, p.Name, p.IssuerURL)
+		}
+		if p.ClientID == "" {
+			return fmt.Errorf("invalid oidc.providers[%d] (%s): client_id is required", i, p.Name)
+		}
+		// ClientSecret is required for the confidential authorization-code flow.
+		// Public clients (no secret, PKCE-only) are intentionally not supported
+		// here because GoZone is a server-side app that can hold a secret.
+		if p.ClientSecret == "" {
+			return fmt.Errorf("invalid oidc.providers[%d] (%s): client_secret is required", i, p.Name)
+		}
+	}
+
+	// enabled=true with no providers is a no-op footgun: surface it loudly.
+	if cfg.OIDC.Enabled && len(cfg.OIDC.Providers) == 0 {
+		return fmt.Errorf("oidc.enabled is true but no providers are configured")
+	}
+
+	// Role/group mapping sanity: a claim path with no mapped values is a no-op
+	// footgun (AdminRoleValues empty means nobody is ever promoted; GroupMapping
+	// empty means no memberships are synced). Surface these so an operator who
+	// sets the claim but forgets the values is warned at startup.
+	if cfg.OIDC.RoleClaim != "" && len(cfg.OIDC.AdminRoleValues) == 0 {
+		return fmt.Errorf("oidc.role_claim %q is set but admin_role_values is empty", cfg.OIDC.RoleClaim)
+	}
+	if cfg.OIDC.GroupClaim != "" && len(cfg.OIDC.GroupMapping) == 0 {
+		return fmt.Errorf("oidc.group_claim %q is set but group_mapping is empty", cfg.OIDC.GroupClaim)
+	}
+	if cfg.OIDC.JWKSCacheTTLMinutes < 0 {
+		return fmt.Errorf("invalid oidc.jwks_cache_ttl_minutes %d: must be non-negative", cfg.OIDC.JWKSCacheTTLMinutes)
+	}
 	return nil
 }
 
@@ -542,6 +751,20 @@ func applyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Auth.SessionDurationHours = n
+	}
+	if v := os.Getenv("GOZONE_IDLE_TIMEOUT_MINUTES"); v != "" {
+		n, err := envInt("GOZONE_IDLE_TIMEOUT_MINUTES", v)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.IdleTimeoutMinutes = n
+	}
+	if v := os.Getenv("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS"); v != "" {
+		n, err := envInt("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", v)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.AbsoluteSessionTimeoutHours = n
 	}
 	if v := os.Getenv("GOZONE_BCRYPT_COST"); v != "" {
 		n, err := envInt("GOZONE_BCRYPT_COST", v)
@@ -665,6 +888,79 @@ func applyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Password.ExpiryWarnDays = n
+	}
+	if err := applyOIDCEnvOverrides(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// applyOIDCEnvOverrides applies GOZONE_OIDC_* environment variables. The
+// scalar toggles (ENABLED, ALLOW_LOCAL_LOGIN, AUTO_PROVISION, DEFAULT_ROLE,
+// SCOPES) map directly onto OIDCConfig fields. A single provider can be
+// declared entirely via env vars (GOZONE_OIDC_PROVIDER_NAME/ISSUER_URL/
+// CLIENT_ID/CLIENT_SECRET) for containerised deployments that configure one
+// IdP without mounting a config file; additional providers require YAML.
+// Provider env vars only take effect when no providers are already declared in
+// YAML, so a file-declared multi-provider setup is never partially overwritten.
+func applyOIDCEnvOverrides(cfg *Config) error {
+	if v := os.Getenv("GOZONE_OIDC_ENABLED"); v != "" {
+		b, err := envBool("GOZONE_OIDC_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.OIDC.Enabled = b
+	}
+	if v := os.Getenv("GOZONE_OIDC_ALLOW_LOCAL_LOGIN"); v != "" {
+		b, err := envBool("GOZONE_OIDC_ALLOW_LOCAL_LOGIN", v)
+		if err != nil {
+			return err
+		}
+		cfg.OIDC.AllowLocalLogin = b
+	}
+	if v := os.Getenv("GOZONE_OIDC_AUTO_PROVISION"); v != "" {
+		b, err := envBool("GOZONE_OIDC_AUTO_PROVISION", v)
+		if err != nil {
+			return err
+		}
+		cfg.OIDC.AutoProvision = b
+	}
+	if v := os.Getenv("GOZONE_OIDC_DEFAULT_ROLE"); v != "" {
+		cfg.OIDC.DefaultRole = v
+	}
+	if v := os.Getenv("GOZONE_OIDC_SCOPES"); v != "" {
+		cfg.OIDC.Scopes = splitNonEmpty(v, ",")
+	}
+	if v := os.Getenv("GOZONE_OIDC_ROLE_CLAIM"); v != "" {
+		cfg.OIDC.RoleClaim = v
+	}
+	if v := os.Getenv("GOZONE_OIDC_ADMIN_ROLE_VALUES"); v != "" {
+		cfg.OIDC.AdminRoleValues = splitNonEmpty(v, ",")
+	}
+	if v := os.Getenv("GOZONE_OIDC_GROUP_CLAIM"); v != "" {
+		cfg.OIDC.GroupClaim = v
+	}
+	if v := os.Getenv("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES"); v != "" {
+		n, err := envInt("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", v)
+		if err != nil {
+			return err
+		}
+		cfg.OIDC.JWKSCacheTTLMinutes = n
+	}
+	// Single-provider env declaration, only when YAML declared none.
+	if len(cfg.OIDC.Providers) == 0 {
+		name := os.Getenv("GOZONE_OIDC_PROVIDER_NAME")
+		issuer := os.Getenv("GOZONE_OIDC_ISSUER_URL")
+		clientID := os.Getenv("GOZONE_OIDC_CLIENT_ID")
+		clientSecret := os.Getenv("GOZONE_OIDC_CLIENT_SECRET")
+		if name != "" || issuer != "" || clientID != "" || clientSecret != "" {
+			cfg.OIDC.Providers = append(cfg.OIDC.Providers, OIDCProviderConfig{
+				Name:         name,
+				IssuerURL:    issuer,
+				ClientID:     clientID,
+				ClientSecret: clientSecret,
+			})
+		}
 	}
 	return nil
 }

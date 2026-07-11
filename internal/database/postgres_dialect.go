@@ -248,5 +248,26 @@ func (p *postgresDialect) Migrations() []string {
 		// Pre-existing orphans are removed first so the constraint can be added.
 		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
 		ALTER TABLE revoked_tokens ADD CONSTRAINT fk_revoked_tokens_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+		// OpenID Connect / OAuth2: see sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS external_identities (
+			id SERIAL PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			issuer VARCHAR(255) NOT NULL,
+			subject VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (issuer, subject),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
+		// Session lifetime tracking (idle/absolute enforcement, shared across
+		// instances). See sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS sessions (
+			session_id VARCHAR(255) PRIMARY KEY,
+			first_seen TIMESTAMP NOT NULL,
+			last_seen TIMESTAMP NOT NULL,
+			expires_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }

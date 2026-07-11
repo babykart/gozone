@@ -38,6 +38,10 @@ const (
 	// missing token, tampered token). It gets its own banner so the user
 	// sees an actionable message instead of a blank page.
 	csrfInvalidError = "csrf_invalid"
+	// ssoError is set by the OIDC handlers when the SSO flow fails (state
+	// mismatch, token verification, disabled account, provisioning refused).
+	// A single generic message avoids leaking which step failed.
+	ssoError = "sso_error"
 )
 
 // loginErrorMessages maps a query-string error code to the user-facing banner.
@@ -49,6 +53,7 @@ const (
 var loginErrorMessages = map[string]string{
 	invalidCredentialsError: "Invalid username or password.",
 	csrfInvalidError:        "Session expired or security token invalid. Please try again.",
+	ssoError:                "Single sign-on failed. Please try again or contact an administrator.",
 }
 
 // loginErrorRedirect builds the /login?error=<code> redirect target. Used by
@@ -88,6 +93,15 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 		"Title":   "Login - " + h.Cfg.Server.AppName,
 		"Error":   loginErrorBanner(r.URL.Query().Get("error")),
 		"AppName": h.Cfg.Server.AppName,
+	}
+	// Expose SSO providers so the template can render "Sign in with X" buttons.
+	// When SSO is enabled and allow_local_login is false, the local form is
+	// hidden (the POST /login endpoint stays wired for existing tooling).
+	if h.OIDC != nil && h.OIDC.Enabled() {
+		data["OIDCProviders"] = h.OIDC.Providers()
+		if !h.Cfg.OIDC.AllowLocalLogin {
+			data["HideLocalLogin"] = true
+		}
 	}
 	h.render(w, r, "login.html", data)
 }
@@ -369,32 +383,41 @@ func (h *Handler) recordFailedAttempt(ctx context.Context, username string, user
 	committed = true
 }
 
-// Logout clears the session cookie, revokes the current JWT, and redirects to /login.
+// Logout clears the session cookie, revokes the current JWT, and redirects to
+// /login. When the session was established via SSO and the provider advertises
+// an end_session_endpoint, the browser is redirected there (RP-initiated
+// logout) with a post_logout_redirect_uri back to /login so the IdP SSO cookie
+// is cleared too.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
 
-	// Revoke the current session token so it cannot be reused after logout.
-	if user != nil {
-		tokenString := ""
-		if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
-			tokenString = cookie.Value
+	// Resolve the auth provider + current token claims up front so we can route
+	// to RP-initiated logout after local cleanup.
+	var authProvider string
+	tokenString := ""
+	if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
+		tokenString = cookie.Value
+	}
+	if tokenString == "" {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 		}
-		if tokenString == "" {
-			authHeader := r.Header.Get("Authorization")
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				tokenString = strings.TrimPrefix(authHeader, "Bearer ")
-			}
-		}
-
-		if tokenString != "" {
-			if claims, err := middleware.ParseToken(tokenString, h.Cfg.Server.JWTKey); err == nil && claims.ID != "" {
+	}
+	if tokenString != "" {
+		if claims, err := middleware.ParseToken(tokenString, h.Cfg.Server.JWTKey); err == nil && claims.ID != "" {
+			authProvider = claims.AuthProvider
+			if user != nil {
 				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
 					logger.Error("failed to revoke token on logout", "user_id", user.ID, "error", err)
 				}
 			}
 		}
+	}
 
+	// Revoke the current session token so it cannot be reused after logout.
+	if user != nil {
 		if _, err := h.DB.ExecContext(ctx,
 			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'logout', ?)",
 			user.ID, fmt.Sprintf("User %s logged out", user.Username),
@@ -414,7 +437,58 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 	})
 
+	// RP-initiated logout: when the session came from an OIDC provider that
+	// advertises an end_session_endpoint, redirect there so the IdP clears its
+	// own SSO cookie. post_logout_redirect_uri sends the browser back to /login.
+	// authProvider "" / "local" means a password login → no IdP round-trip.
+	if h.OIDC != nil && authProvider != "" && authProvider != "local" {
+		if endSession := h.OIDC.EndSessionURL(authProvider); endSession != "" {
+			postLogout := oidcPostLogoutURL(r)
+			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
+			if isAbsoluteHTTPURLAuth(target) {
+				// #nosec G710 -- target is the server-side discovered
+				// end_session_endpoint, validated as absolute http(s) here.
+				http.Redirect(w, r, target, http.StatusSeeOther)
+				return
+			}
+			logger.Warn("oidc logout: end_session_endpoint is not absolute; skipping RP logout",
+				"provider", authProvider, "url", endSession)
+		}
+	}
+
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// oidcPostLogoutURL builds the fully-qualified /login URL to hand the IdP as
+// post_logout_redirect_uri, derived from the request scheme/host (trusted-proxy
+// aware) so the browser returns to the same GoZone instance.
+func oidcPostLogoutURL(r *http.Request) string {
+	scheme := "http"
+	if middleware.IsHTTPS(r) {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/login", scheme, r.Host)
+}
+
+// appendQuery adds a query parameter to a URL string, preserving any existing
+// query. It does not validate the base URL; the caller is responsible for that.
+func appendQuery(baseURL, key, value string) string {
+	sep := "?"
+	if strings.Contains(baseURL, "?") {
+		sep = "&"
+	}
+	return baseURL + sep + url.QueryEscape(key) + "=" + url.QueryEscape(value)
+}
+
+// isAbsoluteHTTPURLAuth reports whether u is an absolute http(s) URL with a
+// host. It guards the RP-initiated logout redirect against a malformed
+// end_session_endpoint.
+func isAbsoluteHTTPURLAuth(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
 // ProfilePage renders the authenticated user's profile (GET /profile).

@@ -10,6 +10,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **Record Management**: Full CRUD for all DNS record types (A, AAAA, CNAME, MX, TXT, SOA, etc.) with color-coded type badges and inline editing
 - **RRSet Comments**: View, add, and edit PowerDNS comments per RRSet through the web UI, CSV import/export, and REST API
 - **Brute-force Protection**: Per-IP and per-username login rate-limiters (compound AND), persistent per-account lockout after repeated failures, audit trail of every attempt, identical generic error response across unknown user / wrong password / locked account to block account enumeration
+- **Single Sign-On (OIDC)**: Delegate login to OpenID Connect providers (Gitea, Google, GitLab, Keycloak, Authentik, Azure AD) with PKCE, JWKS ID-token verification, just-in-time provisioning, role/group mapping from claims, and RP-initiated logout
 - **Multi-database Support**: SQLite (default), MySQL, and PostgreSQL are supported. Migrations are versioned by content hash with multi-instance locks.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
@@ -98,6 +99,61 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 |-----------|---------------------|---------|
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
 | `auth.bcrypt_cost` | — | `12` |
+| `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `0` (disabled) |
+| `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `0` (disabled) |
+
+`idle_timeout_minutes` forces re-authentication after that many minutes of inactivity (even if the JWT has not expired). `absolute_session_timeout_hours` caps the total session lifetime across transparent refreshes: while a session stays active and below the cap, the access JWT is silently refreshed near its expiry (the session "slides" up to the cap). For refresh to trigger it must be greater than `session_duration_hours`. Both apply to local **and** SSO sessions and are enforced cluster-wide via the `sessions` table (an in-memory cache coarsens writes, so cross-instance idle lags by at most ~1 minute). Leave both `0` for the classic behaviour: a session lives exactly `session_duration_hours`.
+
+### Single Sign-On (OpenID Connect / OAuth2)
+
+GoZone can delegate login to one or more external identity providers using
+OpenID Connect (OIDC) — Authorization Code flow with PKCE (S256), a signed
+`state` parameter (CSRF), a `nonce`, JWKS ID-token verification, just-in-time
+user provisioning, role/group mapping from claims, and RP-initiated logout.
+Built-in provider presets: **Gitea**, Google, GitLab, Keycloak, Authentik,
+Azure AD (any other name is treated as a generic OIDC provider).
+
+| YAML Path | Environment Variable | Default |
+|-----------|---------------------|---------|
+| `oidc.enabled` | `GOZONE_OIDC_ENABLED` | `false` |
+| `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` |
+| `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` |
+| `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` |
+| `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` |
+| `oidc.role_claim` | `GOZONE_OIDC_ROLE_CLAIM` | *(none)* |
+| `oidc.admin_role_values` | `GOZONE_OIDC_ADMIN_ROLE_VALUES` | `[]` |
+| `oidc.group_claim` | `GOZONE_OIDC_GROUP_CLAIM` | *(none)* |
+| `oidc.group_mapping` | *(YAML only)* | `{}` |
+| `oidc.jwks_cache_ttl_minutes` | `GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES` | `60` |
+
+Each entry in `oidc.providers[]` needs `name`, `issuer_url`, `client_id`, and
+`client_secret` (plus optional `display_name` and `scopes`). The redirect URI
+to register at the provider is always
+`https://<your-gozone-host>/auth/oidc/<name>/callback`.
+
+Minimal example (Gitea):
+
+```yaml
+oidc:
+  enabled: true
+  auto_provision: true
+  providers:
+    - name: gitea
+      issuer_url: "https://gitea.example.com"
+      client_id: "gozone"
+      client_secret: "<secret>"
+```
+
+A single provider can also be declared entirely from environment variables
+(`GOZONE_OIDC_PROVIDER_NAME` / `_ISSUER_URL` / `_CLIENT_ID` / `_CLIENT_SECRET`).
+
+> GoZone is an OIDC client and requires an `id_token`. Providers that only do
+> OAuth2 without an id_token (e.g. GitHub user OAuth) cannot be used directly —
+> front them with an OIDC-capable IdP (Dex/Keycloak/Authentik).
+
+**Full setup instructions and per-provider examples (Gitea, Google, GitLab,
+Keycloak, Authentik, Azure AD), role/group mapping, RP-initiated logout, and a
+troubleshooting table live in [docs/SSO.md](./docs/SSO.md).**
 
 ### Password policy
 

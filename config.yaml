@@ -49,6 +49,19 @@ powerdns:
 auth:
   session_duration_hours: 24
   bcrypt_cost: 12
+  # Idle inactivity timeout (minutes). A session untouched for longer than this
+  # is forced to re-authenticate, even if the JWT has not expired. 0 (default)
+  # disables the idle check. Applies to both local and SSO sessions. Enforced
+  # cluster-wide via the sessions table (an in-memory cache coarsens writes, so
+  # cross-instance idle lags by at most ~1 minute).
+  idle_timeout_minutes: 0
+  # Absolute session cap (hours) across transparent refreshes. While a session
+  # stays active (within the idle window) and below this cap, the access JWT is
+  # transparently refreshed near its expiry — the session "slides" up to this
+  # TTL. After it, full re-authentication is required. 0 (default) disables the
+  # cap AND refresh (the session lives exactly session_duration_hours). For
+  # refresh to ever trigger this must be greater than session_duration_hours.
+  absolute_session_timeout_hours: 0
 
 # Password policy. Enforced whenever a password is set or changed (user
 # creation, admin user update, `gozone user reset-password`). The initial
@@ -104,3 +117,63 @@ admin:
   email: "admin@gozone.local"
   first_name: "Admin"
   last_name: "User"
+
+# OpenID Connect / OAuth2 single sign-on. Disabled by default. When enabled,
+# "Sign in with <provider>" buttons appear on the login page. The flow is the
+# authorization-code flow with PKCE (S256), a signed state parameter (CSRF) and
+# a nonce (ID-token replay protection).
+#
+# Each provider is discovered via its issuer_url
+# (/.well-known/openid-configuration). Known provider names (gitea, google,
+# github, gitlab, keycloak, authentik, azure) supply default display names and
+# scopes; any other name is treated as a generic OIDC provider.
+#
+# Override everything via GOZONE_OIDC_* env vars; a single provider can be
+# declared entirely from env (GOZONE_OIDC_PROVIDER_NAME / _ISSUER_URL /
+# _CLIENT_ID / _CLIENT_SECRET) without this file.
+oidc:
+  enabled: false
+  # Keep the local username/password form alongside SSO buttons.
+  allow_local_login: true
+  # Auto-create a local user on first successful SSO login.
+  auto_provision: false
+  # Role assigned to auto-provisioned users (admin|user).
+  default_role: "user"
+  # Global fallback scopes when a provider declares none. "openid" is always
+  # added and deduplicated.
+  scopes: ["openid", "profile", "email"]
+  # Role mapping: read a claim at this dotted path (e.g. "groups",
+  # "realm_access.roles") from the ID token and promote the user to admin when
+  # it contains any admin_role_values. Empty (default) disables role mapping;
+  # default_role then governs provisioning. Applied on every SSO login, so the
+  # IdP is authoritative for the role — a demotion that would remove the last
+  # enabled admin is refused to avoid locking the instance out.
+  role_claim: ""
+  admin_role_values: []
+  # Group mapping: read a claim at this dotted path and map each value (via
+  # group_mapping) to a GoZone zone_group name. The user is added (additively)
+  # to every mapped group that exists; groups that do not exist are skipped
+  # (create them first). Memberships are never auto-removed — revoke manually.
+  # group_claim is empty by default (mapping disabled).
+  group_claim: ""
+  group_mapping: {}
+  # JWKS signing-key cache TTL (minutes). A background goroutine re-fetches each
+  # provider's JWKS on this cadence so key rotation is picked up without waiting
+  # for an unknown key ID. 0 disables proactive refresh (keys are still fetched
+  # on first use and on an unknown kid). Default 60 (1 hour).
+  jwks_cache_ttl_minutes: 60
+  providers: []
+  # Example: Gitea as an OIDC identity provider, with role + group mapping.
+  # providers:
+  #   - name: gitea
+  #     issuer_url: "https://gitea.example.com"
+  #     client_id: "gozone"
+  #     client_secret: "changeme"
+  #     # display_name: "Gitea"   # optional override
+  #     # scopes: ["openid", "profile", "email", "groups"]  # optional override
+  # role_claim: "groups"
+  # admin_role_values: ["gozone-admins"]
+  # group_claim: "groups"
+  # group_mapping:
+  #   "dev-team": "developers"
+  #   "ops-team": "operations"

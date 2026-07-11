@@ -34,6 +34,16 @@ type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	// AuthProvider records how the session was established: "" or "local" for
+	// username/password login, or the OIDC provider name (e.g. "gitea") for
+	// single sign-on. Used by the Logout handler to decide whether to perform
+	// RP-initiated logout at the IdP end_session_endpoint.
+	AuthProvider string `json:"auth_provider,omitempty"`
+	// SessionID is a stable identifier for the logical session, preserved
+	// across access-token refreshes (the jti rotates on every refresh; the
+	// SessionID does not). The SessionTracker keys idle/absolute bookkeeping
+	// by SessionID so a refreshed token keeps the same inactivity/age budget.
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -41,7 +51,8 @@ type Claims struct {
 //
 // It produces an HMAC-SHA256 token containing the user ID, username, role, and
 // a unique JWT ID (jti). The token expires after the given duration from the
-// current time.
+// current time. The session is treated as a local login (AuthProvider empty);
+// SSO sessions use GenerateSessionToken with the provider name.
 //
 // Parameters:
 //   - user: the authenticated user to encode in the token
@@ -50,15 +61,45 @@ type Claims struct {
 //
 // Returns the encoded JWT string and any signing error.
 func GenerateToken(user *models.User, secret []byte, duration time.Duration) (string, error) {
+	return GenerateSessionToken(user, secret, duration, "")
+}
+
+// GenerateSessionToken creates a signed JWT token, recording the authentication
+// provider and minting a fresh SessionID. provider is "" / "local" for password
+// login, or the OIDC provider slug for single sign-on. It is embedded as
+// AuthProvider in the claims so the Logout handler can route SSO sessions to
+// the IdP end_session_endpoint.
+func GenerateSessionToken(user *models.User, secret []byte, duration time.Duration, provider string) (string, error) {
+	sid, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("generate session id: %w", err)
+	}
+	return generateSessionToken(user, secret, duration, provider, sid.String())
+}
+
+// RefreshSessionToken re-issues an access token for an existing session,
+// preserving the AuthProvider and SessionID so the refreshed token keeps the
+// same SSO logout routing and the same idle/absolute budget in the tracker.
+// The old jti MUST be revoked by the caller (the refresh path does so).
+func RefreshSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID string) (string, error) {
+	return generateSessionToken(user, secret, duration, provider, sessionID)
+}
+
+// generateSessionToken is the single signing primitive: a fresh jti is always
+// minted (so each access token is independently revocable), while the provider
+// and sessionID are caller-supplied (preserved across refreshes).
+func generateSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID string) (string, error) {
 	jti, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
 	}
 
 	claims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		AuthProvider: provider,
+		SessionID:    sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
@@ -102,20 +143,27 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 	return claims, nil
 }
 
-// Auth returns a middleware that validates JWT tokens for web UI requests.
-//
-// Authentication is attempted in the following order:
-//  1. Cookie named constants.SessionCookieName
-//  2. Authorization header with "Bearer " prefix
-//
-// If authentication fails, the user is redirected to /login. Invalid cookies
-// are cleared automatically. The authenticated user is loaded from the database
-// and stored in the request context via UserContextKey.
-//
-// Parameters:
-//   - db: the database connection for loading the user record
-//   - secret: the HMAC key used to verify JWT signatures
+// Auth returns a middleware that validates JWT tokens for web UI requests,
+// with no session lifetime policy (a token is valid until its exp, unless
+// revoked). It is a thin wrapper around AuthWithPolicy with a nil tracker.
+// Callers that configure idle/absolute session limits use AuthWithPolicy with a
+// SessionTracker.
 func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
+	return AuthWithPolicy(db, secret, nil, 0)
+}
+
+// AuthWithPolicy is the session-aware Auth middleware. When tracker is nil (or
+// the policy is zero), behaviour is identical to Auth. When a policy is
+// configured it additionally:
+//   - forces re-authentication after auth.idle_timeout_minutes of inactivity;
+//   - forces re-authentication once auth.absolute_session_timeout_hours elapse
+//     since the session began (the absolute refresh cap);
+//   - transparently refreshes (re-issues) the access JWT when it is within the
+//     refresh threshold of expiry, sliding the session up to the absolute cap.
+//
+// accessTTL is the access-token lifetime (auth.session_duration_hours) used to
+// compute the refresh threshold; pass 0 to disable refresh.
+func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, accessTTL time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenString string
@@ -141,22 +189,7 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 
 			claims, err := ParseToken(tokenString, secret)
 			if err != nil {
-				// Clear invalid cookie
-				// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r)
-				// (trusted-proxy-gated X-Forwarded-Proto, m40/M-SEC4) so it
-				// matches the Secure flag the Login handler used to issue the
-				// cookie. With r.TLS != nil a TLS-terminating proxy left the
-				// clearing cookie non-Secure and browsers refused to drop the
-				// revoked original (REVIEW.md M-1).
-				http.SetCookie(w, &http.Cookie{
-					Name:     constants.SessionCookieName,
-					Value:    "",
-					Path:     "/",
-					Expires:  time.Unix(0, 0),
-					HttpOnly: true,
-					SameSite: http.SameSiteStrictMode,
-					Secure:   IsHTTPS(r),
-				})
+				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -173,22 +206,7 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 				return
 			}
 			if revoked {
-				// Clear revoked cookie
-				// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r)
-				// (trusted-proxy-gated X-Forwarded-Proto, m40/M-SEC4) so it
-				// matches the Secure flag the Login handler used to issue the
-				// cookie. With r.TLS != nil a TLS-terminating proxy left the
-				// clearing cookie non-Secure and browsers refused to drop the
-				// revoked original (REVIEW.md M-1).
-				http.SetCookie(w, &http.Cookie{
-					Name:     constants.SessionCookieName,
-					Value:    "",
-					Path:     "/",
-					Expires:  time.Unix(0, 0),
-					HttpOnly: true,
-					SameSite: http.SameSiteStrictMode,
-					Secure:   IsHTTPS(r),
-				})
+				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -203,10 +221,19 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			// Force-change gate: a user flagged must_change_password (admin reset
 			// or password expiry) may only reach the change-password page and
 			// logout until they set a new password. Everything else redirects to
-			// /change-password so the session cannot be used until the password is
-			// rotated.
+			// /change-password so the session cannot be used until the password
+			// is rotated.
 			if user.MustChangePassword && !mustChangeAllowedPath(r.URL.Path) {
 				http.Redirect(w, r, "/change-password", http.StatusSeeOther)
+				return
+			}
+
+			// Session lifetime policy (idle / absolute / transparent refresh).
+			// All branches are no-ops when the tracker is nil or the relevant
+			// duration is zero, so the default config behaves exactly like Auth.
+			// When the policy denies the session (idle/absolute exceeded) it has
+			// already written a /login redirect; abort the chain.
+			if !applySessionPolicy(w, r, db, secret, tracker, accessTTL, claims, user) {
 				return
 			}
 
@@ -214,6 +241,105 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// applySessionPolicy enforces the idle/absolute limits and, when appropriate,
+// transparently refreshes the access JWT. It runs after the token is validated
+// and the user loaded, so a refreshed cookie lands on the response before the
+// handler runs. It returns false (after writing a /login redirect + clearing
+// the cookie) when the session is denied for idle/absolute expiry, so the
+// caller can abort the chain. Refresh and pass-through return true.
+//
+// The session is keyed by Claims.SessionID when present (stable across
+// refreshes), falling back to the jti for tokens issued before SessionID
+// existed.
+func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB, secret []byte, tracker *SessionTracker, accessTTL time.Duration, claims *Claims, user *models.User) bool {
+	if tracker == nil {
+		return true
+	}
+	sid := claims.SessionID
+	if sid == "" {
+		sid = claims.ID
+	}
+	now := time.Now()
+	ctx := r.Context()
+
+	if !tracker.Touch(ctx, sid, claims.IssuedAt.Time, now) {
+		// Idle window exceeded → force re-authentication.
+		clearSessionCookie(w, r)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return false
+	}
+
+	if tracker.policy.Absolute <= 0 {
+		return true
+	}
+	firstSeen := tracker.FirstSeen(ctx, sid, claims.IssuedAt.Time, now)
+	if now.Sub(firstSeen) >= tracker.policy.Absolute {
+		// Absolute cap reached → force re-authentication.
+		clearSessionCookie(w, r)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return false
+	}
+
+	// Transparent refresh: when the access token is within the refresh
+	// threshold of expiry, re-issue it (new jti, preserved SessionID) and
+	// revoke the old jti. The session keeps its absolute budget via the
+	// unchanged SessionID.
+	if accessTTL <= 0 || claims.ExpiresAt == nil {
+		return true
+	}
+	threshold := tracker.policy.RefreshThreshold()
+	if claims.ExpiresAt.Time.Sub(now) >= threshold {
+		return true
+	}
+	newToken, err := RefreshSessionToken(user, secret, accessTTL, claims.AuthProvider, sid)
+	if err != nil {
+		logger.Error("failed to refresh session token", "user_id", user.ID, "error", err)
+		return true
+	}
+	// Best-effort: revoke the superseded access token so it cannot be replayed.
+	// A revocation failure does not block the refresh — the old token is near
+	// expiry anyway.
+	if err := db.RevokeToken(r.Context(), claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
+		logger.Error("failed to revoke refreshed token", "user_id", user.ID, "error", err)
+	}
+	setSessionCookie(w, r, newToken, now.Add(accessTTL))
+	tracker.remember(ctx, sid, firstSeen, now)
+	return true
+}
+
+// clearSessionCookie invalidates the session cookie in the browser, matching
+// the Secure flag the issue site used (trusted-proxy-gated, m40/M-SEC4) so a
+// TLS-terminating proxy does not leave a non-Secure clearing cookie that the
+// browser refuses to drop (REVIEW.md M-1).
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r) (m40/M-SEC4).
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   IsHTTPS(r),
+	})
+}
+
+// setSessionCookie writes a session cookie with the same attributes the Login
+// handler uses, so a transparently-refreshed token is indistinguishable from a
+// freshly-issued one to the browser.
+func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expiresAt time.Time) {
+	// #nosec G124 -- Secure flag set dynamically via IsHTTPS(r).
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.SessionCookieName,
+		Value:    value,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   IsHTTPS(r),
+	})
 }
 
 // APIKeyAuth returns a middleware that validates API key tokens for REST API requests.
