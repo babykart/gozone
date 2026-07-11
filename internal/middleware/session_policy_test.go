@@ -62,10 +62,14 @@ func TestAuthWithPolicy_IdleExpiryForcesReauth(t *testing.T) {
 	sid := "sid-idle"
 	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "idleuser", Role: "user"}, sid, time.Hour)
 
-	// Seed the tracker so the session looks idle: lastSeen 2 minutes ago,
-	// beyond the 1-minute idle window.
+	// Seed the shared session row so the tracker sees the session as idle:
+	// lastSeen 2 minutes ago, beyond the 1-minute idle window. Seeding via
+	// SessionInsert (not remember, which is UPDATE-only post M-3) matches how
+	// another instance would have persisted the activity.
 	now := time.Now()
-	tr.remember(context.Background(), sid, now.Add(-2*time.Minute), now.Add(-2*time.Minute))
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-2*time.Minute), now.Add(-2*time.Minute), now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
 
 	rec := runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
 	if rec.Code != http.StatusSeeOther {
@@ -90,8 +94,11 @@ func TestAuthWithPolicy_AbsoluteCapForcesReauth(t *testing.T) {
 	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "absuser", Role: "user"}, sid, time.Hour)
 
 	// Session first seen 31 minutes ago → beyond the 30-minute absolute cap.
+	// Seed via SessionInsert (remember is UPDATE-only post M-3).
 	now := time.Now()
-	tr.remember(context.Background(), sid, now.Add(-31*time.Minute), now)
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-31*time.Minute), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
 
 	rec := runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
 	if rec.Code != http.StatusSeeOther {
@@ -112,7 +119,9 @@ func TestAuthWithPolicy_RefreshReissuesNearExpiry(t *testing.T) {
 	// Token expires in 1 minute → within the 5-minute threshold → refresh.
 	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "refreshuser", Role: "user"}, sid, time.Minute)
 	now := time.Now()
-	tr.remember(context.Background(), sid, now.Add(-5*time.Minute), now)
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-5*time.Minute), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
 
 	rec := runPolicy(t, db, tr, accessTTL, tok, "/dashboard")
 	if rec.Code != http.StatusOK {
@@ -164,7 +173,9 @@ func TestAuthWithPolicy_NoRefreshWhenNotNearExpiry(t *testing.T) {
 	// 50 min of life left (> 5 min threshold) → no refresh.
 	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "freshuser", Role: "user"}, sid, 50*time.Minute)
 	now := time.Now()
-	tr.remember(context.Background(), sid, now.Add(-5*time.Minute), now)
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-5*time.Minute), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
 
 	rec := runPolicy(t, db, tr, accessTTL, tok, "/dashboard")
 	if rec.Code != http.StatusOK {

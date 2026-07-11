@@ -106,6 +106,12 @@ func TestSessionTracker_RememberPreservesFirstSeen(t *testing.T) {
 	ctx := context.Background()
 	first := time.Unix(1000, 0)
 	last := time.Unix(2000, 0)
+	// Touch seeds the session row — in production remember always runs after a
+	// successful Touch (see applySessionPolicy), and remember is UPDATE-only so
+	// it no longer creates the row itself (REVIEW.md M-3).
+	if !tr.Touch(ctx, "s1", first, first) {
+		t.Fatal("seed Touch must allow")
+	}
 	tr.remember(ctx, "s1", first, last)
 	if got := tr.FirstSeen(ctx, "s1", time.Unix(9999, 0), last); !got.Equal(first) {
 		t.Errorf("FirstSeen after remember = %v, want %v", got, first)
@@ -181,6 +187,61 @@ func TestSessionTracker_SharesStateAcrossInstances(t *testing.T) {
 	}
 	if !tr.Touch(ctx, "fresh", fresh.Add(-time.Hour), fresh) {
 		t.Error("fresh instance must allow a recently-active session")
+	}
+}
+
+// TestSessionTracker_TouchDeniesWhenRowDeletedByOtherInstance covers the
+// hot-path propagation fixed in REVIEW.md M-3: when another instance denies a
+// session (deleting its row), this instance's periodic write-through must
+// observe 0 rows affected and deny, instead of silently keeping the cached
+// session alive.
+func TestSessionTracker_TouchDeniesWhenRowDeletedByOtherInstance(t *testing.T) {
+	db := newTestAuthDB(t)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Hour})
+	defer tr.Close()
+	ctx := context.Background()
+	iat := time.Unix(1000, 0)
+	t0 := time.Unix(2000, 0)
+	if !tr.Touch(ctx, "s1", iat, t0) {
+		t.Fatal("first Touch must allow")
+	}
+
+	// Simulate another instance's idle denial: the shared row disappears.
+	if err := db.SessionDelete(ctx, "s1"); err != nil {
+		t.Fatalf("delete row: %v", err)
+	}
+
+	// Advance past sessionWriteInterval so the next Touch writes through and
+	// observes the deletion (0 rows affected).
+	t1 := t0.Add(2 * sessionWriteInterval)
+	if tr.Touch(ctx, "s1", iat, t1) {
+		t.Error("Touch must deny when the session row was deleted by another instance")
+	}
+}
+
+// TestSessionTracker_RememberDoesNotResurrectDeletedRow covers the refresh-path
+// resurrection fixed in REVIEW.md M-3: after another instance deletes the
+// session row, remember (triggered by a transparent token refresh) must not
+// re-create it.
+func TestSessionTracker_RememberDoesNotResurrectDeletedRow(t *testing.T) {
+	db := newTestAuthDB(t)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Minute, Absolute: time.Hour})
+	defer tr.Close()
+	ctx := context.Background()
+	first := time.Unix(1000, 0)
+	if !tr.Touch(ctx, "s1", first, first) {
+		t.Fatal("seed Touch must allow")
+	}
+
+	// Another instance denies the session (deletes the shared row).
+	if err := db.SessionDelete(ctx, "s1"); err != nil {
+		t.Fatalf("delete row: %v", err)
+	}
+
+	// A transparent refresh triggers remember; it must NOT re-create the row.
+	tr.remember(ctx, "s1", first, time.Unix(2000, 0))
+	if _, found, _ := db.SessionGet(ctx, "s1"); found {
+		t.Error("remember must not resurrect a session row deleted by another instance")
 	}
 }
 

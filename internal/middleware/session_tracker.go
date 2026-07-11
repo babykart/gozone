@@ -133,8 +133,16 @@ func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now t
 
 	e.lastSeen = now
 	if now.Sub(e.lastWritten) >= sessionWriteInterval {
-		if err := t.db.SessionTouch(ctx, sessionID, now, t.expiresAt(now)); err != nil {
+		updated, err := t.db.SessionTouch(ctx, sessionID, now, t.expiresAt(now))
+		if err != nil {
 			logger.Error("session tracker: touch write failed", "sid", sessionID, "error", err)
+		} else if !updated {
+			// The row is gone cluster-wide (deleted by another instance's
+			// idle denial or an explicit logout). Honour that decision: drop
+			// the cache entry and deny so this instance does not keep an
+			// idle-expired session alive (REVIEW.md M-3).
+			delete(t.cache, sessionID)
+			return false
 		} else {
 			e.lastWritten = now
 		}
@@ -194,18 +202,28 @@ func (t *SessionTracker) FirstSeen(ctx context.Context, sessionID string, iat, n
 // remember records the firstSeen/lastSeen pair after a transparent token
 // refresh (the SessionID is unchanged, so the absolute budget carries over). It
 // updates the cache and writes through so the pair is shared across instances.
+//
+// The session row is seeded by Touch, which always runs before the refresh
+// that triggers remember (see applySessionPolicy). remember therefore uses
+// UPDATE (SessionTouch) rather than INSERT, so a row deleted by another
+// instance's idle denial is not resurrected here (REVIEW.md M-3).
 func (t *SessionTracker) remember(ctx context.Context, sessionID string, firstSeen, lastSeen time.Time) {
 	if t == nil || t.db == nil || sessionID == "" {
 		return
 	}
-	if err := t.db.SessionInsert(ctx, sessionID, firstSeen, lastSeen, t.expiresAt(lastSeen)); err != nil {
-		logger.Error("session tracker: remember insert failed", "sid", sessionID, "error", err)
-	}
-	if err := t.db.SessionTouch(ctx, sessionID, lastSeen, t.expiresAt(lastSeen)); err != nil {
+	updated, err := t.db.SessionTouch(ctx, sessionID, lastSeen, t.expiresAt(lastSeen))
+	if err != nil {
 		logger.Error("session tracker: remember touch failed", "sid", sessionID, "error", err)
 	}
 	t.mu.Lock()
-	t.cache[sessionID] = &cacheEntry{firstSeen: firstSeen, lastSeen: lastSeen, lastWritten: lastSeen}
+	if updated {
+		t.cache[sessionID] = &cacheEntry{firstSeen: firstSeen, lastSeen: lastSeen, lastWritten: lastSeen}
+	} else {
+		// Row deleted cluster-wide: drop the cache so the next Touch does a
+		// fresh SessionGet instead of acting on a stale local entry. Do NOT
+		// re-insert — that would resurrect a session denied elsewhere.
+		delete(t.cache, sessionID)
+	}
 	t.mu.Unlock()
 }
 

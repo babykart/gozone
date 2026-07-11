@@ -40,14 +40,26 @@ func TestSessionsCRUD(t *testing.T) {
 		t.Errorf("first_seen overwritten to %v, want preserved %v", sl.FirstSeen, first)
 	}
 
-	// Touch updates last_seen without touching first_seen.
+	// Touch updates last_seen without touching first_seen, and reports that the
+	// row matched (updated=true).
 	touched := time.Unix(3000, 0)
-	if err := db.SessionTouch(ctx, "s1", touched, exp); err != nil {
+	updated, err := db.SessionTouch(ctx, "s1", touched, exp)
+	if err != nil {
 		t.Fatalf("touch: %v", err)
+	}
+	if !updated {
+		t.Error("SessionTouch on an existing row must report updated=true")
 	}
 	sl, _, _ = db.SessionGet(ctx, "s1")
 	if !sl.LastSeen.Equal(touched) || !sl.FirstSeen.Equal(first) {
 		t.Errorf("after touch = firstSeen %v lastSeen %v, want %v %v", sl.FirstSeen, sl.LastSeen, first, touched)
+	}
+
+	// Touch on a missing row reports updated=false (no resurrection) — the
+	// behaviour SessionTracker relies on to detect a cluster-wide deletion
+	// (REVIEW.md M-3).
+	if u, err := db.SessionTouch(ctx, "ghost", touched, exp); err != nil || u {
+		t.Errorf("SessionTouch on missing row = (updated=%v, err=%v), want (false, nil)", u, err)
 	}
 
 	// Delete.

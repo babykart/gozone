@@ -46,15 +46,23 @@ func (db *DB) SessionInsert(ctx context.Context, sessionID string, firstSeen, la
 
 // SessionTouch updates a session's last activity and hard expiry. first_seen is
 // intentionally not modified (the absolute budget is anchored at first login).
-func (db *DB) SessionTouch(ctx context.Context, sessionID string, lastSeen, expiresAt time.Time) error {
-	_, err := db.ExecContext(ctx,
+// The returned bool reports whether a row matched: false means the row no
+// longer exists (e.g. it was deleted by another instance's idle denial or by
+// an explicit logout), so callers must not treat the touch as a resurrection
+// signal (REVIEW.md M-3).
+func (db *DB) SessionTouch(ctx context.Context, sessionID string, lastSeen, expiresAt time.Time) (bool, error) {
+	res, err := db.ExecContext(ctx,
 		"UPDATE sessions SET last_seen = ?, expires_at = ? WHERE session_id = ?",
 		lastSeen, expiresAt, sessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("touch session: %w", err)
+		return false, fmt.Errorf("touch session: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("touch session: rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 // SessionDelete removes a session row (e.g. after an idle-timeout denial so the
