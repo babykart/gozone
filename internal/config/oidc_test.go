@@ -96,6 +96,70 @@ func TestOIDCValidateBadDefaultRole(t *testing.T) {
 	}
 }
 
+func TestOIDCValidateRoleClaimWithoutAdminValues(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.RoleClaim = "groups"
+	cfg.OIDC.Providers = []OIDCProviderConfig{
+		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
+	}
+	err := cfg.validateOIDC()
+	if err == nil || !strings.Contains(err.Error(), "admin_role_values") {
+		t.Fatalf("expected admin_role_values error, got %v", err)
+	}
+}
+
+func TestOIDCValidateGroupClaimWithoutMapping(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.GroupClaim = "groups"
+	cfg.OIDC.Providers = []OIDCProviderConfig{
+		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
+	}
+	err := cfg.validateOIDC()
+	if err == nil || !strings.Contains(err.Error(), "group_mapping") {
+		t.Fatalf("expected group_mapping error, got %v", err)
+	}
+}
+
+func TestOIDCValidateRoleAndGroupMappingOK(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.RoleClaim = "groups"
+	cfg.OIDC.AdminRoleValues = []string{"admins"}
+	cfg.OIDC.GroupClaim = "groups"
+	cfg.OIDC.GroupMapping = map[string]string{"devs": "developers"}
+	cfg.OIDC.Providers = []OIDCProviderConfig{
+		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
+	}
+	if err := cfg.validateOIDC(); err != nil {
+		t.Fatalf("valid role+group mapping rejected: %v", err)
+	}
+}
+
+func TestOIDCRoleGroupEnvOverrides(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", testSecret)
+	t.Setenv("GOZONE_OIDC_ENABLED", "true")
+	t.Setenv("GOZONE_OIDC_ROLE_CLAIM", "realm_access.roles")
+	t.Setenv("GOZONE_OIDC_ADMIN_ROLE_VALUES", "admins, super-admins")
+	t.Setenv("GOZONE_OIDC_PROVIDER_NAME", "keycloak")
+	t.Setenv("GOZONE_OIDC_ISSUER_URL", "https://kc.example.com")
+	t.Setenv("GOZONE_OIDC_CLIENT_ID", "cid")
+	t.Setenv("GOZONE_OIDC_CLIENT_SECRET", "sec")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.OIDC.RoleClaim != "realm_access.roles" {
+		t.Errorf("RoleClaim = %q", cfg.OIDC.RoleClaim)
+	}
+	if len(cfg.OIDC.AdminRoleValues) != 2 || cfg.OIDC.AdminRoleValues[1] != "super-admins" {
+		t.Errorf("AdminRoleValues = %v", cfg.OIDC.AdminRoleValues)
+	}
+	// group_claim is YAML-only (group_mapping cannot be expressed in env), so
+	// it is exercised via the YAML/validate tests instead.
+}
+
 // TestOIDCValidateDisabledSkipped ensures a disabled config (the default) is
 // always accepted even with malformed providers — validation is inert when SSO
 // is off and no providers are declared.

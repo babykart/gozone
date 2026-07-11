@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
@@ -298,13 +301,241 @@ func TestLoginPageRendersSSOProviders(t *testing.T) {
 	}
 }
 
+// rawClaim builds a single-key raw claim map for OIDC claims used in tests.
+func rawClaim(key string, values ...string) map[string]json.RawMessage {
+	arr := make([]string, len(values))
+	for i, v := range values {
+		arr[i] = "\"" + v + "\""
+	}
+	body := "[" + strings.Join(arr, ",") + "]"
+	return map[string]json.RawMessage{key: json.RawMessage(body)}
+}
+
+func TestResolveSSOUser_RoleMappingPromotesToAdmin(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.AdminRoleValues = []string{"admins", "super-admins"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-role",
+		Email: "role@example.com", EmailVerified: false,
+		PreferredUsername: "roleuser",
+		Raw:               rawClaim("groups", "devs", "admins"),
+	}
+	user, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if user.Role != "admin" {
+		t.Errorf("expected admin role from group mapping, got %q", user.Role)
+	}
+}
+
+func TestResolveSSOUser_RoleMappingDefaultWhenNoMatch(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.AdminRoleValues = []string{"admins"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-role2",
+		Email: "role2@example.com", EmailVerified: false,
+		PreferredUsername: "roleuser2",
+		Raw:               rawClaim("groups", "devs"),
+	}
+	user, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if user.Role != "user" {
+		t.Errorf("expected user role, got %q", user.Role)
+	}
+}
+
+func TestResolveSSOUser_ExistingUserRoleSync(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.AdminRoleValues = []string{"admins"}
+	ctx := context.Background()
+	// Provision a user first as a regular user.
+	first, err := h.DB.CreateExternalUser(ctx, "syncer", "sync@example.com", "", "", "user",
+		"https://idp.example.com", "sub-sync")
+	if err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	if first.Role != "user" {
+		t.Fatalf("setup: expected user, got %q", first.Role)
+	}
+	// Second login with an admin-group claim must promote the existing user.
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-sync",
+		Raw: rawClaim("groups", "admins"),
+	}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if got.ID != first.ID {
+		t.Fatalf("expected same user %d, got %d", first.ID, got.ID)
+	}
+	if got.Role != "admin" {
+		t.Errorf("expected promoted role admin, got %q", got.Role)
+	}
+	// Persisted in DB too.
+	var role string
+	if err := h.DB.QueryRow("SELECT role FROM users WHERE id = ?", first.ID).Scan(&role); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if role != "admin" {
+		t.Errorf("expected persisted role admin, got %q", role)
+	}
+}
+
+func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.GroupClaim = "groups"
+	h.Cfg.OIDC.GroupMapping = map[string]string{"dev-team": "developers"}
+	ctx := context.Background()
+	// Pre-create the target zone group.
+	res, err := h.DB.ExecContext(ctx,
+		"INSERT INTO zone_groups (name, description) VALUES (?, ?)", "developers", "")
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	gid, _ := res.LastInsertId()
+
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-grp",
+		Email: "grp@example.com", EmailVerified: false,
+		PreferredUsername: "grpuser",
+		Raw:               rawClaim("groups", "dev-team", "unmapped"),
+	}
+	user, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	var n int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?",
+		gid, user.ID).Scan(&n); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 membership, got %d", n)
+	}
+}
+
+func TestResolveSSOUser_GroupMappingSkipsMissingGroup(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.GroupClaim = "groups"
+	h.Cfg.OIDC.GroupMapping = map[string]string{"dev-team": "does-not-exist"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-grp2",
+		Email: "grp2@example.com", EmailVerified: false,
+		PreferredUsername: "grpuser2",
+		Raw:               rawClaim("groups", "dev-team"),
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err != nil {
+		t.Fatalf("resolveSSOUser should not fail when target group missing: %v", err)
+	}
+}
+
+func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-rp-logout!")
+	h.OIDC = &fakeSSOService{
+		providers:  []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+		endSession: "https://idp.example.com/logout",
+	}
+	ctx := context.Background()
+	user, err := h.DB.CreateExternalUser(ctx, "rpuser", "rp@example.com", "", "", "user", "iss", "sub")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	// Establish an SSO session (sets the cookie + AuthProvider=gitea).
+	w0 := httptest.NewRecorder()
+	r0 := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := h.issueSSOSession(w0, r0, user, "gitea"); err != nil {
+		t.Fatalf("issueSSOSession: %v", err)
+	}
+	var sessionCookie *http.Cookie
+	for _, c := range w0.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected a session cookie")
+	}
+
+	// POST /logout with that cookie → must redirect to the IdP end_session URL.
+	// Inject the user into the context to mirror the Auth middleware (the real
+	// Logout route runs behind it).
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r.AddCookie(sessionCookie)
+	r.Host = "gozone.test"
+	r = r.WithContext(context.WithValue(r.Context(), middleware.UserContextKey, user))
+	h.Logout(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://idp.example.com/logout") {
+		t.Errorf("expected redirect to IdP end_session, got %q", loc)
+	}
+	if !strings.Contains(loc, "post_logout_redirect_uri=") {
+		t.Errorf("expected post_logout_redirect_uri param, got %q", loc)
+	}
+	// Token revoked.
+	var revoked int
+	h.DB.QueryRow("SELECT COUNT(*) FROM revoked_tokens").Scan(&revoked)
+	if revoked != 1 {
+		t.Errorf("expected 1 revoked token, got %d", revoked)
+	}
+}
+
+func TestLogout_LocalSessionSkipsRPLogout(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-local-logout!")
+	h.OIDC = &fakeSSOService{
+		providers:  []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+		endSession: "https://idp.example.com/logout",
+	}
+	// A local-login session: AuthProvider empty (GenerateToken path).
+	user := &models.User{ID: 1, Username: "local", Role: "user"}
+	token, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	h.Logout(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/login" {
+		t.Errorf("local logout must redirect to /login, got %q", loc)
+	}
+}
+
 // fakeSSOService is a test double for SSOService. It implements just enough of
 // the contract (Enabled/Providers) to exercise handler branches without a live
 // identity provider. AuthCodeURL/HandleCallback are wired for completeness.
 type fakeSSOService struct {
-	providers []*oidc.ProviderInstance
-	claims    *oidc.Claims
-	err       error
+	providers  []*oidc.ProviderInstance
+	claims     *oidc.Claims
+	err        error
+	endSession string
 }
 
 func (f *fakeSSOService) Enabled() bool                       { return len(f.providers) > 0 }
@@ -314,6 +545,12 @@ func (f *fakeSSOService) AuthCodeURL(provider, _ string) (string, error) {
 }
 func (f *fakeSSOService) HandleCallback(_ context.Context, _, _, _, _ string) (*oidc.Claims, error) {
 	return f.claims, f.err
+}
+func (f *fakeSSOService) EndSessionURL(provider string) string {
+	if f.endSession == "" {
+		return ""
+	}
+	return f.endSession + "?provider=" + provider
 }
 
 // Ensure the models import is used by referencing the User type.

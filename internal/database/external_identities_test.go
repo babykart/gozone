@@ -154,6 +154,98 @@ func TestCreateExternalUserUsernameCollision(t *testing.T) {
 	}
 }
 
+func TestZoneGroupIDByNameTx(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	res, err := db.ExecContext(ctx,
+		"INSERT INTO zone_groups (name, description) VALUES (?, ?)", "developers", "")
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	gid, _ := res.LastInsertId()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	got, err := tx.ZoneGroupIDByNameTx(ctx, "developers")
+	if err != nil {
+		t.Fatalf("ZoneGroupIDByNameTx: %v", err)
+	}
+	missing, err := tx.ZoneGroupIDByNameTx(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("ZoneGroupIDByNameTx missing: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if got != gid {
+		t.Errorf("expected group id %d, got %d", gid, got)
+	}
+	if missing != 0 {
+		t.Errorf("expected 0 for missing group, got %d", missing)
+	}
+}
+
+func TestAddGroupMembershipIdempotent(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user, err := db.CreateExternalUser(ctx, "greg", "greg@example.com", "", "", "user", "iss", "sub")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	res, _ := db.ExecContext(ctx, "INSERT INTO zone_groups (name, description) VALUES (?, ?)", "devs", "")
+	gid, _ := res.LastInsertId()
+
+	// Add twice in two transactions; the second must not error (idempotent).
+	for i := 0; i < 2; i++ {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		if err := tx.AddGroupMembership(ctx, gid, user.ID); err != nil {
+			t.Fatalf("AddGroupMembership #%d: %v", i, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+	var n int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?", gid, user.ID).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 membership row, got %d", n)
+	}
+}
+
+func TestSetUserRole(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	user, err := db.CreateExternalUser(ctx, "hugo", "hugo@example.com", "", "", "user", "iss", "sub")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := tx.SetUserRole(ctx, user.ID, "admin"); err != nil {
+		t.Fatalf("SetUserRole: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	var role string
+	if err := db.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", user.ID).Scan(&role); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if role != "admin" {
+		t.Errorf("expected role admin, got %q", role)
+	}
+}
+
 // newTestDB mirrors the handler-test helper but lives in the database package
 // so these tests do not import handlers (which would be a cycle).
 func newTestDB(t *testing.T) *DB {

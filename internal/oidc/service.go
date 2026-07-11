@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -31,6 +32,11 @@ type Claims struct {
 	PreferredUsername string
 	// Name mirrors "name", split into first/last for the local user record.
 	Name string
+	// Raw is the full decoded ID-token claim set. It lets the handler apply
+	// config-driven claim mappings (role/group extraction along arbitrary
+	// dotted paths such as "realm_access.roles") without the oidc package
+	// having to know every provider's claim shape.
+	Raw map[string]json.RawMessage
 }
 
 // ProviderInstance is a single configured, discovered identity provider.
@@ -40,8 +46,13 @@ type ProviderInstance struct {
 	Icon        string
 	Issuer      string
 	Scopes      []string
-	oauth2      *oauth2.Config
-	verifier    *oidc.IDTokenVerifier
+	// EndSessionURL is the provider's RP-initiated logout endpoint
+	// (discovery "end_session_endpoint"), or empty when the provider does not
+	// advertise one. Used by the Logout handler to redirect the browser back
+	// to the IdP so its SSO cookie is also cleared.
+	EndSessionURL string
+	oauth2        *oauth2.Config
+	verifier      *oidc.IDTokenVerifier
 }
 
 // Service holds the set of discovered OIDC providers and provides the
@@ -100,6 +111,18 @@ func (s *Service) Provider(name string) (*ProviderInstance, bool) {
 	return p, ok
 }
 
+// EndSessionURL returns the RP-initiated logout endpoint for the named provider,
+// or "" when the provider is unknown or does not advertise end_session_endpoint.
+// The Logout handler uses this to redirect the browser to the IdP so the SSO
+// cookie is cleared alongside the local GoZone session.
+func (s *Service) EndSessionURL(provider string) string {
+	inst, ok := s.Provider(provider)
+	if !ok {
+		return ""
+	}
+	return inst.EndSessionURL
+}
+
 // Providers returns the configured providers in a stable order (configuration
 // order) so the login page can render consistent buttons.
 func (s *Service) Providers() []*ProviderInstance {
@@ -123,8 +146,10 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 	// The authoritative issuer is the "iss" claim in the discovery document
 	// (which the ID-token verifier also enforces); it is the link key half
 	// (issuer, subject) → local user, so prefer it over the configured URL.
+	// Capture end_session_endpoint too for RP-initiated logout.
 	var meta struct {
-		Issuer string `json:"issuer"`
+		Issuer        string `json:"issuer"`
+		EndSessionURL string `json:"end_session_endpoint"`
 	}
 	_ = provider.Claims(&meta)
 	issuer := meta.Issuer
@@ -141,11 +166,12 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 		displayName = pc.Name
 	}
 	inst := &ProviderInstance{
-		Name:        pc.Name,
-		DisplayName: displayName,
-		Icon:        preset.Icon,
-		Issuer:      issuer,
-		Scopes:      scopes,
+		Name:          pc.Name,
+		DisplayName:   displayName,
+		Icon:          preset.Icon,
+		Issuer:        issuer,
+		Scopes:        scopes,
+		EndSessionURL: meta.EndSessionURL,
 		oauth2: &oauth2.Config{
 			ClientID:     pc.ClientID,
 			ClientSecret: pc.ClientSecret,
@@ -223,8 +249,15 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 	}
 
 	claims := &Claims{Subject: idToken.Subject, Issuer: idToken.Issuer}
-	// Extract optional claims. Unknown/missing claims are left zero — the
-	// handler falls back to the subject for the username.
+	// Stash the raw claim set first so the handler can run config-driven
+	// mappings against arbitrary claim paths (role/group extraction). idToken
+	// decodes from its stored payload on every Claims() call, so this extra
+	// unmarshal does not disturb the profile-claim extraction below.
+	var rawMap map[string]json.RawMessage
+	_ = idToken.Claims(&rawMap)
+	claims.Raw = rawMap
+	// Extract the common profile claims. Unknown/missing claims are left zero —
+	// the handler falls back to the subject for the username.
 	var raw struct {
 		Email             string `json:"email"`
 		EmailVerified     bool   `json:"email_verified"`

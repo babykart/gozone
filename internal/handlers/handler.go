@@ -49,6 +49,9 @@ type SSOService interface {
 	// HandleCallback verifies the state, exchanges the code, verifies the ID
 	// token and returns the normalized user claims.
 	HandleCallback(ctx context.Context, provider, code, state, callbackURL string) (*oidc.Claims, error)
+	// EndSessionURL returns the provider's RP-initiated logout endpoint, or ""
+	// when the provider is unknown or does not advertise one.
+	EndSessionURL(provider string) string
 }
 
 // New creates a new Handler with all dependencies.

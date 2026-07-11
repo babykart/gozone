@@ -103,7 +103,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.issueSSOSession(w, r, user, claims.Issuer); err != nil {
+	if err := h.issueSSOSession(w, r, user, provider); err != nil {
 		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
 		return
 	}
@@ -121,9 +121,15 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // resolved — e.g. auto_provision disabled with no prior link, or a unique
 // collision that cannot be resolved deterministically.
 func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*models.User, error) {
+	role := h.desiredRole(claims)
 	if user, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject); err != nil {
 		return nil, fmt.Errorf("lookup external identity: %w", err)
 	} else if user != nil {
+		// Existing linked user: sync IdP-authoritative attributes (role when
+		// role_claim is set, group memberships when group_claim is set).
+		if err := h.syncSSOAttributes(ctx, user, claims); err != nil {
+			return nil, err
+		}
 		return user, nil
 	}
 
@@ -141,14 +147,13 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 			if err := h.linkIdentity(ctx, existing.ID, claims.Issuer, claims.Subject); err != nil {
 				return nil, err
 			}
+			if err := h.syncSSOAttributes(ctx, existing, claims); err != nil {
+				return nil, err
+			}
 			return existing, nil
 		}
 	}
 
-	role := h.Cfg.OIDC.DefaultRole
-	if role == "" {
-		role = "user"
-	}
 	first, last := splitName(claims.Name)
 	username := deriveSSOUsername(claims.PreferredUsername, claims.Subject)
 	email := claims.Email
@@ -165,7 +170,152 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 		}
 		return nil, fmt.Errorf("provision user: %w", err)
 	}
+	// A freshly provisioned user already has the desired role; only group
+	// memberships remain to be synced.
+	if h.Cfg.OIDC.GroupClaim != "" {
+		if err := h.syncGroups(ctx, user.ID, claims); err != nil {
+			return nil, err
+		}
+	}
 	return user, nil
+}
+
+// desiredRole resolves the GoZone role a user should hold based on the OIDC
+// claims and the configured role mapping. When role mapping is disabled
+// (RoleClaim empty) it returns DefaultRole (defaulting to "user"). When enabled,
+// any overlap between the claim values and AdminRoleValues promotes the user to
+// "admin"; otherwise DefaultRole applies.
+func (h *Handler) desiredRole(claims *oidc.Claims) string {
+	role := h.Cfg.OIDC.DefaultRole
+	if role == "" {
+		role = "user"
+	}
+	if h.Cfg.OIDC.RoleClaim != "" {
+		values := oidc.ClaimStrings(claims.Raw, h.Cfg.OIDC.RoleClaim)
+		for _, v := range values {
+			for _, admin := range h.Cfg.OIDC.AdminRoleValues {
+				if v == admin {
+					return "admin"
+				}
+			}
+		}
+	}
+	return role
+}
+
+// syncSSOAttributes applies IdP-authoritative attribute mappings to an existing
+// user: role (when role_claim is configured) and zone-group memberships (when
+// group_claim is configured). Both are best-effort and never block a successful
+// SSO login — a failure is returned so the caller surfaces a generic sso_error,
+// but transient/attribute errors are logged and skipped inside the helpers.
+func (h *Handler) syncSSOAttributes(ctx context.Context, user *models.User, claims *oidc.Claims) error {
+	if h.Cfg.OIDC.RoleClaim != "" {
+		desired := h.desiredRole(claims)
+		if desired != user.Role {
+			if err := h.applySSORole(ctx, user, desired); err != nil {
+				return err
+			}
+			user.Role = desired
+		}
+	}
+	if h.Cfg.OIDC.GroupClaim != "" {
+		return h.syncGroups(ctx, user.ID, claims)
+	}
+	return nil
+}
+
+// applySSORole updates a user's role to reflect the IdP mapping. A demotion
+// from admin→user is refused (and logged) when the user is the last enabled
+// admin, mirroring the guard in UpdateUser so SSO role sync can never lock the
+// instance out. The change is recorded in activity_logs.
+func (h *Handler) applySSORole(ctx context.Context, user *models.User, desired string) error {
+	tx, err := h.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if user.Role == "admin" && desired != "admin" {
+		last, err := tx.IsLastEnabledAdmin(ctx, user.ID)
+		if err != nil {
+			return fmt.Errorf("check last admin: %w", err)
+		}
+		if last {
+			logger.Warn("refused SSO role demotion of the last enabled admin",
+				"user_id", user.ID, "username", user.Username)
+			// Commit the empty tx and keep the admin role.
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit: %w", err)
+			}
+			committed = true
+			return nil
+		}
+	}
+	if err := tx.SetUserRole(ctx, user.ID, desired); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'sso_role_sync', ?)",
+		user.ID, fmt.Sprintf("SSO role sync set role to %s", desired),
+	); err != nil {
+		return fmt.Errorf("log sso role sync: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// syncGroups adds the user to every GoZone zone_group that the configured
+// GroupMapping resolves from the claim values. It is additive only — existing
+// memberships are kept, and memberships are never removed automatically (revoke
+// manually). Target groups that do not exist are skipped with a warning so the
+// operator is nudged to pre-create them.
+func (h *Handler) syncGroups(ctx context.Context, userID int64, claims *oidc.Claims) error {
+	values := oidc.ClaimStrings(claims.Raw, h.Cfg.OIDC.GroupClaim)
+	if len(values) == 0 {
+		return nil
+	}
+	tx, err := h.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	seen := make(map[string]bool, len(values))
+	for _, v := range values {
+		groupName, ok := h.Cfg.OIDC.GroupMapping[v]
+		if !ok || seen[groupName] {
+			continue
+		}
+		seen[groupName] = true
+		groupID, err := tx.ZoneGroupIDByNameTx(ctx, groupName)
+		if err != nil {
+			return fmt.Errorf("lookup group %q: %w", groupName, err)
+		}
+		if groupID == 0 {
+			logger.Warn("oidc group mapping: target group does not exist; skipping",
+				"group", groupName, "claim_value", v)
+			continue
+		}
+		if err := tx.AddGroupMembership(ctx, groupID, userID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // linkIdentity links an external identity to an existing user in its own
@@ -201,10 +351,11 @@ func (h *Handler) linkIdentity(ctx context.Context, userID int64, issuer, subjec
 // issueSSOSession mints the JWT session cookie used for all authenticated web
 // routes and records an activity log entry. It mirrors the tail of the local
 // Login handler so SSO and local sessions are indistinguishable to the Auth
-// middleware.
-func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *models.User, issuer string) error {
+// middleware. The provider name is embedded as AuthProvider so the Logout
+// handler can perform RP-initiated logout at the IdP end_session_endpoint.
+func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *models.User, provider string) error {
 	duration := time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour
-	token, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, duration)
+	token, err := middleware.GenerateSessionToken(user, h.Cfg.Server.JWTKey, duration, provider)
 	if err != nil {
 		return fmt.Errorf("generate token: %w", err)
 	}
@@ -220,7 +371,7 @@ func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *
 	})
 	if _, err := h.DB.ExecContext(r.Context(),
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'sso_login', ?)",
-		user.ID, fmt.Sprintf("User %s logged in via SSO (%s)", user.Username, issuer),
+		user.ID, fmt.Sprintf("User %s logged in via SSO (%s)", user.Username, provider),
 	); err != nil {
 		logger.Error("failed to log sso login activity", "user_id", user.ID, "error", err)
 	}

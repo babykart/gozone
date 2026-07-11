@@ -34,6 +34,11 @@ type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	// AuthProvider records how the session was established: "" or "local" for
+	// username/password login, or the OIDC provider name (e.g. "gitea") for
+	// single sign-on. Used by the Logout handler to decide whether to perform
+	// RP-initiated logout at the IdP end_session_endpoint.
+	AuthProvider string `json:"auth_provider,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -41,7 +46,8 @@ type Claims struct {
 //
 // It produces an HMAC-SHA256 token containing the user ID, username, role, and
 // a unique JWT ID (jti). The token expires after the given duration from the
-// current time.
+// current time. The session is treated as a local login (AuthProvider empty);
+// SSO sessions use GenerateSessionToken with the provider name.
 //
 // Parameters:
 //   - user: the authenticated user to encode in the token
@@ -50,15 +56,24 @@ type Claims struct {
 //
 // Returns the encoded JWT string and any signing error.
 func GenerateToken(user *models.User, secret []byte, duration time.Duration) (string, error) {
+	return GenerateSessionToken(user, secret, duration, "")
+}
+
+// GenerateSessionToken creates a signed JWT token, recording the authentication
+// provider. provider is "" / "local" for password login, or the OIDC provider
+// slug for single sign-on. It is embedded as AuthProvider in the claims so the
+// Logout handler can route SSO sessions to the IdP end_session_endpoint.
+func GenerateSessionToken(user *models.User, secret []byte, duration time.Duration, provider string) (string, error) {
 	jti, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
 	}
 
 	claims := Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		AuthProvider: provider,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),

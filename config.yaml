@@ -129,8 +129,23 @@ oidc:
   # Global fallback scopes when a provider declares none. "openid" is always
   # added and deduplicated.
   scopes: ["openid", "profile", "email"]
+  # Role mapping: read a claim at this dotted path (e.g. "groups",
+  # "realm_access.roles") from the ID token and promote the user to admin when
+  # it contains any admin_role_values. Empty (default) disables role mapping;
+  # default_role then governs provisioning. Applied on every SSO login, so the
+  # IdP is authoritative for the role — a demotion that would remove the last
+  # enabled admin is refused to avoid locking the instance out.
+  role_claim: ""
+  admin_role_values: []
+  # Group mapping: read a claim at this dotted path and map each value (via
+  # group_mapping) to a GoZone zone_group name. The user is added (additively)
+  # to every mapped group that exists; groups that do not exist are skipped
+  # (create them first). Memberships are never auto-removed — revoke manually.
+  # group_claim is empty by default (mapping disabled).
+  group_claim: ""
+  group_mapping: {}
   providers: []
-  # Example: Gitea as an OIDC identity provider.
+  # Example: Gitea as an OIDC identity provider, with role + group mapping.
   # providers:
   #   - name: gitea
   #     issuer_url: "https://gitea.example.com"
@@ -138,3 +153,9 @@ oidc:
   #     client_secret: "changeme"
   #     # display_name: "Gitea"   # optional override
   #     # scopes: ["openid", "profile", "email", "groups"]  # optional override
+  # role_claim: "groups"
+  # admin_role_values: ["gozone-admins"]
+  # group_claim: "groups"
+  # group_mapping:
+  #   "dev-team": "developers"
+  #   "ops-team": "operations"

@@ -7,7 +7,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
 - [x] **OAuth2 / OIDC provider configuration**
   - Configurable provider URL, client ID, client secret via `config.yaml` + env vars (`GOZONE_OIDC_*`)
   - Well-known discovery endpoint (`/.well-known/openid-configuration`) for automatic metadata retrieval
-  - Support for standard providers: Google, GitHub, GitLab, Keycloak, Authentik, Azure AD, **Gitea**
+  - Support for standard providers: Google, GitHub, GitLab, Keycloak, Authentik, Azure AD, Gitea
 
 - [x] **Login flow**
   - "Sign in with SSO" button on login page, redirects to provider authorization endpoint
@@ -16,7 +16,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - Nonce parameter for OpenID Connect ID token replay protection
   - Redirect URI validation against configured base URL
 
-- [ ] **User mapping and provisioning**
+- [x] **User mapping and provisioning**
   - Map OIDC claims to GoZone user attributes: `sub` → external ID, `email` → email, `preferred_username` → username, `name` → display name
   - Just-in-time (JIT) user provisioning: auto-create user on first login if allowed by config
   - Role mapping: map provider roles/groups/realm_access claims to GoZone roles (admin/user)
@@ -27,7 +27,7 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - [x] JWT session issued after successful OIDC authentication, same as local login
   - Refresh token support with configurable TTL
   - Idle session timeout with forced re-authentication
-  - Single logout (RP-Initiated Logout) with `end_session_endpoint` when available
+  - [x] Single logout (RP-Initiated Logout) with `end_session_endpoint` when available
 
 - [x] **Configuration options**
   - `oidc.enabled` — master switch for SSO

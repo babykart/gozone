@@ -156,3 +156,46 @@ func randomLoginHash() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// ZoneGroupIDByNameTx looks up a zone_group ID by its (unique) name inside the
+// caller's transaction. Returns (0, nil) when no such group exists — callers
+// (SSO group mapping) treat a missing target group as "skip" rather than an
+// error, so the operator must pre-create the group.
+func (tx *Tx) ZoneGroupIDByNameTx(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx,
+		"SELECT id FROM zone_groups WHERE name = ?", name,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
+}
+
+// AddGroupMembership adds userID to groupID idempotently (no-op if already a
+// member). Intended to run inside the SSO provisioning/login transaction.
+func (tx *Tx) AddGroupMembership(ctx context.Context, groupID, userID int64) error {
+	_, err := tx.InsertIgnore(ctx, "zone_group_members",
+		[]string{"group_id", "user_id"},
+		[]string{"group_id", "user_id"},
+		groupID, userID)
+	if err != nil {
+		return fmt.Errorf("add group membership: %w", err)
+	}
+	return nil
+}
+
+// SetUserRole updates a user's role. role MUST be validated ("admin"/"user") by
+// the caller. The last-enabled-admin guard is NOT applied here — the caller is
+// responsible for refusing a demotion that would leave the instance without an
+// enabled admin (see handlers.UpdateUser and the SSO role-sync path).
+func (tx *Tx) SetUserRole(ctx context.Context, userID int64, role string) error {
+	_, err := tx.ExecContext(ctx,
+		"UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		role, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("set user role: %w", err)
+	}
+	return nil
+}

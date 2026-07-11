@@ -157,6 +157,23 @@ type OIDCConfig struct {
 	// Providers is the list of configured identity providers. Each entry
 	// becomes a /auth/oidc/{name} route pair and a login button.
 	Providers []OIDCProviderConfig `yaml:"providers"`
+	// RoleClaim is the dotted path of the ID-token claim inspected for role
+	// mapping (e.g. "groups", "roles", "realm_access.roles"). When empty (the
+	// default) role mapping is disabled and DefaultRole governs provisioning.
+	RoleClaim string `yaml:"role_claim"`
+	// AdminRoleValues lists claim values (at RoleClaim) that grant the GoZone
+	// admin role. Any user whose claim set contains one of these values is
+	// mapped to "admin"; otherwise the DefaultRole applies. Case-sensitive.
+	AdminRoleValues []string `yaml:"admin_role_values"`
+	// GroupClaim is the dotted path of the ID-token claim inspected for zone-
+	// group mapping (e.g. "groups", "teams"). When empty (the default) group
+	// mapping is disabled.
+	GroupClaim string `yaml:"group_claim"`
+	// GroupMapping maps an IdP claim value (at GroupClaim) to a GoZone
+	// zone_group name. On each SSO login the user is added (additively) to
+	// every mapped group that exists; groups that do not exist are skipped with
+	// a warning. Memberships are never auto-removed — revoke manually.
+	GroupMapping map[string]string `yaml:"group_mapping"`
 }
 
 // OIDCProviderConfig describes a single identity provider. Name maps to a
@@ -335,7 +352,9 @@ func DefaultConfig() *Config {
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
 // GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_OIDC_ENABLED,
 // GOZONE_OIDC_ALLOW_LOCAL_LOGIN, GOZONE_OIDC_AUTO_PROVISION,
-// GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_PROVIDER_NAME,
+// GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
+// GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
+// GOZONE_OIDC_PROVIDER_NAME,
 // GOZONE_OIDC_ISSUER_URL, GOZONE_OIDC_CLIENT_ID, GOZONE_OIDC_CLIENT_SECRET.
 //
 // Parameters:
@@ -619,6 +638,17 @@ func (cfg *Config) validateOIDC() error {
 	if cfg.OIDC.Enabled && len(cfg.OIDC.Providers) == 0 {
 		return fmt.Errorf("oidc.enabled is true but no providers are configured")
 	}
+
+	// Role/group mapping sanity: a claim path with no mapped values is a no-op
+	// footgun (AdminRoleValues empty means nobody is ever promoted; GroupMapping
+	// empty means no memberships are synced). Surface these so an operator who
+	// sets the claim but forgets the values is warned at startup.
+	if cfg.OIDC.RoleClaim != "" && len(cfg.OIDC.AdminRoleValues) == 0 {
+		return fmt.Errorf("oidc.role_claim %q is set but admin_role_values is empty", cfg.OIDC.RoleClaim)
+	}
+	if cfg.OIDC.GroupClaim != "" && len(cfg.OIDC.GroupMapping) == 0 {
+		return fmt.Errorf("oidc.group_claim %q is set but group_mapping is empty", cfg.OIDC.GroupClaim)
+	}
 	return nil
 }
 
@@ -845,6 +875,15 @@ func applyOIDCEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("GOZONE_OIDC_SCOPES"); v != "" {
 		cfg.OIDC.Scopes = splitNonEmpty(v, ",")
+	}
+	if v := os.Getenv("GOZONE_OIDC_ROLE_CLAIM"); v != "" {
+		cfg.OIDC.RoleClaim = v
+	}
+	if v := os.Getenv("GOZONE_OIDC_ADMIN_ROLE_VALUES"); v != "" {
+		cfg.OIDC.AdminRoleValues = splitNonEmpty(v, ",")
+	}
+	if v := os.Getenv("GOZONE_OIDC_GROUP_CLAIM"); v != "" {
+		cfg.OIDC.GroupClaim = v
 	}
 	// Single-provider env declaration, only when YAML declared none.
 	if len(cfg.OIDC.Providers) == 0 {
