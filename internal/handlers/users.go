@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -175,6 +176,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		username, email, string(hash), firstName, lastName, role, mustChangeVal,
 	)
 	if err != nil {
+		if errors.Is(err, database.ErrUniqueViolation) {
+			h.renderError(w, r, "A user with that username or email already exists")
+			return
+		}
 		h.renderInternalError(w, r, "Failed to create user", err)
 		return
 	}

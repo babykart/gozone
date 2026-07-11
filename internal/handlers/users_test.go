@@ -177,6 +177,46 @@ func TestCreateUser_RejectsInvalidRole(t *testing.T) {
 	}
 }
 
+// TestCreateUser_DuplicateRejected is the L-7 regression test: creating a user
+// with a username or email that already exists must return a friendly 400
+// message instead of a generic 500. Before the fix, the UNIQUE constraint
+// violation surfaced as an undifferentiated internal error.
+func TestCreateUser_DuplicateRejected(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	// admin user already exists with username "admin", email "admin@test.local"
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Duplicate username.
+	w := httptest.NewRecorder()
+	body := "username=admin&email=other@test.local&password=testpass&role=user"
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate username: expected 400, got %d (REVIEW.md L-7)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "already exists") {
+		t.Errorf("expected 'already exists' in error page, got: %s", w.Body.String())
+	}
+
+	// Duplicate email (different username but email collides).
+	w2 := httptest.NewRecorder()
+	body2 := "username=other&email=admin@test.local&password=testpass&role=user"
+	r2 := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body2))
+	r2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r2 = r2.WithContext(ctx)
+	h.CreateUser(w2, r2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate email: expected 400, got %d (REVIEW.md L-7)", w2.Code)
+	}
+	if !strings.Contains(w2.Body.String(), "already exists") {
+		t.Errorf("expected 'already exists' in error page, got: %s", w2.Body.String())
+	}
+}
+
 func TestCreateUser_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
