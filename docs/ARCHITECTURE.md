@@ -234,10 +234,13 @@ Browser ──POST /login──► chi Router
 
 ## Authentication Flows
 
-GoZone supports two authentication mechanisms (both populate `middleware.UserContextKey`):
+GoZone supports three authentication mechanisms (all populate
+`middleware.UserContextKey`):
 
 1. **Web UI** — JWT cookie + CSRF protection on every state-changing POST + optional admin guard
-2. **REST API** — API key (SHA-256 hashed) with rate-limiting
+2. **Single Sign-On (OIDC)** — optional; delegates login to an external OpenID
+   Connect provider, then issues the same JWT cookie as local login
+3. **REST API** — API key (SHA-256 hashed) with rate-limiting
 
 ### Client IP Resolution (global, before auth)
 
@@ -305,9 +308,13 @@ Subsequent Web UI requests:
 Auth middleware (on protected routes)
   ├── Extract from cookie "gozone_session"
   ├── Fallback: Authorization: Bearer <JWT>
-  ├── ParseToken → Claims{UserID, Username, Role, jti}
+  ├── ParseToken → Claims{UserID, Username, Role, AuthProvider, SessionID, jti}
   ├── CheckTokenRevoked (SELECT COUNT FROM revoked_tokens WHERE jti = ?)
   ├── loadUser(DB, UserID) → ensure enabled
+  ├── applySessionPolicy (when idle/absolute configured):
+  │     ├── SessionTracker.Touch(sid) → idle check
+  │     ├── absolute cap check (SessionID-keyed firstSeen)
+  │     └── transparent refresh near expiry (new jti, revoke old, preserved sid)
   └── context.WithValue(UserContextKey, user)
 
 CSRF middleware (gorilla/csrf):
@@ -333,6 +340,61 @@ LogoutHandler
 Background: CleanupRevokedTokens (every 1h)
   └── DELETE FROM revoked_tokens WHERE expires_at <= now
 ```
+
+### Single Sign-On (OpenID Connect)
+
+Optional. Enabled by `oidc.enabled` + at least one `oidc.providers[]` entry
+that successfully discovers (`/.well-known/openid-configuration`). Each
+discovered provider becomes a `Sign in with <provider>` button on `/login`. See
+[docs/SSO.md](./SSO.md) for provider setup; the flow is identical regardless of
+provider.
+
+```
+GET /auth/oidc/<provider>/login (login button)
+  │
+  ▼ oidc.Service.AuthCodeURL
+  ├── newStateToken: HMAC-signed state carrying {provider, nonce, PKCE verifier, exp}
+  ├── code_challenge = S256(verifier)
+  └── 302 → provider authorization endpoint
+        ?response_type=code&client_id=…&redirect_uri=…&scope=openid…
+        &state=<signed>&nonce=<nonce>&code_challenge=…&code_challenge_method=S256
+
+… user authenticates at the provider …
+
+GET /auth/oidc/<provider>/callback?code=…&state=…
+  │  (rate-limited by the shared login limiter)
+  ▼ oidc.Service.HandleCallback
+  ├── verifyStateToken: HMAC signature + exp + provider match (else sso_error)
+  ├── oauth2.Exchange(code, code_verifier) → {access_token, id_token, …}
+  ├── idToken.Verify: JWKS signature + iss/aud/exp/nonce (coreos/go-oidc)
+  └── normalize claims → {sub, iss, email, email_verified, preferred_username, name, Raw}
+  │
+  ▼ resolveSSOUser
+  ├── FindUserByExternalIdentity(iss, sub)        ← existing link (external_identities)
+  ├── else email link (only if email_verified):   FindUserByEmail → link identity
+  ├── else auto_provision (if enabled):           CreateExternalUser + link
+  └── syncSSOAttributes (IdP-authoritative):
+        ├── role (role_claim + admin_role_values, last-admin guarded)
+        └── groups (group_claim + group_mapping → add zone_group memberships, additive)
+  │
+  ▼ issueSSOSession
+  ├── GenerateSessionToken(user, JWTKey, duration, provider)  ← AuthProvider embedded for RP logout
+  ├── Set-Cookie gozone_session=<JWT>; SameSite=Lax (SSO callback is cross-site)
+  └── INSERT activity_logs (action='sso_login')
+  └── redirect /dashboard
+```
+
+Logout (RP-initiated): when the session's JWT carries an OIDC `auth_provider`
+and the provider advertises `end_session_endpoint`, `POST /logout` clears the
+local session + revokes the JWT, then 302s to the IdP end-session URL with
+`post_logout_redirect_uri=https://<host>/login`. Local-login sessions skip the
+IdP round-trip.
+
+Session policy (applies to local **and** SSO sessions): when
+`auth.idle_timeout_minutes` / `auth.absolute_session_timeout_hours` are set, the
+`SessionTracker` (in-memory, keyed by the JWT `sid`) enforces an idle window
+and an absolute refresh cap, transparently re-issuing the access JWT near its
+expiry up to the absolute cap.
 
 ### REST API (API Keys)
 

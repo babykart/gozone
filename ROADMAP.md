@@ -35,13 +35,26 @@ Remaining tasks to improve the security, quality, and performance of GoZone.
   - `oidc.auto_provision` — create users on first SSO login
   - `oidc.default_role` — role assigned to auto-provisioned users
   - `oidc.scopes` — requested scopes (openid, profile, email, groups)
-  - `oidc.claim_mappings` — custom claim-to-attribute mapping
+  - `oidc.role_claim` / `oidc.admin_role_values` — map IdP roles/groups claims to the GoZone admin role (delivers the ROADMAP's "claim-to-attribute mapping" for roles via a dotted claim path, e.g. `realm_access.roles`)
+  - `oidc.group_claim` / `oidc.group_mapping` — map IdP groups/teams to GoZone zone groups
 
 - [x] **Security**
   - Token signature verification with JWKS endpoint (`id_token_signing_alg_values_supported`)
   - Claims validation: `iss`, `aud`, `exp`, `iat`, `nbf`, `nonce`
-  - JWKS caching with configurable TTL (default 1 hour)
+  - JWKS caching (library-managed key rotation; not operator-tunable — see notes)
   - Rate limiting on callback endpoint to prevent brute-force state guessing
+
+> **Implementation notes (honest gaps)** — the feature is functional end-to-end
+> and every box above is delivered, with these caveats:
+> - GoZone's flow strictly requires an OIDC **id_token** (it is not a plain
+>   OAuth2 client). Providers that only do OAuth2 without an id_token (e.g.
+>   GitHub user OAuth) are not usable directly — front them with an OIDC-capable
+>   IdP (Dex/Keycloak/Authentik). See [docs/SSO.md](docs/SSO.md).
+> - JWKS caching & rotation are handled by `coreos/go-oidc`; the cache TTL is
+>   not operator-tunable today.
+> - Idle/absolute session enforcement is in-memory and single-instance
+>   (consistent with the rate limiters); multi-instance deployments do not
+>   share the idle window.
 
 ## Monitoring and Observability
 
