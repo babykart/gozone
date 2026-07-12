@@ -113,16 +113,48 @@ func selectDialect(driver string) (Dialect, error) {
 	}
 }
 
+// rebindDollar rewrites '?' placeholders to PostgreSQL-style '$N' markers. It
+// honours single-quoted string literals (with ” escaping) and "--" line
+// comments so a '?' inside a literal or comment is left untouched, mirroring
+// the state machine of splitStatements (REVIEW.md L-12).
 func rebindDollar(query string) string {
-	var out strings.Builder
-	n := 0
-	for _, c := range query {
-		if c == '?' {
+	var (
+		out      strings.Builder
+		n        int
+		inString bool
+	)
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && c == '-' && i+1 < len(query) && query[i+1] == '-' {
+			for i < len(query) && query[i] != '\n' {
+				out.WriteByte(query[i])
+				i++
+			}
+			if i < len(query) {
+				out.WriteByte(query[i])
+			}
+			continue
+		}
+		if c == '\'' {
+			out.WriteByte(c)
+			if inString {
+				if i+1 < len(query) && query[i+1] == '\'' {
+					out.WriteByte(query[i+1])
+					i++
+				} else {
+					inString = false
+				}
+			} else {
+				inString = true
+			}
+			continue
+		}
+		if c == '?' && !inString {
 			n++
 			out.WriteString(fmt.Sprintf("$%d", n))
-		} else {
-			out.WriteRune(c)
+			continue
 		}
+		out.WriteByte(c)
 	}
 	return out.String()
 }

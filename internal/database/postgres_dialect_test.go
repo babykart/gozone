@@ -135,11 +135,40 @@ func TestRebindDollar_NoopWhenNoPlaceholders(t *testing.T) {
 }
 
 func TestRebindDollar_NoDoubleCounting(t *testing.T) {
-	// A parameter marker inside a string literal should still be replaced; this
-	// is acceptable for our controlled SQL where string literals never contain
-	// single '?'. We verify the basic renumbering logic here.
 	q := "INSERT INTO t (a, b) VALUES (?, ?)"
 	want := "INSERT INTO t (a, b) VALUES ($1, $2)"
+	if got := rebindDollar(q); got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRebindDollar_SkipsQuestionMarkInStringLiteral(t *testing.T) {
+	q := "SELECT * FROM t WHERE a = ? AND b = 'what? no'"
+	want := "SELECT * FROM t WHERE a = $1 AND b = 'what? no'"
+	if got := rebindDollar(q); got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRebindDollar_SkipsQuestionMarkInEscapedQuoteLiteral(t *testing.T) {
+	q := "SELECT * FROM t WHERE a = ? AND b = 'it''s a ? test' AND c = ?"
+	want := "SELECT * FROM t WHERE a = $1 AND b = 'it''s a ? test' AND c = $2"
+	if got := rebindDollar(q); got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRebindDollar_SkipsQuestionMarkInLineComment(t *testing.T) {
+	q := "SELECT * FROM t -- why?\nWHERE a = ?"
+	want := "SELECT * FROM t -- why?\nWHERE a = $1"
+	if got := rebindDollar(q); got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestRebindDollar_ConsecutivePlaceholdersAfterLiteral(t *testing.T) {
+	q := "SELECT 'lit?eral', ?, ?, 'more?'"
+	want := "SELECT 'lit?eral', $1, $2, 'more?'"
 	if got := rebindDollar(q); got != want {
 		t.Errorf("expected %q, got %q", want, got)
 	}
