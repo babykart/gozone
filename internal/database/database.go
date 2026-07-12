@@ -266,11 +266,14 @@ func (db *DB) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
 }
 
 // CleanupRevokedTokens removes revocation entries that have already expired,
-// preventing the table from growing indefinitely.
+// preventing the table from growing indefinitely. The cutoff uses UTC to match
+// how expiries are written (JWT `exp` claims — the only production caller of
+// RevokeToken — are UTC), avoiding a TZ skew that would retain already-expired
+// rows until the local clock catches up (REVIEW.md L-16e).
 func (db *DB) CleanupRevokedTokens(ctx context.Context) error {
 	_, err := db.ExecContext(ctx,
 		"DELETE FROM revoked_tokens WHERE expires_at <= ?",
-		time.Now(),
+		time.Now().UTC(),
 	)
 	return err
 }

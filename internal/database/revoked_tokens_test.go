@@ -47,12 +47,12 @@ func TestRevokeTokenRoundTrip(t *testing.T) {
 		t.Fatal("token should not be revoked before RevokeToken")
 	}
 
-	if err := db.RevokeToken(ctx, "jti-1", uid, time.Now().Add(time.Hour)); err != nil {
+	if err := db.RevokeToken(ctx, "jti-1", uid, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 
 	// Revoking the same jti twice must be idempotent (ON CONFLICT DO NOTHING).
-	if err := db.RevokeToken(ctx, "jti-1", uid, time.Now().Add(time.Hour)); err != nil {
+	if err := db.RevokeToken(ctx, "jti-1", uid, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("RevokeToken (second call): %v", err)
 	}
 
@@ -72,10 +72,10 @@ func TestCleanupRevokedTokens(t *testing.T) {
 	uidValid := seedUser(t, db, "valid-user")
 
 	// An already-expired revocation and a still-valid one.
-	if err := db.RevokeToken(ctx, "expired", uidExpired, time.Now().Add(-time.Hour)); err != nil {
+	if err := db.RevokeToken(ctx, "expired", uidExpired, time.Now().UTC().Add(-time.Hour)); err != nil {
 		t.Fatalf("RevokeToken expired: %v", err)
 	}
-	if err := db.RevokeToken(ctx, "valid", uidValid, time.Now().Add(time.Hour)); err != nil {
+	if err := db.RevokeToken(ctx, "valid", uidValid, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("RevokeToken valid: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestRevokedTokens_CascadeOnUserDelete(t *testing.T) {
 	}
 	uid, _ := res.LastInsertId()
 
-	if err := db.RevokeToken(ctx, "jti-cascade", uid, time.Now().Add(time.Hour)); err != nil {
+	if err := db.RevokeToken(ctx, "jti-cascade", uid, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 	if revoked, _ := db.IsTokenRevoked(ctx, "jti-cascade"); !revoked {
