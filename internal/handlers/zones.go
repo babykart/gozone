@@ -100,6 +100,8 @@ func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
 		page = totalPages
 	}
 	if perPage <= 0 {
+		// B-7: pagination disabled -> the full slice is one page, so the
+		// returned Current is always 1 (never "page 2 sur 1").
 		return items, PageInfo{Current: 1, PerPage: 0, TotalPages: 1, Total: total}
 	}
 	start := (page - 1) * perPage
@@ -158,6 +160,10 @@ func pageInfoFromTotal(total, page, perPage int) PageInfo {
 	} else {
 		perPage = 0
 		totalPages = 1
+		// B-7: when pagination is disabled the whole result set is a single
+		// page, so a requested page > 1 is reset to 1 rather than relying on
+		// the generic clamp below (which would otherwise show "page 2 sur 1").
+		page = 1
 	}
 	if totalPages < 1 {
 		totalPages = 1 // L-11: "page 1 sur 1" instead of "page 1 sur 0"

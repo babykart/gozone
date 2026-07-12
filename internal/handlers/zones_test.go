@@ -860,6 +860,12 @@ func TestPaginate(t *testing.T) {
 		t.Errorf("perPage=0: len=%d pages=%d current=%d", len(paged), info.TotalPages, info.Current)
 	}
 
+	// B-7: perPage disabled resets a requested page > 1 to 1 — never "page 2 sur 1".
+	paged, info = paginate(items, 2, 0)
+	if len(paged) != 15 || info.TotalPages != 1 || info.Current != 1 {
+		t.Errorf("perPage=0 page=2: len=%d pages=%d current=%d (B-7 regression)", len(paged), info.TotalPages, info.Current)
+	}
+
 	// single item
 	paged, info = paginate([]int{42}, 1, 10)
 	if len(paged) != 1 || info.TotalPages != 1 || info.Total != 1 {
@@ -889,9 +895,10 @@ func TestPageInfoFromTotal(t *testing.T) {
 		t.Errorf("pageInfoFromTotal clamps above total: %+v", info)
 	}
 
-	// perPage 0 means one page.
+	// perPage 0 means one page (B-7: a requested page > 1 is reset to 1, never
+	// "page 2 sur 1").
 	info = pageInfoFromTotal(100, 5, 0)
-	if info.PerPage != 0 || info.TotalPages != 1 {
+	if info.PerPage != 0 || info.TotalPages != 1 || info.Current != 1 {
 		t.Errorf("pageInfoFromTotal(100,5,0) = %+v", info)
 	}
 
