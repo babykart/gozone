@@ -73,16 +73,41 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquire connection for migration lock: %w", err)
 	}
-	// GET_LOCK returns 1 on success, 0 on timeout (impossible with timeout -1
-	// but handled defensively), or NULL on an internal error such as out of
-	// memory or reaching the thread limit. Neither 0 nor NULL is a driver
-	// error, so scanning the result row is required — calling ExecContext and
-	// inspecting only its error would silently proceed without holding the
-	// lock (REVIEW.md M-1).
+	// GET_LOCK returns 1 on success, 0 on timeout, or NULL on an internal
+	// error (out of memory, thread killed, or the connection/thread limit
+	// being reached). Neither 0 nor NULL is a driver error, so the result row
+	// must be scanned — ExecContext + error inspection alone would silently
+	// proceed without holding the lock (REVIEW.md M-1).
+	//
+	// The timeout is finite rather than -1 (infinite). An infinite timeout
+	// pins a MySQL thread for as long as the lock is held elsewhere, and under
+	// multi-instance startup (or a slow/stuck holder) that exhausts MySQL's
+	// connection/thread pool — which then makes GET_LOCK itself return NULL,
+	// the exact "thread limit" failure gozone boots into. Migrations finish in
+	// seconds, so 60s is a generous bound for a waiting instance. A NULL is
+	// retried a few times because it can also reflect a transient server-side
+	// hiccup that clears on its own.
+	const (
+		lockTimeoutSec = 60
+		maxAttempts    = 3
+		retryBackoff   = 2 * time.Second
+	)
+	query := fmt.Sprintf("SELECT GET_LOCK('gozone_migrations', %d)", lockTimeoutSec)
 	var got sql.NullInt64
-	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK('gozone_migrations', -1)").Scan(&got); err != nil {
-		conn.Close() // #nosec G104 -- best-effort cleanup on error path
-		return nil, fmt.Errorf("acquire migration lock: %w", err)
+	for attempt := 1; ; attempt++ {
+		got = sql.NullInt64{}
+		if err := conn.QueryRowContext(ctx, query).Scan(&got); err != nil {
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire migration lock: %w", err)
+		}
+		// Retry only on a NULL result (server-side error); a definitive 1
+		// (acquired) or 0 (timed out) falls through to mysqlGetLockResult.
+		if got.Valid || attempt >= maxAttempts {
+			break
+		}
+		logger.Warn("GET_LOCK returned NULL (MySQL internal error); retrying",
+			"attempt", attempt, "of", maxAttempts, "backoff", retryBackoff.String())
+		time.Sleep(retryBackoff)
 	}
 	if err := mysqlGetLockResult(got); err != nil {
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
