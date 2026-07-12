@@ -24,9 +24,10 @@ func newTestDB(t *testing.T) *database.DB {
 // real embedded templates.
 func testTemplateSet() *template.Template {
 	funcMap := template.FuncMap{
-		"add":      func(a, b int) int { return a + b },
-		"sub":      func(a, b int) int { return a - b },
-		"urlquery": func(s string) string { return s },
+		"add":          func(a, b int) int { return a + b },
+		"sub":          func(a, b int) int { return a - b },
+		"urlquery":     func(s string) string { return s },
+		"assetVersion": func() string { return "testv" },
 		"dict": func(values ...interface{}) (map[string]interface{}, error) {
 			if len(values)%2 != 0 {
 				return nil, fmt.Errorf("dict expects an even number of arguments")

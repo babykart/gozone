@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/web"
 )
 
 // executeServer builds a fresh root command and runs `gozone server` with
@@ -35,6 +38,54 @@ func TestParseTemplates(t *testing.T) {
 	}
 	if tmpl == nil {
 		t.Fatal("expected non-nil template")
+	}
+}
+
+func TestStaticAssetVersion(t *testing.T) {
+	// REVIEW.md L-16c: the asset version is a short content hash of the bundled
+	// JS/CSS so a new deployment busts the browser cache via ?v=… despite the
+	// 24h max-age served by fileServer.
+	got := staticAssetVersion()
+	if len(got) != 16 { // first 8 bytes of SHA-256, hex-encoded
+		t.Fatalf("expected a 16-hex-char content hash, got %q (len %d)", got, len(got))
+	}
+	// Determinism: the version must match an independent computation over the
+	// same embedded bytes.
+	h := sha256.New()
+	for _, name := range []string{"static/js/app.js", "static/css/style.css"} {
+		data, err := web.FS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		h.Write(data)
+	}
+	want := hex.EncodeToString(h.Sum(nil)[:8])
+	if got != want {
+		t.Errorf("asset version = %q, want %q", got, want)
+	}
+}
+
+func TestAssetVersionRenderedInTemplates(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+	data := map[string]interface{}{"Title": "x"}
+
+	var head strings.Builder
+	if err := tmpl.ExecuteTemplate(&head, "head", data); err != nil {
+		t.Fatalf("execute head: %v", err)
+	}
+	if !strings.Contains(head.String(), "/static/css/style.css?v=") {
+		t.Errorf("head partial missing cache-busted style.css:\n%s", head.String())
+	}
+
+	var tail strings.Builder
+	if err := tmpl.ExecuteTemplate(&tail, "tail", data); err != nil {
+		t.Fatalf("execute tail: %v", err)
+	}
+	if !strings.Contains(tail.String(), "/static/js/app.js?v=") {
+		t.Errorf("tail partial missing cache-busted app.js:\n%s", tail.String())
 	}
 }
 

@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}}</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v={{assetVersion}}">
 </head>
 <body>
 {{end}}
 
 {{define "tail"}}
     <div id="notification" class="notification" role="status" aria-live="polite" aria-atomic="true" style="display:none"></div>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v={{assetVersion}}"></script>
 </body>
 </html>
 {{end}}

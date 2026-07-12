@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v={{assetVersion}}">
 </head>
 <body>
     <button class="theme-toggle theme-toggle-fixed" data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"></button>
@@ -15,6 +15,6 @@
         </div>
         <a href="/dashboard" class="btn btn-primary">Back to Dashboard</a>
     </main>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v={{assetVersion}}"></script>
 </body>
 </html>

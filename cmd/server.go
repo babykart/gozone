@@ -6,6 +6,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -639,13 +641,34 @@ func relativeName(recordName, zoneName string) string {
 	return recordName
 }
 
+// staticAssetVersion returns a short content hash of the bundled JS/CSS so
+// templates can append it as ?v=… to asset URLs. Deploying a new build changes
+// the hash, which invalidates browser caches despite the 24h max-age served by
+// fileServer (REVIEW.md L-16c). Computed from the embedded files, so it varies
+// on every content change regardless of the version label.
+func staticAssetVersion() string {
+	h := sha256.New()
+	for _, name := range []string{"static/js/app.js", "static/css/style.css"} {
+		data, err := web.FS.ReadFile(name)
+		if err != nil {
+			// Embedded files: unreachable in practice. Fall back to the build
+			// version so cache-busting still varies per release.
+			return version
+		}
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
+}
+
 // parseTemplates loads all HTML templates from the embedded filesystem.
 func parseTemplates() (*template.Template, error) {
+	assetVer := staticAssetVersion()
 	funcMap := template.FuncMap{
 		"add":          func(a, b int) int { return a + b },
 		"sub":          func(a, b int) int { return a - b },
 		"urlquery":     url.QueryEscape,
 		"relativeName": relativeName,
+		"assetVersion": func() string { return assetVer },
 		"dict": func(values ...interface{}) (map[string]interface{}, error) {
 			if len(values)%2 != 0 {
 				return nil, fmt.Errorf("dict expects an even number of arguments")
