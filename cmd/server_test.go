@@ -89,6 +89,48 @@ func TestAssetVersionRenderedInTemplates(t *testing.T) {
 	}
 }
 
+func TestSkipLinkAndMainAnchor(t *testing.T) {
+	// REVIEW.md L-16d: every authenticated page must expose a skip-to-content
+	// link as the first focusable element and a focusable main landmark it
+	// targets, so keyboard users can jump past the sidebar/topbar.
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+	data := map[string]interface{}{
+		"Title":     "Test",
+		"AppName":   "GoZone",
+		"Section":   "dashboard",
+		"IsAdmin":   true,
+		"CSRFToken": "tok",
+		"User":      map[string]interface{}{"Username": "admin"},
+	}
+	var buf strings.Builder
+	if err := tmpl.ExecuteTemplate(&buf, "app_layout_start", data); err != nil {
+		t.Fatalf("execute app_layout_start: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `class="skip-link"`) || !strings.Contains(out, `href="#main-content"`) {
+		t.Errorf("missing skip-to-content link:\n%s", out)
+	}
+	if !strings.Contains(out, `id="main-content"`) {
+		t.Errorf("main landmark missing id=\"main-content\":\n%s", out)
+	}
+}
+
+func TestAppJSNoNativeConfirm(t *testing.T) {
+	// REVIEW.md L-16d: blocking window.confirm() must be gone in favour of the
+	// custom confirmDialog modal. "confirm(" is not a substring of confirmDialog(
+	// / closeConfirmDialog(, so a Contains check reliably guards against a revert.
+	js, err := web.FS.ReadFile("static/js/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	if strings.Contains(string(js), "confirm(") {
+		t.Error("app.js must not call the native window.confirm(); use confirmDialog() instead (REVIEW.md L-16d)")
+	}
+}
+
 func TestRun_InvalidDatabaseDriver(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

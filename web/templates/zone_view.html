@@ -282,12 +282,12 @@
         <form method="POST" action="/zones/{{.Zone.ID}}/import" enctype="multipart/form-data" style="margin-top:0.5rem">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <div class="form-group">
-                <label>Zone File (.zone or .csv)</label>
-                <input type="file" name="zonefile" accept=".zone,.csv,.txt" required>
+                <label for="import-zonefile">Zone File (.zone or .csv)</label>
+                <input id="import-zonefile" type="file" name="zonefile" accept=".zone,.csv,.txt" required>
             </div>
             <div class="form-group">
-                <label>Format</label>
-                <select name="format">
+                <label for="import-format">Format</label>
+                <select id="import-format" name="format">
                     <option value="bind">BIND zone file</option>
                     <option value="csv">CSV</option>
                 </select>

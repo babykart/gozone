@@ -1,9 +1,10 @@
 {{define "app_layout_start"}}
 {{template "head" .}}
+<a href="#main-content" class="skip-link">Skip to content</a>
 <div class="app-layout">
     {{template "sidebar" .}}
     {{template "topbar" .}}
-    <main class="main-content">
+    <main id="main-content" class="main-content" tabindex="-1">
         <div class="container">
 {{end}}
 

@@ -1336,3 +1336,57 @@ details summary {
         outline-color: CanvasText;
     }
 }
+
+/* Skip-to-content link: off-screen until keyboard-focused, letting keyboard
+   users jump past the sidebar/topbar to the main content (REVIEW.md L-16d). */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1100;
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: #fff;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    transition: top 0.15s ease-in-out;
+}
+.skip-link:focus {
+    top: 1rem;
+    outline: 2px solid #fff;
+}
+
+/* Custom confirm dialog, replacing window.confirm (blocking, unthemeable and
+   inconsistently announced by screen readers). Non-blocking, theme-aware,
+   focus-trapped and keyboard-dismissable (Escape cancels) (REVIEW.md L-16d). */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+}
+.modal-dialog {
+    width: 100%;
+    max-width: 420px;
+    margin: 1rem;
+    padding: 1.5rem;
+    background: var(--card-bg);
+    color: var(--text);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+.modal-title {
+    margin-bottom: 0.5rem;
+}
+.modal-message {
+    margin-bottom: 1.25rem;
+    color: var(--text-muted);
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}

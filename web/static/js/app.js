@@ -396,10 +396,10 @@ function bulkEditSelected() {
     showNotification(rows.length + (rows.length === 1 ? ' record' : ' records') + ' in edit mode', 'success');
 }
 
-function bulkDeleteSelected() {
+async function bulkDeleteSelected() {
     var rows = selectedRecordRows();
     if (rows.length === 0) { showNotification('Select at least one record first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected record(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected record(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-actions-bar');
     var zoneID = bar ? bar.getAttribute('data-zone-id') : '';
@@ -483,10 +483,10 @@ function toggleSelectAllZones(cb) {
     updateBulkZonesCount();
 }
 
-function bulkDeleteZones() {
+async function bulkDeleteZones() {
     var rows = selectedZoneRows();
     if (rows.length === 0) { showNotification('Select at least one zone first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected zone(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected zone(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-zones-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -568,10 +568,10 @@ function toggleSelectAllTSIG(cb) {
     updateBulkTSIGCount();
 }
 
-function bulkDeleteTSIG() {
+async function bulkDeleteTSIG() {
     var rows = selectedTSIGRows();
     if (rows.length === 0) { showNotification('Select at least one key first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected TSIG key(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected TSIG key(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-tsig-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -654,10 +654,10 @@ function toggleSelectAllAPIKeys(cb) {
     updateBulkAPIKeyCount();
 }
 
-function bulkDeleteAPIKeys() {
+async function bulkDeleteAPIKeys() {
     var rows = selectedAPIKeyRows();
     if (rows.length === 0) { showNotification('Select at least one key first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected API key(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected API key(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-apikey-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -740,10 +740,10 @@ function toggleSelectAllUsers(cb) {
     updateBulkUsersCount();
 }
 
-function bulkDeleteUsers() {
+async function bulkDeleteUsers() {
     var rows = selectedUserRows();
     if (rows.length === 0) { showNotification('Select at least one user first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected user(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected user(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-users-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -825,10 +825,10 @@ function toggleSelectAllGroups(cb) {
     updateBulkGroupsCount();
 }
 
-function bulkDeleteGroups() {
+async function bulkDeleteGroups() {
     var rows = selectedGroupRows();
     if (rows.length === 0) { showNotification('Select at least one group first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected group(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected group(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-groups-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -911,10 +911,10 @@ function toggleSelectAllTemplates(cb) {
     updateBulkTemplatesCount();
 }
 
-function bulkDeleteTemplates() {
+async function bulkDeleteTemplates() {
     var rows = selectedTemplateRows();
     if (rows.length === 0) { showNotification('Select at least one template first', 'warning'); return; }
-    if (!confirm('Delete ' + rows.length + ' selected template(s)? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete ' + rows.length + ' selected template(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
 
     var bar = document.getElementById('bulk-templates-bar');
     var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
@@ -956,6 +956,91 @@ function bulkDeleteTemplates() {
     .catch(function(err) {
         showNotification('Delete failed: ' + err.message, 'error');
     });
+}
+
+// --- Custom confirm dialog ---
+//
+// Replaces window.confirm (blocking, unthemeable, and announced inconsistently
+// by screen readers). confirmDialog returns a Promise<boolean> so call sites
+// can `await` it; the dialog is non-blocking, focus-trapped, and Escape cancels
+// (REVIEW.md L-16d).
+var confirmDialogEl = null;
+var confirmDialogResolve = null;
+var confirmDialogLastFocus = null;
+
+function ensureConfirmDialog() {
+    if (confirmDialogEl) return;
+    confirmDialogEl = document.createElement('div');
+    confirmDialogEl.className = 'modal-overlay';
+    confirmDialogEl.style.display = 'none';
+    confirmDialogEl.setAttribute('role', 'dialog');
+    confirmDialogEl.setAttribute('aria-modal', 'true');
+    confirmDialogEl.setAttribute('aria-labelledby', 'confirm-dialog-title');
+    confirmDialogEl.setAttribute('aria-hidden', 'true');
+    confirmDialogEl.innerHTML =
+        '<div class="modal-dialog" role="document">' +
+        '<h3 class="modal-title" id="confirm-dialog-title">Confirm</h3>' +
+        '<p class="modal-message" id="confirm-dialog-message"></p>' +
+        '<div class="modal-actions">' +
+        '<button type="button" class="btn btn-secondary" data-confirm-cancel>Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-confirm-ok>Confirm</button>' +
+        '</div>' +
+        '</div>';
+    document.body.appendChild(confirmDialogEl);
+
+    var okBtn = confirmDialogEl.querySelector('[data-confirm-ok]');
+    var cancelBtn = confirmDialogEl.querySelector('[data-confirm-cancel]');
+    okBtn.addEventListener('click', function() { closeConfirmDialog(true); });
+    cancelBtn.addEventListener('click', function() { closeConfirmDialog(false); });
+    confirmDialogEl.addEventListener('click', function(e) {
+        // Click on the backdrop (the overlay itself, not its children) cancels.
+        if (e.target === confirmDialogEl) closeConfirmDialog(false);
+    });
+    document.addEventListener('keydown', function(e) {
+        if (!confirmDialogEl || confirmDialogEl.getAttribute('aria-hidden') === 'true') return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeConfirmDialog(false);
+            return;
+        }
+        if (e.key === 'Tab') {
+            // Keep focus cycling between the two action buttons while open.
+            var group = [cancelBtn, okBtn];
+            var idx = group.indexOf(document.activeElement);
+            if (idx === -1) { e.preventDefault(); cancelBtn.focus(); return; }
+            var next = e.shiftKey ? (idx - 1 + group.length) % group.length : (idx + 1) % group.length;
+            e.preventDefault();
+            group[next].focus();
+        }
+    });
+}
+
+function confirmDialog(message, opts) {
+    opts = opts || {};
+    ensureConfirmDialog();
+    document.getElementById('confirm-dialog-message').textContent = message;
+    var okBtn = confirmDialogEl.querySelector('[data-confirm-ok]');
+    okBtn.textContent = opts.confirmText || 'Confirm';
+    okBtn.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
+    confirmDialogEl.style.display = 'flex';
+    confirmDialogEl.setAttribute('aria-hidden', 'false');
+    confirmDialogLastFocus = document.activeElement;
+    // Focus Cancel first so a stray Enter does not confirm a destructive
+    // action; Tab reaches Confirm.
+    confirmDialogEl.querySelector('[data-confirm-cancel]').focus();
+    return new Promise(function(resolve) { confirmDialogResolve = resolve; });
+}
+
+function closeConfirmDialog(ok) {
+    if (!confirmDialogEl) return;
+    confirmDialogEl.style.display = 'none';
+    confirmDialogEl.setAttribute('aria-hidden', 'true');
+    var resolve = confirmDialogResolve;
+    confirmDialogResolve = null;
+    if (resolve) resolve(ok);
+    if (confirmDialogLastFocus && typeof confirmDialogLastFocus.focus === 'function') {
+        confirmDialogLastFocus.focus();
+    }
 }
 
 function initDelegatedListeners() {
@@ -1032,10 +1117,17 @@ function initDelegatedListeners() {
         var confirmForm = e.target.closest('form[data-confirm]');
         var confirmTrigger = e.target.closest('button, input[type=submit]');
         if (confirmForm && confirmTrigger) {
+            // The native click would submit the form; stop it unconditionally,
+            // show the modal, and submit programmatically only on confirm.
+            // HTMLFormElement.submit() bypasses the event dispatch (no re-entry
+            // into this click handler) and these simple action forms carry
+            // their target id + CSRF as hidden inputs (REVIEW.md L-16d).
+            e.preventDefault();
             var message = confirmForm.getAttribute('data-confirm');
-            if (!confirm(message)) {
-                e.preventDefault();
-            }
+            var label = (confirmTrigger.textContent || '').trim() || 'Confirm';
+            confirmDialog(message, { danger: true, confirmText: label }).then(function(ok) {
+                if (ok) confirmForm.submit();
+            });
         }
     });
 
