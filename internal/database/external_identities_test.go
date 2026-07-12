@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
@@ -100,13 +101,15 @@ func TestFindUserByEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateExternalUser: %v", err)
 	}
-	// Case-insensitive email lookup.
-	found, err := db.FindUserByEmail(ctx, "dave@example.com")
-	if err != nil {
-		t.Fatalf("FindUserByEmail: %v", err)
-	}
-	if found == nil || found.Username != "dave" {
-		t.Errorf("expected dave, got %+v", found)
+	// Case-insensitive email lookup (mixed-case and all-caps variants).
+	for _, query := range []string{"dave@example.com", "DAVE@EXAMPLE.COM", "DaVe@ExAmPlE.cOm"} {
+		found, err := db.FindUserByEmail(ctx, query)
+		if err != nil {
+			t.Fatalf("FindUserByEmail(%q): %v", query, err)
+		}
+		if found == nil || found.Username != "dave" {
+			t.Errorf("FindUserByEmail(%q): expected dave, got %+v", query, found)
+		}
 	}
 
 	// Unknown email returns nil, nil.
@@ -116,6 +119,41 @@ func TestFindUserByEmail(t *testing.T) {
 	}
 	if missing != nil {
 		t.Errorf("expected nil for unknown email, got %+v", missing)
+	}
+}
+
+func TestFindUserByEmail_UsesEmailIndex(t *testing.T) {
+	// Regression guard for REVIEW.md L-13: the lookup must seek through
+	// idx_users_email_lc (generated LOWER(email)) rather than wrapping the
+	// UNIQUE-indexed column in LOWER(), which defeated the index and forced a
+	// full scan. SQLite exposes the chosen plan via EXPLAIN QUERY PLAN; a
+	// revert to "LOWER(email) = LOWER(?)" would show a SCAN with no index.
+	db := newTestDB(t)
+	ctx := context.Background()
+	if _, err := db.CreateExternalUser(ctx, "ivy", "Ivy@Example.com", "", "", "user", "iss", "sub"); err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN
+		SELECT id FROM users WHERE email_lc = LOWER(?) AND enabled = 1`, "ivy@example.com")
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
+	}
+	plan := strings.Join(details, "; ")
+	if !strings.Contains(plan, "idx_users_email_lc") {
+		t.Errorf("expected plan to use idx_users_email_lc, got: %s", plan)
 	}
 }
 

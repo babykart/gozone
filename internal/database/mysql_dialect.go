@@ -321,5 +321,11 @@ func (m *mysqlDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL,
 			KEY idx_sessions_expires_at (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		// REVIEW.md L-13: lowercased email column + index for case-insensitive
+		// SSO account-linking lookup (FindUserByEmail). A generated column is
+		// used instead of a functional index because the project supports
+		// MySQL < 8.0.13 / MariaDB where functional indexes are unavailable
+		// (see m21 note). Works on MySQL 5.7+ and MariaDB.
+		`ALTER TABLE users ADD COLUMN email_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(email)) STORED, ADD INDEX idx_users_email_lc (email_lc)`,
 	}
 }

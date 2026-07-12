@@ -274,5 +274,12 @@ func (p *postgresDialect) Migrations() []string {
 			expires_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		// REVIEW.md L-13: lowercased email column + index for case-insensitive
+		// SSO account-linking lookup (FindUserByEmail). PostgreSQL only supports
+		// STORED generated columns (since 12); the index turns the lookup into
+		// an equality seek instead of wrapping the UNIQUE-indexed column in
+		// LOWER(), which forced a full scan.
+		`ALTER TABLE users ADD COLUMN email_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(email)) STORED`,
+		`CREATE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
 	}
 }

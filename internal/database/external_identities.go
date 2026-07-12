@@ -34,12 +34,16 @@ func (db *DB) FindUserByExternalIdentity(ctx context.Context, issuer, subject st
 // an existing local account to an SSO identity on first login (the ROADMAP
 // "Existing local user linking by email match" path). Returns (nil, nil) when
 // no such user exists.
+//
+// The lookup uses the generated email_lc column (LOWER(email)) instead of
+// wrapping the indexed column in LOWER(), so the UNIQUE-indexed value is
+// compared via an equality seek on email_lc = LOWER(?) (REVIEW.md L-13).
 func (db *DB) FindUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	row := db.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name,
 		        role, enabled, created_at, updated_at,
 		        password_changed_at, must_change_password
-		 FROM users WHERE LOWER(email) = LOWER(?) AND enabled = 1`, email)
+		 FROM users WHERE email_lc = LOWER(?) AND enabled = 1`, email)
 	u, err := scanLinkedUser(row)
 	if err == sql.ErrNoRows {
 		return nil, nil

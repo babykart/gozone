@@ -257,5 +257,14 @@ func (s *sqliteDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		// REVIEW.md L-13: case-insensitive email lookup for SSO account
+		// linking (FindUserByEmail). A generated lowercased email column + index
+		// lets the lookup use an equality seek (email_lc = LOWER(?)) instead of
+		// wrapping the indexed column in LOWER(), which defeated the UNIQUE
+		// index and forced a full scan on MySQL/PostgreSQL. SQLite ALTER TABLE
+		// ADD COLUMN only supports VIRTUAL generated columns (STORED is
+		// rejected); VIRTUAL generated columns are indexable.
+		`ALTER TABLE users ADD COLUMN email_lc TEXT GENERATED ALWAYS AS (LOWER(email)) VIRTUAL`,
+		`CREATE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
 	}
 }
