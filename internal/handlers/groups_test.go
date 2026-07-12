@@ -251,6 +251,47 @@ func TestCreateGroup_NoSelections(t *testing.T) {
 	}
 }
 
+// TestCreateGroup_NonExistentMember guards REVIEW.md B-4: a numeric but
+// non-existent user_id must be skipped (not silently inserted/ignored) and the
+// redirect must surface a members_skipped warning so the admin is informed.
+func TestCreateGroup_NonExistentMember(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	uid := seedUserWithHash(t, h, "alice", "pass", "user")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "name=grp&user_ids=" + strconv.FormatInt(uid, 10) +
+		"&user_ids=999999" // numeric but non-existent -> must be skipped
+	r := withUserContext(httptest.NewRequest(http.MethodPost, "/groups/create", strings.NewReader(body)), user)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateGroup(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d: %s", w.Code, w.Body.String())
+	}
+
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "flash=members_skipped") {
+		t.Errorf("expected redirect to carry ?flash=members_skipped, got %s", loc)
+	}
+	groupID, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(loc, "/groups/"), "/edit?flash=members_skipped"), 10, 64)
+	if err != nil {
+		t.Fatalf("parse group id from %q: %v", loc, err)
+	}
+
+	var memberCount, orphanCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&memberCount)
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = 999999", groupID).Scan(&orphanCount)
+	if memberCount != 1 {
+		t.Errorf("expected only the valid member to be attached, got %d", memberCount)
+	}
+	if orphanCount != 0 {
+		t.Errorf("expected non-existent user_id to be skipped, got %d rows", orphanCount)
+	}
+}
+
 func TestCreateGroup_EmptyName(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
@@ -534,6 +575,38 @@ func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&n)
 	if n != 0 {
 		t.Errorf("expected 0 members inserted for invalid user_ids, got %d", n)
+	}
+}
+
+// TestAddMemberToGroup_NonExistentUser guards REVIEW.md B-4 (single-add path):
+// a numeric but non-existent user_id must yield a clear 400 and insert nothing,
+// rather than being silently dropped by InsertIgnore (FK violation).
+func TestAddMemberToGroup_NonExistentUser(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "user_id=999999" // numeric, valid format, but does not exist
+	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-member", strings.NewReader(body))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddMemberToGroup(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for non-existent user, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "User does not exist") {
+		t.Errorf("expected 'User does not exist' message, got %s", w.Body.String())
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID).Scan(&n)
+	if n != 0 {
+		t.Errorf("expected 0 members inserted for non-existent user, got %d", n)
 	}
 }
 

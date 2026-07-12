@@ -6,6 +6,12 @@
     </div>
 </div>
 
+{{if eq .Flash "members_skipped"}}
+<div class="alert alert-error">
+    One or more selected members could not be added (they no longer exist). They were skipped; the remaining selections were saved.
+</div>
+{{end}}
+
 <form method="POST" action="{{.FormAction}}" style="margin-bottom:2rem">
     <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
     <div class="form-group">

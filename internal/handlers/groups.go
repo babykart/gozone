@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -144,17 +145,70 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.attachGroupSelections(r, id)
+	skipped := h.attachGroupSelections(r, id)
 
-	http.Redirect(w, r, "/groups/"+strconv.FormatInt(id, 10)+"/edit", http.StatusSeeOther)
+	target := "/groups/" + strconv.FormatInt(id, 10) + "/edit"
+	if skipped > 0 {
+		// Some submitted members did not exist (stale form / tampered request)
+		// and were skipped — surface it so the admin is not left with a silent
+		// partial add (REVIEW.md B-4).
+		target += "?flash=members_skipped"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// groupValidFlashCodes is the allow-list of ?flash codes the server actually
+// emits for /groups/{id}/edit (CreateGroup -> members_skipped). EditGroupPage
+// validates the incoming query param against this set so a crafted link cannot
+// inject arbitrary text into the page — the handler is the trust boundary,
+// mirroring apiKeyValidFlashCodes (REVIEW.md B-4 / L-1).
+var groupValidFlashCodes = map[string]struct{}{
+	"members_skipped": {},
+}
+
+// existingUserIDs returns the subset of ids that exist in the users table. It
+// batches a single SELECT so member validation on the group form is one
+// round-trip regardless of selection size.
+func (h *Handler) existingUserIDs(ctx context.Context, ids []int64) (map[int64]bool, error) {
+	exists := make(map[int64]bool, len(ids))
+	if len(ids) == 0 {
+		return exists, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := "SELECT id FROM users WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := h.DB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		exists[id] = true
+	}
+	return exists, rows.Err()
 }
 
 // attachGroupSelections inserts the multi-select members (user_ids) and zones
 // (zone_ids) carried by the create form into the just-created group. User IDs
-// are validated as positive ints; zone IDs are trimmed strings. Both lists are
-// de-duplicated while preserving order. Each row uses InsertIgnore so a stale
-// or repeated selection is tolerated. Errors are logged, not fatal.
-func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) {
+// are validated as positive ints and their existence is checked in one batched
+// query before insertion: a stale or tampered user_id would otherwise be
+// silently dropped by InsertIgnore (FK violation) with no feedback to the
+// admin. Non-existent users are skipped and counted; the count is returned so
+// CreateGroup can surface a warning. Zone IDs are trimmed strings referencing
+// PowerDNS zones (no users-table FK to validate against). Both lists are
+// de-duplicated while preserving order. Each row uses InsertIgnore so a
+// repeated selection is tolerated. Errors are logged, not fatal (REVIEW.md
+// B-4).
+func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
+	var userIDs []int64
 	seenUsers := make(map[int64]struct{})
 	for _, raw := range r.PostForm["user_ids"] {
 		uid, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -165,6 +219,30 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) {
 			continue
 		}
 		seenUsers[uid] = struct{}{}
+		userIDs = append(userIDs, uid)
+	}
+
+	// Validate existence before insertion. On a transient query error fail open
+	// (attempt every id, the previous behaviour) so group creation is not
+	// blocked by the validation query.
+	existing, err := h.existingUserIDs(r.Context(), userIDs)
+	if err != nil {
+		logger.Error("failed to validate group member existence; failing open",
+			"group_id", groupID, "error", err)
+		existing = make(map[int64]bool, len(userIDs))
+		for _, uid := range userIDs {
+			existing[uid] = true
+		}
+	}
+
+	skipped := 0
+	for _, uid := range userIDs {
+		if !existing[uid] {
+			skipped++
+			logger.Warn("skipped non-existent user on group create",
+				"group_id", groupID, "user_id", uid)
+			continue
+		}
 		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members",
 			[]string{"group_id", "user_id"},
 			[]string{"group_id", "user_id"},
@@ -192,6 +270,8 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) {
 				"group_id", groupID, "zone_id", zoneID, "error", err)
 		}
 	}
+
+	return skipped
 }
 
 // EditGroupPage renders the group edit form with members and zones (GET /groups/{group_id}/edit).
@@ -224,6 +304,8 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 
 	allZones, _ := h.PDNS.ListZonesWithInfo(r.Context())
 
+	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
+
 	data := map[string]interface{}{
 		"Title":      g.Name + " - " + h.Cfg.Server.AppName,
 		"User":       user,
@@ -234,6 +316,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		"AllZones":   allZones,
 		"IsAdmin":    user.IsAdmin(),
 		"FormAction": "/groups/" + groupIDStr + "/update",
+		"Flash":      flash,
 	}
 	h.render(w, r, "group_edit.html", data)
 }
@@ -353,6 +436,19 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {
 		h.renderError(w, r, "Invalid user ID")
+		return
+	}
+
+	// Validate existence before inserting: InsertIgnore would otherwise drop a
+	// non-existent user_id silently (FK violation) with no feedback — the same
+	// gap as attachGroupSelections (REVIEW.md B-4).
+	existing, err := h.existingUserIDs(r.Context(), []int64{userID})
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to validate user", err)
+		return
+	}
+	if !existing[userID] {
+		h.renderError(w, r, "User does not exist")
 		return
 	}
 
