@@ -43,6 +43,38 @@ func TestCache_Expiry(t *testing.T) {
 	}
 }
 
+func TestCache_GetEvictsExpiredEntry(t *testing.T) {
+	// REVIEW.md L-16a: Get must proactively delete an expired entry instead
+	// of leaving it for the background sweep. Verify by inspecting the map
+	// directly (Len() filters by expiry, so it cannot distinguish "deleted"
+	// from "still present but expired").
+	c := New[string](10 * time.Millisecond)
+	defer c.Stop()
+
+	c.Set("k1", "hello")
+	c.Set("k2", "world")
+	time.Sleep(15 * time.Millisecond)
+
+	if _, ok := c.Get("k1"); ok {
+		t.Fatal("expected expired key k1 to return false")
+	}
+
+	c.mu.RLock()
+	remaining := len(c.items)
+	c.mu.RUnlock()
+	if remaining != 1 {
+		t.Errorf("expected only the un-touched k2 to remain, got %d entries", remaining)
+	}
+
+	// k2 is expired but was not touched by Get: it stays until a Get or sweep.
+	c.mu.RLock()
+	_, hasK2 := c.items["k2"]
+	c.mu.RUnlock()
+	if !hasK2 {
+		t.Error("k2 should still be present (only Get-touched entries are proactively evicted)")
+	}
+}
+
 func TestCache_LenExpired(t *testing.T) {
 	c := New[string](10 * time.Millisecond)
 	defer c.Stop()
