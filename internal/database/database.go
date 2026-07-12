@@ -361,22 +361,18 @@ func (db *DB) PurgeLoginAttempts(ctx context.Context, retentionHours int) (int64
 // FailedLoginStats reports the number of failed login attempts within the
 // given rolling window for the supplied username, and the most recent failure
 // timestamp. Returns zeros / zero time when no attempts match.
+//
+// Both aggregates are computed in a single SELECT so count and lastFailed are
+// read from one consistent snapshot (a concurrent insert/purge between two
+// separate queries could otherwise make them disagree) (REVIEW.md L-16f).
 func (db *DB) FailedLoginStats(ctx context.Context, username string, window time.Duration) (count int, lastFailed time.Time, err error) {
 	cutoff := time.Now().UTC().Add(-window)
-	row := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
-		username, cutoff,
-	)
-	if err := row.Scan(&count); err != nil {
-		return 0, time.Time{}, err
-	}
 	var last sql.NullString
-	row = db.QueryRowContext(ctx,
-		"SELECT MAX(attempted_at) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
+	if err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*), MAX(attempted_at) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
 		username, cutoff,
-	)
-	if err := row.Scan(&last); err != nil {
-		return count, time.Time{}, err
+	).Scan(&count, &last); err != nil {
+		return 0, time.Time{}, err
 	}
 	if last.Valid {
 		if parsed, perr := parseAttemptedAt(last.String); perr == nil {

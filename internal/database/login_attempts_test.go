@@ -152,7 +152,13 @@ func TestFailedLoginStats(t *testing.T) {
 		t.Errorf("expected 2 failed attempts in window, got %d", count)
 	}
 	if last.IsZero() {
-		t.Errorf("expected non-zero last failure timestamp")
+		t.Fatalf("expected non-zero last failure timestamp")
+	}
+	// The two failures are at now-2h and now-1h; MAX must return the more
+	// recent one (now-1h), not the older. -90min sits between them, so a correct
+	// MAX is strictly after it (REVIEW.md L-16f).
+	if !last.After(now.Add(-90 * time.Minute)) {
+		t.Errorf("expected last failure to be the most recent (~now-1h), got %v", last)
 	}
 }
 
