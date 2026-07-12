@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -24,7 +23,7 @@ func (db *DB) FindUserByExternalIdentity(ctx context.Context, issuer, subject st
 		 JOIN users u ON u.id = ei.user_id
 		 WHERE ei.issuer = ? AND ei.subject = ?`, issuer, subject)
 	u, err := scanLinkedUser(row)
-	if err == sql.ErrNoRows {
+	if isNoRows(err) {
 		return nil, nil
 	}
 	return u, err
@@ -45,7 +44,7 @@ func (db *DB) FindUserByEmail(ctx context.Context, email string) (*models.User, 
 		        password_changed_at, must_change_password
 		 FROM users WHERE email_lc = LOWER(?) AND enabled = 1`, email)
 	u, err := scanLinkedUser(row)
-	if err == sql.ErrNoRows {
+	if isNoRows(err) {
 		return nil, nil
 	}
 	return u, err
@@ -166,7 +165,7 @@ func (tx *Tx) ZoneGroupIDByNameTx(ctx context.Context, name string) (int64, erro
 	err := tx.QueryRowContext(ctx,
 		"SELECT id FROM zone_groups WHERE name = ?", name,
 	).Scan(&id)
-	if err == sql.ErrNoRows {
+	if isNoRows(err) {
 		return 0, nil
 	}
 	return id, err

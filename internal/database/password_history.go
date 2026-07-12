@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
@@ -95,7 +94,7 @@ func (tx *Tx) PasswordHistoryCount(ctx context.Context, userID int64) (int, erro
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM password_history WHERE user_id = ?`, userID,
 	).Scan(&n); err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("count password history: %w", err)
