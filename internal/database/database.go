@@ -686,7 +686,11 @@ var oldVersionRegex = regexp.MustCompile(`^v(\d{3})$`)
 func (db *DB) migrate() error {
 	release, err := db.dialect.LockMigrations(db.Conn)
 	if err != nil {
-		return fmt.Errorf("acquire migration lock: %w", err)
+		// The dialect's LockMigrations already wraps its error with
+		// "acquire migration lock:" (and a connection-acquire variant), so
+		// propagate it directly — re-wrapping here duplicated the prefix
+		// ("acquire migration lock: acquire migration lock: ...").
+		return err
 	}
 	defer release()
 

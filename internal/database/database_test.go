@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -914,5 +915,51 @@ func dropAllTables(t *testing.T, conn *sql.DB, driverName string) {
 		dropAllTablesMySQL(t, conn)
 	case "postgres":
 		dropAllTablesPostgres(t, conn)
+	}
+}
+
+// failingLockDialect wraps sqliteDialect but forces LockMigrations to return a
+// fixed error, so migrate()'s error wrapping can be exercised without a live
+// MySQL/PostgreSQL (the real GET_LOCK/pg-advisory-lock paths are covered by
+// the integration tests).
+type failingLockDialect struct {
+	sqliteDialect
+	lockErr error
+}
+
+func (d *failingLockDialect) LockMigrations(_ *sql.DB) (func(), error) {
+	return nil, d.lockErr
+}
+
+// TestMigrate_LockErrorNotDoubleWrapped guards against the duplicated
+// "acquire migration lock:" prefix: the dialect's LockMigrations already wraps
+// its error with that prefix, so migrate() must propagate it directly instead
+// of wrapping again (the bug produced
+// "acquire migration lock: acquire migration lock: GET_LOCK returned NULL ...").
+func TestMigrate_LockErrorNotDoubleWrapped(t *testing.T) {
+	conn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	leaf := errors.New("GET_LOCK returned NULL (internal MySQL error)")
+	db := &DB{
+		Conn: conn,
+		dialect: &failingLockDialect{
+			lockErr: fmt.Errorf("acquire migration lock: %w", leaf),
+		},
+	}
+
+	if err := db.migrate(); err == nil {
+		t.Fatal("expected migrate to fail when LockMigrations fails")
+	} else {
+		msg := err.Error()
+		if n := strings.Count(msg, "acquire migration lock:"); n != 1 {
+			t.Errorf("expected 'acquire migration lock:' to appear once, got %d in: %s", n, msg)
+		}
+		if !strings.Contains(msg, "GET_LOCK returned NULL") {
+			t.Errorf("expected the leaf error to be preserved, got: %s", msg)
+		}
 	}
 }
