@@ -359,6 +359,14 @@ func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *
 	if err != nil {
 		return fmt.Errorf("generate token: %w", err)
 	}
+	// The SSO session cookie uses SameSite=Lax, intentionally diverging from
+	// the local login's SameSite=Strict (auth.go). The IdP -> /callback hop is
+	// a cross-site top-level navigation; the callback then 303-redirects to
+	// /dashboard. That first /dashboard request is cross-site-initiated, so a
+	// Strict cookie would NOT be carried on it and the Auth middleware would
+	// bounce the user back to /login. Lax allows the cookie on the top-level
+	// GET landing while still blocking cross-site POST, so state-changing
+	// requests remain protected by gorilla/csrf (REVIEW.md B-1).
 	// #nosec G124 -- Secure flag set dynamically via isSecure(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     constants.SessionCookieName,

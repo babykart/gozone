@@ -41,6 +41,13 @@ prevent brute-forcing of the `state` parameter.
 - **HTTPS in production.** OIDC redirect URIs and cookies are HTTPS-oriented.
   Run GoZone behind a TLS-terminating reverse proxy and set
   `server.secure_cookies: true` (see the README HTTPS section).
+- **SSO session cookie is `SameSite=Lax`.** The local-login cookie uses
+  `SameSite=Strict`, but SSO requires `Lax`: the IdP redirects back to
+  `/auth/oidc/<provider>/callback` (a cross-site top-level navigation), and the
+  subsequent redirect to `/dashboard` would not carry a `Strict` cookie, leaving
+  the user unauthenticated. `Lax` still blocks cross-site POST, so mutations stay
+  protected by CSRF. This is intentional and documented at the cookie-set site
+  (`internal/handlers/oidc.go`, REVIEW.md B-1).
 - **A stable `server.secret_key`.** The OIDC `state` parameter is signed with a
   key derived from the master secret; an auto-generated ephemeral key
   invalidates in-flight SSO attempts on every restart.
