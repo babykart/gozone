@@ -1,5 +1,15 @@
 // Package middleware provides HTTP middleware for authentication, authorization,
 // and user context propagation in the GoZone web application.
+//
+// # Timestamp convention
+//
+// Every timestamp bound for the database (sessions.first_seen/last_seen/
+// expires_at, api_keys.last_used_at, revoked_tokens.expires_at) is produced in
+// UTC. SQLite (mattn/go-sqlite3) serializes time.Time with its offset and the
+// engine compares those strings lexicographically; mixing offsets across DST
+// transitions or multi-TZ deployments would skew the comparisons. Instant-only
+// comparisons in memory (time.Time.Before/After/Sub) are unaffected and are not
+// annotated (REVIEW.md M-1).
 package middleware
 
 import (
@@ -261,7 +271,9 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	if sid == "" {
 		sid = claims.ID
 	}
-	now := time.Now()
+	// UTC: now flows into sessions table writes (SessionTouch/SessionInsert)
+	// whose expires_at is compared lexicographically by SQLite (REVIEW.md M-1).
+	now := time.Now().UTC()
 	ctx := r.Context()
 
 	if !tracker.Touch(ctx, sid, claims.IssuedAt.Time, now) {
@@ -393,7 +405,8 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 			// Record last use only once the key has authenticated a valid, enabled
 			// user (m36). Updating it earlier bumped last_used_at for orphaned keys
 			// (user deleted) and disabled-user keys, misrepresenting real usage.
-			if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now(), keyHash); err != nil {
+			// UTC keeps the column consistent across TZ/DST (REVIEW.md M-1).
+			if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now().UTC(), keyHash); err != nil {
 				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
 			}
 

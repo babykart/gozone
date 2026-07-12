@@ -181,6 +181,7 @@ Use Go 1.22+ `r.PathValue("name")` to extract URL path parameters — **not** `c
 - Writes are serialized: `SetMaxOpenConns(1)`
 - Migrations are inline in `internal/database/database.go`
 - New migrations should use `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`
+- **Timestamps bound for the database are always UTC** (`time.Now().UTC()`). SQLite serializes `time.Time` with its offset and compares the resulting strings lexicographically; mixing offsets across DST transitions or multi-TZ deployments skews `WHERE expires_at <= ?`-style comparisons. MySQL/PostgreSQL normalize at the driver level but UTC is used uniformly for consistency. Instant-only comparisons in memory (`Before`/`After`/`Sub`) are timezone-agnostic and need no annotation.
 
 ### Auth Patterns
 

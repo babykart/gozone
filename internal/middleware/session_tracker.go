@@ -266,7 +266,9 @@ func (t *SessionTracker) cleanup() {
 	for {
 		select {
 		case <-ticker.C:
-			cutoff := time.Now().Add(-ttl)
+			// UTC: cache lastSeen values originate from UTC writes (Touch),
+			// and the purge below is DB-bound (REVIEW.md M-1).
+			cutoff := time.Now().UTC().Add(-ttl)
 			t.mu.Lock()
 			for sid, e := range t.cache {
 				if e.lastSeen.Before(cutoff) {
@@ -274,7 +276,9 @@ func (t *SessionTracker) cleanup() {
 				}
 			}
 			t.mu.Unlock()
-			if n, err := t.db.SessionPurgeExpired(context.Background(), time.Now()); err != nil {
+			// UTC cutoff feeds DELETE ... WHERE expires_at <= ?, matching how
+			// expires_at is written by SessionTouch/SessionInsert (REVIEW.md M-1).
+			if n, err := t.db.SessionPurgeExpired(context.Background(), time.Now().UTC()); err != nil {
 				logger.Error("session tracker: purge expired failed", "error", err)
 			} else if n > 0 {
 				logger.Info("session tracker: purged expired sessions", "deleted", n)
