@@ -42,4 +42,11 @@ USER nonroot
 
 EXPOSE 8080
 
+# Image-level healthcheck so orchestrators that read only the image (plain
+# `docker run`, Kubernetes, Nomad) benefit, not just docker-compose. The
+# readiness endpoint returns 200 only when DB + PowerDNS are reachable.
+# busybox wget ships with alpine (REVIEW.md B-10).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q --spider http://localhost:8080/health/live || exit 1
+
 CMD ["/gozone", "server", "--config", "config.yaml"]
