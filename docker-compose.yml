@@ -4,6 +4,15 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # ---------------------------------------------------------------------
+      # WARNING: these are INSECURE placeholders for local development only.
+      # NEVER deploy them to production as-is. Rotate before any real use.
+      # See README.md -> "Secret Key" for hardening guidance.
+      #   GOZONE_SECRET_KEY     -> openssl rand -hex 32
+      #   GOZONE_ADMIN_PASSWORD -> a strong, unique password (or unset it and
+      #                            run: gozone user reset-password admin)
+      #   GOZONE_PDNS_API_KEY   -> must match PDNS_api_key below; rotate both
+      # ---------------------------------------------------------------------
       - GOZONE_SECRET_KEY=change-me-to-a-random-secret-in-production
       - GOZONE_ADMIN_PASSWORD=admin
       - GOZONE_PDNS_API_URL=http://powerdns:8081
@@ -28,6 +37,7 @@ services:
       - "53:53/udp"
     environment:
       - PDNS_auth_api=yes
+      # WARNING: must match GOZONE_PDNS_API_KEY above; rotate both in production.
       - PDNS_api_key=changeme
       - PDNS_webserver=yes
       - PDNS_webserver_address=0.0.0.0
