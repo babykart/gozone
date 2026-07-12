@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
@@ -239,5 +240,102 @@ func TestSeedAdminUser_CustomConfig(t *testing.T) {
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("admin")); err == nil {
 		t.Error("default password should NOT match when custom is set")
+	}
+}
+
+func TestSeedAdminUser_RecordsPasswordHistory(t *testing.T) {
+	// REVIEW.md L-15a: the seed password hash must be recorded in
+	// password_history even when history is disabled (HistorySize == 0), so
+	// that enabling history later catches a revert to the seed password.
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+	if cfg.Password.HistorySize != 0 {
+		t.Fatalf("precondition: expected default HistorySize 0, got %d", cfg.Password.HistorySize)
+	}
+
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var pwHash string
+	var adminID int64
+	if err := db.QueryRow(
+		"SELECT id, password_hash FROM users WHERE username = ?", cfg.Admin.Username,
+	).Scan(&adminID, &pwHash); err != nil {
+		t.Fatalf("read admin: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM password_history WHERE user_id = ?", adminID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count password_history: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 password_history row for seed admin, got %d", n)
+	}
+	var histHash string
+	if err := db.QueryRow(
+		"SELECT password_hash FROM password_history WHERE user_id = ?", adminID,
+	).Scan(&histHash); err != nil {
+		t.Fatalf("read password_history hash: %v", err)
+	}
+	if histHash != pwHash {
+		t.Error("password_history hash must match the seed admin password_hash")
+	}
+}
+
+func TestSeedAdminUser_ConcurrentBootstrapIsIdempotent(t *testing.T) {
+	// REVIEW.md L-15b: two instances starting concurrently on a fresh database
+	// must not race — InsertIgnore turns the loser's insert into a silent
+	// no-op instead of aborting with ErrUniqueViolation. SQLite serializes
+	// writers (MaxOpenConns == 1) so the real race window only reproduces on
+	// MySQL/PostgreSQL, but the test still guards idempotency and duplicate
+	// avoidance under concurrent invocation (mirrors the M-2 approach).
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+
+	const n = 20
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			errs <- SeedAdminUser(context.Background(), db, cfg)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent SeedAdminUser returned error: %v", err)
+		}
+	}
+
+	var userCount, histCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM password_history").Scan(&histCount); err != nil {
+		t.Fatalf("count password_history: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("expected exactly 1 user after concurrent bootstrap, got %d", userCount)
+	}
+	if histCount != 1 {
+		t.Errorf("expected exactly 1 password_history row after concurrent bootstrap, got %d", histCount)
 	}
 }
