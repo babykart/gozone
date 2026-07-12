@@ -35,14 +35,16 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePaginationParams(r, 10)
 	pageInfo := pageInfoFromTotal(total, page, perPage)
 
+	// start/end depend only on the page window, so compute them once instead
+	// of on every iteration (REVIEW.md L-16b).
+	start := (pageInfo.Current - 1) * pageInfo.PerPage
+	end := pageInfo.Current * pageInfo.PerPage
 	var paginated []models.TSIGKey
 	var idx int
 	for _, k := range keys {
 		if search != "" && !strings.Contains(strings.ToLower(k.Name), searchLower) {
 			continue
 		}
-		start := (pageInfo.Current - 1) * pageInfo.PerPage
-		end := pageInfo.Current * pageInfo.PerPage
 		if perPage <= 0 || (idx >= start && idx < end) {
 			paginated = append(paginated, k)
 		}
