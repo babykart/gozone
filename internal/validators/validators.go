@@ -413,7 +413,7 @@ func validateRRSIGTime(s, name string) error {
 //   - CNAME, ALIAS, NS, PTR, DNAME: DNS name (underscores allowed)
 //   - MX: priority + FQDN, or just FQDN (priority handled separately)
 //   - TXT, SPF: free text (quoted strings allowed)
-//   - SOA: 7+ fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum, all > 0
+//   - SOA: exactly 7 fields with valid 32-bit unsigned serial/refresh/retry/expire/minimum, all > 0
 //
 // All other whitelisted record types (AFSDB, CERT, DNSKEY, DS, HINFO, KEY, LOC,
 // NAPTR, NSEC, NSEC3, NSEC3PARAM, OPENPGPKEY, RP, RRSIG, SSHFP, TLSA, URI) are
@@ -452,8 +452,8 @@ func ValidateRecordContent(recordType, content string) error {
 		return ValidateDNSName(content)
 	case "SOA":
 		parts := strings.Fields(content)
-		if len(parts) < 7 {
-			return fmt.Errorf("SOA content requires at least 7 fields: mname rname serial refresh retry expire minimum")
+		if len(parts) != 7 {
+			return fmt.Errorf("SOA content requires exactly 7 fields: mname rname serial refresh retry expire minimum")
 		}
 		if err := ValidateDNSName(strings.TrimSuffix(parts[0], ".")); err != nil {
 			return fmt.Errorf("SOA mname: %w", err)

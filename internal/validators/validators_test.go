@@ -587,6 +587,9 @@ func TestValidateRecordContent_SOANumericFields(t *testing.T) {
 		{"zero retry", base + " 2024010100 3600 0 604800 86400", true},
 		{"zero expire", base + " 2024010100 3600 900 0 86400", true},
 		{"zero minimum", base + " 2024010100 3600 900 604800 0", true},
+		// B-6: extra trailing fields are rejected locally rather than deferred
+		// to a less-readable PowerDNS error.
+		{"too many fields", base + " 2024010100 3600 900 604800 86400 extra", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
