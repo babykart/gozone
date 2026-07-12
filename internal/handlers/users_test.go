@@ -709,6 +709,83 @@ func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
 	}
 }
 
+// TestDeleteUser_AuditFailureRollsBack guards REVIEW.md B-8 (suppression case):
+// the delete_user audit write runs inside the same transaction as the DELETE,
+// so a failure to write the audit trail must roll the delete back — a user can
+// never be deleted without leaving an audit entry. The audit INSERT is forced
+// to fail by dropping the activity_logs table; the target must survive and the
+// handler must return 500 (not a redirect).
+func TestDeleteUser_AuditFailureRollsBack(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
+
+	// Force every activity_logs INSERT to fail.
+	if _, err := h.DB.Exec("DROP TABLE activity_logs"); err != nil {
+		t.Fatalf("drop activity_logs: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader(fmt.Sprintf("user_id=%d", targetID)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteUser(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when the audit write fails, got %d (B-8: delete must not succeed without an audit trail)", w.Code)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", targetID).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected the delete to be rolled back (user survives), got count=%d (B-8 regression: delete committed without audit)", count)
+	}
+}
+
+// TestUpdateUser_AuditFailureRollsBack guards REVIEW.md B-8 (admin-demotion
+// case): the update_user audit write runs inside the same transaction as the
+// UPDATE, so a failure to write the audit trail must roll the role change back
+// — an admin can never be demoted without leaving an audit entry.
+func TestUpdateUser_AuditFailureRollsBack(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	// A second enabled admin so the last-admin guard allows the demotion.
+	res, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
+		"admin2", "admin2@test.local", "hash", "admin", 1,
+	)
+	if err != nil {
+		t.Fatalf("insert second admin: %v", err)
+	}
+	secondID, _ := res.LastInsertId()
+
+	// Force every activity_logs INSERT to fail.
+	if _, err := h.DB.Exec("DROP TABLE activity_logs"); err != nil {
+		t.Fatalf("drop activity_logs: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	body := "email=admin2@test.local&first_name=&last_name=&role=user&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/update", secondID), strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", fmt.Sprintf("%d", secondID))
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when the audit write fails, got %d (B-8: demotion must not succeed without an audit trail)", w.Code)
+	}
+
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id = ?", secondID).Scan(&role)
+	if role != "admin" {
+		t.Errorf("expected the demotion to be rolled back (role stays admin), got role=%q (B-8 regression: demotion committed without audit)", role)
+	}
+}
+
 func TestLockUser_Success(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
