@@ -339,6 +339,17 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	if existingRRSet != nil {
 		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
 			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
+		// If the merge didn't find a match (originalContent no longer matches
+		// any existing record — stale page data, e.g. the SOA serial was
+		// bumped by PowerDNS between page load and save via SOA-EDIT), the
+		// merge appended a new record. For a single-record RRSet this would
+		// produce two records, which PowerDNS rejects for types like SOA or
+		// CNAME ("only one such record allowed"). Replace the sole record
+		// instead, implementing last-write-wins for the edit the user
+		// explicitly submitted.
+		if len(updatedRecords) > len(existingRRSet.Records) && len(existingRRSet.Records) == 1 {
+			updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+		}
 	} else {
 		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
 	}

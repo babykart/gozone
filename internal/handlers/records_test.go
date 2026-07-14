@@ -790,6 +790,156 @@ func TestUpdateRecord_PreservesSiblingRecords(t *testing.T) {
 	}
 }
 
+// TestInlineUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends
+// reproduces the "only one such record allowed" PDNS error: the zone view
+// rendered a single-record RRSet (e.g. SOA) with content C1, but by the time
+// the user saves, PowerDNS has changed the content (e.g. the SOA serial was
+// bumped via SOA-EDIT). The stale original_content (C1) no longer matches the
+// live record (C2), so the update must REPLACE the sole record rather than
+// append a second one — PowerDNS rejects >1 record for single-record types
+// like SOA and CNAME.
+func TestInlineUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "x.io.", Name: "x.io.", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "x.io.",
+						Type: "SOA",
+						TTL:  3600,
+						Records: []models.RecordInfo{
+							// Live content has serial …02 (bumped since page load).
+							{Content: "ns1.x.io. hostmaster.x.io. 2024010102 3600 3600 604800 3600", Priority: 0, Disabled: false},
+						},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// original_content has serial …01 (stale); live PDNS has …02.
+	body := "name=x.io.&type=SOA" +
+		"&content=ns1.x.io.+hostmaster.x.io.+2024010103+3600+3600+604800+3600" +
+		"&ttl=3600&priority=0&disabled=false" +
+		"&original_content=ns1.x.io.+hostmaster.x.io.+2024010101+3600+3600+604800+3600" +
+		"&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/x.io./records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "x.io.")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	records := patchedRRSet[0].Records
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record (replace), got %d (append would cause PDNS 422 'only one such record allowed')", len(records))
+	}
+	want := "ns1.x.io. hostmaster.x.io. 2024010103 3600 3600 604800 3600"
+	if got := records[0].Content; got != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+// TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends is the HTML
+// form counterpart of the inline-update test above, exercising the same fix
+// through the UpdateRecord handler (POST redirect path).
+func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "x.io.", Name: "x.io.", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "x.io.",
+						Type: "CNAME",
+						TTL:  3600,
+						Records: []models.RecordInfo{
+							{Content: "target2.example.com.", Priority: 0, Disabled: false},
+						},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=x.io.&type=CNAME" +
+		"&content=target3.example.com" +
+		"&ttl=3600&priority=0&disabled=false" +
+		"&original_content=target1.example.com." +
+		"&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/x.io./records/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "x.io.")
+	r = r.WithContext(ctx)
+	h.UpdateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	records := patchedRRSet[0].Records
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record (replace), got %d", len(records))
+	}
+	if got := records[0].Content; got != "target3.example.com." {
+		t.Errorf("content = %q, want %q", got, "target3.example.com.")
+	}
+}
+
 func TestBatchCreateRecords_Success(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
