@@ -26,6 +26,8 @@ Run a single package: `go test -count=1 ./internal/config/`
 
 Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete.
 
+CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test` does **not** use `-race`, so run `go test -race ./...` locally to catch what CI catches. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
+
 ## Security Analysis
 
 After any code change, run `just fmt` (or `make fmt`) then `just gosec` (or `make gosec`) and fix every issue reported before
@@ -38,15 +40,15 @@ all reported issues regardless of the exit code.
 ## Architecture
 
 - **Entrypoint**: `main.go` (repo root) is intentionally minimal — `main()` only calls `cmd.Execute()`. The CLI tree lives in package `cmd` (`cmd/`), built on **Cobra** (`spf13/cobra`). `cmd/root.go` defines the root command (a namespace: bare `gozone` prints help) and `Execute()`/`newRootCmd()`; `cmd/server.go` defines `gozone server` (cobra command `newServerCmd`) and `runServer(cfg *config.Config) error`, which wires the chi router, seeds admin, and serves — it also holds the HTTP helpers (`parseTemplates`, `relativeName`, the rate-limit/HTTPS middlewares). `cmd/user.go` defines the `gozone user` command tree (with `unlock` and `reset-password` subcommands); `cmd/version.go` defines `gozone version`. `--config`/`-c` is a persistent flag on the root, inherited by subcommands.
-- **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *database.DB`, `PDNS pdns.ZoneService`, `Cfg *config.Config`, `Tmpl *template.Template` — methods on Handler
+- **Handler pattern**: `Handler` struct in `internal/handlers/handler.go` holds `DB *database.DB`, `PDNS pdns.ZoneService`, `Cfg *config.Config`, `Tmpl *template.Template`, `Version version.Info`, `OIDC SSOService` — methods on Handler. `SSOService` (same file) is the handler-side interface; the concrete impl is `internal/oidc.Service`. `OIDC` is nil when SSO is unconfigured and the SSO handlers no-op (redirect to `/login`).
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
-- **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/server.go` and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`
+- **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/server.go` (`parseTemplates`) and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`, `assetVersion`. `assetVersion` returns a short content-hash of the bundled JS/CSS (`staticAssetVersion`) for cache-busting; bumping static assets flows through automatically.
 - **Database**: migrations in `internal/database/database.go` and dialect files; content-hash versioning with `Dialect.LockMigrations` for multi-instance safety; exposed via `*database.DB` with raw SQL and context-aware methods (`ExecContext`, `QueryContext`, `QueryRowContext`, `BeginTx`)
 - **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`). `server.trusted_proxies` entries **must be CIDR** (e.g. `10.0.0.0/8`, `192.0.2.1/32`) — plain IPs without `/` cause a startup panic in chi's `netip.MustParsePrefix`.
 - **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface (`internal/pdns/service.go`); generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
 - **Caching**: generic TTL cache in `internal/cache/cache.go`; `cachedClient` wraps `ZoneService` and caches zone lists, zone info, stats and server info; record mutations invalidate affected caches
 - **Errors**: `internal/errors.AppError` carries an HTTP status code and supports `Unwrap()` for compatibility with `errors.Is/As`
-- **CLI subcommand**: `gozone user` (in `user.go`, a Cobra subcommand tree) holds the emergency DB-recovery operations: `gozone user unlock <id|username>` clears account lockout, `gozone user reset-password <id|username>` sets a new bcrypt password (no-echo prompt via `golang.org/x/term`, piped stdin, or `--password`). Both write a `*_cli` `activity_logs` entry with `user_id = NULL` (actor = shell operator via `operatorIdentity()`). `gozone version` (in `version.go`) prints the version banner; `version`/`commit`/`buildDate` are ldflags-injected (`-X github.com/babykart/gozone/cmd.version=...`) and fall back to VCS metadata (`runtime/debug.ReadBuildInfo`) when unset. Cobra's built-in `--version` flag (one-liner) is enabled via `rootCmd.Version`. Errors from `Execute()` are surfaced by `main()` via `logger.Fatal`; commands set `SilenceErrors`+`SilenceUsage` so cobra does not print to stderr.
+- **CLI subcommand**: `gozone user` (in `user.go`, a Cobra subcommand tree) holds the emergency DB-recovery operations: `gozone user unlock <id|username>` clears account lockout, `gozone user reset-password <id|username>` sets a new bcrypt password (no-echo prompt via `golang.org/x/term`, piped stdin, or `--password`). Both write a `*_cli` `activity_logs` entry with `user_id = NULL` (actor = shell operator via `operatorIdentity()`). `gozone version` (in `version.go`) prints the version banner; `version`/`commit`/`buildDate` are ldflags-injected (`-X github.com/babykart/gozone/cmd.version=...`) and fall back to VCS metadata via `internal/version.Resolve` (`runtime/debug.ReadBuildInfo`) when unset — that package is the single source of truth consumed by both `cmd` and `internal/handlers`. Cobra's built-in `--version` flag (one-liner) is enabled via `rootCmd.Version`. Errors from `Execute()` are surfaced by `main()` via `logger.Fatal`; commands set `SilenceErrors`+`SilenceUsage` so cobra does not print to stderr.
 
 ## Record Content Normalization
 
@@ -76,6 +78,14 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 | API | API key SHA-256 hash in `Authorization: Bearer <key>` header |
 | Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` |
 
+## Single Sign-On (OIDC)
+
+- Delegated login is **off** unless `oidc.enabled` (`GOZONE_OIDC_ENABLED`) is set; the `internal/oidc` package is the concrete impl behind `Handler.OIDC SSOService`. `SSOService.Enabled()` gates the login-page provider buttons and the `/auth/oidc/*` handlers (no-op → `/login` when disabled).
+- Flow: Authorization Code + PKCE (S256), signed `state` (CSRF), `nonce`, JWKS ID-token verification, just-in-time provisioning, role/group mapping from claims, RP-initiated logout. The `(issuer, subject)` pair is the link key to the local user; `oidc.Claims` exposes normalized fields plus `Raw` for config-driven dotted-path mapping (e.g. `realm_access.roles`).
+- The shared `oauth2.Config` is **cloned per callback** (`cloneOAuth2Config`) so concurrent callbacks cannot race on `RedirectURL` (REVIEW.md L-4).
+- Built-in provider presets: Gitea, Google, GitLab, Keycloak, Authentik, Azure AD (any other name = generic OIDC). The redirect URI is always `https://<host>/auth/oidc/<name>/callback`.
+- Idle/absolute session timeouts apply to local **and** SSO sessions, enforced cluster-wide via the `sessions` table (in-memory cache coarsens writes to ~1 min). See README "Authentication" and `docs/SSO.md` for full provider setup.
+
 ## Password Policy
 
 - `config.PasswordConfig` (`password:` in YAML, `GOZONE_PASSWORD_*` env) drives `validators.ValidatePassword(password, cfg.Password.Policy())` — min length (runes) + character-class requires. Secure-by-default (`min_length:8`, all four classes on). A zero policy accepts any non-empty password.
@@ -89,9 +99,10 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - **In-memory SQLite**: `testutil.NewTestDB(t)` auto-migrates the schema and auto-closes via `t.Cleanup`.
 - **Mock PDNS**: `testutil.NewTestPDNSServer(t, handler)` returns an `httptest.Server` + `pdns.Client`. Handler controls responses; pass `nil` for 500 on all requests.
 - **Handler tests**: `newTestHandler(t)` / `newTestHandlerWithPDNS(t, handler)` build a `Handler` with mock PDNS + in-memory DB + **stub templates** (defined inline in `handler_test.go:testTemplateSet()`, NOT the real embedded templates). The stub templates must be updated when handler data shapes change — e.g. when `.Records` changed from `[]RRSet` to `[]ZoneRecordRow`, the stub `zone_view.html` had to switch from `{{range .Records}}{{range .Records}}{{.Content}}` to `{{range .Records}}{{.Record.Content}}`.
-- **FuncMap sync**: the test FuncMap in `testTemplateSet()` is a **subset** of the real one in `main.go:parseTemplates()`. If a new template func is added to `parseTemplates()`, it must also be added to `testTemplateSet()` or tests that render templates will fail.
+- **FuncMap sync**: the test FuncMap in `testTemplateSet()` is a **subset** of the real one in `cmd/server.go:parseTemplates()`. If a new template func is added to `parseTemplates()`, it must also be added to `testTemplateSet()` or tests that render templates will fail.
 - **`captureRRSets(t, &sent)`**: helper in `api_test.go` that decodes the PATCH body sent to the mock PDNS, so tests can assert exactly what PowerDNS received. Use this for content-normalization regression tests.
 - **`relativeName`** lives in `cmd/server.go` (package cmd), so handler tests stub it out — the test FuncMap maps it to a no-op.
+- **Admin routes**: every admin web route is registered in one place — `mountAdminRoutes` in `cmd/server.go` — and `TestAdminRoutesProtectedByRequireAdmin` (in `cmd/server_test.go`) walks that table to assert none escapes `middleware.RequireAdmin`. Add new admin routes to `mountAdminRoutes` so the invariant stays green.
 
 ## Key Constraints
 
@@ -103,6 +114,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 ## Frontend Conventions
 
 - **No inline event handlers**: never add `onclick=`, `onchange=`, or `onsubmit=` to templates — they violate the Content-Security-Policy. Instead, use `data-action="action-name"` (and optionally `data-confirm="message"`) on the element, then handle via `initDelegatedListeners()` in `web/static/js/app.js`.
+- **CSRF token (gorilla/csrf)**: every POST form MUST include `<input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">`. JS-initiated POSTs must read `data-csrf="{{.CSRFToken}}"` and append `gorilla.csrf.Token` to the `FormData` (see existing `data-csrf` usage in templates and `app.js`). The CSRF middleware is configured with `csrf.Secure(false)` (static) and a per-request `csrfSecureCookieWriter` rewrites the `Secure` attribute from `middleware.IsHTTPS` — do not re-add `Secure` at the middleware level.
 - **CSP**: `script-src 'self'` only (no `'unsafe-inline'`). Only `app.js` is loaded. `style-src` allows `'unsafe-inline'` for dynamic styles.
 - **Layout partials**: use `{{template "app_layout_start" .}}` at the top and `{{template "app_layout_end" .}}` at the bottom of every authenticated page template. Never duplicate the `head`/`sidebar`/`topbar`/`main` wrapper directly.
 - **User feedback**: use `showNotification(message, type)` (from `app.js`) for flash-style alerts. `alert()` is not used.
