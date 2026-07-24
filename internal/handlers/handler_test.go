@@ -44,7 +44,7 @@ func testTemplateSet() *template.Template {
 		},
 	}
 	return template.Must(template.New("test").Funcs(funcMap).Parse(`
-		{{define "error.html"}}Error: {{.Message}}{{end}}
+		{{define "error.html"}}Error: {{.Message}} Back={{.BackURL}}{{end}}
 		{{define "partial_fail.html"}}LEAKED-PREFIX{{template "missing_inner_template"}}{{end}}
 		{{define "login.html"}}Login{{end}}
 		{{define "dashboard.html"}}Dashboard{{end}}

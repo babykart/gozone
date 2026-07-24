@@ -1442,3 +1442,77 @@ func TestFlattenRecords_Empty(t *testing.T) {
 		t.Fatalf("expected 0 rows, got %d", len(rows))
 	}
 }
+
+// newBackReq builds a request whose Host is the given same-origin host (so
+// backURL can compare it against the Referer) with an optional Referer header.
+func newBackReq(t *testing.T, host, referer string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "http://"+host+"/whatever", nil)
+	if referer != "" {
+		r.Header.Set("Referer", referer)
+	}
+	return r
+}
+
+// TestBackURL locks the same-origin Referer → back-link behaviour of backURL,
+// including the open-redirect mitigations: only a same-host Referer's path
+// (plus query) is reused, and everything else falls back to /dashboard.
+func TestBackURL(t *testing.T) {
+	const host = "gozone.test"
+	tests := []struct {
+		name    string
+		referer string
+		want    string
+	}{
+		{"no referer", "", "/dashboard"},
+		{"same-origin absolute", "http://" + host + "/zones/42", "/zones/42"},
+		{"same-origin with query", "http://" + host + "/zones/42?Page=2&PerPage=10", "/zones/42?Page=2&PerPage=10"},
+		{"same-origin https", "https://" + host + "/users/1", "/users/1"},
+		{"cross-origin host", "https://evil.com/x", "/dashboard"},
+		{"cross-origin host+port", "http://" + host + ":8080/x", "/dashboard"},
+		{"protocol-relative", "//evil.com/x", "/dashboard"},
+		{"invalid escape", "http://" + host + "/%zz", "/dashboard"},
+		{"relative path-only", "/users/1", "/users/1"},
+		{"relative without slash", "users/1", "/dashboard"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := backURL(newBackReq(t, host, tc.referer)); got != tc.want {
+				t.Errorf("backURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderError_BackURLWired confirms the error page renders the resolved
+// back URL (the regression: it used to hard-code /dashboard).
+func TestRenderError_BackURLWired(t *testing.T) {
+	h := newTestHandler(t)
+
+	t.Run("uses referer", func(t *testing.T) {
+		r := newBackReq(t, "gozone.test", "http://gozone.test/zones/42")
+		rr := httptest.NewRecorder()
+		h.renderError(rr, r, "boom")
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rr.Code)
+		}
+		body := rr.Body.String()
+		if !strings.Contains(body, "Error: boom") {
+			t.Errorf("body missing message: %q", body)
+		}
+		if !strings.Contains(body, "Back=/zones/42") {
+			t.Errorf("body should reference the referer path, got %q", body)
+		}
+	})
+
+	t.Run("falls back to dashboard", func(t *testing.T) {
+		r := newBackReq(t, "gozone.test", "") // no Referer
+		rr := httptest.NewRecorder()
+		h.renderError(rr, r, "boom")
+
+		if !strings.Contains(rr.Body.String(), "Back=/dashboard") {
+			t.Errorf("body should fall back to /dashboard, got %q", rr.Body.String())
+		}
+	})
+}

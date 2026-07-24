@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -826,8 +827,42 @@ func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, stat
 	data := map[string]interface{}{
 		"Title":   "Error - " + h.Cfg.Server.AppName,
 		"Message": msg,
+		// BackURL sends the user back to where they came from (the form/page
+		// that triggered the error) rather than always dumping them on the
+		// dashboard.
+		"BackURL": backURL(r),
 	}
 	h.render(w, r, "error.html", data)
+}
+
+// backURL returns a safe same-origin URL to send the user back to after an
+// error: the request Referer when it points at this site, otherwise the
+// dashboard. Only the path and query of the Referer are reused, so a crafted
+// Referer can never produce an off-site (open-redirect) link. An empty,
+// unparsable, cross-host, or non-rooted Referer falls back to /dashboard.
+func backURL(r *http.Request) string {
+	const fallback = "/dashboard"
+	ref := r.Referer()
+	if ref == "" {
+		return fallback
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return fallback
+	}
+	// Reject cross-origin referers to block an open redirect via a forged
+	// Referer header. An empty Host covers same-origin relative referers.
+	if u.Host != "" && u.Host != r.Host {
+		return fallback
+	}
+	if !strings.HasPrefix(u.Path, "/") {
+		return fallback
+	}
+	back := u.Path
+	if u.RawQuery != "" {
+		back += "?" + u.RawQuery
+	}
+	return back
 }
 
 // sortZoneRecords orders RRSets for display: SOA first, NS second, zone apex
