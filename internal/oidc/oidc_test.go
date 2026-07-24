@@ -261,6 +261,18 @@ func TestRandomCodeVerifierUsesCryptoRand(t *testing.T) {
 	_ = rand.Reader // ensure crypto/rand import is exercised
 }
 
+func TestByteIndex(t *testing.T) {
+	if got := byteIndex("enc.sig", '.'); got != 3 {
+		t.Errorf("byteIndex present = %d, want 3", got)
+	}
+	if got := byteIndex("no-separator", '.'); got != -1 {
+		t.Errorf("byteIndex missing = %d, want -1", got)
+	}
+	if got := byteIndex("", '.'); got != -1 {
+		t.Errorf("byteIndex empty = %d, want -1", got)
+	}
+}
+
 // stateMAC replicates the HMAC-SHA256 signing used by newStateToken, for tests
 // that need to build a token with an unusual (e.g. expired) payload.
 func stateMAC(key []byte, enc string) string {

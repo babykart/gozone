@@ -1,12 +1,17 @@
 package oidc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
 	"golang.org/x/oauth2"
+
+	"github.com/babykart/gozone/internal/config"
 )
 
 // newTestService builds a minimal Service with a single provider whose oauth2
@@ -174,4 +179,185 @@ func TestAuthCodeURL_ConcurrentNoRace(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestNewService_DisabledPaths covers the early-out branches of NewService: a
+// nil config, OIDC not enabled, and enabled with no providers must all return a
+// disabled service without touching the network.
+func TestNewService_DisabledPaths(t *testing.T) {
+	key := []byte("test-state-key-32-bytes-long-0000")
+
+	t.Run("nil config", func(t *testing.T) {
+		svc := NewService(context.Background(), nil, key)
+		t.Cleanup(svc.Close)
+		if svc.Enabled() {
+			t.Error("nil config must yield a disabled service")
+		}
+	})
+
+	t.Run("not enabled", func(t *testing.T) {
+		svc := NewService(context.Background(), &config.Config{}, key)
+		t.Cleanup(svc.Close)
+		if svc.Enabled() {
+			t.Error("disabled OIDC must yield a disabled service")
+		}
+	})
+
+	t.Run("enabled but no providers", func(t *testing.T) {
+		cfg := &config.Config{OIDC: config.OIDCConfig{Enabled: true}}
+		svc := NewService(context.Background(), cfg, key)
+		t.Cleanup(svc.Close)
+		if svc.Enabled() {
+			t.Error("enabled with no providers must yield a disabled service")
+		}
+	})
+}
+
+// TestEnabled covers the nil-receiver and zero-value guards plus the
+// positive case, so a future refactor cannot flip the polarity.
+func TestEnabled(t *testing.T) {
+	var nilSvc *Service
+	if nilSvc.Enabled() {
+		t.Error("nil Service must not be enabled")
+	}
+	if (&Service{}).Enabled() {
+		t.Error("zero-value Service must not be enabled")
+	}
+	if !newTestService(t).Enabled() {
+		t.Error("service with a provider must be enabled")
+	}
+}
+
+// TestProvider_NilAndUnknown locks the nil-receiver short-circuit and the
+// unknown-provider miss.
+func TestProvider_NilAndUnknown(t *testing.T) {
+	var nilSvc *Service
+	if p, ok := nilSvc.Provider("test"); ok || p != nil {
+		t.Errorf("nil Service Provider = (%v,%v), want (nil,false)", p, ok)
+	}
+	svc := newTestService(t)
+	if _, ok := svc.Provider("missing"); ok {
+		t.Error("unknown provider must miss")
+	}
+}
+
+// TestProviders covers the nil/empty cases (must return nil, not an empty
+// slice) and the populated case.
+func TestProviders(t *testing.T) {
+	var nilSvc *Service
+	if ps := nilSvc.Providers(); ps != nil {
+		t.Errorf("nil Service Providers = %v, want nil", ps)
+	}
+	if (&Service{}).Providers() != nil {
+		t.Error("empty Service Providers must be nil")
+	}
+	svc := newTestService(t)
+	// Add a second provider to guard against a single-element coincidence.
+	svc.providers["test2"] = &ProviderInstance{Name: "test2"}
+	ps := svc.Providers()
+	if len(ps) != 2 {
+		t.Fatalf("Providers = %d items, want 2", len(ps))
+	}
+	names := map[string]bool{}
+	for _, p := range ps {
+		names[p.Name] = true
+	}
+	if !names["test"] || !names["test2"] {
+		t.Errorf("Providers missing expected names, got %v", names)
+	}
+}
+
+// TestEndSessionURL covers the unknown-provider miss, the known-provider empty
+// case, and the known-provider non-empty case (the path the Logout handler
+// relies on).
+func TestEndSessionURL(t *testing.T) {
+	svc := newTestService(t)
+	if got := svc.EndSessionURL("missing"); got != "" {
+		t.Errorf("unknown provider EndSessionURL = %q, want empty", got)
+	}
+	if got := svc.EndSessionURL("test"); got != "" {
+		t.Errorf("provider with empty EndSessionURL = %q, want empty", got)
+	}
+	const want = "https://idp.example.com/logout"
+	inst, _ := svc.Provider("test")
+	inst.EndSessionURL = want
+	if got := svc.EndSessionURL("test"); got != want {
+		t.Errorf("EndSessionURL = %q, want %q", got, want)
+	}
+}
+
+// TestService_CloseNilSafe verifies the nil-receiver guard on Close.
+func TestService_CloseNilSafe(t *testing.T) {
+	var nilSvc *Service
+	nilSvc.Close() // must not panic
+}
+
+// TestAuthCodeURL_UnknownProvider locks the ErrUnknownProvider sentinel for the
+// authorization-request side of the flow.
+func TestAuthCodeURL_UnknownProvider(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.AuthCodeURL("missing", "https://cb.example.com/cb")
+	if !errors.Is(err, ErrUnknownProvider) {
+		t.Errorf("expected ErrUnknownProvider, got %v", err)
+	}
+}
+
+// TestHandleCallback_UnknownProvider locks the ErrUnknownProvider sentinel for
+// the callback side, before any state/token work happens.
+func TestHandleCallback_UnknownProvider(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.HandleCallback(context.Background(), "missing", "code", "state", "https://cb.example.com/cb")
+	if !errors.Is(err, ErrUnknownProvider) {
+		t.Errorf("expected ErrUnknownProvider, got %v", err)
+	}
+}
+
+// TestHandleCallback_InvalidState verifies a garbage state token is rejected
+// before the token exchange.
+func TestHandleCallback_InvalidState(t *testing.T) {
+	svc := newTestService(t)
+	svc.usedStates = newStateStore()
+	t.Cleanup(svc.Close)
+	_, err := svc.HandleCallback(context.Background(), "test", "code", "not-a-state", "https://cb.example.com/cb")
+	if err == nil {
+		t.Error("expected error for invalid state")
+	}
+}
+
+// TestHandleCallback_StateProviderMismatch verifies a state minted for a
+// different provider is rejected (guards against authenticating the wrong IdP
+// identity on a mismatched/replayed callback).
+func TestHandleCallback_StateProviderMismatch(t *testing.T) {
+	svc := newTestService(t)
+	svc.usedStates = newStateStore()
+	t.Cleanup(svc.Close)
+	state, _, _, _, err := newStateToken(svc.stateKey, "other")
+	if err != nil {
+		t.Fatalf("newStateToken: %v", err)
+	}
+	_, err = svc.HandleCallback(context.Background(), "test", "code", state, "https://cb.example.com/cb")
+	if err == nil || !strings.Contains(err.Error(), "provider mismatch") {
+		t.Errorf("expected provider mismatch error, got %v", err)
+	}
+}
+
+// TestHandleCallback_StateReplayRejected is the L-3 end-to-end check via
+// HandleCallback: a state already consumed must be rejected before the token
+// exchange (so the network is never hit).
+func TestHandleCallback_StateReplayRejected(t *testing.T) {
+	svc := newTestService(t)
+	svc.usedStates = newStateStore()
+	t.Cleanup(svc.Close)
+	state, _, _, _, err := newStateToken(svc.stateKey, "test")
+	if err != nil {
+		t.Fatalf("newStateToken: %v", err)
+	}
+	// Simulate a prior consumption (a first callback that started processing).
+	if !svc.usedStates.consume(state) {
+		t.Fatal("first consume should succeed")
+	}
+	_, err = svc.HandleCallback(context.Background(), "test", "code", state, "https://cb.example.com/cb")
+	if err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Errorf("expected replay (already consumed) error, got %v", err)
+	}
 }

@@ -247,3 +247,25 @@ func mergeJWKS(t *testing.T, a, b []byte) []byte {
 	}
 	return out
 }
+
+func TestSupportedAlg(t *testing.T) {
+	for _, alg := range []string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "EdDSA"} {
+		if !supportedAlg(alg) {
+			t.Errorf("supportedAlg(%q) = false, want true", alg)
+		}
+	}
+	for _, alg := range []string{"HS256", "none", "", "ABC256"} {
+		if supportedAlg(alg) {
+			t.Errorf("supportedAlg(%q) = true, want false", alg)
+		}
+	}
+}
+
+// TestLastFetchErr confirms the best-effort accessor returns nil (the error is
+// already surfaced to the caller that performed the fetch).
+func TestLastFetchErr(t *testing.T) {
+	k := &cachedKeySet{}
+	if err := k.lastFetchErr(); err != nil {
+		t.Errorf("lastFetchErr = %v, want nil", err)
+	}
+}
