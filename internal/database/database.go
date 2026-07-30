@@ -490,13 +490,22 @@ func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, un
 // failed-login counter so the lockout window starts fresh. Used by the admin
 // manual-lock UI; the per-account automatic lockout uses
 // IncrementFailedLogins instead.
+//
+// A manual lock also revokes every active session by bumping
+// tokens_valid_after: an admin who locks an account expects it frozen on all
+// devices immediately, not just blocked at the next login. The automatic
+// brute-force lockout (IncrementFailedLogins) deliberately does NOT do this,
+// so an attacker triggering the threshold cannot kick the legitimate user off
+// their other sessions (DoS amplification) — only the manual, admin-initiated
+// lock cuts sessions. The user recovers by logging in again once the lock
+// expires or is cleared.
 func (db *DB) AdminLockUser(ctx context.Context, userID int64, lockFor time.Duration) error {
 	if lockFor <= 0 {
 		return fmt.Errorf("lockFor must be positive, got %v", lockFor)
 	}
 	lockedUntil := time.Now().UTC().Add(lockFor)
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET locked_until = ?, failed_login_attempts = 0 WHERE id = ?",
+		"UPDATE users SET locked_until = ?, failed_login_attempts = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
 		lockedUntil, userID,
 	)
 	return err

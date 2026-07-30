@@ -542,3 +542,68 @@ func TestIsLastEnabledAdmin_ConcurrentLockOrder(t *testing.T) {
 		t.Errorf("admin1 unexpectedly changed: role=%q enabled=%d", role, enabled)
 	}
 }
+
+// TestAdminLockUser_RevokesSessions verifies the M2 fix: a manual admin lock
+// bumps tokens_valid_after so the Auth middleware rejects every outstanding
+// session for the locked user, not just future logins.
+func TestAdminLockUser_RevokesSessions(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "carol")
+
+	var tvaBefore time.Time
+	if err := db.QueryRowContext(ctx, "SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaBefore); err != nil {
+		t.Fatalf("select tokens_valid_after: %v", err)
+	}
+
+	if err := db.AdminLockUser(ctx, uid, 15*time.Minute); err != nil {
+		t.Fatalf("AdminLockUser: %v", err)
+	}
+
+	var tvaAfter time.Time
+	if err := db.QueryRowContext(ctx, "SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaAfter); err != nil {
+		t.Fatalf("select tokens_valid_after after lock: %v", err)
+	}
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped by a manual admin lock (M2)")
+	}
+}
+
+// TestIncrementFailedLogins_DoesNotRevokeSessions locks in the design decision
+// that the automatic brute-force lockout must NOT cut active sessions: an
+// attacker who triggers the threshold should not be able to kick the
+// legitimate user off their other devices (DoS amplification). Only the
+// manual, admin-initiated lock revokes sessions.
+func TestIncrementFailedLogins_DoesNotRevokeSessions(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "dave")
+
+	var tvaBefore time.Time
+	if err := db.QueryRowContext(ctx, "SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaBefore); err != nil {
+		t.Fatalf("select tokens_valid_after: %v", err)
+	}
+
+	// Cross the threshold to trigger the automatic lockout.
+	for i := 0; i < 3; i++ {
+		if _, err := db.IncrementFailedLogins(ctx, uid, 3, 15*time.Minute); err != nil {
+			t.Fatalf("IncrementFailedLogins #%d: %v", i+1, err)
+		}
+	}
+
+	locked, _, err := db.UserLockStatus(ctx, uid)
+	if err != nil {
+		t.Fatalf("UserLockStatus: %v", err)
+	}
+	if !locked {
+		t.Fatal("expected the account to be locked after crossing the threshold")
+	}
+
+	var tvaAfter time.Time
+	if err := db.QueryRowContext(ctx, "SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaAfter); err != nil {
+		t.Fatalf("select tokens_valid_after after auto-lockout: %v", err)
+	}
+	if !tvaAfter.Equal(tvaBefore) {
+		t.Errorf("automatic lockout must not revoke sessions: tokens_valid_after before=%v after=%v", tvaBefore, tvaAfter)
+	}
+}

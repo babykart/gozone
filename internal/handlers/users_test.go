@@ -821,6 +821,36 @@ func TestLockUser_Success(t *testing.T) {
 	}
 }
 
+// TestLockUser_RevokesSessions is the M2 regression: the admin "Lock user"
+// action cuts every active session (tokens_valid_after bumped), so the locked
+// user is frozen on all devices immediately — not just blocked at the next
+// login.
+func TestLockUser_RevokesSessions(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
+
+	var tvaBefore time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", targetID).Scan(&tvaBefore)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/lock", targetID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", targetID))
+	r = r.WithContext(ctx)
+	h.LockUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+
+	var tvaAfter time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", targetID).Scan(&tvaAfter)
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped when an admin locks a user (M2)")
+	}
+}
+
 func TestLockUser_SelfBlocked(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
