@@ -281,5 +281,8 @@ func (p *postgresDialect) Migrations() []string {
 		// LOWER(), which forced a full scan.
 		`ALTER TABLE users ADD COLUMN email_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(email)) STORED`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
+		// Per-user session-revocation cutoff. See
+		// sqlite_dialect.go for the rationale.
+		`ALTER TABLE users ADD COLUMN tokens_valid_after TIMESTAMP NOT NULL DEFAULT '1970-01-01 00:00:00'`,
 	}
 }

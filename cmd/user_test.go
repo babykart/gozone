@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -193,5 +194,38 @@ func TestResetPassword_AuditLog(t *testing.T) {
 	}
 	if !strings.Contains(details, "reset password") && !strings.Contains(details, "Reset password") {
 		t.Errorf("details should mention the reset action, got %q", details)
+	}
+}
+
+// TestResetPassword_RevokesSessions is the M1 regression for the CLI emergency
+// reset: setting a new password bumps tokens_valid_after so every active
+// session (including a stolen JWT) is rejected by the Auth middleware.
+func TestResetPassword_RevokesSessions(t *testing.T) {
+	cfgPath, _ := writeUnlockTestConfig(t)
+	db := openUnlockTestDB(t, cfgPath)
+
+	var adminID int64
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT id FROM users WHERE username='admin'").Scan(&adminID); err != nil {
+		t.Fatalf("find admin: %v", err)
+	}
+
+	var tvaBefore time.Time
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT tokens_valid_after FROM users WHERE id=?", adminID).Scan(&tvaBefore); err != nil {
+		t.Fatalf("select tokens_valid_after: %v", err)
+	}
+
+	if err := executeResetPassword("--config", cfgPath, "--password", "newpass-secret", "admin"); err != nil {
+		t.Fatalf("reset-password: %v", err)
+	}
+
+	var tvaAfter time.Time
+	if err := db.QueryRowContext(context.Background(),
+		"SELECT tokens_valid_after FROM users WHERE id=?", adminID).Scan(&tvaAfter); err != nil {
+		t.Fatalf("select tokens_valid_after after reset: %v", err)
+	}
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped after CLI reset-password (M1)")
 	}
 }

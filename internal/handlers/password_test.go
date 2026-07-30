@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
@@ -301,5 +302,142 @@ func TestUpdateUser_SetsMustChangePassword(t *testing.T) {
 	h.DB.QueryRow("SELECT must_change_password FROM users WHERE id=2").Scan(&mustChange)
 	if mustChange != 1 {
 		t.Errorf("admin-reset user should have must_change_password=1, got %d", mustChange)
+	}
+}
+
+// TestChangePassword_RevokesOtherSessions is the M1 regression for the
+// self-service flow: changing the password bumps tokens_valid_after (so every
+// other session is rejected by the Auth middleware) AND re-issues the current
+// session token so the user stays logged in on this device.
+func TestChangePassword_RevokesOtherSessions(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target3", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+	var tvaBefore time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaBefore)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target3", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// tokens_valid_after must move past the epoch default.
+	var tvaAfter time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaAfter)
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped after self-service password change (M1)")
+	}
+
+	// A fresh session cookie must be issued so the user is not logged out on
+	// the device that just changed the password.
+	var sessionValue string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionValue = c.Value
+		}
+	}
+	if sessionValue == "" {
+		t.Error("expected a fresh session cookie after password change (M1); user must stay logged in")
+	}
+}
+
+// TestUpdateUser_PasswordResetRevokesSessions is the M1 regression for the
+// admin reset path: setting a new password bumps tokens_valid_after so the
+// target must re-authenticate on every device.
+func TestUpdateUser_PasswordResetRevokesSessions(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('user2', 'u2@e.com', 'oldhash', 'user', 1)`)
+	var tvaBefore time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaBefore)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	body := "email=u2@e.com&first_name=&last_name=&role=user&password=newpass&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	var tvaAfter time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped after admin password reset (M1)")
+	}
+}
+
+// TestUpdateUser_DisableRevokesSessions is the M1 regression for the account
+// disable path: disabling a user bumps tokens_valid_after so active sessions
+// are cut immediately.
+func TestUpdateUser_DisableRevokesSessions(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('victim', 'victim@example.com', 'hash', 'user', 1)`)
+	var tvaBefore time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaBefore)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	// enabled omitted → requestedEnabled=false → disable transition.
+	body := "email=victim@example.com&first_name=&last_name=&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	var tvaAfter time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
+	if !tvaAfter.After(tvaBefore) {
+		t.Error("expected tokens_valid_after to be bumped when disabling a user (M1)")
+	}
+}
+
+// TestUpdateUser_ProfileEditDoesNotRevokeSessions guards the inverse: a
+// profile-only edit (no password change, account stays enabled) must NOT bump
+// tokens_valid_after, so the user's legitimate sessions survive.
+func TestUpdateUser_ProfileEditDoesNotRevokeSessions(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('victim', 'victim@example.com', 'hash', 'user', 1)`)
+	var tvaBefore time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaBefore)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	body := "email=victim@example.com&first_name=New&last_name=Name&role=user&enabled=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	var tvaAfter time.Time
+	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
+	if !tvaAfter.Equal(tvaBefore) {
+		t.Errorf("tokens_valid_after must not change on a profile-only edit (M1): before=%v after=%v", tvaBefore, tvaAfter)
 	}
 }

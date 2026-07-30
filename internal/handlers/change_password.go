@@ -3,9 +3,11 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/validators"
@@ -110,7 +112,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0 WHERE id = ?",
+		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
 		string(hash), user.ID,
 	); err != nil {
 		h.renderInternalError(w, r, "Failed to update password", err)
@@ -140,6 +142,29 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to commit transaction", err)
 		return
 	}
+
+	// Re-issue the current session so the user stays logged in:
+	// tokens_valid_after was just bumped to now, which invalidates every access
+	// token minted before this instant — including the cookie this request
+	// arrived with, and any session on another device / a stolen JWT. A fresh
+	// token carries an iat >= the cutoff and so survives the Auth middleware's
+	// check on the next request; the overwritten cookie drops the stale one.
+	duration := time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour
+	newToken, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, duration)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to issue session token", err)
+		return
+	}
+	// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.SessionCookieName,
+		Value:    newToken,
+		Path:     "/",
+		Expires:  time.Now().Add(duration),
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   isSecure(r),
+	})
 
 	logger.Info("user changed their own password", "user_id", user.ID)
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)

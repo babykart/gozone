@@ -228,6 +228,21 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 				return
 			}
 
+			// Bulk-revoke outstanding sessions when the credential rotated or
+			// the account was disabled. Any access token whose iat
+			// predates the user's tokens_valid_after cutoff is stale and must
+			// re-authenticate — this is what makes a stolen JWT useless once the
+			// password changes, without enumerating active jtis. The guard skips
+			// tokens without an iat (e.g. none — API keys use a separate path and
+			// their own revocation lifecycle); CURRENT_TIMESTAMP writes are UTC so
+			// the instant comparison is sound (see package timestamp convention).
+			if claims.IssuedAt != nil && !claims.IssuedAt.Time.IsZero() &&
+				claims.IssuedAt.Time.Before(user.TokensValidAfter) {
+				clearSessionCookie(w, r)
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
 			// Force-change gate: a user flagged must_change_password (admin reset
 			// or password expiry) may only reach the change-password page and
 			// logout until they set a new password. Everything else redirects to
@@ -475,12 +490,13 @@ func loadUser(ctx context.Context, db *database.DB, userID int64) (*models.User,
 	var enabled int
 	var mustChange int
 	err := db.QueryRowContext(ctx,
-		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
+		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password, tokens_valid_after
 		 FROM users WHERE id = ?`, userID,
 	).Scan(
 		&user.ID, &user.Username, &user.Email,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
+		&user.TokensValidAfter,
 	)
 	user.Enabled = enabled == 1
 	user.MustChangePassword = mustChange == 1

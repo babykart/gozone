@@ -352,5 +352,8 @@ func (m *mysqlDialect) Migrations() []string {
 		// MySQL < 8.0.13 / MariaDB where functional indexes are unavailable
 		// (see m21 note). Works on MySQL 5.7+ and MariaDB.
 		`ALTER TABLE users ADD COLUMN email_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(email)) STORED, ADD INDEX idx_users_email_lc (email_lc)`,
+		// Per-user session-revocation cutoff. See
+		// sqlite_dialect.go for the rationale.
+		`ALTER TABLE users ADD COLUMN tokens_valid_after DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'`,
 	}
 }

@@ -30,6 +30,14 @@ type User struct {
 	// MustChangePassword forces a password change on next login. Set when an
 	// admin/operator resets a user's password and when a password expires.
 	MustChangePassword bool `json:"-"`
+	// TokensValidAfter is the cutoff before which every session JWT is
+	// considered revoked. The Auth middleware rejects any access
+	// token whose iat predates this instant, so rotating the credential
+	// (password change/reset) or disabling the account invalidates every
+	// outstanding session — including a stolen JWT — without enumerating active
+	// jtis. Defaults to the Unix epoch (no revocation) and is bumped to now at
+	// every credential-changing event.
+	TokensValidAfter time.Time `json:"-"`
 }
 
 // IsAdmin returns true if the user has the admin role.

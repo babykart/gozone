@@ -1053,3 +1053,114 @@ func TestLoadUser_DoesNotLoadPasswordHash(t *testing.T) {
 		t.Errorf("loadUser must not populate PasswordHash (L-9); got %q", user.PasswordHash)
 	}
 }
+
+// TestLoadUser_PopulatesTokensValidAfter verifies loadUser reads the
+// tokens_valid_after cutoff into the user struct so the Auth
+// middleware can compare the token's iat against it.
+func TestLoadUser_PopulatesTokensValidAfter(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "tva", "user", true)
+	cutoff := time.Now().Add(-30 * time.Minute).UTC()
+	if _, err := db.Exec("UPDATE users SET tokens_valid_after = ? WHERE id = ?", cutoff, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	user, err := loadUser(context.Background(), db, userID)
+	if err != nil {
+		t.Fatalf("loadUser: %v", err)
+	}
+	// Compare on the instant; the column stores second precision, so allow a
+	// small skew rather than asserting exact equality.
+	if user.TokensValidAfter.IsZero() {
+		t.Fatal("expected tokens_valid_after to be populated, got zero value")
+	}
+	if d := user.TokensValidAfter.Sub(cutoff); d > time.Second || d < -time.Second {
+		t.Errorf("tokens_valid_after = %v, want ~%v (skew %v)", user.TokensValidAfter, cutoff, d)
+	}
+}
+
+// TestAuth_TokensValidAfterRevokesStaleToken is the M1 core regression: once
+// tokens_valid_after is bumped past the token's iat (password reset / account
+// disable), the access token is rejected and the session cookie is cleared,
+// even though its signature and exp are still valid.
+func TestAuth_TokensValidAfterRevokesStaleToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "stale", "user", true)
+	user := &models.User{ID: userID, Username: "stale", Role: "user"}
+
+	token, err := GenerateToken(user, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bump the cutoff one hour into the future so the token's iat (now) is
+	// strictly before it.
+	if _, err := db.Exec("UPDATE users SET tokens_valid_after = ? WHERE id = ?",
+		time.Now().Add(time.Hour).UTC(), userID); err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if reached {
+		t.Error("handler must not be reached for a token predating tokens_valid_after (M1)")
+	}
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+	var cleared bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName && c.Value == "" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("expected the session cookie to be cleared when a stale token is rejected")
+	}
+}
+
+// TestAuth_TokensValidAfterAllowsFreshToken complements the revocation test:
+// when tokens_valid_after lies in the past (the epoch default, or set before
+// the token was issued), a valid token still authenticates.
+func TestAuth_TokensValidAfterAllowsFreshToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "fresh", "user", true)
+
+	// Leave the epoch default in place and issue a normal token.
+	token, err := GenerateToken(&models.User{ID: userID, Username: "fresh", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if !reached {
+		t.Error("handler should be reached for a fresh token with epoch tokens_valid_after (M1)")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}

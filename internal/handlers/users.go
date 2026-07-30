@@ -333,9 +333,17 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err = tx.ExecContext(ctx,
-		`UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ?`,
+	// Revoke every outstanding session when an admin disables the account
+	// (target was enabled, requested state is disabled): this closes the
+	// session on every device immediately. Profile-only edits and re-enable
+	// transitions leave the cutoff untouched so legitimate sessions survive.
+	disableRevokesSessions := target.Enabled && !requestedEnabled
+	updateQuery := `UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP`
+	if disableRevokesSessions {
+		updateQuery += ", tokens_valid_after = CURRENT_TIMESTAMP"
+	}
+	updateQuery += " WHERE id = ?"
+	_, err = tx.ExecContext(ctx, updateQuery,
 		email, firstName, lastName, requestedRole, enabledVal, userID,
 	)
 	if err != nil {
@@ -363,7 +371,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, "Failed to hash password")
 			return
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1 WHERE id = ?", string(hash), userID)
+		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?", string(hash), userID)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return

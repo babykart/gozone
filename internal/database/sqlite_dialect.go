@@ -266,5 +266,13 @@ func (s *sqliteDialect) Migrations() []string {
 		// rejected); VIRTUAL generated columns are indexable.
 		`ALTER TABLE users ADD COLUMN email_lc TEXT GENERATED ALWAYS AS (LOWER(email)) VIRTUAL`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
+		// Per-user session-revocation cutoff. An access token
+		// whose iat predates tokens_valid_after is rejected by the Auth
+		// middleware, so a password change/reset or an account disable
+		// invalidates every outstanding session (incl. a stolen JWT) without
+		// tracking active jtis. Epoch default keeps existing sessions valid on
+		// upgrade — the column is only bumped to now at credential-changing
+		// events.
+		`ALTER TABLE users ADD COLUMN tokens_valid_after DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'`,
 	}
 }
