@@ -193,3 +193,40 @@ func TestCheckZoneAccess_CancelledContext_Forbidden(t *testing.T) {
 		t.Error("next handler must not run when the access probe is aborted by context cancellation")
 	}
 }
+
+// TestCheckZoneAccess_DBError_FailsClosed500 is the regression test for the
+// swallowed-DB-error flaw: a genuine DB fault (here a closed connection) MUST
+// NOT collapse into an indistinguishable 403. It fails closed (the next
+// handler never runs) but surfaces as a 500 and is logged, so an operator can
+// tell a DB outage from a stream of legitimate denials. ErrNoRows (genuine
+// denial) and context cancellation still return 403 (covered by the tests
+// above).
+func TestCheckZoneAccess_DBError_FailsClosed500(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "member", "user", true)
+	seedZoneAccess(t, db, userID, "example.com.")
+
+	user := &models.User{ID: userID, Username: "member", Role: "user"}
+
+	// Simulate a DB outage: closing the connection makes the access probe
+	// return a non-ErrNoRows, non-context error.
+	db.Close()
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com.", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withTestUser(r, user)
+
+	called := false
+	CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, r)
+
+	if called {
+		t.Error("next handler must not run when the access probe fails (fail-closed)")
+	}
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 on DB error (not an indistinguishable 403), got %d", rr.Code)
+	}
+}
