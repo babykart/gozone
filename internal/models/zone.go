@@ -158,10 +158,11 @@ type ZoneStatistics struct {
 	Statistics []StatisticItem `json:"statistics,omitempty"`
 }
 
-// ZoneWithInfo combines a zone with its record count for listing pages.
+// ZoneWithInfo wraps a Zone for the list-zones view. It is the return type of
+// ListZonesWithInfo; PowerDNS does not return a record count in its zone-list
+// response, so no extra fields are populated today.
 type ZoneWithInfo struct {
-	Zone        Zone `json:"zone"`
-	RecordCount int  `json:"record_count"`
+	Zone Zone `json:"zone"`
 }
 
 // Metadata represents a zone metadata entry in the PowerDNS API.
