@@ -357,6 +357,12 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 }
 
 // BatchCreateRecords creates multiple DNS records in a zone (POST /zones/{zone_id}/records/batch-create).
+//
+// The flow is split into three focused helpers so the handler stays a short,
+// readable outline:
+//   - collectBatchRows parses and validates the parallel form arrays;
+//   - mergeBatchRRSets merges the new rows into the existing RRSets by name+type;
+//   - finalizeBatchRRSets normalises content, deduplicates and assembles comments.
 func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
@@ -367,197 +373,34 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	names := r.PostForm["name"]
-	types := r.PostForm["type"]
-	contents := r.PostForm["content"]
-	ttls := r.PostForm["ttl"]
-	priorities := r.PostForm["priority"]
-	comments := r.PostForm["comment"]
-	commentClears := r.PostForm["comment_clear"]
-
-	if len(names) == 0 || len(types) == 0 || len(contents) == 0 {
+	if len(r.PostForm["name"]) == 0 || len(r.PostForm["type"]) == 0 || len(r.PostForm["content"]) == 0 {
 		h.renderError(w, r, "At least one record is required")
 		return
 	}
 
-	type logEntry struct {
-		recordType string
-		name       string
-		content    string
+	rrsets, logEntries, pendingComments, err := collectBatchRows(
+		r.PostForm["name"], r.PostForm["type"], r.PostForm["content"],
+		r.PostForm["ttl"], r.PostForm["priority"],
+		r.PostForm["comment"], r.PostForm["comment_clear"],
+		zoneID,
+	)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
 	}
-
-	// name/type/content are parallel form arrays; iterate only over indices
-	// present in all three so a mismatched POST can't index out of range.
-	count := min(len(names), len(types), len(contents))
-
-	var rrsets []models.RRSet
-	var logEntries []logEntry
-	// pendingComments collects user-provided comments grouped by name+type so
-	// rows that merge into the same RRSet contribute their comments together.
-	// Each entry carries the textarea text and an explicit "clear" flag so
-	// per-row clear signals survive the merge.
-	type pendingComment struct {
-		text  string
-		clear bool
-	}
-	pendingComments := make(map[string][]pendingComment)
-	for i := 0; i < count; i++ {
-		name := strings.TrimSpace(names[i])
-		recordType := strings.TrimSpace(types[i])
-		content := strings.TrimSpace(contents[i])
-
-		if name == "" || recordType == "" || content == "" {
-			continue
-		}
-
-		name = normalizeRecordName(name, zoneID)
-
-		if err := validators.ValidateRecordName(name); err != nil {
-			h.renderError(w, r, "Invalid record name '"+name+"': "+err.Error())
-			return
-		}
-
-		// TTL/priority validation mirrors the single-record CreateRecord path:
-		// an empty field means "use the default" (3600 / 0), but an explicit
-		// non-numeric or out-of-range value is rejected rather than silently
-		// substituted, so the activity log records what the user actually
-		// typed (REVIEW.md L-4, M-5). Priority 0 is a valid MX value, so the
-		// presence check ("0 provided" vs "not provided") is the empty-string
-		// test, not a > 0 test.
-		ttl := 3600
-		if i < len(ttls) {
-			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
-				v, err := strconv.Atoi(ttlStr)
-				if err != nil || v <= 0 {
-					h.renderError(w, r, "Invalid TTL: must be a positive integer")
-					return
-				}
-				ttl = v
-			}
-		}
-		priority := 0
-		if i < len(priorities) {
-			if priorityStr := strings.TrimSpace(priorities[i]); priorityStr != "" {
-				v, err := strconv.Atoi(priorityStr)
-				if err != nil || v < 0 {
-					h.renderError(w, r, "Invalid priority: must be a non-negative integer")
-					return
-				}
-				priority = v
-			}
-		}
-
-		var rowComment string
-		if i < len(comments) {
-			rowComment = strings.TrimSpace(comments[i])
-		}
-		rowCommentClear := false
-		if i < len(commentClears) {
-			rowCommentClear = commentClears[i] == "1" || commentClears[i] == "true"
-		}
-
-		if err := validators.ValidateRecordType(recordType); err != nil {
-			h.renderError(w, r, "Invalid record type '"+recordType+"': "+err.Error())
-			return
-		}
-		if err := validators.ValidateRecordContent(recordType, content); err != nil {
-			h.renderError(w, r, "Invalid record content: "+err.Error())
-			return
-		}
-		if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
-			h.renderError(w, r, "Invalid priority '"+recordType+"': "+err.Error())
-			return
-		}
-
-		rrsets = append(rrsets, models.RRSet{
-			Name: name,
-			Type: recordType,
-			TTL:  ttl,
-			Records: []models.RecordInfo{
-				{Content: content, Priority: priority, Disabled: false},
-			},
-		})
-		logEntries = append(logEntries, logEntry{recordType, name, content})
-
-		key := name + "|" + recordType
-		if rowComment != "" || rowCommentClear {
-			pendingComments[key] = append(pendingComments[key], pendingComment{text: rowComment, clear: rowCommentClear})
-		}
-	}
-
 	if len(rrsets) == 0 {
 		h.renderError(w, r, "No valid records to create")
 		return
 	}
 
-	// Fetch existing RRSets to merge new records into
 	existing, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch existing records", err)
 		return
 	}
-	existingMap := make(map[string]*models.RRSet)
-	for i := range existing {
-		existingMap[existing[i].Name+"|"+existing[i].Type] = &existing[i]
-	}
 
-	// Group new records by name+type, merging into existing RRSets
-	mergedMap := make(map[string]*models.RRSet)
-	for _, newRR := range rrsets {
-		key := newRR.Name + "|" + newRR.Type
-		if ex, ok := existingMap[key]; ok {
-			if m, seen := mergedMap[key]; seen {
-				m.Records = append(m.Records, newRR.Records...)
-			} else {
-				clone := *ex
-				for _, nr := range newRR.Records {
-					clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
-				}
-				clone.TTL = newRR.TTL
-				mergedMap[key] = &clone
-			}
-		} else {
-			if m, seen := mergedMap[key]; seen {
-				m.Records = append(m.Records, newRR.Records...)
-			} else {
-				mergedMap[key] = &newRR
-			}
-		}
-	}
-
-	var merged []models.RRSet
-	for key, rr := range mergedMap {
-		for i := range rr.Records {
-			rr.Records[i].Content, rr.Records[i].Priority =
-				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
-		}
-		// DNS RRs in an RRSet are a set, so drop records that produced
-		// identical wire content — e.g. duplicate batch rows, or a new row
-		// that duplicates an existing record. PowerDNS rejects duplicates.
-		// Comparison is post-normalization (MX/SRV priority is embedded in
-		// the content, so targets with different priorities are kept).
-		rr.Records = dedupRecordsByContent(rr.Records)
-		// Combine all user comments for this name+type into a single text
-		// payload so buildCommentsPatch splits them into one Comment per line.
-		// PowerDNS PATCH `comments` REPLACES the RRSet's comment list, so we
-		// also preserve any existing comments from the cloned RRSet.
-		var existing []models.Comment
-		if rr.Comments != nil {
-			existing = rr.Comments.Items
-		}
-		if userComments := pendingComments[key]; len(userComments) > 0 {
-			lines := make([]string, 0, len(userComments))
-			clear := false
-			for _, uc := range userComments {
-				lines = append(lines, uc.text)
-				if uc.clear {
-					clear = true
-				}
-			}
-			rr.Comments = buildCommentsPatch(existing, clear, lines...)
-		}
-		merged = append(merged, *rr)
-	}
+	mergedMap := mergeBatchRRSets(rrsets, existing)
+	merged := finalizeBatchRRSets(mergedMap, pendingComments)
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, merged); err != nil {
 		h.renderInternalError(w, r, "Failed to create records", err)
@@ -573,6 +416,193 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
+}
+
+// batchLogEntry captures the user-facing details of one submitted record row
+// for the activity log, written after the PowerDNS create succeeds.
+type batchLogEntry struct {
+	recordType string
+	name       string
+	content    string
+}
+
+// batchPendingComment is one row's comment textarea text plus its explicit
+// "clear" flag. Rows that merge into the same RRSet contribute their comments
+// together, and the per-row clear signal must survive the merge.
+type batchPendingComment struct {
+	text  string
+	clear bool
+}
+
+// collectBatchRows parses and validates the parallel name/type/content/...
+// form arrays of a batch-create submission. name/type/content are iterated
+// only up to the shortest of the three so a mismatched POST cannot index out
+// of range. It returns the built one-record RRSets, the activity-log entries
+// and the per name+type pending comments. A validation failure yields a
+// user-facing error (the caller renders err.Error()).
+//
+// TTL/priority validation mirrors the single-record CreateRecord path: an
+// empty field means "use the default" (3600 / 0), but an explicit non-numeric
+// or out-of-range value is rejected rather than silently substituted, so the
+// activity log records what the user actually typed. Priority 0 is a valid MX
+// value, so the presence check ("0 provided" vs "not provided") is the
+// empty-string test, not a > 0 test.
+func collectBatchRows(names, types, contents, ttls, priorities, comments, commentClears []string, zoneID string) ([]models.RRSet, []batchLogEntry, map[string][]batchPendingComment, error) {
+	count := min(len(names), len(types), len(contents))
+
+	var rrsets []models.RRSet
+	var logs []batchLogEntry
+	pending := make(map[string][]batchPendingComment)
+
+	for i := 0; i < count; i++ {
+		name := strings.TrimSpace(names[i])
+		recordType := strings.TrimSpace(types[i])
+		content := strings.TrimSpace(contents[i])
+
+		if name == "" || recordType == "" || content == "" {
+			continue
+		}
+
+		name = normalizeRecordName(name, zoneID)
+
+		if err := validators.ValidateRecordName(name); err != nil {
+			return nil, nil, nil, fmt.Errorf("Invalid record name '%s': %w", name, err)
+		}
+
+		ttl := 3600
+		if i < len(ttls) {
+			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
+				v, err := strconv.Atoi(ttlStr)
+				if err != nil || v <= 0 {
+					return nil, nil, nil, fmt.Errorf("Invalid TTL: must be a positive integer")
+				}
+				ttl = v
+			}
+		}
+		priority := 0
+		if i < len(priorities) {
+			if priorityStr := strings.TrimSpace(priorities[i]); priorityStr != "" {
+				v, err := strconv.Atoi(priorityStr)
+				if err != nil || v < 0 {
+					return nil, nil, nil, fmt.Errorf("Invalid priority: must be a non-negative integer")
+				}
+				priority = v
+			}
+		}
+
+		var rowComment string
+		if i < len(comments) {
+			rowComment = strings.TrimSpace(comments[i])
+		}
+		rowCommentClear := false
+		if i < len(commentClears) {
+			rowCommentClear = commentClears[i] == "1" || commentClears[i] == "true"
+		}
+
+		if err := validators.ValidateRecordType(recordType); err != nil {
+			return nil, nil, nil, fmt.Errorf("Invalid record type '%s': %w", recordType, err)
+		}
+		if err := validators.ValidateRecordContent(recordType, content); err != nil {
+			return nil, nil, nil, fmt.Errorf("Invalid record content: %w", err)
+		}
+		if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
+			return nil, nil, nil, fmt.Errorf("Invalid priority '%s': %w", recordType, err)
+		}
+
+		rrsets = append(rrsets, models.RRSet{
+			Name: name,
+			Type: recordType,
+			TTL:  ttl,
+			Records: []models.RecordInfo{
+				{Content: content, Priority: priority, Disabled: false},
+			},
+		})
+		logs = append(logs, batchLogEntry{recordType: recordType, name: name, content: content})
+
+		key := name + "|" + recordType
+		if rowComment != "" || rowCommentClear {
+			pending[key] = append(pending[key], batchPendingComment{text: rowComment, clear: rowCommentClear})
+		}
+	}
+
+	return rrsets, logs, pending, nil
+}
+
+// mergeBatchRRSets groups the new one-record RRSets by name+type and merges
+// them into the existing RRSets fetched from PowerDNS, so a batch that adds
+// several records to the same RRSet (or to an existing one) produces a single
+// merged RRSet per name+type. The TTL follows the new submission. Returns the
+// merged RRSets keyed by "name|type".
+func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) map[string]*models.RRSet {
+	existingMap := make(map[string]*models.RRSet)
+	for i := range existing {
+		existingMap[existing[i].Name+"|"+existing[i].Type] = &existing[i]
+	}
+
+	merged := make(map[string]*models.RRSet)
+	for _, newRR := range newRRSets {
+		key := newRR.Name + "|" + newRR.Type
+		if ex, ok := existingMap[key]; ok {
+			if m, seen := merged[key]; seen {
+				m.Records = append(m.Records, newRR.Records...)
+			} else {
+				clone := *ex
+				for _, nr := range newRR.Records {
+					clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
+				}
+				clone.TTL = newRR.TTL
+				merged[key] = &clone
+			}
+		} else {
+			if m, seen := merged[key]; seen {
+				m.Records = append(m.Records, newRR.Records...)
+			} else {
+				merged[key] = &newRR
+			}
+		}
+	}
+	return merged
+}
+
+// finalizeBatchRRSets prepares each merged RRSet for the PowerDNS write:
+// normalises record content/priority, drops records that produced identical
+// wire content (PowerDNS rejects duplicates — e.g. duplicate batch rows, or a
+// new row duplicating an existing record; MX/SRV priority is embedded in the
+// content so targets with different priorities are kept), and assembles the
+// comment patch from the per-row pending comments merged with any comments
+// already on the RRSet (PowerDNS PATCH comments REPLACE the list). It mutates
+// the RRSets in merged in place and returns them as a slice; the caller also
+// reads merged (by key) for the activity-log snapshot, which therefore
+// reflects the finalised, post-normalisation record set. Map iteration order
+// is non-deterministic, but each RRSet is sent as an independent PATCH so the
+// order does not matter.
+func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment) []models.RRSet {
+	var out []models.RRSet
+	for key, rr := range merged {
+		for i := range rr.Records {
+			rr.Records[i].Content, rr.Records[i].Priority =
+				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
+		}
+		rr.Records = dedupRecordsByContent(rr.Records)
+
+		var existing []models.Comment
+		if rr.Comments != nil {
+			existing = rr.Comments.Items
+		}
+		if userComments := pending[key]; len(userComments) > 0 {
+			lines := make([]string, 0, len(userComments))
+			clear := false
+			for _, uc := range userComments {
+				lines = append(lines, uc.text)
+				if uc.clear {
+					clear = true
+				}
+			}
+			rr.Comments = buildCommentsPatch(existing, clear, lines...)
+		}
+		out = append(out, *rr)
+	}
+	return out
 }
 
 // rrsetSnapshot serialises an RRSet to JSON for storage in activity_logs,
