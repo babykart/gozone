@@ -148,7 +148,7 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}) 
 		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
 	}
 
-	logger.Info("pdns request", "method", method, "path", path, "status", resp.StatusCode, "bytes", len(respBody))
+	logger.Debug("pdns request", "method", method, "path", path, "status", resp.StatusCode, "bytes", len(respBody))
 	return respBody, resp.StatusCode, nil
 }
 
