@@ -37,10 +37,7 @@ func (h *Handler) CreateCryptokey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_cryptokey', ?)",
-		user.ID, zoneID, fmt.Sprintf("Created %s key %d (%s)", keyType, key.ID, algorithm),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_cryptokey", Details: fmt.Sprintf("Created %s key %d (%s)", keyType, key.ID, algorithm)}); err != nil {
 		logger.Error("failed to log create_cryptokey", "zone_id", zoneID, "error", err)
 	}
 
@@ -80,10 +77,7 @@ func (h *Handler) ToggleCryptokey(w http.ResponseWriter, r *http.Request) {
 	// derived from the active bool), but binding it removes the footgun if a
 	// future refactor lets user input reach action (REVIEW.md L-2).
 	actionName := "cryptokey_" + action
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, ?, ?)",
-		user.ID, zoneID, actionName, fmt.Sprintf("%s key %d", action, keyID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: actionName, Details: fmt.Sprintf("%s key %d", action, keyID)}); err != nil {
 		logger.Error("failed to log cryptokey toggle", "zone_id", zoneID, "error", err)
 	}
 
@@ -112,10 +106,7 @@ func (h *Handler) DeleteCryptokey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_cryptokey', ?)",
-		user.ID, zoneID, fmt.Sprintf("Deleted key %d", keyID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_cryptokey", Details: fmt.Sprintf("Deleted key %d", keyID)}); err != nil {
 		logger.Error("failed to log delete_cryptokey", "zone_id", zoneID, "error", err)
 	}
 
@@ -141,10 +132,7 @@ func (h *Handler) ClearZoneCache(w http.ResponseWriter, r *http.Request) {
 
 	h.PDNS.InvalidateZoneCache(r.Context(), zoneID)
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'clear_zone_cache', ?)",
-		user.ID, zoneID, fmt.Sprintf("Cleared cache for zone %s", zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "clear_zone_cache", Details: fmt.Sprintf("Cleared cache for zone %s", zoneID)}); err != nil {
 		logger.Error("failed to log clear_zone_cache", "zone_id", zoneID, "error", err)
 	}
 

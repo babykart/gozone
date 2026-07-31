@@ -276,10 +276,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := h.DB.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'login', ?)",
-		user.ID, fmt.Sprintf("User %s logged in", user.Username),
-	); err != nil {
+	if err := logActivity(ctx, h.DB, activityEntry{UserID: user.ID, Action: "login", Details: fmt.Sprintf("User %s logged in", user.Username)}); err != nil {
 		logger.Error("failed to log login activity", "user_id", user.ID, "error", err)
 	}
 
@@ -440,10 +437,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	// Revoke the current session token so it cannot be reused after logout.
 	if user != nil {
-		if _, err := h.DB.ExecContext(ctx,
-			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'logout', ?)",
-			user.ID, fmt.Sprintf("User %s logged out", user.Username),
-		); err != nil {
+		if err := logActivity(ctx, h.DB, activityEntry{UserID: user.ID, Action: "logout", Details: fmt.Sprintf("User %s logged out", user.Username)}); err != nil {
 			logger.Error("failed to log logout activity", "user_id", user.ID, "error", err)
 		}
 	}

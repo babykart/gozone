@@ -101,10 +101,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 			contents = append(contents, r.Content)
 		}
 		details := fmt.Sprintf("Imported %s %s -> %s", rs.Type, rs.Name, strings.Join(contents, ", "))
-		if _, err := h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'import_zone', ?)",
-			user.ID, zoneID, details,
-		); err != nil {
+		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details}); err != nil {
 			logger.Error("failed to log import_zone activity", "zone_id", zoneID, "error", err)
 		}
 	}

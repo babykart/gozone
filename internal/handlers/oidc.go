@@ -258,10 +258,7 @@ func (h *Handler) applySSORole(ctx context.Context, user *models.User, desired s
 	if err := tx.SetUserRole(ctx, user.ID, desired); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'sso_role_sync', ?)",
-		user.ID, fmt.Sprintf("SSO role sync set role to %s", desired),
-	); err != nil {
+	if err := logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "sso_role_sync", Details: fmt.Sprintf("SSO role sync set role to %s", desired)}); err != nil {
 		return fmt.Errorf("log sso role sync: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -335,10 +332,7 @@ func (h *Handler) linkIdentity(ctx context.Context, userID int64, issuer, subjec
 	if err := tx.LinkExternalIdentity(ctx, userID, issuer, subject); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'sso_link', ?)",
-		userID, fmt.Sprintf("Linked SSO identity %s", issuer),
-	); err != nil {
+	if err := logActivity(ctx, tx, activityEntry{UserID: userID, Action: "sso_link", Details: fmt.Sprintf("Linked SSO identity %s", issuer)}); err != nil {
 		return fmt.Errorf("log sso link: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -377,10 +371,7 @@ func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isSecure(r),
 	})
-	if _, err := h.DB.ExecContext(r.Context(),
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'sso_login', ?)",
-		user.ID, fmt.Sprintf("User %s logged in via SSO (%s)", user.Username, provider),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "sso_login", Details: fmt.Sprintf("User %s logged in via SSO (%s)", user.Username, provider)}); err != nil {
 		logger.Error("failed to log sso login activity", "user_id", user.ID, "error", err)
 	}
 	return nil

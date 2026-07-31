@@ -140,11 +140,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'create_record', ?, ?, ?)",
-		user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", recordType, name, content),
-		rrsetSnapshot(existingRRSet), rrsetSnapshot(&rrset),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_record", Details: fmt.Sprintf("Created %s record %s -> %s", recordType, name, content), OldValue: rrsetSnapshot(existingRRSet), NewValue: rrsetSnapshot(&rrset)}); err != nil {
 		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -223,11 +219,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'update_record', ?, ?, ?)",
-		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
-		rrsetSnapshot(oldRRSet), rrsetSnapshot(rrset),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "update_record", Details: fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name), OldValue: rrsetSnapshot(oldRRSet), NewValue: rrsetSnapshot(rrset)}); err != nil {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -262,11 +254,7 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'update_record', ?, ?, ?)",
-		user.ID, zoneID, fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name),
-		rrsetSnapshot(oldRRSet), rrsetSnapshot(rrset),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "update_record", Details: fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name), OldValue: rrsetSnapshot(oldRRSet), NewValue: rrsetSnapshot(rrset)}); err != nil {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -578,11 +566,7 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 
 	for _, e := range logEntries {
 		key := e.name + "|" + e.recordType
-		if _, err := h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'create_record', ?, '', ?)",
-			user.ID, zoneID, fmt.Sprintf("Created %s record %s -> %s", e.recordType, e.name, e.content),
-			rrsetSnapshot(mergedMap[key]),
-		); err != nil {
+		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_record", Details: fmt.Sprintf("Created %s record %s -> %s", e.recordType, e.name, e.content), NewValue: rrsetSnapshot(mergedMap[key])}); err != nil {
 			logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 		}
 	}
@@ -873,11 +857,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'delete_record', ?, ?, '')",
-		user.ID, zoneID, fmt.Sprintf("Deleted %s record %s", recordType, recordName),
-		rrsetSnapshot(oldRRSet),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_record", Details: fmt.Sprintf("Deleted %s record %s", recordType, recordName), OldValue: rrsetSnapshot(oldRRSet)}); err != nil {
 		logger.Error("failed to log delete_record activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -1040,12 +1020,7 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	if b, err := json.Marshal(removedSnapshot); err == nil {
 		snapshotJSON = string(b)
 	}
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details, old_value, new_value) VALUES (?, ?, 'delete_record', ?, ?, '')",
-		user.ID, zoneID,
-		fmt.Sprintf("Bulk deleted %d record(s) across %d RRSet(s)", totalRemoved, len(removedSnapshot)),
-		snapshotJSON,
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_record", Details: fmt.Sprintf("Bulk deleted %d record(s) across %d RRSet(s)", totalRemoved, len(removedSnapshot)), OldValue: snapshotJSON}); err != nil {
 		logger.Error("failed to log bulk delete_record activity", "zone_id", zoneID, "error", err)
 	}
 

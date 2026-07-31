@@ -183,10 +183,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to create user", err)
 		return
 	}
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_user', ?)",
-		admin.ID, fmt.Sprintf("Created user %s (id: %d)", username, userID),
-	)
+	err = logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "create_user", Details: fmt.Sprintf("Created user %s (id: %d)", username, userID)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -388,10 +385,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'update_user', ?)",
-		admin.ID, fmt.Sprintf("Updated user %d", userID),
-	)
+	err = logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "update_user", Details: fmt.Sprintf("Updated user %d", userID)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -459,10 +453,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_user', ?)",
-		admin.ID, fmt.Sprintf("Deleted user %d", userID),
-	)
+	err = logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "delete_user", Details: fmt.Sprintf("Deleted user %d", userID)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -564,10 +555,7 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete user"})
 			return
 		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_user', ?)",
-			admin.ID, fmt.Sprintf("Deleted user %d", userID),
-		); err != nil {
+		if err := logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "delete_user", Details: fmt.Sprintf("Deleted user %d", userID)}); err != nil {
 			logger.Error("BulkDeleteUsers: log activity", "user_id", userID, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to log activity"})
 			return
@@ -625,10 +613,7 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'lock_user', ?)",
-		admin.ID, fmt.Sprintf("Locked user id=%d", targetID),
-	); err != nil {
+	if err := logActivity(ctx, h.DB, activityEntry{UserID: admin.ID, Action: "lock_user", Details: fmt.Sprintf("Locked user id=%d", targetID)}); err != nil {
 		logger.Error("failed to log lock_user activity", "target_id", targetID, "error", err)
 	}
 
@@ -662,10 +647,7 @@ func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'unlock_user', ?)",
-		admin.ID, fmt.Sprintf("Unlocked user %s (id=%d)", target.Username, targetID),
-	); err != nil {
+	if err := logActivity(ctx, h.DB, activityEntry{UserID: admin.ID, Action: "unlock_user", Details: fmt.Sprintf("Unlocked user %s (id=%d)", target.Username, targetID)}); err != nil {
 		logger.Error("failed to log unlock_user activity", "target_id", targetID, "error", err)
 	}
 

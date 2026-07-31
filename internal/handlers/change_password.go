@@ -130,10 +130,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'change_password', ?)",
-		user.ID, "User changed their own password",
-	); err != nil {
+	if err := logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "change_password", Details: "User changed their own password"}); err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
 	}

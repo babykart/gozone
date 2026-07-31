@@ -180,10 +180,7 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_api_key', ?)",
-		user.ID, fmt.Sprintf("Created API key: %s", description),
-	)
+	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "create_api_key", Details: fmt.Sprintf("Created API key: %s", description)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -237,10 +234,7 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx.ExecContext(ctx,
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_api_key', ?)",
-		user.ID, fmt.Sprintf("Deleted API key %s", keyID),
-	)
+	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %s", keyID)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -315,10 +309,7 @@ func (h *Handler) BulkDeleteAPIKeys(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, keyID)
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_api_key', ?)",
-			user.ID, fmt.Sprintf("Deleted API key %s", keyID),
-		); err != nil {
+		if err := logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %s", keyID)}); err != nil {
 			h.renderInternalError(w, r, "Failed to log activity", err)
 			return
 		}

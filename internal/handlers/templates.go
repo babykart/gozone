@@ -382,10 +382,7 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'apply_template', ?)",
-		user.ID, zoneID, fmt.Sprintf("Applied template %s", templateIDStr),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "apply_template", Details: fmt.Sprintf("Applied template %s", templateIDStr)}); err != nil {
 		logger.Error("failed to log activity", "error", err)
 	}
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern

@@ -322,10 +322,7 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_zone', ?)",
-		user.ID, zone.ID, fmt.Sprintf("Created zone %s (kind: %s)", zone.Name, zone.Kind),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zone.ID, Action: "create_zone", Details: fmt.Sprintf("Created zone %s (kind: %s)", zone.Name, zone.Kind)}); err != nil {
 		logger.Error("failed to log create_zone activity", "zone_id", zone.ID, "error", err)
 	}
 
@@ -374,10 +371,7 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_zone', ?)",
-		user.ID, zoneID, fmt.Sprintf("Deleted zone %s", zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
 		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -430,10 +424,7 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deleted++
-		if _, err := h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_zone', ?)",
-			user.ID, zoneID, fmt.Sprintf("Deleted zone %s", zoneID),
-		); err != nil {
+		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
 			logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 		}
 	}
@@ -638,10 +629,7 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'rectify_zone', ?)",
-		user.ID, zoneID, fmt.Sprintf("Rectified zone %s", zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "rectify_zone", Details: fmt.Sprintf("Rectified zone %s", zoneID)}); err != nil {
 		logger.Error("failed to log rectify_zone activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -709,10 +697,7 @@ func (h *Handler) CreateMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'create_metadata', ?)",
-		user.ID, zoneID, fmt.Sprintf("Set metadata %s on zone %s", kind, zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_metadata", Details: fmt.Sprintf("Set metadata %s on zone %s", kind, zoneID)}); err != nil {
 		logger.Error("failed to log create_metadata activity", "zone_id", zoneID, "kind", kind, "error", err)
 	}
 
@@ -739,10 +724,7 @@ func (h *Handler) DeleteMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_metadata', ?)",
-		user.ID, zoneID, fmt.Sprintf("Deleted metadata %s from zone %s", kind, zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_metadata", Details: fmt.Sprintf("Deleted metadata %s from zone %s", kind, zoneID)}); err != nil {
 		logger.Error("failed to log delete_metadata activity", "zone_id", zoneID, "kind", kind, "error", err)
 	}
 

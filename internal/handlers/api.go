@@ -170,14 +170,12 @@ func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	// Audit trail: mirror the web DeleteZone handler so API-driven deletes show
 	// up in the activity log. user_id is the API key owner (set by APIKeyAuth);
 	// the guard keeps this panic-free if the route is ever exposed unauthenticated.
-	var userID any
-	if user := middleware.GetUser(r); user != nil {
+	user := middleware.GetUser(r)
+	var userID int64
+	if user != nil {
 		userID = user.ID
 	}
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, ?, 'delete_zone', ?)",
-		userID, zoneID, fmt.Sprintf("Deleted zone %s via API", zoneID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: userID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s via API", zoneID)}); err != nil {
 		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 	}
 

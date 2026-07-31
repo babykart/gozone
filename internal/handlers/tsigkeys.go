@@ -122,10 +122,7 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'create_tsigkey', ?)",
-		user.ID, fmt.Sprintf("Created TSIG key %s (alg: %s)", tsigKey.Name, tsigKey.Algorithm),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "create_tsigkey", Details: fmt.Sprintf("Created TSIG key %s (alg: %s)", tsigKey.Name, tsigKey.Algorithm)}); err != nil {
 		logger.Error("failed to log create_tsigkey activity", "key_id", tsigKey.ID, "error", err)
 	}
 
@@ -199,10 +196,7 @@ func (h *Handler) UpdateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'update_tsigkey', ?)",
-		user.ID, fmt.Sprintf("Updated TSIG key %s (alg: %s)", keyID, algorithm),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "update_tsigkey", Details: fmt.Sprintf("Updated TSIG key %s (alg: %s)", keyID, algorithm)}); err != nil {
 		logger.Error("failed to log update_tsigkey activity", "key_id", keyID, "error", err)
 	}
 
@@ -224,10 +218,7 @@ func (h *Handler) DeleteTSIGKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
-		"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_tsigkey', ?)",
-		user.ID, fmt.Sprintf("Deleted TSIG key %s", keyID),
-	); err != nil {
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "delete_tsigkey", Details: fmt.Sprintf("Deleted TSIG key %s", keyID)}); err != nil {
 		logger.Error("failed to log delete_tsigkey activity", "key_id", keyID, "error", err)
 	}
 
@@ -280,10 +271,7 @@ func (h *Handler) BulkDeleteTSIGKeys(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deleted++
-		if _, err := h.DB.Exec(
-			"INSERT INTO activity_logs (user_id, action, details) VALUES (?, 'delete_tsigkey', ?)",
-			user.ID, fmt.Sprintf("Deleted TSIG key %s", keyID),
-		); err != nil {
+		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "delete_tsigkey", Details: fmt.Sprintf("Deleted TSIG key %s", keyID)}); err != nil {
 			logger.Error("failed to log delete_tsigkey activity", "key_id", keyID, "error", err)
 		}
 	}
