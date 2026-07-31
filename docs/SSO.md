@@ -399,6 +399,15 @@ state is persisted in the `sessions` table, so the limits are enforced
 **cluster-wide** across multiple GoZone instances (an in-memory cache coarsens
 writes, so cross-instance idle lags by at most ~1 minute).
 
+> **Multi-instance note:** the session *lifetime* is cluster-wide, but the
+> OIDC `state` **single-use (anti-replay) store is in-process and per-node**.
+> In a multi-instance deployment a captured `state` replayed at a different
+> instance than the one that issued it could succeed within the 10-minute TTL.
+> The OAuth2 authorization-code single-use at the IdP, PKCE, and the `nonce`
+> bound into the id_token keep the practical risk negligible; for a stricter
+> guarantee, enable session affinity on the load balancer. See the README
+> "High Availability / Multi-Instance Deployments" section.
+
 ---
 
 ## Troubleshooting

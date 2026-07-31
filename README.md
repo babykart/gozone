@@ -322,6 +322,30 @@ server {
 }
 ```
 
+### High Availability / Multi-Instance Deployments
+
+GoZone is stateless from the application's point of view: every piece of **durable** auth/security state lives in the shared database, so several instances can run behind a load balancer out of the box. A few protections are **per-node** (in-process), and this section documents which is which so operators can size their deployment and their expectations.
+
+**Cluster-wide (shared via the database)** — identical on every instance, enforced consistently regardless of which instance handles a request:
+
+- Users, roles, enable/disable and lock state; the persistent brute-force lockout (`locked_until`, `failed_login_attempts`) and manual admin locks (`manual_lock_until`).
+- Password policy, password history and password expiry.
+- Session idle/absolute lifetime (the `sessions` table) and JWT revocation (`tokens_valid_after`, plus the per-`jti` `revoked_tokens` table).
+- API keys, activity/login-attempt audit, and OIDC account linking (`external_identities`).
+
+**Per-node (in-memory, NOT shared across instances):**
+
+- **Rate limiters** — login per-IP (`5/min`), login per-username (`login_lock.username_rate_limit_per_minute`), API per-IP (`300/min`) and API per-key (`100/min`). The effective ceiling scales with the instance count: with *N* instances a single client can sustain up to roughly *N×* the configured rate (one fresh bucket per instance). Account lockout (above) still caps credential-stuffing regardless of instance count.
+- **OIDC `state` single-use store** — the anti-replay check for the SSO redirect is in-process. A captured `state` replayed at a *different* instance than the one that issued it could succeed within its 10-minute TTL. The existing mitigations (OAuth2 authorization-code single-use at the IdP, PKCE, and the `nonce` bound into the id_token) keep the practical risk negligible.
+- **Session-tracker cache** — an in-memory cache coarsens idle/absolute writes, so cross-instance inactivity detection lags by at most ~1 minute; it always falls back to the shared `sessions` table, so the limit itself is still cluster-wide.
+
+**Mitigations for stricter per-client guarantees:** enable session affinity ("sticky sessions") at the load balancer — hashing on the `gozone_session` cookie routes a given client to one instance, restoring single-node rate-limit accounting and pinning the OIDC `state` check to the issuing instance. This reduces horizontal spreading for that traffic, so weigh it against your load-balancing goals.
+
+**Required for any multi-instance setup:**
+
+- A **shared database** (PostgreSQL or MySQL). A per-node SQLite file is *not* shared and must not be used across instances.
+- The **same `server.secret_key` on every instance.** The JWT, CSRF and OIDC keys are HKDF-derived from it; mismatched keys mean a session cookie minted by one instance is rejected by the others (and CSRF/OIDC flows break). See [Secret Key](#secret-key).
+
 ## Web UI
 
 ### Dashboard

@@ -17,6 +17,13 @@ import (
 //
 // Each unique key (e.g., IP address, API key, username) gets its own
 // token bucket limiter. Unused limiters are periodically cleaned up.
+//
+// Buckets are held in-process: the limit is enforced **per instance**, not
+// shared across a fleet. In a multi-instance deployment the effective ceiling
+// per client therefore scales with the instance count (N instances → up to
+// roughly N× the configured rate). Durable brute-force protection (account
+// lockout in the DB) is independent of this and stays cluster-wide. See the
+// README "High Availability / Multi-Instance Deployments" section.
 type RateLimiter struct {
 	mu       sync.Mutex
 	limiters map[string]*rateLimiterEntry
