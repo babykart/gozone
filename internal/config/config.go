@@ -99,10 +99,10 @@ type ServerConfig struct {
 	JWTKey []byte `yaml:"-"`
 	// CSRFKey is derived from SecretKey via HKDF-SHA256 for CSRF tokens.
 	CSRFKey []byte `yaml:"-"`
-	// OIDCStateKey is derived from SecretKey via HKDF-SHA256 and signs the
-	// OIDC state parameter (CSRF protection for the SSO redirect dance). It
-	// is independent of JWTKey/CSRFKey so compromise of one does not reveal
-	// the others.
+	// OIDCStateKey is derived from SecretKey via HKDF-SHA256 and encrypts the
+	// OIDC state parameter (AES-256-GCM: confidentiality + CSRF protection for
+	// the SSO redirect dance). It is independent of JWTKey/CSRFKey so compromise
+	// of one does not reveal the others.
 	OIDCStateKey []byte `yaml:"-"`
 	// ShutdownTimeoutSeconds is the maximum time to wait for in-flight
 	// requests to finish during graceful shutdown (SIGINT/SIGTERM). Must

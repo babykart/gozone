@@ -20,7 +20,7 @@ import (
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	return &Service{
-		stateKey: []byte("test-state-key-32-bytes-long-0000"),
+		stateKey: []byte("test-state-key-32-bytes-long-000"),
 		providers: map[string]*ProviderInstance{
 			"test": {
 				Name: "test",
@@ -185,7 +185,7 @@ func TestAuthCodeURL_ConcurrentNoRace(t *testing.T) {
 // nil config, OIDC not enabled, and enabled with no providers must all return a
 // disabled service without touching the network.
 func TestNewService_DisabledPaths(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
+	key := []byte("test-state-key-32-bytes-long-000")
 
 	t.Run("nil config", func(t *testing.T) {
 		svc := NewService(context.Background(), nil, key)

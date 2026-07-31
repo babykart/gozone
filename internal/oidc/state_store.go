@@ -8,12 +8,12 @@ import (
 )
 
 // stateStore tracks consumed OIDC state tokens to enforce single-use semantics
-// server-side (REVIEW.md L-3). The stateless design (state token = HMAC-signed
-// payload carrying the PKCE verifier + nonce) means a captured state is
-// otherwise replayable within its TTL. This store closes that gap: once a state
-// token passes HMAC + expiry verification in HandleCallback, it is marked
-// consumed; any subsequent attempt to reuse it is rejected before the token
-// exchange even begins.
+// server-side (REVIEW.md L-3). The stateless design (state token = AES-GCM
+// encrypted payload carrying the PKCE verifier + nonce) means a captured state
+// is otherwise replayable within its TTL. This store closes that gap: once a
+// state token passes decryption + expiry verification in HandleCallback, it is
+// marked consumed; any subsequent attempt to reuse it is rejected before the
+// token exchange even begins.
 //
 // Entries auto-expire after stateTTL and are periodically swept by a background
 // goroutine. The store is in-process, so multi-instance deployments are not
@@ -86,8 +86,9 @@ func (s *stateStore) cleanup() {
 }
 
 // hashState returns the hex-encoded SHA-256 digest of the state string. The
-// hash avoids storing the raw state (which contains the PKCE verifier) in
-// process memory longer than necessary.
+// hash avoids storing the raw state token in process memory longer than
+// necessary; the payload it carries is AES-GCM encrypted, so only the digest
+// is retained.
 func hashState(state string) string {
 	sum := sha256.Sum256([]byte(state))
 	return hex.EncodeToString(sum[:])

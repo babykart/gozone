@@ -242,9 +242,9 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 }
 
 // AuthCodeURL builds the authorization-endpoint redirect URL for the given
-// provider, embedding a fresh signed state token (carrying the PKCE verifier +
-// nonce). The callbackURL is the fully-qualified /auth/oidc/{name}/callback
-// URL the IdP must redirect back to.
+// provider, embedding a fresh encrypted state token (carrying the PKCE
+// verifier + nonce). The callbackURL is the fully-qualified
+// /auth/oidc/{name}/callback URL the IdP must redirect back to.
 func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err error) {
 	inst, ok := s.Provider(provider)
 	if !ok {
@@ -263,8 +263,8 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		// Send the nonce to the IdP so it echoes it back in the id_token; the
-		// callback verifies it against the value embedded in the signed state
-		// to block token replay (REVIEW.md C-1).
+		// callback verifies it against the value embedded in the encrypted
+		// state to block token replay (REVIEW.md C-1).
 		oidc.Nonce(nonce),
 	), nil
 }

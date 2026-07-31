@@ -1,12 +1,11 @@
 package oidc
 
 import (
-	"crypto/hmac"
+	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,7 +126,7 @@ func TestNormalizeScopesOpenIDOnce(t *testing.T) {
 }
 
 func TestStateTokenRoundTrip(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
+	key := []byte("test-state-key-32-bytes-long-000")
 	state, verifier, challenge, nonce, err := newStateToken(key, "gitea")
 	if err != nil {
 		t.Fatalf("newStateToken: %v", err)
@@ -156,12 +155,13 @@ func TestStateTokenRoundTrip(t *testing.T) {
 }
 
 func TestStateTokenTamperRejected(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
+	key := []byte("test-state-key-32-bytes-long-000")
 	state, _, _, _, err := newStateToken(key, "gitea")
 	if err != nil {
 		t.Fatalf("newStateToken: %v", err)
 	}
-	// Flip the last character of the signature.
+	// Flip the last character of the token (ciphertext / nonce) so the AES-GCM
+	// authentication tag no longer verifies.
 	tampered := state[:len(state)-1]
 	last := state[len(state)-1]
 	if last == 'a' {
@@ -175,31 +175,32 @@ func TestStateTokenTamperRejected(t *testing.T) {
 }
 
 func TestStateTokenWrongKeyRejected(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
+	key := []byte("test-state-key-32-bytes-long-000")
 	state, _, _, _, err := newStateToken(key, "gitea")
 	if err != nil {
 		t.Fatalf("newStateToken: %v", err)
 	}
-	other := []byte("a-different-key-32-bytes-long-11111")
+	other := []byte("a-different-key-32-bytes-long-11")
 	if _, err := verifyStateToken(other, state); err == nil {
 		t.Error("state token verified with the wrong key")
 	}
 }
 
 func TestStateTokenExpiry(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
-	// Build a token, then rewind its expiry into the past by crafting one
-	// directly via the internal builder with an already-expired timestamp.
+	key := []byte("test-state-key-32-bytes-long-000")
+	// Build a token with an already-expired timestamp by encrypting a payload
+	// directly, then assert verification rejects it on the expiry check (which
+	// runs after the successful AES-GCM decryption).
 	payload := statePayload{
 		Provider: "gitea",
 		Nonce:    "n",
 		Verifier: "v",
 		Exp:      time.Now().Add(-time.Minute).Unix(),
 	}
-	body := mustEncodePayload(t, payload)
-	enc := hex.EncodeToString(body)
-	mac := stateMAC(key, enc)
-	state := enc + "." + mac
+	state, err := encryptState(key, payload)
+	if err != nil {
+		t.Fatalf("encryptState: %v", err)
+	}
 	if _, err := verifyStateToken(key, state); err == nil {
 		t.Error("expired state token must fail verification")
 	}
@@ -273,22 +274,41 @@ func TestByteIndex(t *testing.T) {
 	}
 }
 
-// stateMAC replicates the HMAC-SHA256 signing used by newStateToken, for tests
-// that need to build a token with an unusual (e.g. expired) payload.
-func stateMAC(key []byte, enc string) string {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(enc))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// mustEncodePayload JSON-marshals the payload and base64url-encodes it, mirroring
-// newStateToken's body encoding.
-func mustEncodePayload(t *testing.T, p statePayload) []byte {
-	t.Helper()
-	body, err := json.Marshal(p)
+// TestStateTokenPayloadEncrypted is the B1 regression: the PKCE verifier,
+// nonce, and provider name MUST NOT be recoverable from the opaque state value.
+// Before the fix the payload was only HMAC-signed, so anyone observing the
+// state (URL, server logs, Referer) could base64-decode the verifier. AES-GCM
+// encryption makes the payload confidential while the GCM tag preserves
+// integrity.
+func TestStateTokenPayloadEncrypted(t *testing.T) {
+	key := []byte("test-state-key-32-bytes-long-000")
+	state, verifier, _, nonce, err := newStateToken(key, "gitea")
 	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
+		t.Fatalf("newStateToken: %v", err)
 	}
-	enc := base64.RawURLEncoding.EncodeToString(body)
-	return []byte(enc)
+
+	// The plaintext secrets must not appear in the token string itself.
+	if strings.Contains(state, verifier) {
+		t.Error("state token leaks the PKCE verifier in cleartext")
+	}
+	if strings.Contains(state, nonce) {
+		t.Error("state token leaks the nonce in cleartext")
+	}
+	if strings.Contains(state, "gitea") {
+		t.Error("state token leaks the provider name in cleartext")
+	}
+
+	// ...nor in the base64-decoded bytes (nonce segment + ciphertext segment).
+	var raw []byte
+	for _, seg := range strings.SplitN(state, ".", 2) {
+		if b, derr := base64.RawURLEncoding.DecodeString(seg); derr == nil {
+			raw = append(raw, b...)
+		}
+	}
+	if bytes.Contains(raw, []byte(verifier)) {
+		t.Error("decoded state token contains the PKCE verifier (payload not encrypted)")
+	}
+	if bytes.Contains(raw, []byte("gitea")) {
+		t.Error("decoded state token contains the provider name (payload not encrypted)")
+	}
 }

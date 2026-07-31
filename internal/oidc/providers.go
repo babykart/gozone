@@ -5,9 +5,10 @@
 // for well-known providers. Custom/generic OIDC providers are also supported
 // via standard discovery (issuer URL + /.well-known/openid-configuration).
 //
-// The flow is the authorization-code flow with PKCE (S256), a signed state
-// parameter (HMAC) to prevent CSRF, and a nonce for ID-token replay
-// protection — matching the GoZone ROADMAP "OpenID Connect / OAuth2" section.
+// The flow is the authorization-code flow with PKCE (S256), an encrypted state
+// parameter (AES-256-GCM: confidentiality + CSRF protection) to prevent CSRF,
+// and a nonce for ID-token replay protection — matching the GoZone ROADMAP
+// "OpenID Connect / OAuth2" section.
 package oidc
 
 // Preset describes the defaults for a well-known provider type. It is the

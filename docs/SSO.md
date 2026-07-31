@@ -48,9 +48,9 @@ prevent brute-forcing of the `state` parameter.
   the user unauthenticated. `Lax` still blocks cross-site POST, so mutations stay
   protected by CSRF. This is intentional and documented at the cookie-set site
   (`internal/handlers/oidc.go`, REVIEW.md B-1).
-- **A stable `server.secret_key`.** The OIDC `state` parameter is signed with a
-  key derived from the master secret; an auto-generated ephemeral key
-  invalidates in-flight SSO attempts on every restart.
+- **A stable `server.secret_key`.** The OIDC `state` parameter is encrypted
+  (AES-256-GCM) with a key derived from the master secret; an auto-generated
+  ephemeral key invalidates in-flight SSO attempts on every restart.
 - **The redirect URI** registered at the provider. It is always:
 
   ```

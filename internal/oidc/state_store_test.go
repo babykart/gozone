@@ -67,7 +67,7 @@ func TestStateStore_CloseIdempotent(t *testing.T) {
 // state token produced by newStateToken, verifying that the store works
 // end-to-end with the actual state format.
 func TestStateStore_ConsumeWithRealStateToken(t *testing.T) {
-	key := []byte("test-state-key-32-bytes-long-0000")
+	key := []byte("test-state-key-32-bytes-long-000")
 	state, _, _, _, err := newStateToken(key, "gitea")
 	if err != nil {
 		t.Fatalf("newStateToken: %v", err)

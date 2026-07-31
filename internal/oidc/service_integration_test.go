@@ -18,9 +18,9 @@ import (
 	"github.com/babykart/gozone/internal/config"
 )
 
-// integrationStateKey is the HMAC key used to sign/verify state tokens in the
-// integration tests (kept in sync with the key used by newTestService).
-const integrationStateKey = "test-state-key-32-bytes-long-0000"
+// integrationStateKey is the AES-256 key used to encrypt/decrypt state tokens
+// in the integration tests (kept in sync with the key used by newTestService).
+const integrationStateKey = "test-state-key-32-bytes-long-000"
 
 // fakeIdP is a minimal OIDC provider used to exercise NewService discovery and
 // the full HandleCallback flow end-to-end without an external identity
@@ -198,7 +198,7 @@ func newIntegrationService(t *testing.T, idp *fakeIdP, name string) *Service {
 	return svc
 }
 
-// extractState pulls the signed state parameter out of an authorization URL.
+// extractState pulls the encrypted state parameter out of an authorization URL.
 func extractState(t *testing.T, authURL string) string {
 	t.Helper()
 	u, err := url.Parse(authURL)
@@ -218,7 +218,7 @@ func mustAuthCodeURL(t *testing.T, svc *Service, provider, callbackURL string) s
 	return u
 }
 
-// stateNonce decrypts a signed state token to recover the nonce the IdP must
+// stateNonce decrypts an encrypted state token to recover the nonce the IdP must
 // echo back in the id_token.
 func stateNonce(t *testing.T, state string) string {
 	t.Helper()
@@ -332,7 +332,7 @@ func TestHandleCallback_HappyPath(t *testing.T) {
 		t.Fatalf("AuthCodeURL: %v", err)
 	}
 	state := extractState(t, authURL)
-	// Make the IdP echo the nonce bound into the signed state token.
+	// Make the IdP echo the nonce bound into the encrypted state token.
 	idp.setNonce(stateNonce(t, state))
 
 	claims, err := svc.HandleCallback(context.Background(), "fake", "auth-code-xyz", state, callbackURL)
@@ -357,7 +357,7 @@ func TestHandleCallback_HappyPath(t *testing.T) {
 }
 
 // TestHandleCallback_NonceMismatch verifies the C-1 replay guard: an id_token
-// whose nonce does not match the one bound in the signed state is rejected.
+// whose nonce does not match the one bound in the encrypted state is rejected.
 func TestHandleCallback_NonceMismatch(t *testing.T) {
 	idp := newFakeIdP(t, "gozone-client")
 	svc := newIntegrationService(t, idp, "fake")
