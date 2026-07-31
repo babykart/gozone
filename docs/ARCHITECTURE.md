@@ -46,8 +46,9 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 │                                                    │
 │  Global middleware chain:                          │
 │    RequestID → ClientIPFrom* → requestLogger →     │
-│    Recoverer → Compress → SecurityHeaders →        │
-│    ErrorHandler → CSRF                             │
+│    Compress → HTTPSResolver → SecurityHeaders →    │
+│    BodyLimit → ErrorHandler                        │
+│  (CSRF is per-group: Web UI group only)            │
 └──────────────────────-┬────────────────────────────┘
                          │
                   ┌──────▼───────┐
@@ -97,15 +98,28 @@ internal/
 ### Dependency Graph
 
 ```
-cmd        ──► config, database, handlers, middleware, pdns, web
-handlers   ──► middleware, models, pdns, cache, validators, errors, database
-middleware ──► models, database
-pdns       ──► config, models, errors, cache
+cmd        ──► config, database, handlers, middleware, oidc, pdns, validators, version, web
+handlers   ──► config, database, middleware, models, oidc, pdns, validators, version
+middleware ──► database, errors, models
+pdns       ──► cache, config, models
 database   ──► config, models
-handlers   ──► web (render-only; template.FuncMap is in cmd/server.go)
+config     ──► validators
+oidc       ──► config
 ```
 
-The `pdns` package wraps `*Client` in a `cachedClient` (internal/cache) — both implement the same `ZoneService` interface, so handlers depend on the interface and never on a concrete cache implementation.
+`logger` and `constants` are utility leaves imported widely (by most packages
+above); omitted from the edges for readability. Neither imports another internal
+package. True leaf packages (no internal imports at all): `cache`, `errors`,
+`models`, `validators`, `version`.
+
+`handlers` does **not** import the `web` package: it renders through the
+`*template.Template` injected at construction (`handlers.New`). The template
+`FuncMap` is registered in `cmd/server.go` (`parseTemplates`); the OIDC `state`
+parameter is AES-256-GCM encrypted in `internal/oidc` (the handler-side SSO
+service interface is `handlers.SSOService`, the concrete impl `*oidc.Service`).
+The `pdns` package wraps `*Client` in a `cachedClient` (`internal/cache`) — both
+implement the same `ZoneService` interface, so handlers depend on the interface
+and never on a concrete cache implementation.
 
 ### Layer Responsibilities
 
@@ -139,7 +153,7 @@ The `pdns` package wraps `*Client` in a `cachedClient` (internal/cache) — both
    - Each job receives a context derived from the parent; the returned `stop` function cancels it on shutdown
 8. **`parseTemplates()`** — load `web/templates/*.html` via `template.ParseFS` from embedded filesystem (`web/embed.go`)
 9. **`handlers.New(db, pdnsClient, cfg, tmpl)`** — wire handler with all dependencies
-10. **Register routes** on chi router with global middleware chain (`RequestID → ClientIPFrom* → requestLogger → Recoverer → Compress → SecurityHeaders → ErrorHandler`) plus per-group chains (CSRF, Auth, APIKey, RequireAdmin)
+10. **Register routes** on chi router with global middleware chain (`RequestID → ClientIPFrom* → requestLogger → Compress → HTTPSResolver → SecurityHeaders → BodyLimit → ErrorHandler`) plus per-group chains (CSRF + Auth on the Web UI group, APIKey + rate limiters on the API group, RequireAdmin on admin routes)
 11. **`http.ListenAndServe(addr, r)`** with **graceful shutdown** on SIGINT/SIGTERM:
     - `srv.Shutdown(ctx)` stops accepting new connections
     - Goroutine waits on `<-shutdownDone` before returning
@@ -353,18 +367,18 @@ provider.
 GET /auth/oidc/<provider>/login (login button)
   │
   ▼ oidc.Service.AuthCodeURL
-  ├── newStateToken: HMAC-signed state carrying {provider, nonce, PKCE verifier, exp}
+  ├── newStateToken: AES-256-GCM-encrypted state carrying {provider, nonce, PKCE verifier, exp}
   ├── code_challenge = S256(verifier)
   └── 302 → provider authorization endpoint
         ?response_type=code&client_id=…&redirect_uri=…&scope=openid…
-        &state=<signed>&nonce=<nonce>&code_challenge=…&code_challenge_method=S256
+        &state=<encrypted>&nonce=<nonce>&code_challenge=…&code_challenge_method=S256
 
 … user authenticates at the provider …
 
 GET /auth/oidc/<provider>/callback?code=…&state=…
   │  (rate-limited by the shared login limiter)
   ▼ oidc.Service.HandleCallback
-  ├── verifyStateToken: HMAC signature + exp + provider match (else sso_error)
+  ├── verifyStateToken: AES-GCM decrypt (confidentiality + auth tag) + exp + provider match (else sso_error)
   ├── oauth2.Exchange(code, code_verifier) → {access_token, id_token, …}
   ├── idToken.Verify: JWKS signature (TTL-cached key set, proactively refreshed every oidc.jwks_cache_ttl_minutes) + iss/aud/exp/nonce (coreos/go-oidc)
   └── normalize claims → {sub, iss, email, email_verified, preferred_username, name, Raw}
@@ -442,13 +456,18 @@ users
 ├── id                    INTEGER PK AUTOINCREMENT (SQLite) / SERIAL (Postgres) / AUTO_INCREMENT (MySQL)
 ├── username              TEXT/ VARCHAR UNIQUE NOT NULL
 ├── email                 TEXT/ VARCHAR UNIQUE NOT NULL
+├── email_lc              generated LOWER(email)                    ← case-insensitive SSO email-link lookup
 ├── password_hash         TEXT/ VARCHAR NOT NULL                ← bcrypt hash, json:"-"
 ├── first_name            TEXT/ VARCHAR DEFAULT ''
 ├── last_name             TEXT/ VARCHAR DEFAULT ''
 ├── role                  TEXT/ VARCHAR DEFAULT 'user'          ← 'admin' or 'user'
 ├── enabled               INTEGER/ BOOLEAN DEFAULT 1
 ├── failed_login_attempts INTEGER DEFAULT 0                    ← auto-lockout threshold counter
-├── locked_until          DATETIME/ TIMESTAMP                   ← NULL = not locked; non-NULL = locked until
+├── locked_until          DATETIME/ TIMESTAMP                   ← auto-lockout expiry (NULL = not auto-locked)
+├── manual_lock_until     DATETIME/ TIMESTAMP                   ← admin manual-lock marker (enforced at login regardless of max_failed_attempts)
+├── password_changed_at   DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP  ← password age (expiry) + history anchor
+├── must_change_password  INTEGER DEFAULT 0                     ← force-change gate (admin reset / expiry)
+├── tokens_valid_after    DATETIME DEFAULT '1970-01-01 …'       ← session-revocation cutoff; JWT iat before this is rejected
 ├── created_at            DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 └── updated_at            DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
@@ -525,13 +544,37 @@ zone_template_records
 ├── ttl          INTEGER NOT NULL DEFAULT 3600
 ├── priority     INTEGER NOT NULL DEFAULT 0
 └── disabled     INTEGER/ SMALLINT NOT NULL DEFAULT 0
+
+password_history                                       ← password reuse prevention
+├── id            INTEGER PK / SERIAL / AUTO_INCREMENT
+├── user_id        INTEGER NOT NULL FK → users(id) ON DELETE CASCADE
+├── password_hash  TEXT/ VARCHAR NOT NULL
+└── created_at     DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+external_identities                                    ← OIDC account linking ((issuer, subject) → local user)
+├── id         INTEGER PK / SERIAL / AUTO_INCREMENT
+├── user_id    INTEGER NOT NULL FK → users(id) ON DELETE CASCADE
+├── issuer     TEXT/ VARCHAR NOT NULL                     ← IdP issuer URL from the id_token "iss"
+├── subject    TEXT/ VARCHAR NOT NULL                     ← IdP subject ("sub")
+├── created_at DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+└── UNIQUE (issuer, subject)
+
+sessions                                               ← idle/absolute session lifetime (cluster-wide)
+├── session_id  TEXT/ VARCHAR PRIMARY KEY                ← JWT "sid" claim (stable across refreshes)
+├── first_seen  DATETIME/ TIMESTAMP NOT NULL
+├── last_seen   DATETIME/ TIMESTAMP NOT NULL
+└── expires_at  DATETIME/ TIMESTAMP NOT NULL
 ```
 
 **Indexes**:
 - `activity_logs(user_id)`, `activity_logs(zone_id)`, `activity_logs(zone_id, created_at DESC)`, `activity_logs(created_at)`
-- `api_keys(key_hash)`
+- `api_keys(key_hash)`, `api_keys(user_id, created_at DESC)`
 - `revoked_tokens(expires_at)`
 - `login_attempts(username, attempted_at)`, `login_attempts(ip_address, attempted_at)`, `login_attempts(user_id, attempted_at)`, `login_attempts(attempted_at)`
+- `password_history(user_id, created_at DESC)`
+- `external_identities(user_id)`, `external_identities(issuer, subject)`
+- `sessions(expires_at)`
+- `users(email_lc)` (generated lowercased email for SSO linking)
 - `zone_group_members(user_id)`
 - `zone_group_zones(group_id)`, `zone_group_zones(zone_id)`
 
@@ -687,13 +730,13 @@ MySQL and PostgreSQL deployments do not have these constraints and can use a nor
 
 - JWT tokens are HMAC-SHA256 with a key derived from `server.secret_key` via HKDF-SHA256. There is no key rotation mechanism — changing the secret invalidates all existing sessions.
 - API keys are SHA-256 hashed before comparison against the stored `key_hash`. The raw key is only shown once at creation time.
-- The default admin password (`admin`/`admin`) is logged in the startup banner when the seed matches `config.DefaultAdminPassword`. There is no force-change on first login — set `GOZONE_ADMIN_PASSWORD` (or `admin.password` in YAML) at startup.
-- No password policy (length, complexity). `CreateUser` / `UpdateUser` accept any non-empty password.
+- The default admin password (`admin`/`admin`) is logged in the startup banner when the seed matches `config.DefaultAdminPassword`. Set `GOZONE_ADMIN_PASSWORD` (or `admin.password` in YAML) at startup to avoid it. A forced-change mechanism **does** exist: every admin/operator password reset (and password expiry) sets `users.must_change_password = 1`, and the Auth middleware gates such a session to `/change-password` + `/logout` until the user sets a new password. The **initial admin seed is exempt** — it only logs a warning (see REVIEW.md M3 for force-changing the default seed).
+- Password policy is enforced (`internal/validators.ValidatePassword`, driven by `password.*` / `GOZONE_PASSWORD_*`): minimum length (runes) and required character classes (uppercase/lowercase/digit/special), secure-by-default (`min_length: 8`, all four classes on). It is checked at every password-set site (`CreateUser`, `UpdateUser`, `gozone user reset-password`); the admin seed is exempt as a one-time bootstrap. Optional **password history** (`password.history_size`) refuses reuse of recent hashes, and **password expiry** (`password.max_age_days`) flips `must_change_password` on login once the password age exceeds the limit.
 
 ### Web UI
 
 - CSRF protection is implemented via gorilla/csrf middleware on all state-changing POST endpoints. Invalid CSRF tokens result in a redirect to `/login?error=csrf_invalid` and a warning log.
-- Cookies lack the `Secure` flag by default (set dynamically based on request). Enable TLS and use HTTPS in production. The CSRF cookie's `Secure` flag is configured once at startup via `server.secure_cookies` (`GOZONE_SECURE_COOKIES`).
+- Cookies use the `Secure` flag dynamically — set per request from the effective TLS context (`middleware.IsHTTPS`, trusted-proxy aware). Both the session cookie and the CSRF cookie get it via a per-request `csrfSecureCookieWriter` (the session cookie at issue time, the CSRF cookie rewritten on every response). `server.secure_cookies` is **no longer read** (retained only for backward compatibility); enable TLS / serve over HTTPS in production so the flag is set.
 - Templates are embedded at compile time via `//go:embed` and loaded with `template.ParseFS`, making deployment a single binary with no external template files required. A rebuild is required to change any template.
 - All frontend event handlers are delegated via `data-action` (CSP `script-src 'self'` only — no `'unsafe-inline'`).
 
