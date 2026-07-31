@@ -12,7 +12,7 @@
 </div>
 {{end}}
 
-<form method="POST" action="{{.FormAction}}" style="margin-bottom:2rem">
+<form method="POST" action="{{.FormAction}}" class="mb-2">
     <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
     <div class="form-group">
         <label for="name">Name</label>
@@ -50,7 +50,7 @@
 
 {{/* Edit flow: per-member / per-zone tables with incremental add + remove. */}}
 {{if ne .Group.ID 0}}
-<div class="card" style="margin-bottom:2rem">
+<div class="card mb-2">
     <h3>Members</h3>
     {{if .Members}}
     <div class="table-responsive">
@@ -66,7 +66,7 @@
                 <td>{{.Email}}</td>
                 <td><span class="badge badge-{{.Role}}">{{.Role}}</span></td>
                 <td>
-                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-member" style="display:inline" data-confirm="Remove {{.Username}} from group?">
+                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-member" class="inline" data-confirm="Remove {{.Username}} from group?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="user_id" value="{{.ID}}">
                         <button type="submit" class="btn btn-sm btn-danger">Remove</button>
@@ -78,12 +78,12 @@
     </table>
     </div>
     {{else}}
-    <p class="empty-state" style="text-align:left">No members in this group.</p>
+    <p class="empty-state text-left">No members in this group.</p>
     {{end}}
 
-    <form method="POST" action="/groups/{{.Group.ID}}/add-member" style="margin-top:1rem;display:flex;gap:0.5rem;align-items:flex-end">
+    <form method="POST" action="/groups/{{.Group.ID}}/add-member" class="add-row">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
-        <div class="form-group" style="margin:0;flex:1">
+        <div class="form-group m-0 flex-1">
             <label for="user_id">Add member</label>
             <select id="user_id" name="user_id" class="form-control">
                 {{range .AllUsers}}
@@ -109,7 +109,7 @@
             <tr>
                 <td><strong>{{.}}</strong></td>
                 <td>
-                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-zone" style="display:inline" data-confirm="Remove zone {{.}} from group?">
+                    <form method="POST" action="/groups/{{$.Group.ID}}/remove-zone" class="inline" data-confirm="Remove zone {{.}} from group?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="zone_id" value="{{.}}">
                         <button type="submit" class="btn btn-sm btn-danger">Remove</button>
@@ -121,12 +121,12 @@
     </table>
     </div>
     {{else}}
-    <p class="empty-state" style="text-align:left">No zones assigned to this group.</p>
+    <p class="empty-state text-left">No zones assigned to this group.</p>
     {{end}}
 
-    <form method="POST" action="/groups/{{.Group.ID}}/add-zone" style="margin-top:1rem;display:flex;gap:0.5rem;align-items:flex-end">
+    <form method="POST" action="/groups/{{.Group.ID}}/add-zone" class="add-row">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
-        <div class="form-group" style="margin:0;flex:1">
+        <div class="form-group m-0 flex-1">
             <label for="zone_id">Add zone</label>
             <select id="zone_id" name="zone_id" class="form-control">
                 {{range .AllZones}}

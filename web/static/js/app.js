@@ -69,8 +69,12 @@ function cancelEditRow(btn) {
 function toggleEditMode(row, editing) {
     var displayEls = row.querySelectorAll('.rv');
     var editEls = row.querySelectorAll('.ev');
-    for (var i = 0; i < displayEls.length; i++) displayEls[i].style.display = editing ? 'none' : '';
-    for (var j = 0; j < editEls.length; j++) editEls[j].style.display = editing ? '' : 'none';
+    // Toggle a .hidden class (display:none) rather than mutating inline
+    // style.display: the edit fields start hidden via the same class, and
+    // classList keeps the markup free of inline styles (CSP style-src has no
+    // 'unsafe-inline').
+    for (var i = 0; i < displayEls.length; i++) displayEls[i].classList.toggle('hidden', editing);
+    for (var j = 0; j < editEls.length; j++) editEls[j].classList.toggle('hidden', !editing);
 }
 
 function resetRowValues(row) {
@@ -261,7 +265,7 @@ function addRecordRow() {
     var select = template.querySelector('select[name=type]');
     if (select) select.value = select.querySelector('option').value;
     var prioGrp = template.querySelector('.record-prio-group');
-    if (prioGrp) prioGrp.style.display = 'none';
+    if (prioGrp) prioGrp.classList.add('hidden');
     container.appendChild(template);
 }
 
@@ -326,7 +330,10 @@ function togglePriority(select) {
     if (!row) return;
     var grp = row.querySelector('.record-prio-group');
     if (!grp) return;
-    grp.style.display = (t === 'MX' || t === 'SRV') ? '' : 'none';
+    // Toggle .hidden (display:none) instead of inline style.display so no
+    // inline style attribute is left behind (CSP style-src has no
+    // 'unsafe-inline').
+    grp.classList.toggle('hidden', !(t === 'MX' || t === 'SRV'));
 }
 
 function initRecordPriority() {

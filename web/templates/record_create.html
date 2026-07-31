@@ -10,7 +10,7 @@
     <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
 
     <div id="record-rows">
-        <div class="record-row" style="border:1px solid var(--border);border-radius:6px;padding:1rem;margin-bottom:0.75rem">
+        <div class="record-row record-row-box">
             <div class="form-row">
                 <div class="form-group">
                     <label for="rec-name-0">Name</label>
@@ -26,15 +26,15 @@
                 </div>
             </div>
             <div class="form-row">
-                <div class="form-group" style="flex:1">
+                <div class="form-group flex-1">
                     <label for="rec-content-0">Content</label>
                     <input type="text" id="rec-content-0" name="content" placeholder="192.168.1.1" class="form-control" required>
                 </div>
-                <div class="form-group" style="flex:0 0 5rem">
+                <div class="form-group flex-5rem">
                     <label for="rec-ttl-0">TTL</label>
                     <input type="number" id="rec-ttl-0" name="ttl" value="3600" min="0" class="form-control">
                 </div>
-                <div class="form-group record-prio-group" style="display:none;flex:0 0 6rem">
+                <div class="form-group record-prio-group hidden">
                     <label for="rec-priority-0">Prio</label>
                     <input type="number" id="rec-priority-0" name="priority" value="0" min="0" class="form-control">
                 </div>
@@ -42,7 +42,7 @@
             <div class="form-group">
                 <label for="rec-comment-0">Comment <span class="field-hint">(optional, one per line)</span></label>
                 <textarea name="comment" id="rec-comment-0" rows="2" class="form-control" placeholder="e.g. managed by ops-team"></textarea>
-                <label class="checkbox-inline" style="margin-top:0.5rem;display:block">
+                <label class="checkbox-inline mt-0-5 d-block">
                     <input type="checkbox" name="comment_clear" value="1">
                     Clear all comments <span class="field-hint">(only applies when the RRSet already exists)</span>
                 </label>
@@ -50,7 +50,7 @@
         </div>
     </div>
 
-    <div style="margin-bottom:1rem">
+    <div class="mb-1">
         <button type="button" class="btn btn-secondary" data-action="add-record-row">+ Add another record</button>
     </div>
 

@@ -1034,6 +1034,8 @@ details summary {
 }
 
 .ev-comment-clear {
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
     color: var(--text-muted, #64748b);
 }
 .ev-comment-clear input[type="checkbox"] {
@@ -1390,3 +1392,54 @@ details summary {
     justify-content: flex-end;
     gap: 0.5rem;
 }
+
+/* Layout & component helpers — these replace the former inline style=""
+   attributes so the Content-Security-Policy can drop 'unsafe-inline' from
+   style-src. Each rule carries the exact property value the inline style did,
+   preserving the visual output. Defined last so they win equal-specificity
+   ties with earlier component rules (e.g. .empty-state, .form-group). */
+
+.hidden { display: none; }
+.inline { display: inline; }
+.d-block { display: block; }
+.flex-1 { flex: 1; }
+.flex-5rem { flex: 0 0 5rem; }
+.align-self-end { align-self: flex-end; }
+.w-8rem { width: 8rem; }
+.m-0 { margin: 0; }
+.my-1 { margin: 1rem 0; }
+.mt-0-5 { margin-top: 0.5rem; }
+.mt-0-75 { margin-top: 0.75rem; }
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mt-4 { margin-top: 4rem; }
+.mb-0-75 { margin-bottom: 0.75rem; }
+.mb-1 { margin-bottom: 1rem; }
+.mb-2 { margin-bottom: 2rem; }
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+
+/* Collapsible <summary> toggles (cursor:pointer;font-weight:600). */
+.summary-toggle { cursor: pointer; font-weight: 600; }
+
+/* Muted <hr> separators with the themed border colour. */
+.hr-sm { margin: 0.5rem 0; border-color: var(--border); }
+.hr-lg { margin: 1.5rem 0; border-color: var(--border); }
+
+/* zone tools action row (flex-wrap chips). */
+.action-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+
+/* add-member / add-zone inline form row. */
+.add-row { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: flex-end; }
+
+/* Boxed record row on the record-create form. */
+.record-row-box { border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 0.75rem; }
+
+/* Muted panel (apply-template form body). */
+.panel-muted { margin-top: 0.75rem; padding: 1rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+
+/* Cryptokey hash cell. */
+.key-hash { display: block; margin-bottom: 0.2rem; font-size: 0.75rem; word-break: break-all; }
+
+/* Centered error alert box. */
+.error-box { max-width: 600px; margin: 1rem auto; }

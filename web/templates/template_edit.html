@@ -6,7 +6,7 @@
                 </div>
             </div>
 
-            <form method="POST" action="{{if .Template.ID}}/templates/{{.Template.ID}}/update{{else}}/templates/create{{end}}" style="margin-bottom:2rem">
+            <form method="POST" action="{{if .Template.ID}}/templates/{{.Template.ID}}/update{{else}}/templates/create{{end}}" class="mb-2">
                 <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
                 <div class="form-group">
                     <label for="tpl-name">Name</label>
@@ -41,7 +41,7 @@
                             <td class="nowrap">{{.TTL}}</td>
                             <td class="nowrap">{{if and (or (eq .Type "MX") (eq .Type "SRV"))}}{{.Priority}}{{else}}-{{end}}</td>
                             <td class="actions-cell">
-                                <form method="POST" action="/templates/{{$.Template.ID}}/records/{{.ID}}/delete" style="display:inline" data-confirm="Delete this record?">
+                                <form method="POST" action="/templates/{{$.Template.ID}}/records/{{.ID}}/delete" class="inline" data-confirm="Delete this record?">
                                     <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                                 </form>
@@ -52,19 +52,19 @@
                 </table>
                 </div>
                 {{else}}
-                <p class="empty-state" style="text-align:left">No records yet. Use the form below to add records.</p>
+                <p class="empty-state text-left">No records yet. Use the form below to add records.</p>
                 {{end}}
 
-                <details style="margin-top:1rem">
-                    <summary style="cursor:pointer;font-weight:600">Add Record</summary>
-                    <form method="POST" action="/templates/{{.Template.ID}}/records/add" style="margin-top:0.75rem">
+                <details class="mt-1">
+                    <summary class="summary-toggle">Add Record</summary>
+                    <form method="POST" action="/templates/{{.Template.ID}}/records/add" class="mt-0-75">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
                         <div class="form-row">
-                            <div class="form-group" style="flex:1">
+                            <div class="form-group flex-1">
                                 <label for="rec-name">Name (<code>@</code> for apex)</label>
                                 <input type="text" id="rec-name" name="name" value="@" class="form-control">
                             </div>
-                            <div class="form-group" style="flex:1">
+                            <div class="form-group flex-1">
                                 <label for="rec-type">Type</label>
                                 <select name="type" id="rec-type" class="form-control">
                                     {{range $.RecordTypes}}
@@ -80,11 +80,11 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="rec-ttl">TTL</label>
-                                <input type="number" id="rec-ttl" name="ttl" value="3600" min="0" class="form-control" style="width:8rem">
+                                <input type="number" id="rec-ttl" name="ttl" value="3600" min="0" class="form-control w-8rem">
                             </div>
                             <div class="form-group">
                                 <label for="rec-priority">Priority (MX/SRV only)</label>
-                                <input type="number" id="rec-priority" name="priority" value="0" min="0" class="form-control" style="width:8rem">
+                                <input type="number" id="rec-priority" name="priority" value="0" min="0" class="form-control w-8rem">
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" name="disabled"> Disabled</label>
@@ -95,7 +95,7 @@
                 </details>
             </div>
 
-            <div class="card" style="margin-top:2rem">
+            <div class="card mt-2">
                 <h3>Template Variables</h3>
                 <p>Use these variables in record content; they will be replaced when applying the template:</p>
                 <div class="table-responsive">

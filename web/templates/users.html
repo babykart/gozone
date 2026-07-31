@@ -51,17 +51,17 @@
                 <a href="/users/{{.ID}}/edit" class="btn btn-sm btn-secondary">Edit</a>
                 {{if ne .ID $.User.ID}}
                 {{if .IsLocked}}
-                <form method="POST" action="/users/{{.ID}}/unlock" style="display:inline" data-confirm="Unlock user {{.Username}}?">
+                <form method="POST" action="/users/{{.ID}}/unlock" class="inline" data-confirm="Unlock user {{.Username}}?">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <button type="submit" class="btn btn-sm btn-warning">Unlock</button>
                 </form>
                 {{else}}
-                <form method="POST" action="/users/{{.ID}}/lock" style="display:inline" data-confirm="Lock user {{.Username}}?">
+                <form method="POST" action="/users/{{.ID}}/lock" class="inline" data-confirm="Lock user {{.Username}}?">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <button type="submit" class="btn btn-sm btn-warning">Lock</button>
                 </form>
                 {{end}}
-                <form method="POST" action="/users/delete" style="display:inline" data-confirm="Delete user {{.Username}}?">
+                <form method="POST" action="/users/delete" class="inline" data-confirm="Delete user {{.Username}}?">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                     <input type="hidden" name="user_id" value="{{.ID}}">
                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>

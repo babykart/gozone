@@ -48,7 +48,7 @@
             <td>
                 <a href="/zones/{{.Zone.ID}}" class="btn btn-sm btn-secondary">View</a>
                 {{if $.IsAdmin}}
-                <form method="POST" action="/zones/delete" style="display:inline" data-confirm="Delete zone {{.Zone.Name}}? This cannot be undone.">
+                <form method="POST" action="/zones/delete" class="inline" data-confirm="Delete zone {{.Zone.Name}}? This cannot be undone.">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{$csrf}}">
                     <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>

@@ -24,7 +24,7 @@ func TestSecurityHeaders_AllPresent(t *testing.T) {
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"},
+		{"Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"},
 	}
 	for _, tt := range tests {
 		got := w.Header().Get(tt.header)
@@ -235,6 +235,11 @@ func TestSecurityHeaders_CSPHardenedDirectives(t *testing.T) {
 		{"base-uri", "'self'"},
 		{"frame-ancestors", "'none'"},
 		{"form-action", "'self'"},
+		// style-src must be hardened to 'self' only — no
+		// 'unsafe-inline'. All inline style="" attributes were externalised to
+		// CSS classes, so inline styles are no longer needed.
+		{"style-src", "'self'"},
+		{"script-src", "'self'"},
 	}
 	for _, tt := range required {
 		got, ok := directives[tt.directive]

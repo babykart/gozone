@@ -5,7 +5,7 @@
         <a href="/zones" class="breadcrumb">Zones</a> / <h2>{{.Zone.Name}}</h2>
     </div>
     <div class="header-actions">
-        <form method="GET" class="search-form" style="display:inline">
+        <form method="GET" class="search-form inline">
             <input type="search" name="search" value="{{.Search}}" placeholder="Filter records..." class="search-input" aria-label="Filter records">
         </form>
         <a href="/zones/{{.Zone.ID}}/records/new" class="btn btn-primary">Add Record</a>
@@ -53,43 +53,43 @@
             {{range .Records}}
             <tr data-name="{{.Name}}" data-type="{{.Type}}" data-zone-id="{{$zoneID}}" data-csrf="{{$csrf}}" data-original-content="{{.Record.Content}}" data-original-priority="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" data-disabled="{{.Record.Disabled}}">
                 <td class="col-select"><input type="checkbox" class="record-select" aria-label="Select record {{.Name}}"></td>
-                <td class="col-name"><span class="rv rv-name">{{relativeName .Name $zoneName}}</span><span class="ev ev-name" style="display:none">{{.Name}}</span></td>
+                <td class="col-name"><span class="rv rv-name">{{relativeName .Name $zoneName}}</span><span class="ev ev-name hidden">{{.Name}}</span></td>
                 <td class="nowrap"><span class="badge badge-type badge-type-{{.Type}}">{{.Type}}</span></td>
                 <td class="nowrap">
                     <span class="rv rv-ttl">{{.TTL}}</span>
-                    <input type="number" class="ev ev-ttl form-control-inline" style="display:none" value="{{.TTL}}" min="0">
+                    <input type="number" class="ev ev-ttl form-control-inline hidden" value="{{.TTL}}" min="0">
                 </td>
                 <td class="col-prio">
                     <span class="rv rv-prio">{{if .Record.Priority}}{{.Record.Priority}}{{else}}-{{end}}</span>
-                    <input type="number" class="ev ev-prio form-control-inline" style="display:none" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" min="0">
+                    <input type="number" class="ev ev-prio form-control-inline hidden" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" min="0">
                 </td>
                 <td>
                     <span class="rv rv-content">{{.Record.Content}}</span>
-                    <textarea class="ev ev-content" style="display:none" rows="2">{{.Record.Content}}</textarea>
+                    <textarea class="ev ev-content hidden" rows="2">{{.Record.Content}}</textarea>
                 </td>
                 <td class="col-comment">
                     {{if .Comments}}{{if .Comments.Items}}
                     <div class="rv rv-comments record-comments">{{range .Comments.Items}}{{.Content}}
 {{end}}</div>
                     {{end}}{{end}}
-                    <textarea class="ev ev-comments record-comments-edit" style="display:none" rows="2" placeholder="Comment (one per line)">{{if .Comments}}{{range .Comments.Items}}{{.Content}}
+                    <textarea class="ev ev-comments record-comments-edit hidden" rows="2" placeholder="Comment (one per line)">{{if .Comments}}{{range .Comments.Items}}{{.Content}}
 {{end}}{{end}}</textarea>
-                    <label class="ev ev-comment-clear" style="display:none;margin-top:0.25rem;font-size:0.8rem">
+                    <label class="ev ev-comment-clear hidden">
                         <input type="checkbox" class="ev-comment-clear-cb" value="1">
                         Clear all comments
                     </label>
                 </td>
                 <td class="nowrap">
                     <span class="rv rv-status">{{if .Record.Disabled}}<span class="badge badge-disabled">Disabled</span>{{else}}<span class="badge badge-active">Active</span>{{end}}</span>
-                    <label class="ev ev-status" style="display:none"><input type="checkbox" class="ev-disabled" {{if .Record.Disabled}}checked{{end}}> Disabled</label>
+                    <label class="ev ev-status hidden"><input type="checkbox" class="ev-disabled" {{if .Record.Disabled}}checked{{end}}> Disabled</label>
                 </td>
                 <td class="actions-cell">
                     <span class="rv"><button type="button" class="btn btn-sm btn-secondary" data-action="edit-record">Edit</button></span>
-                    <span class="ev" style="display:none">
+                    <span class="ev hidden">
                         <button type="button" class="btn btn-sm btn-primary" data-action="save-record">Save</button>
                         <button type="button" class="btn btn-sm btn-secondary" data-action="cancel-edit">Cancel</button>
                     </span>
-                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" style="display:inline" data-confirm="Delete record {{.Name}}?">
+                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" class="inline" data-confirm="Delete record {{.Name}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="name" value="{{.Name}}">
                         <input type="hidden" name="type" value="{{.Type}}">
@@ -114,7 +114,7 @@
 {{end}}
 
 {{if .IsAdmin}}
-<div class="card" style="margin-top:2rem">
+<div class="card mt-2">
     <h3>Zone Metadata</h3>
     {{if .MetaData}}
     <div class="table-responsive">
@@ -134,7 +134,7 @@
                     {{end}}
                 </td>
                 <td class="actions-cell">
-                    <form method="POST" action="/zones/{{$zoneID}}/metadata/delete" style="display:inline" data-confirm="Delete metadata {{.Kind}}?">
+                    <form method="POST" action="/zones/{{$zoneID}}/metadata/delete" class="inline" data-confirm="Delete metadata {{.Kind}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="kind" value="{{.Kind}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
@@ -148,9 +148,9 @@
     {{else}}
     <p class="empty-meta">No metadata set for this zone.</p>
     {{end}}
-    <details style="margin-top:1rem">
-        <summary style="cursor:pointer;font-weight:600">Add Metadata</summary>
-        <form method="POST" action="/zones/{{.Zone.ID}}/metadata/create" style="margin-top:0.75rem">
+    <details class="mt-1">
+        <summary class="summary-toggle">Add Metadata</summary>
+        <form method="POST" action="/zones/{{.Zone.ID}}/metadata/create" class="mt-0-75">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <div class="form-row">
                 <div class="form-group">
@@ -173,7 +173,7 @@
 </div>
 {{end}}
 
-<div class="card" style="margin-top:2rem">
+<div class="card mt-2">
     <h3>DNSSEC</h3>
 
     {{if .Cryptokeys}}
@@ -194,17 +194,17 @@
                 <td>{{if .Active}}<span class="badge badge-active">Active</span>{{else}}<span class="badge badge-disabled">Inactive</span>{{end}}</td>
                 <td>
                     {{range .DS}}
-                    <code style="display:block;margin-bottom:0.2rem;font-size:0.75rem;word-break:break-all">{{.}}</code>
+                    <code class="key-hash">{{.}}</code>
                     {{end}}
                 </td>
                 <td class="actions-cell">
-                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/toggle" style="display:inline">
+                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/toggle" class="inline">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <input type="hidden" name="active" value="{{if .Active}}false{{else}}true{{end}}">
                         <button type="submit" class="btn btn-sm {{if .Active}}btn-secondary{{else}}btn-primary{{end}}">{{if .Active}}Deactivate{{else}}Activate{{end}}</button>
                     </form>
                     {{if $.IsAdmin}}
-                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/delete" style="display:inline" data-confirm="Delete key {{.ID}}?">
+                    <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/delete" class="inline" data-confirm="Delete key {{.ID}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                     </form>
@@ -216,23 +216,23 @@
     </table>
     </div>
     {{else}}
-    <p class="empty-state" style="text-align:left">No DNSSEC keys for this zone.</p>
+    <p class="empty-state text-left">No DNSSEC keys for this zone.</p>
     {{end}}
 
     {{if $.IsAdmin}}
-    <details style="margin-top:1rem">
-        <summary style="cursor:pointer;font-weight:600">Create Key</summary>
-        <form method="POST" action="/zones/{{.Zone.ID}}/cryptokeys/create" style="margin-top:0.75rem">
+    <details class="mt-1">
+        <summary class="summary-toggle">Create Key</summary>
+        <form method="POST" action="/zones/{{.Zone.ID}}/cryptokeys/create" class="mt-0-75">
             <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
             <div class="form-row">
-                <div class="form-group" style="flex:1">
+                <div class="form-group flex-1">
                     <label for="crypto_keytype">Key Type</label>
                     <select name="keytype" id="crypto_keytype" class="form-control">
                         <option value="ksk">KSK (Key Signing Key)</option>
                         <option value="zsk">ZSK (Zone Signing Key)</option>
                     </select>
                 </div>
-                <div class="form-group" style="flex:1">
+                <div class="form-group flex-1">
                     <label for="crypto_algo">Algorithm</label>
                     <select name="algorithm" id="crypto_algo" class="form-control">
                         {{range $.DNSSECAlgos}}
@@ -247,15 +247,15 @@
     {{end}}
 </div>
 
-<div class="card" style="margin-top:2rem">
+<div class="card mt-2">
     <h3>Tools</h3>
     {{if .Templates}}
-    <details style="margin-bottom:0.75rem">
-        <summary style="cursor:pointer;font-weight:600">Apply Template</summary>
-        <form method="POST" action="/zones/{{.Zone.ID}}/apply-template" style="margin-top:0.75rem;padding:1rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius)">
+    <details class="mb-0-75">
+        <summary class="summary-toggle">Apply Template</summary>
+        <form method="POST" action="/zones/{{.Zone.ID}}/apply-template" class="panel-muted">
             <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
-            <div class="form-row" style="margin-bottom:1rem">
-                <div class="form-group" style="flex:1">
+            <div class="form-row mb-1">
+                <div class="form-group flex-1">
                     <label for="apply_template_id">Template</label>
                     <select id="apply_template_id" name="template_id" class="form-control" data-action="toggle-apply-template-vars">
                         <option value="">Select a template...</option>
@@ -265,7 +265,7 @@
                     </select>
                 </div>
             </div>
-            <div id="apply-template-vars" style="display:none">
+            <div id="apply-template-vars" class="hidden">
                 {{range $.TemplateVars}}
                 <div class="form-group">
                     <label for="apply_var_{{.}}"><code>{{.}}</code></label>
@@ -278,8 +278,8 @@
     </details>
     {{end}}
     <details>
-        <summary style="cursor:pointer;font-weight:600">Import Zone File</summary>
-        <form method="POST" action="/zones/{{.Zone.ID}}/import" enctype="multipart/form-data" style="margin-top:0.5rem">
+        <summary class="summary-toggle">Import Zone File</summary>
+        <form method="POST" action="/zones/{{.Zone.ID}}/import" enctype="multipart/form-data" class="mt-0-5">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <div class="form-group">
                 <label for="import-zonefile">Zone File (.zone or .csv)</label>
@@ -297,26 +297,26 @@
     </details>
 </div>
 
-<div class="card" style="margin-top:2rem">
+<div class="card mt-2">
     <h3>Danger Zone</h3>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-        <form method="POST" action="/zones/{{.Zone.ID}}/cache/clear" style="display:inline">
+    <div class="action-bar">
+        <form method="POST" action="/zones/{{.Zone.ID}}/cache/clear" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Clear Cache</button>
         </form>
         {{if .IsAdmin}}
-        <form method="POST" action="/zones/{{.Zone.ID}}/rectify" style="display:inline">
+        <form method="POST" action="/zones/{{.Zone.ID}}/rectify" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Rectify</button>
         </form>
-        <form method="POST" action="/zones/{{.Zone.ID}}/notify" style="display:inline">
+        <form method="POST" action="/zones/{{.Zone.ID}}/notify" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Notify</button>
         </form>
         {{end}}
     </div>
     {{if .IsAdmin}}
-    <hr style="margin:1rem 0">
+    <hr class="my-1">
     <form method="POST" action="/zones/delete" data-confirm="Delete zone {{.Zone.Name}}? This action cannot be undone.">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
@@ -325,7 +325,7 @@
     {{end}}
 </div>
 
-<div class="card" style="margin-top:2rem">
+<div class="card mt-2">
     <h3>Activity</h3>
     {{if .Logs}}
     <div class="table-responsive">

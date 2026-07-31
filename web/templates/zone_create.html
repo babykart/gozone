@@ -28,7 +28,7 @@
     </div>
 
     {{if .Templates}}
-    <hr style="margin:1.5rem 0;border-color:var(--border)">
+    <hr class="hr-lg">
     <div class="form-group">
         <label for="template_id">Apply Template (optional)</label>
         <select id="template_id" name="template_id" data-action="toggle-template-vars">
@@ -38,7 +38,7 @@
             {{end}}
         </select>
     </div>
-    <div id="template-vars" style="display:none">
+    <div id="template-vars" class="hidden">
         {{range $.TemplateVars}}
         <div class="form-group">
             <label for="var_{{.}}"><code>{{.}}</code></label>

@@ -43,7 +43,7 @@
                         <span>{{.Server.Daemon}}</span>
                     </div>
                     {{if .ServerStats}}
-                    <hr style="margin:0.5rem 0;border-color:var(--border)">
+                    <hr class="hr-sm">
                     {{if .ServerStats.uptime}}<div class="server-info-row"><span class="server-info-label">Uptime</span><span>{{.ServerStats.uptime}}s</span></div>{{end}}
                     {{if .ServerStats.questions}}<div class="server-info-row"><span class="server-info-label">Questions</span><span>{{.ServerStats.questions}}</span></div>{{end}}
                     {{if index .ServerStats "packetcache-hit"}}<div class="server-info-row"><span class="server-info-label">Packet Cache Hit</span><span>{{index .ServerStats "packetcache-hit"}}</span></div>{{end}}

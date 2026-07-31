@@ -74,17 +74,23 @@ const permissionsPolicy = "accelerometer=(), ambient-light-sensor=(), camera=(),
 //   - X-Content-Type-Options: nosniff
 //   - X-Frame-Options: DENY
 //   - Referrer-Policy: strict-origin-when-cross-origin
-//   - Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
+//   - Content-Security-Policy: default-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'
 //   - Permissions-Policy: accelerometer=(), ambient-light-sensor=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
 //   - Strict-Transport-Security: max-age=31536000; includeSubDomains (only over HTTPS)
 //
 // Note: X-XSS-Protection is intentionally omitted (m39). The header is
 // deprecated (the Auditor was removed from Chrome/Edge and never shipped in
 // Firefox; it was known to introduce cross-site information leaks). The strong
-// CSP above — script-src 'self' with no 'unsafe-inline' — is the modern,
-// robust XSS mitigation. An explicit "0" is unnecessary since modern browsers
-// no longer act on this header and the application does not support legacy
-// user agents that ship a non-default Auditor.
+// CSP below — script-src 'self' AND style-src 'self', neither with
+// 'unsafe-inline' — is the modern, robust XSS mitigation. An explicit "0" is
+// unnecessary since modern browsers no longer act on this header and the
+// application does not support legacy user agents that ship a non-default
+// Auditor.
+//
+// style-src 'self' (no 'unsafe-inline'): every former inline style="" attribute
+// has been externalised to a CSS class, so neither inline style attributes nor
+// <style> blocks are needed. JS CSSOM mutations (element.style.foo) remain
+// allowed — CSP style-src governs document markup, not the CSSOM.
 //
 // Strict-Transport-Security intentionally omits "preload" (REVIEW.md I-5):
 // preload is an opt-in to the browser HSTS preload list (hstspreload.org) and is
@@ -98,7 +104,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("Permissions-Policy", permissionsPolicy)
 
 		if IsHTTPS(r) {

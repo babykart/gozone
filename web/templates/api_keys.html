@@ -71,7 +71,7 @@
                 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                 <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
                 <td>
-                    <form method="POST" action="/profile/api-keys/delete" style="display:inline" data-confirm="Delete key {{.Description}}?">
+                    <form method="POST" action="/profile/api-keys/delete" class="inline" data-confirm="Delete key {{.Description}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="key_id" value="{{.ID}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
