@@ -726,277 +726,164 @@ func (cfg *Config) validateOIDC() error {
 	return nil
 }
 
-// applyEnvOverrides overlays GOZONE_-prefixed environment variables on top of
-// the YAML-provided config. An unparseable override (e.g.
-// GOZONE_SERVER_PORT=abc) is returned as a hard error rather than silently
-// keeping the default, so a typo fails config load loud-and-early instead of
-// hiding the operator's intent (REVIEW.md m13). String overrides are accepted
-// as-is since any non-empty value is valid for them.
-func applyEnvOverrides(cfg *Config) error {
-	if v := os.Getenv("GOZONE_SERVER_HOST"); v != "" {
-		cfg.Server.Host = v
-	}
-	if v := os.Getenv("GOZONE_SERVER_PORT"); v != "" {
-		n, err := envInt("GOZONE_SERVER_PORT", v)
-		if err != nil {
-			return err
-		}
-		cfg.Server.Port = n
-	}
-	if v := os.Getenv("GOZONE_APP_NAME"); v != "" {
-		cfg.Server.AppName = v
-	}
-	if v := os.Getenv("GOZONE_SECRET_KEY"); v != "" {
-		cfg.Server.SecretKey = v
-	}
-	if v := os.Getenv("GOZONE_SECURE_COOKIES"); v != "" {
-		b, err := envBool("GOZONE_SECURE_COOKIES", v)
-		if err != nil {
-			return err
-		}
-		cfg.Server.SecureCookies = b
-	}
-	if v := os.Getenv("GOZONE_EXTERNAL_URL"); v != "" {
-		cfg.Server.ExternalURL = v
-	}
-	if v := os.Getenv("GOZONE_SHUTDOWN_TIMEOUT"); v != "" {
-		n, err := envInt("GOZONE_SHUTDOWN_TIMEOUT", v)
-		if err != nil {
-			return err
-		}
-		cfg.Server.ShutdownTimeoutSeconds = n
-	}
-	if v := os.Getenv("GOZONE_DB_DRIVER"); v != "" {
-		cfg.Database.Driver = v
-	}
-	if v := os.Getenv("GOZONE_DB_DSN"); v != "" {
-		cfg.Database.DSN = v
-	}
-	if v := os.Getenv("GOZONE_PDNS_API_URL"); v != "" {
-		cfg.PowerDNS.APIURL = v
-	}
-	if v := os.Getenv("GOZONE_PDNS_API_KEY"); v != "" {
-		cfg.PowerDNS.APIKey = v
-	}
-	if v := os.Getenv("GOZONE_PDNS_SERVER_ID"); v != "" {
-		cfg.PowerDNS.ServerID = v
-	}
-	if v := os.Getenv("GOZONE_SESSION_DURATION"); v != "" {
-		n, err := envInt("GOZONE_SESSION_DURATION", v)
-		if err != nil {
-			return err
-		}
-		cfg.Auth.SessionDurationHours = n
-	}
-	if v := os.Getenv("GOZONE_IDLE_TIMEOUT_MINUTES"); v != "" {
-		n, err := envInt("GOZONE_IDLE_TIMEOUT_MINUTES", v)
-		if err != nil {
-			return err
-		}
-		cfg.Auth.IdleTimeoutMinutes = n
-	}
-	if v := os.Getenv("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS"); v != "" {
-		n, err := envInt("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", v)
-		if err != nil {
-			return err
-		}
-		cfg.Auth.AbsoluteSessionTimeoutHours = n
-	}
-	if v := os.Getenv("GOZONE_BCRYPT_COST"); v != "" {
-		n, err := envInt("GOZONE_BCRYPT_COST", v)
-		if err != nil {
-			return err
-		}
-		cfg.Auth.BcryptCost = n
-	}
-	if v := os.Getenv("GOZONE_ADMIN_USERNAME"); v != "" {
-		cfg.Admin.Username = v
-	}
-	if v := os.Getenv("GOZONE_ADMIN_PASSWORD"); v != "" {
-		cfg.Admin.Password = v
-	}
-	if v := os.Getenv("GOZONE_ADMIN_EMAIL"); v != "" {
-		cfg.Admin.Email = v
-	}
-	if v := os.Getenv("GOZONE_ADMIN_FIRST_NAME"); v != "" {
-		cfg.Admin.FirstName = v
-	}
-	if v := os.Getenv("GOZONE_ADMIN_LAST_NAME"); v != "" {
-		cfg.Admin.LastName = v
-	}
-	if v := os.Getenv("GOZONE_ACTIVITY_RETENTION_DAYS"); v != "" {
-		n, err := envInt("GOZONE_ACTIVITY_RETENTION_DAYS", v)
-		if err != nil {
-			return err
-		}
-		cfg.Activity.RetentionDays = n
-	}
-	if v := os.Getenv("GOZONE_ACTIVITY_BATCH_SIZE"); v != "" {
-		n, err := envInt("GOZONE_ACTIVITY_BATCH_SIZE", v)
-		if err != nil {
-			return err
-		}
-		cfg.Activity.BatchSize = n
-	}
-	if v := os.Getenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS"); v != "" {
-		n, err := envInt("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", v)
-		if err != nil {
-			return err
-		}
-		cfg.LoginLock.MaxFailedAttempts = n
-	}
-	if v := os.Getenv("GOZONE_LOGIN_LOCKOUT_MINUTES"); v != "" {
-		n, err := envInt("GOZONE_LOGIN_LOCKOUT_MINUTES", v)
-		if err != nil {
-			return err
-		}
-		cfg.LoginLock.LockoutDurationMinutes = n
-	}
-	if v := os.Getenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE"); v != "" {
-		n, err := envInt("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", v)
-		if err != nil {
-			return err
-		}
-		cfg.LoginLock.UsernameRateLimitPerMinute = n
-	}
-	if v := os.Getenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS"); v != "" {
-		n, err := envInt("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", v)
-		if err != nil {
-			return err
-		}
-		cfg.LoginLock.AttemptsRetentionHours = n
-	}
-	if v := os.Getenv("GOZONE_TRUSTED_PROXIES"); v != "" {
-		cfg.Server.TrustedProxies = splitNonEmpty(v, ",")
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_MIN_LENGTH"); v != "" {
-		n, err := envInt("GOZONE_PASSWORD_MIN_LENGTH", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.MinLength = n
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_HISTORY_SIZE"); v != "" {
-		n, err := envInt("GOZONE_PASSWORD_HISTORY_SIZE", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.HistorySize = n
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_UPPERCASE"); v != "" {
-		b, err := envBool("GOZONE_PASSWORD_REQUIRE_UPPERCASE", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.RequireUppercase = b
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_LOWERCASE"); v != "" {
-		b, err := envBool("GOZONE_PASSWORD_REQUIRE_LOWERCASE", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.RequireLowercase = b
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_DIGIT"); v != "" {
-		b, err := envBool("GOZONE_PASSWORD_REQUIRE_DIGIT", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.RequireDigit = b
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_REQUIRE_SPECIAL"); v != "" {
-		b, err := envBool("GOZONE_PASSWORD_REQUIRE_SPECIAL", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.RequireSpecial = b
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_MAX_AGE_DAYS"); v != "" {
-		n, err := envInt("GOZONE_PASSWORD_MAX_AGE_DAYS", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.MaxAgeDays = n
-	}
-	if v := os.Getenv("GOZONE_PASSWORD_EXPIRY_WARN_DAYS"); v != "" {
-		n, err := envInt("GOZONE_PASSWORD_EXPIRY_WARN_DAYS", v)
-		if err != nil {
-			return err
-		}
-		cfg.Password.ExpiryWarnDays = n
-	}
-	if err := applyOIDCEnvOverrides(cfg); err != nil {
-		return err
+// envOverride is a single environment-variable override. The concrete types
+// below (strOverride / intOverride / boolOverride / sliceOverride) carry the
+// typed setter, so applyEnvOverrides reduces to a one-line loop over a static
+// table instead of ~260 lines of repeated read/parse/assign boilerplate.
+type envOverride interface {
+	apply(*Config) error
+}
+
+type strOverride struct {
+	env string
+	set func(*Config, string)
+}
+
+func (o strOverride) apply(c *Config) error {
+	if v := os.Getenv(o.env); v != "" {
+		o.set(c, v)
 	}
 	return nil
 }
 
-// applyOIDCEnvOverrides applies GOZONE_OIDC_* environment variables. The
-// scalar toggles (ENABLED, ALLOW_LOCAL_LOGIN, AUTO_PROVISION, DEFAULT_ROLE,
-// SCOPES) map directly onto OIDCConfig fields. A single provider can be
-// declared entirely via env vars (GOZONE_OIDC_PROVIDER_NAME/ISSUER_URL/
-// CLIENT_ID/CLIENT_SECRET) for containerised deployments that configure one
-// IdP without mounting a config file; additional providers require YAML.
-// Provider env vars only take effect when no providers are already declared in
-// YAML, so a file-declared multi-provider setup is never partially overwritten.
-func applyOIDCEnvOverrides(cfg *Config) error {
-	if v := os.Getenv("GOZONE_OIDC_ENABLED"); v != "" {
-		b, err := envBool("GOZONE_OIDC_ENABLED", v)
+type intOverride struct {
+	env string
+	set func(*Config, int)
+}
+
+func (o intOverride) apply(c *Config) error {
+	if v := os.Getenv(o.env); v != "" {
+		n, err := envInt(o.env, v)
 		if err != nil {
 			return err
 		}
-		cfg.OIDC.Enabled = b
+		o.set(c, n)
 	}
-	if v := os.Getenv("GOZONE_OIDC_ALLOW_LOCAL_LOGIN"); v != "" {
-		b, err := envBool("GOZONE_OIDC_ALLOW_LOCAL_LOGIN", v)
+	return nil
+}
+
+type boolOverride struct {
+	env string
+	set func(*Config, bool)
+}
+
+func (o boolOverride) apply(c *Config) error {
+	if v := os.Getenv(o.env); v != "" {
+		b, err := envBool(o.env, v)
 		if err != nil {
 			return err
 		}
-		cfg.OIDC.AllowLocalLogin = b
+		o.set(c, b)
 	}
-	if v := os.Getenv("GOZONE_OIDC_AUTO_PROVISION"); v != "" {
-		b, err := envBool("GOZONE_OIDC_AUTO_PROVISION", v)
-		if err != nil {
+	return nil
+}
+
+type sliceOverride struct {
+	env string
+	set func(*Config, []string)
+}
+
+func (o sliceOverride) apply(c *Config) error {
+	if v := os.Getenv(o.env); v != "" {
+		o.set(c, splitNonEmpty(v, ","))
+	}
+	return nil
+}
+
+// envOverrides is the static table of scalar GOZONE_* overrides. Each entry
+// touches a distinct field, so order is irrelevant. An unparseable override
+// (e.g. GOZONE_SERVER_PORT=abc) surfaces as a hard error via envInt/envBool so
+// a typo fails config load loud-and-early instead of hiding the operator's
+// intent; string overrides are accepted as-is since any non-empty value is
+// valid for them. The OIDC single-provider block (declared from up to four
+// GOZONE_OIDC_PROVIDER_* vars) is applied separately by applyOIDCProviderEnv
+// after these scalars, because it is conditional on cfg.OIDC.Providers being
+// empty.
+var envOverrides = []envOverride{
+	// server
+	strOverride{"GOZONE_SERVER_HOST", func(c *Config, v string) { c.Server.Host = v }},
+	intOverride{"GOZONE_SERVER_PORT", func(c *Config, n int) { c.Server.Port = n }},
+	strOverride{"GOZONE_APP_NAME", func(c *Config, v string) { c.Server.AppName = v }},
+	strOverride{"GOZONE_SECRET_KEY", func(c *Config, v string) { c.Server.SecretKey = v }},
+	boolOverride{"GOZONE_SECURE_COOKIES", func(c *Config, b bool) { c.Server.SecureCookies = b }},
+	strOverride{"GOZONE_EXTERNAL_URL", func(c *Config, v string) { c.Server.ExternalURL = v }},
+	intOverride{"GOZONE_SHUTDOWN_TIMEOUT", func(c *Config, n int) { c.Server.ShutdownTimeoutSeconds = n }},
+	sliceOverride{"GOZONE_TRUSTED_PROXIES", func(c *Config, v []string) { c.Server.TrustedProxies = v }},
+	// database / powerdns
+	strOverride{"GOZONE_DB_DRIVER", func(c *Config, v string) { c.Database.Driver = v }},
+	strOverride{"GOZONE_DB_DSN", func(c *Config, v string) { c.Database.DSN = v }},
+	strOverride{"GOZONE_PDNS_API_URL", func(c *Config, v string) { c.PowerDNS.APIURL = v }},
+	strOverride{"GOZONE_PDNS_API_KEY", func(c *Config, v string) { c.PowerDNS.APIKey = v }},
+	strOverride{"GOZONE_PDNS_SERVER_ID", func(c *Config, v string) { c.PowerDNS.ServerID = v }},
+	// auth / admin / activity / login-lockout
+	intOverride{"GOZONE_SESSION_DURATION", func(c *Config, n int) { c.Auth.SessionDurationHours = n }},
+	intOverride{"GOZONE_IDLE_TIMEOUT_MINUTES", func(c *Config, n int) { c.Auth.IdleTimeoutMinutes = n }},
+	intOverride{"GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", func(c *Config, n int) { c.Auth.AbsoluteSessionTimeoutHours = n }},
+	intOverride{"GOZONE_BCRYPT_COST", func(c *Config, n int) { c.Auth.BcryptCost = n }},
+	strOverride{"GOZONE_ADMIN_USERNAME", func(c *Config, v string) { c.Admin.Username = v }},
+	strOverride{"GOZONE_ADMIN_PASSWORD", func(c *Config, v string) { c.Admin.Password = v }},
+	strOverride{"GOZONE_ADMIN_EMAIL", func(c *Config, v string) { c.Admin.Email = v }},
+	strOverride{"GOZONE_ADMIN_FIRST_NAME", func(c *Config, v string) { c.Admin.FirstName = v }},
+	strOverride{"GOZONE_ADMIN_LAST_NAME", func(c *Config, v string) { c.Admin.LastName = v }},
+	intOverride{"GOZONE_ACTIVITY_RETENTION_DAYS", func(c *Config, n int) { c.Activity.RetentionDays = n }},
+	intOverride{"GOZONE_ACTIVITY_BATCH_SIZE", func(c *Config, n int) { c.Activity.BatchSize = n }},
+	intOverride{"GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", func(c *Config, n int) { c.LoginLock.MaxFailedAttempts = n }},
+	intOverride{"GOZONE_LOGIN_LOCKOUT_MINUTES", func(c *Config, n int) { c.LoginLock.LockoutDurationMinutes = n }},
+	intOverride{"GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", func(c *Config, n int) { c.LoginLock.UsernameRateLimitPerMinute = n }},
+	intOverride{"GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", func(c *Config, n int) { c.LoginLock.AttemptsRetentionHours = n }},
+	// password policy
+	intOverride{"GOZONE_PASSWORD_MIN_LENGTH", func(c *Config, n int) { c.Password.MinLength = n }},
+	intOverride{"GOZONE_PASSWORD_HISTORY_SIZE", func(c *Config, n int) { c.Password.HistorySize = n }},
+	boolOverride{"GOZONE_PASSWORD_REQUIRE_UPPERCASE", func(c *Config, b bool) { c.Password.RequireUppercase = b }},
+	boolOverride{"GOZONE_PASSWORD_REQUIRE_LOWERCASE", func(c *Config, b bool) { c.Password.RequireLowercase = b }},
+	boolOverride{"GOZONE_PASSWORD_REQUIRE_DIGIT", func(c *Config, b bool) { c.Password.RequireDigit = b }},
+	boolOverride{"GOZONE_PASSWORD_REQUIRE_SPECIAL", func(c *Config, b bool) { c.Password.RequireSpecial = b }},
+	intOverride{"GOZONE_PASSWORD_MAX_AGE_DAYS", func(c *Config, n int) { c.Password.MaxAgeDays = n }},
+	intOverride{"GOZONE_PASSWORD_EXPIRY_WARN_DAYS", func(c *Config, n int) { c.Password.ExpiryWarnDays = n }},
+	// OIDC scalar toggles (single-provider block handled by applyOIDCProviderEnv)
+	boolOverride{"GOZONE_OIDC_ENABLED", func(c *Config, b bool) { c.OIDC.Enabled = b }},
+	boolOverride{"GOZONE_OIDC_ALLOW_LOCAL_LOGIN", func(c *Config, b bool) { c.OIDC.AllowLocalLogin = b }},
+	boolOverride{"GOZONE_OIDC_AUTO_PROVISION", func(c *Config, b bool) { c.OIDC.AutoProvision = b }},
+	strOverride{"GOZONE_OIDC_DEFAULT_ROLE", func(c *Config, v string) { c.OIDC.DefaultRole = v }},
+	sliceOverride{"GOZONE_OIDC_SCOPES", func(c *Config, v []string) { c.OIDC.Scopes = v }},
+	strOverride{"GOZONE_OIDC_ROLE_CLAIM", func(c *Config, v string) { c.OIDC.RoleClaim = v }},
+	sliceOverride{"GOZONE_OIDC_ADMIN_ROLE_VALUES", func(c *Config, v []string) { c.OIDC.AdminRoleValues = v }},
+	strOverride{"GOZONE_OIDC_GROUP_CLAIM", func(c *Config, v string) { c.OIDC.GroupClaim = v }},
+	intOverride{"GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", func(c *Config, n int) { c.OIDC.JWKSCacheTTLMinutes = n }},
+}
+
+// applyEnvOverrides overlays GOZONE_-prefixed environment variables on top of
+// the YAML-provided config by dispatching through the envOverrides table.
+func applyEnvOverrides(cfg *Config) error {
+	for _, o := range envOverrides {
+		if err := o.apply(cfg); err != nil {
 			return err
 		}
-		cfg.OIDC.AutoProvision = b
 	}
-	if v := os.Getenv("GOZONE_OIDC_DEFAULT_ROLE"); v != "" {
-		cfg.OIDC.DefaultRole = v
+	return applyOIDCProviderEnv(cfg)
+}
+
+// applyOIDCProviderEnv declares a single OIDC provider entirely from env vars
+// (GOZONE_OIDC_PROVIDER_NAME/ISSUER_URL/CLIENT_ID/CLIENT_SECRET) for
+// containerised deployments that configure one IdP without mounting a config
+// file; additional providers require YAML. It only takes effect when no
+// providers are already declared in YAML, so a file-declared multi-provider
+// setup is never partially overwritten.
+func applyOIDCProviderEnv(cfg *Config) error {
+	if len(cfg.OIDC.Providers) != 0 {
+		return nil
 	}
-	if v := os.Getenv("GOZONE_OIDC_SCOPES"); v != "" {
-		cfg.OIDC.Scopes = splitNonEmpty(v, ",")
-	}
-	if v := os.Getenv("GOZONE_OIDC_ROLE_CLAIM"); v != "" {
-		cfg.OIDC.RoleClaim = v
-	}
-	if v := os.Getenv("GOZONE_OIDC_ADMIN_ROLE_VALUES"); v != "" {
-		cfg.OIDC.AdminRoleValues = splitNonEmpty(v, ",")
-	}
-	if v := os.Getenv("GOZONE_OIDC_GROUP_CLAIM"); v != "" {
-		cfg.OIDC.GroupClaim = v
-	}
-	if v := os.Getenv("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES"); v != "" {
-		n, err := envInt("GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", v)
-		if err != nil {
-			return err
-		}
-		cfg.OIDC.JWKSCacheTTLMinutes = n
-	}
-	// Single-provider env declaration, only when YAML declared none.
-	if len(cfg.OIDC.Providers) == 0 {
-		name := os.Getenv("GOZONE_OIDC_PROVIDER_NAME")
-		issuer := os.Getenv("GOZONE_OIDC_ISSUER_URL")
-		clientID := os.Getenv("GOZONE_OIDC_CLIENT_ID")
-		clientSecret := os.Getenv("GOZONE_OIDC_CLIENT_SECRET")
-		if name != "" || issuer != "" || clientID != "" || clientSecret != "" {
-			cfg.OIDC.Providers = append(cfg.OIDC.Providers, OIDCProviderConfig{
-				Name:         name,
-				IssuerURL:    issuer,
-				ClientID:     clientID,
-				ClientSecret: clientSecret,
-			})
-		}
+	name := os.Getenv("GOZONE_OIDC_PROVIDER_NAME")
+	issuer := os.Getenv("GOZONE_OIDC_ISSUER_URL")
+	clientID := os.Getenv("GOZONE_OIDC_CLIENT_ID")
+	clientSecret := os.Getenv("GOZONE_OIDC_CLIENT_SECRET")
+	if name != "" || issuer != "" || clientID != "" || clientSecret != "" {
+		cfg.OIDC.Providers = append(cfg.OIDC.Providers, OIDCProviderConfig{
+			Name:         name,
+			IssuerURL:    issuer,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+		})
 	}
 	return nil
 }
