@@ -356,613 +356,233 @@ function initImportFeedback() {
     window.history.replaceState(null, '', clean ? '?' + clean : window.location.pathname);
 }
 
-// --- Bulk record selection ---
+// --- Bulk selection ---
 //
-// The zone records table exposes per-row checkboxes plus a "select all"
-// checkbox in the header and a bulk-action toolbar. "Edit selected" flips every
-// checked row into inline edit mode (each row is then saved individually via the
-// existing inline-update flow); "Delete selected" POSTs the selection to the
-// bulk-delete endpoint and reloads the page on success.
+// Every list view (zone records, zones, TSIG keys, API keys, users, groups,
+// templates) exposes the same shape: per-row checkboxes, a header "select all"
+// checkbox, a selected-count label, and a "Delete selected" button that POSTs
+// the selection as form data and reloads on success. The seven previous
+// hand-written, near-identical copies (~600 lines) collapse into one factory
+// driven by a per-table spec.
 
-function selectedRecordRows() {
-    var boxes = document.querySelectorAll('.record-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
+// bulkFailedSuffix formats the "; N failed: a, b" tail appended to the success
+// notification when a best-effort bulk delete skips some items.
+function bulkFailedSuffix(n, list) {
+    return '; ' + n + ' failed: ' + list.join(', ');
 }
 
-function updateBulkSelectedCount() {
-    var rows = selectedRecordRows();
-    var countEl = document.getElementById('bulk-selected-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' record selected' : ' records selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-records"]');
-    var boxes = document.querySelectorAll('.record-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
+// makeBulkController builds the selection + delete helpers for one list table
+// from a spec:
+//   name           — short key used to reach this controller (e.g. 'records')
+//   checkboxClass  — class on each row's checkbox (without the dot)
+//   countId        — id of the selected-count label element
+//   noun           — singular item noun, used for the count label, the
+//                    "select at least one" warning and the "Deleted N <noun>(s)"
+//                    success line
+//   selectAllAction— data-action of the header "select all" checkbox
+//   deleteAction   — data-action of the "Delete selected" button
+//   barId          — id of the bulk-action bar (carries data-csrf and, for
+//                    records, data-zone-id)
+//   endpoint       — string URL, or function(bar) returning the URL
+//   idField/idAttr — single-id families: form field name + row attribute holding
+//                    the id (mutually exclusive with appendRowFields)
+//   appendRowFields— override for multi-field rows (records: name/type/...),
+//                    called as appendRowFields(formData, row)
+//   confirmNoun    — noun used in the confirm dialog (defaults to noun; TSIG and
+//                    API keys use the fuller "TSIG key"/"API key")
+//   failedSuffix   — function(n, list) formatting the "; ... failed ..." tail,
+//                    or null when the endpoint never reports failures (records)
+function makeBulkController(spec) {
+    function selectedRows() {
+        var boxes = document.querySelectorAll('.' + spec.checkboxClass);
+        var rows = [];
         for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
+            if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
         }
-        selectAll.checked = allChecked;
+        return rows;
     }
+
+    function updateCount() {
+        var rows = selectedRows();
+        var countEl = document.getElementById(spec.countId);
+        if (countEl) {
+            countEl.textContent = rows.length + ' ' + spec.noun + (rows.length === 1 ? '' : 's') + ' selected';
+        }
+        var selectAll = document.querySelector('[data-action="' + spec.selectAllAction + '"]');
+        var boxes = document.querySelectorAll('.' + spec.checkboxClass);
+        if (selectAll) {
+            var allChecked = boxes.length > 0;
+            for (var i = 0; i < boxes.length; i++) {
+                if (!boxes[i].checked) { allChecked = false; break; }
+            }
+            selectAll.checked = allChecked;
+        }
+    }
+
+    function toggleSelectAll(cb) {
+        var boxes = document.querySelectorAll('.' + spec.checkboxClass);
+        for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
+        updateCount();
+    }
+
+    async function bulkDelete() {
+        var rows = selectedRows();
+        if (rows.length === 0) { showNotification('Select at least one ' + spec.noun + ' first', 'warning'); return; }
+        var confirmNoun = spec.confirmNoun || spec.noun;
+        if (!await confirmDialog('Delete ' + rows.length + ' selected ' + confirmNoun + '(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
+
+        var bar = document.getElementById(spec.barId);
+        var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
+        var endpoint = typeof spec.endpoint === 'function' ? spec.endpoint(bar) : spec.endpoint;
+
+        var formData = new URLSearchParams();
+        if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
+        for (var i = 0; i < rows.length; i++) {
+            if (spec.appendRowFields) {
+                spec.appendRowFields(formData, rows[i]);
+            } else {
+                formData.append(spec.idField, rows[i].getAttribute(spec.idAttr));
+            }
+        }
+
+        fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData.toString()
+        })
+        .then(function(resp) {
+            // Session expired: the auth middleware 303-redirects to /login, which
+            // fetch follows transparently. Detect it and surface a clear message.
+            if (resp.redirected) {
+                throw new Error('Session expired. Please reload the page to log in again.');
+            }
+            var ct = resp.headers.get('Content-Type') || '';
+            if (ct.indexOf('application/json') === -1) {
+                throw new Error('Unexpected response from server (not JSON).');
+            }
+            return resp.json().then(function(data) {
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || ('HTTP ' + resp.status));
+                }
+                return data;
+            });
+        })
+        .then(function(data) {
+            var msg = 'Deleted ' + data.deleted + ' ' + spec.noun + '(s)';
+            if (spec.failedSuffix && data.failed && data.failed.length > 0) {
+                msg += spec.failedSuffix(data.failed.length, data.failed);
+            }
+            showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
+            window.location.reload();
+        })
+        .catch(function(err) {
+            showNotification('Delete failed: ' + err.message, 'error');
+        });
+    }
+
+    return { selectedRows: selectedRows, updateCount: updateCount, toggleSelectAll: toggleSelectAll, bulkDelete: bulkDelete };
 }
 
-function toggleSelectAllRecords(cb) {
-    var boxes = document.querySelectorAll('.record-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkSelectedCount();
+// One spec per list table. The records table is special: its endpoint is
+// zone-scoped (read from the bar's data-zone-id), each row contributes four id
+// fields (name/type/content/priority) instead of a single id, and the response
+// carries only {deleted} (no failed list) — so it overrides endpoint/
+// appendRowFields and sets failedSuffix=null.
+var bulkSpecs = [
+    {
+        name: 'records',
+        checkboxClass: 'record-select',
+        countId: 'bulk-selected-count',
+        noun: 'record',
+        selectAllAction: 'select-all-records',
+        deleteAction: 'bulk-delete-selected',
+        barId: 'bulk-actions-bar',
+        endpoint: function(bar) { return '/zones/' + bar.getAttribute('data-zone-id') + '/records/bulk-delete'; },
+        appendRowFields: function(fd, row) {
+            fd.append('name', row.getAttribute('data-name'));
+            fd.append('type', row.getAttribute('data-type'));
+            fd.append('original_content', row.getAttribute('data-original-content'));
+            fd.append('original_priority', row.getAttribute('data-original-priority'));
+        },
+        failedSuffix: null
+    },
+    {
+        name: 'zones',
+        checkboxClass: 'zone-select', countId: 'bulk-zones-count', noun: 'zone',
+        selectAllAction: 'select-all-zones', deleteAction: 'bulk-delete-zones',
+        barId: 'bulk-zones-bar', endpoint: '/zones/bulk-delete',
+        idField: 'zone_id', idAttr: 'data-zone-id', failedSuffix: bulkFailedSuffix
+    },
+    {
+        name: 'tsig',
+        checkboxClass: 'tsig-select', countId: 'bulk-tsig-count', noun: 'key',
+        selectAllAction: 'select-all-tsig', deleteAction: 'bulk-delete-tsig',
+        barId: 'bulk-tsig-bar', endpoint: '/tsigkeys/bulk-delete',
+        idField: 'key_id', idAttr: 'data-key-id',
+        confirmNoun: 'TSIG key', failedSuffix: bulkFailedSuffix
+    },
+    {
+        name: 'apikeys',
+        checkboxClass: 'apikey-select', countId: 'bulk-apikey-count', noun: 'key',
+        selectAllAction: 'select-all-apikeys', deleteAction: 'bulk-delete-apikeys',
+        barId: 'bulk-apikey-bar', endpoint: '/profile/api-keys/bulk-delete',
+        idField: 'key_id', idAttr: 'data-key-id',
+        confirmNoun: 'API key', failedSuffix: bulkFailedSuffix
+    },
+    {
+        name: 'users',
+        checkboxClass: 'user-select', countId: 'bulk-users-count', noun: 'user',
+        selectAllAction: 'select-all-users', deleteAction: 'bulk-delete-users',
+        barId: 'bulk-users-bar', endpoint: '/users/bulk-delete',
+        idField: 'user_id', idAttr: 'data-user-id',
+        failedSuffix: function(n, list) { return '; ' + n + ' skipped (self/last-admin): ' + list.join(', '); }
+    },
+    {
+        name: 'groups',
+        checkboxClass: 'group-select', countId: 'bulk-groups-count', noun: 'group',
+        selectAllAction: 'select-all-groups', deleteAction: 'bulk-delete-groups',
+        barId: 'bulk-groups-bar', endpoint: '/groups/bulk-delete',
+        idField: 'group_id', idAttr: 'data-group-id', failedSuffix: bulkFailedSuffix
+    },
+    {
+        name: 'templates',
+        checkboxClass: 'template-select', countId: 'bulk-templates-count', noun: 'template',
+        selectAllAction: 'select-all-templates', deleteAction: 'bulk-delete-templates',
+        barId: 'bulk-templates-bar', endpoint: '/templates/bulk-delete',
+        idField: 'template_id', idAttr: 'data-template-id',
+        failedSuffix: function(n, list) { return '; ' + n + ' failed (built-in/missing): ' + list.join(', '); }
+    }
+];
+
+// Build the controllers and the dispatcher lookup tables in one pass.
+var bulkControllers = {};
+var bulkDeleteByAction = {};
+var bulkSelectAllByAction = {};
+var bulkUpdateByCheckboxClass = {};
+for (var i = 0; i < bulkSpecs.length; i++) {
+    var ctrl = makeBulkController(bulkSpecs[i]);
+    bulkControllers[bulkSpecs[i].name] = ctrl;
+    bulkDeleteByAction[bulkSpecs[i].deleteAction] = ctrl.bulkDelete;
+    bulkSelectAllByAction[bulkSpecs[i].selectAllAction] = ctrl.toggleSelectAll;
+    bulkUpdateByCheckboxClass[bulkSpecs[i].checkboxClass] = ctrl.updateCount;
 }
 
+// bulkEditSelected flips every checked record row into inline edit mode. It is
+// specific to the zone-records table (the other lists only support delete), so
+// it stays standalone and reuses the records controller to read the selection.
 function bulkEditSelected() {
-    var rows = selectedRecordRows();
+    var rows = bulkControllers.records.selectedRows();
     if (rows.length === 0) { showNotification('Select at least one record first', 'warning'); return; }
     for (var i = 0; i < rows.length; i++) toggleEditMode(rows[i], true);
     showNotification(rows.length + (rows.length === 1 ? ' record' : ' records') + ' in edit mode', 'success');
 }
 
-async function bulkDeleteSelected() {
-    var rows = selectedRecordRows();
-    if (rows.length === 0) { showNotification('Select at least one record first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected record(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-actions-bar');
-    var zoneID = bar ? bar.getAttribute('data-zone-id') : '';
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('name', rows[i].getAttribute('data-name'));
-        formData.append('type', rows[i].getAttribute('data-type'));
-        formData.append('original_content', rows[i].getAttribute('data-original-content'));
-        formData.append('original_priority', rows[i].getAttribute('data-original-priority'));
+// syncAllBulkCounts refreshes every list's count label + select-all indicator
+// (called at init and after per-row checkbox changes affect the page).
+function syncAllBulkCounts() {
+    for (var i = 0; i < bulkSpecs.length; i++) {
+        bulkControllers[bulkSpecs[i].name].updateCount();
     }
-
-    fetch('/zones/' + zoneID + '/records/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        // Session expired: the auth middleware 303-redirects to /login, which
-        // fetch follows transparently. Detect it and surface a clear message.
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        showNotification('Deleted ' + data.deleted + ' record(s)', 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk zone selection ---
-//
-// The zones list (admin only) exposes per-row checkboxes, a "select all"
-// checkbox in the header, and a "Delete selected" toolbar button that POSTs
-// the selection to /zones/bulk-delete (best-effort) and reloads on success.
-
-function selectedZoneRows() {
-    var boxes = document.querySelectorAll('.zone-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkZonesCount() {
-    var rows = selectedZoneRows();
-    var countEl = document.getElementById('bulk-zones-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' zone selected' : ' zones selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-zones"]');
-    var boxes = document.querySelectorAll('.zone-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllZones(cb) {
-    var boxes = document.querySelectorAll('.zone-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkZonesCount();
-}
-
-async function bulkDeleteZones() {
-    var rows = selectedZoneRows();
-    if (rows.length === 0) { showNotification('Select at least one zone first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected zone(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-zones-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('zone_id', rows[i].getAttribute('data-zone-id'));
-    }
-
-    fetch('/zones/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' zone(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk TSIG key selection ---
-//
-// The TSIG keys list exposes per-row checkboxes, a "select all" checkbox in
-// the header, and a "Delete selected" toolbar button that POSTs the selection
-// to /tsigkeys/bulk-delete (best-effort) and reloads on success.
-
-function selectedTSIGRows() {
-    var boxes = document.querySelectorAll('.tsig-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkTSIGCount() {
-    var rows = selectedTSIGRows();
-    var countEl = document.getElementById('bulk-tsig-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' key selected' : ' keys selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-tsig"]');
-    var boxes = document.querySelectorAll('.tsig-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllTSIG(cb) {
-    var boxes = document.querySelectorAll('.tsig-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkTSIGCount();
-}
-
-async function bulkDeleteTSIG() {
-    var rows = selectedTSIGRows();
-    if (rows.length === 0) { showNotification('Select at least one key first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected TSIG key(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-tsig-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('key_id', rows[i].getAttribute('data-key-id'));
-    }
-
-    fetch('/tsigkeys/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' key(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk API key selection ---
-//
-// The "Your API Keys" list exposes per-row checkboxes, a "select all" header
-// checkbox, and a "Delete selected" toolbar button that POSTs the selection to
-// /profile/api-keys/bulk-delete (ownership-enforced server-side) and reloads on
-// success.
-
-function selectedAPIKeyRows() {
-    var boxes = document.querySelectorAll('.apikey-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkAPIKeyCount() {
-    var rows = selectedAPIKeyRows();
-    var countEl = document.getElementById('bulk-apikey-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' key selected' : ' keys selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-apikeys"]');
-    var boxes = document.querySelectorAll('.apikey-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllAPIKeys(cb) {
-    var boxes = document.querySelectorAll('.apikey-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkAPIKeyCount();
-}
-
-async function bulkDeleteAPIKeys() {
-    var rows = selectedAPIKeyRows();
-    if (rows.length === 0) { showNotification('Select at least one key first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected API key(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-apikey-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('key_id', rows[i].getAttribute('data-key-id'));
-    }
-
-    fetch('/profile/api-keys/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' key(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk user selection ---
-//
-// The users list (admin only) exposes per-row checkboxes (never for the admin's
-// own row), a "select all" header checkbox, and a "Delete selected" toolbar
-// button that POSTs the selection to /users/bulk-delete (server enforces
-// self-delete and last-admin guards) and reloads on success.
-
-function selectedUserRows() {
-    var boxes = document.querySelectorAll('.user-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkUsersCount() {
-    var rows = selectedUserRows();
-    var countEl = document.getElementById('bulk-users-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' user selected' : ' users selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-users"]');
-    var boxes = document.querySelectorAll('.user-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllUsers(cb) {
-    var boxes = document.querySelectorAll('.user-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkUsersCount();
-}
-
-async function bulkDeleteUsers() {
-    var rows = selectedUserRows();
-    if (rows.length === 0) { showNotification('Select at least one user first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected user(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-users-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('user_id', rows[i].getAttribute('data-user-id'));
-    }
-
-    fetch('/users/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' user(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' skipped (self/last-admin): ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk group selection ---
-//
-// The zone groups list exposes per-row checkboxes, a "select all" header
-// checkbox, and a "Delete selected" toolbar button that POSTs the selection to
-// /groups/bulk-delete (best-effort) and reloads on success.
-
-function selectedGroupRows() {
-    var boxes = document.querySelectorAll('.group-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkGroupsCount() {
-    var rows = selectedGroupRows();
-    var countEl = document.getElementById('bulk-groups-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' group selected' : ' groups selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-groups"]');
-    var boxes = document.querySelectorAll('.group-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllGroups(cb) {
-    var boxes = document.querySelectorAll('.group-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkGroupsCount();
-}
-
-async function bulkDeleteGroups() {
-    var rows = selectedGroupRows();
-    if (rows.length === 0) { showNotification('Select at least one group first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected group(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-groups-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('group_id', rows[i].getAttribute('data-group-id'));
-    }
-
-    fetch('/groups/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' group(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' failed: ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
-}
-
-// --- Bulk template selection ---
-//
-// The templates list exposes per-row checkboxes (never for built-in templates,
-// which cannot be deleted), a "select all" header checkbox, and a "Delete
-// selected" toolbar button that POSTs the selection to /templates/bulk-delete
-// (server still rejects built-ins) and reloads on success.
-
-function selectedTemplateRows() {
-    var boxes = document.querySelectorAll('.template-select');
-    var rows = [];
-    for (var i = 0; i < boxes.length; i++) {
-        if (boxes[i].checked) rows.push(boxes[i].closest('tr'));
-    }
-    return rows;
-}
-
-function updateBulkTemplatesCount() {
-    var rows = selectedTemplateRows();
-    var countEl = document.getElementById('bulk-templates-count');
-    if (countEl) {
-        countEl.textContent = rows.length + (rows.length === 1 ? ' template selected' : ' templates selected');
-    }
-    var selectAll = document.querySelector('[data-action="select-all-templates"]');
-    var boxes = document.querySelectorAll('.template-select');
-    if (selectAll) {
-        var allChecked = boxes.length > 0;
-        for (var i = 0; i < boxes.length; i++) {
-            if (!boxes[i].checked) { allChecked = false; break; }
-        }
-        selectAll.checked = allChecked;
-    }
-}
-
-function toggleSelectAllTemplates(cb) {
-    var boxes = document.querySelectorAll('.template-select');
-    for (var i = 0; i < boxes.length; i++) boxes[i].checked = cb.checked;
-    updateBulkTemplatesCount();
-}
-
-async function bulkDeleteTemplates() {
-    var rows = selectedTemplateRows();
-    if (rows.length === 0) { showNotification('Select at least one template first', 'warning'); return; }
-    if (!await confirmDialog('Delete ' + rows.length + ' selected template(s)? This cannot be undone.', { danger: true, confirmText: 'Delete' })) return;
-
-    var bar = document.getElementById('bulk-templates-bar');
-    var csrfToken = bar ? bar.getAttribute('data-csrf') : '';
-
-    var formData = new URLSearchParams();
-    if (csrfToken) formData.append('gorilla.csrf.Token', csrfToken);
-    for (var i = 0; i < rows.length; i++) {
-        formData.append('template_id', rows[i].getAttribute('data-template-id'));
-    }
-
-    fetch('/templates/bulk-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData.toString()
-    })
-    .then(function(resp) {
-        if (resp.redirected) {
-            throw new Error('Session expired. Please reload the page to log in again.');
-        }
-        var ct = resp.headers.get('Content-Type') || '';
-        if (ct.indexOf('application/json') === -1) {
-            throw new Error('Unexpected response from server (not JSON).');
-        }
-        return resp.json().then(function(data) {
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || ('HTTP ' + resp.status));
-            }
-            return data;
-        });
-    })
-    .then(function(data) {
-        var msg = 'Deleted ' + data.deleted + ' template(s)';
-        if (data.failed && data.failed.length > 0) {
-            msg += '; ' + data.failed.length + ' failed (built-in/missing): ' + data.failed.join(', ');
-        }
-        showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
-        window.location.reload();
-    })
-    .catch(function(err) {
-        showNotification('Delete failed: ' + err.message, 'error');
-    });
 }
 
 // --- Custom confirm dialog ---
@@ -1090,34 +710,13 @@ function initDelegatedListeners() {
                     e.preventDefault();
                     bulkEditSelected();
                     return;
-                case 'bulk-delete-selected':
-                    e.preventDefault();
-                    bulkDeleteSelected();
-                    return;
-                case 'bulk-delete-zones':
-                    e.preventDefault();
-                    bulkDeleteZones();
-                    return;
-                case 'bulk-delete-tsig':
-                    e.preventDefault();
-                    bulkDeleteTSIG();
-                    return;
-                case 'bulk-delete-apikeys':
-                    e.preventDefault();
-                    bulkDeleteAPIKeys();
-                    return;
-                case 'bulk-delete-users':
-                    e.preventDefault();
-                    bulkDeleteUsers();
-                    return;
-                case 'bulk-delete-groups':
-                    e.preventDefault();
-                    bulkDeleteGroups();
-                    return;
-                case 'bulk-delete-templates':
-                    e.preventDefault();
-                    bulkDeleteTemplates();
-                    return;
+            }
+            // Bulk-delete buttons dispatch through the factory-built controllers.
+            var bulkDelete = bulkDeleteByAction[action];
+            if (bulkDelete) {
+                e.preventDefault();
+                bulkDelete();
+                return;
             }
         }
 
@@ -1154,57 +753,19 @@ function initDelegatedListeners() {
                 togglePriority(actionTarget);
                 return;
             }
-            if (action === 'select-all-records') {
-                toggleSelectAllRecords(actionTarget);
-                return;
-            }
-            if (action === 'select-all-zones') {
-                toggleSelectAllZones(actionTarget);
-                return;
-            }
-            if (action === 'select-all-tsig') {
-                toggleSelectAllTSIG(actionTarget);
-                return;
-            }
-            if (action === 'select-all-apikeys') {
-                toggleSelectAllAPIKeys(actionTarget);
-                return;
-            }
-            if (action === 'select-all-users') {
-                toggleSelectAllUsers(actionTarget);
-                return;
-            }
-            if (action === 'select-all-groups') {
-                toggleSelectAllGroups(actionTarget);
-                return;
-            }
-            if (action === 'select-all-templates') {
-                toggleSelectAllTemplates(actionTarget);
+            var selectAll = bulkSelectAllByAction[action];
+            if (selectAll) {
+                selectAll(actionTarget);
                 return;
             }
         }
         // Per-row selection checkbox (no data-action): keep the count and the
         // header "select all" indicator in sync as individual rows toggle.
-        if (e.target.classList && e.target.classList.contains('record-select')) {
-            updateBulkSelectedCount();
-        }
-        if (e.target.classList && e.target.classList.contains('zone-select')) {
-            updateBulkZonesCount();
-        }
-        if (e.target.classList && e.target.classList.contains('tsig-select')) {
-            updateBulkTSIGCount();
-        }
-        if (e.target.classList && e.target.classList.contains('apikey-select')) {
-            updateBulkAPIKeyCount();
-        }
-        if (e.target.classList && e.target.classList.contains('user-select')) {
-            updateBulkUsersCount();
-        }
-        if (e.target.classList && e.target.classList.contains('group-select')) {
-            updateBulkGroupsCount();
-        }
-        if (e.target.classList && e.target.classList.contains('template-select')) {
-            updateBulkTemplatesCount();
+        if (e.target.classList) {
+            for (var ci = 0; ci < e.target.classList.length; ci++) {
+                var rowUpdate = bulkUpdateByCheckboxClass[e.target.classList[ci]];
+                if (rowUpdate) { rowUpdate(); break; }
+            }
         }
     });
 }
@@ -1214,23 +775,11 @@ if (document.readyState === 'loading') {
         initDelegatedListeners();
         initRecordPriority();
         initImportFeedback();
-        updateBulkSelectedCount();
-        updateBulkZonesCount();
-        updateBulkTSIGCount();
-        updateBulkAPIKeyCount();
-        updateBulkUsersCount();
-        updateBulkGroupsCount();
-        updateBulkTemplatesCount();
+        syncAllBulkCounts();
     });
 } else {
     initDelegatedListeners();
     initRecordPriority();
     initImportFeedback();
-    updateBulkSelectedCount();
-    updateBulkZonesCount();
-    updateBulkTSIGCount();
-    updateBulkAPIKeyCount();
-    updateBulkUsersCount();
-    updateBulkGroupsCount();
-    updateBulkTemplatesCount();
+    syncAllBulkCounts();
 }
