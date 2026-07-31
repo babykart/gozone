@@ -607,3 +607,59 @@ func TestIncrementFailedLogins_DoesNotRevokeSessions(t *testing.T) {
 		t.Errorf("automatic lockout must not revoke sessions: tokens_valid_after before=%v after=%v", tvaBefore, tvaAfter)
 	}
 }
+
+// TestAdminLockUser_SetsManualLockMarker verifies the B3 decoupling: a manual
+// admin lock sets the dedicated manual_lock_until marker (in addition to
+// locked_until), so the login path can enforce it independently of the
+// automatic brute-force feature flag.
+func TestAdminLockUser_SetsManualLockMarker(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "erin")
+
+	if err := db.AdminLockUser(ctx, uid, 15*time.Minute); err != nil {
+		t.Fatalf("AdminLockUser: %v", err)
+	}
+	manual, err := db.IsManualLock(ctx, uid)
+	if err != nil {
+		t.Fatalf("IsManualLock: %v", err)
+	}
+	if !manual {
+		t.Error("expected AdminLockUser to set the manual-lock marker (manual_lock_until)")
+	}
+
+	// AdminUnlockUser must clear it.
+	if err := db.AdminUnlockUser(ctx, uid); err != nil {
+		t.Fatalf("AdminUnlockUser: %v", err)
+	}
+	manual, err = db.IsManualLock(ctx, uid)
+	if err != nil {
+		t.Fatalf("IsManualLock after unlock: %v", err)
+	}
+	if manual {
+		t.Error("expected AdminUnlockUser to clear the manual-lock marker")
+	}
+}
+
+// TestIncrementFailedLogins_DoesNotSetManualLockMarker is the counterpart: the
+// automatic brute-force lockout must only set locked_until, never the manual
+// marker — otherwise disabling the auto feature would not decouple from
+// manual enforcement.
+func TestIncrementFailedLogins_DoesNotSetManualLockMarker(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "frank")
+
+	for i := 0; i < 3; i++ {
+		if _, err := db.IncrementFailedLogins(ctx, uid, 3, 15*time.Minute); err != nil {
+			t.Fatalf("IncrementFailedLogins #%d: %v", i+1, err)
+		}
+	}
+	manual, err := db.IsManualLock(ctx, uid)
+	if err != nil {
+		t.Fatalf("IsManualLock: %v", err)
+	}
+	if manual {
+		t.Error("automatic brute-force lockout must not set the manual-lock marker")
+	}
+}

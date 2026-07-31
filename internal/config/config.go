@@ -45,17 +45,22 @@ type Config struct {
 //     that survives server restarts and cluster-wide rollouts.
 type LoginLockConfig struct {
 	// MaxFailedAttempts is the number of consecutive failed login attempts per
-	// account before the account is locked. Set to 0 to disable persistent
-	// lockout (the rate limiters still protect the endpoint).
+	// account before the account is locked. Set to 0 to disable the AUTOMATIC
+	// brute-force lockout (the rate limiters still protect the endpoint).
 	//
-	// Disabling lockout (0) disables it completely: no new locks are recorded
-	// AND existing locks are no longer enforced at login. A previously locked
-	// account (locked while this setting was > 0, or manually via the admin
-	// "Lock user" action) becomes immediately able to log in again. This is
-	// intentional — 0 means "the persistent-lockout feature is off" — but
-	// operators toggling it off should be aware of the consequence. To clear a
-	// specific lock without disabling the feature, use the admin Unlock action
-	// or `gozone user unlock <id|username>`.
+	// Disabling the automatic lockout (0) means no new auto-locks are recorded
+	// AND existing auto-locks (locked_until, set while this setting was > 0)
+	// are no longer enforced at login — a previously auto-locked account
+	// becomes immediately able to log in again. This is intentional — 0 means
+	// "the automatic lockout feature is off" — but operators toggling it off
+	// should be aware of the consequence.
+	//
+	// A MANUAL admin lock (the "Lock user" action / AdminLockUser) is NOT
+	// affected by this setting: it is tracked in a separate column
+	// (manual_lock_until) and enforced at login unconditionally, so an account
+	// an administrator froze stays frozen even with the automatic lockout
+	// disabled. To clear a specific lock, use the admin Unlock action or
+	// `gozone user unlock <id|username>`.
 	MaxFailedAttempts int `yaml:"max_failed_attempts"`
 	// LockoutDurationMinutes is how long the account stays locked after the
 	// threshold is reached. Subsequent failed attempts reset the window.

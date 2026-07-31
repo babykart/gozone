@@ -182,20 +182,42 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// ~250 ms (bcrypt), letting an attacker distinguish a locked-but-valid
 	// account from an unknown one (timing oracle / account enumeration).
 	//
+	// A manual admin lock is enforced UNCONDITIONALLY, independent of the
+	// brute-force feature flag: an account an admin froze must stay frozen
+	// even when max_failed_attempts = 0. The automatic brute-force lockout
+	// below still follows the flag (I-2): with max_failed_attempts = 0 a stale
+	// auto-lock is ignored at login. The two are decoupled by tracking the
+	// manual lock in its own column (manual_lock_until), set alongside
+	// locked_until by AdminLockUser.
+	if manualLocked, merr := h.DB.IsManualLock(ctx, user.ID); merr != nil {
+		// Fail-closed (m34): if the manual-lock status cannot be read we
+		// cannot confirm the account is not frozen, so deny. A dummy bcrypt
+		// compare keeps the response time in the wrong-password band.
+		logger.Error("failed to check manual lock status; denying login (fail-closed)", "user_id", user.ID, "error", merr)
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
+		return
+	} else if manualLocked {
+		logger.Warn("login attempt on manually locked account", "username", user.Username)
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
+		return
+	}
+
+	// Automatic brute-force lockout. This whole block (status check +
+	// enforcement + sliding-window extension) is gated on MaxFailedAttempts >
+	// 0 by design (REVIEW.md I-2): when an operator sets max_failed_attempts =
+	// 0 the automatic lockout feature is considered off, so a stale auto-lock
+	// (locked while the setting was > 0) is not honoured and the account can
+	// log in again without clearing it. Manual admin locks are NOT affected —
+	// they are checked above unconditionally. The per-IP and per-username rate
+	// limiters still apply, and clearing a specific auto-lock without enabling
+	// the feature is available via the admin Unlock action or
+	// `gozone user unlock`. See config.LoginLockConfig.MaxFailedAttempts.
+	//
 	// M-SEC5: recordFailedAttempt is called even on an already-locked account
 	// so each further failure extends the lockout window (sliding expiration).
 	// Without this an attacker gets one free guess per lockout window.
-	//
-	// This whole block (status check + lock enforcement + sliding-window
-	// extension) is gated on MaxFailedAttempts > 0 by design (REVIEW.md I-2):
-	// when an operator sets max_failed_attempts = 0 the persistent-lockout
-	// feature is considered fully off, so existing locks are not honoured
-	// either — a previously locked account (locked while the setting was > 0,
-	// or manually via the admin "Lock user" action) can log in again without
-	// clearing the lock. The per-IP and per-username rate limiters still apply,
-	// and clearing a specific lock without disabling the feature is available
-	// via the admin Unlock action or `gozone user unlock`. See
-	// config.LoginLockConfig.MaxFailedAttempts for the full rationale.
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {

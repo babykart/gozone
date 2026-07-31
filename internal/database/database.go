@@ -456,11 +456,12 @@ func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold
 	return count, nil
 }
 
-// ResetFailedLogins clears the failed-login counter and lockout when the user
+// ResetFailedLogins clears the failed-login counter and every lockout (both
+// the automatic brute-force lock and a manual admin lock) when the user
 // successfully authenticates. Safe to call when no counter is set.
 func (db *DB) ResetFailedLogins(ctx context.Context, userID int64) error {
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL, manual_lock_until = NULL WHERE id = ?",
 		userID,
 	)
 	return err
@@ -499,16 +500,39 @@ func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, un
 // their other sessions (DoS amplification) — only the manual, admin-initiated
 // lock cuts sessions. The user recovers by logging in again once the lock
 // expires or is cleared.
+//
+// Both locked_until and manual_lock_until are set to the same expiry: the
+// former keeps the existing locked_until-based display and UserLockStatus
+// working unchanged, while the latter is the marker the login path checks
+// unconditionally so that a manual lock stays enforced even when
+// max_failed_attempts = 0 disables the automatic lockout.
 func (db *DB) AdminLockUser(ctx context.Context, userID int64, lockFor time.Duration) error {
 	if lockFor <= 0 {
 		return fmt.Errorf("lockFor must be positive, got %v", lockFor)
 	}
 	lockedUntil := time.Now().UTC().Add(lockFor)
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET locked_until = ?, failed_login_attempts = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
-		lockedUntil, userID,
+		"UPDATE users SET locked_until = ?, manual_lock_until = ?, failed_login_attempts = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
+		lockedUntil, lockedUntil, userID,
 	)
 	return err
+}
+
+// IsManualLock reports whether the account is currently under an admin-imposed
+// manual lock (manual_lock_until in the future). Unlike the automatic
+// brute-force lockout, a manual lock is enforced at login regardless of the
+// max_failed_attempts setting. Returns false (no error) for a missing user.
+func (db *DB) IsManualLock(ctx context.Context, userID int64) (bool, error) {
+	var manualUntil sql.NullTime
+	if err := db.QueryRowContext(ctx,
+		"SELECT manual_lock_until FROM users WHERE id = ?", userID,
+	).Scan(&manualUntil); err != nil {
+		if isNoRows(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return manualUntil.Valid && manualUntil.Time.After(time.Now()), nil
 }
 
 // AdminUnlockUser clears the lockout and resets the failed-login counter. Safe

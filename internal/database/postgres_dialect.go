@@ -284,5 +284,8 @@ func (p *postgresDialect) Migrations() []string {
 		// Per-user session-revocation cutoff. See
 		// sqlite_dialect.go for the rationale.
 		`ALTER TABLE users ADD COLUMN tokens_valid_after TIMESTAMP NOT NULL DEFAULT '1970-01-01 00:00:00'`,
+		// Distinct marker for an admin-imposed manual lock. See
+		// sqlite_dialect.go for the rationale.
+		`ALTER TABLE users ADD COLUMN manual_lock_until TIMESTAMP`,
 	}
 }

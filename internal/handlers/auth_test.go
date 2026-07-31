@@ -757,3 +757,85 @@ func TestDebugLogin(t *testing.T) {
 	}
 	t.Logf("Final body: %q", w.Body.String())
 }
+
+// TestLogin_ManualLockHonoredWhenAutoLockoutDisabled is the B3 regression: a
+// manual admin lock must block login even when max_failed_attempts = 0 disables
+// the automatic brute-force lockout. Before the fix, 0 de-enforced manual
+// locks too (the whole lockout check was gated on max_failed_attempts > 0).
+func TestLogin_ManualLockHonoredWhenAutoLockoutDisabled(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.LoginLock.MaxFailedAttempts = 0 // disable the automatic lockout feature
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"victim", "victim@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Admin manually locks the account (sets locked_until + manual_lock_until).
+	if err := h.DB.AdminLockUser(context.Background(), uid, time.Hour); err != nil {
+		t.Fatalf("AdminLockUser: %v", err)
+	}
+
+	// Even with the correct password and the auto-lockout feature OFF, the
+	// manual lock must block the login.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=goodpass"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, invalidCredentialsError) {
+		t.Errorf("manual lock must block login even with auto-lockout disabled; got %q", loc)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			t.Error("manual lock must not issue a session cookie")
+		}
+	}
+}
+
+// TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled guards the I-2
+// contract that B3 must NOT regress: with max_failed_attempts = 0, a stale
+// automatic lock (locked_until set while the feature was on) is ignored at
+// login — the manual-lock enforcement added for B3 must not leak into the
+// auto path.
+func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.LoginLock.MaxFailedAttempts = 0
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
+	res, _ := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"stale", "stale@example.com", string(hash), "user",
+	)
+	uid, _ := res.LastInsertId()
+
+	// Simulate a stale auto-lock: locked_until set, but no manual_lock_until
+	// (the account was auto-locked while the feature was on, then the operator
+	// set max_failed_attempts = 0).
+	if _, err := h.DB.Exec("UPDATE users SET locked_until = ? WHERE id = ?", time.Now().Add(time.Hour), uid); err != nil {
+		t.Fatalf("set stale locked_until: %v", err)
+	}
+
+	// With the feature off, the stale auto-lock is ignored and login succeeds.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=stale&password=goodpass"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+
+	loc := w.Header().Get("Location")
+	if strings.Contains(loc, "error=") {
+		t.Errorf("stale auto-lock must be ignored when the feature is disabled (I-2); got %q", loc)
+	}
+	var hasSession bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			hasSession = true
+		}
+	}
+	if !hasSession {
+		t.Error("expected a session cookie after successful login past a stale auto-lock (I-2)")
+	}
+}

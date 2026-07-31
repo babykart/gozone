@@ -274,5 +274,12 @@ func (s *sqliteDialect) Migrations() []string {
 		// upgrade — the column is only bumped to now at credential-changing
 		// events.
 		`ALTER TABLE users ADD COLUMN tokens_valid_after DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'`,
+		// Distinct marker for an admin-imposed manual lock. The login path
+		// honours manual_lock_until unconditionally, while the automatic brute-force locked_until is only enforced when
+		// max_failed_attempts > 0 — so disabling the auto lockout (0) no longer
+		// de-enforces an existing manual lock. AdminLockUser sets both columns
+		// to the same expiry so the existing locked_until-based display and
+		// UserLockStatus keep working unchanged.
+		`ALTER TABLE users ADD COLUMN manual_lock_until DATETIME`,
 	}
 }
