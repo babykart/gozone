@@ -39,7 +39,7 @@ func (h *Handler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
 		return
 	}
-	callbackURL := oidcCallbackURL(r, provider)
+	callbackURL := oidcCallbackURL(h.Cfg.Server.ExternalURL, r, provider)
 	authURL, err := h.OIDC.AuthCodeURL(provider, callbackURL)
 	if err != nil {
 		logger.Warn("oidc login: build auth url", "provider", provider, "error", err)
@@ -80,7 +80,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	callbackURL := oidcCallbackURL(r, provider)
+	callbackURL := oidcCallbackURL(h.Cfg.Server.ExternalURL, r, provider)
 
 	claims, err := h.OIDC.HandleCallback(ctx, provider, code, state, callbackURL)
 	if err != nil {
@@ -396,12 +396,20 @@ func isAbsoluteHTTPURL(u string) bool {
 	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
-// oidcCallbackURL builds the fully-qualified callback URL for a provider based
-// on the request's resolved scheme (trusted-proxy aware) and host. The value
-// must be byte-identical between the authorization request and the token
+// oidcCallbackURL builds the fully-qualified callback URL for a provider. The
+// value must be byte-identical between the authorization request and the token
 // exchange, so both OIDCLogin and OIDCCallback call this helper with the same
 // provider name.
-func oidcCallbackURL(r *http.Request, provider string) string {
+//
+// When externalURL is non-empty (server.external_url), it is used as the base
+// — pinning the canonical origin instead of deriving it from the
+// client-controlled Host header (defense-in-depth; the IdP already validates
+// redirect_uri against its registered list). When empty, the URL is derived
+// per-request from the resolved scheme (trusted-proxy aware) and r.Host.
+func oidcCallbackURL(externalURL string, r *http.Request, provider string) string {
+	if externalURL != "" {
+		return externalURL + "/auth/oidc/" + provider + "/callback"
+	}
 	scheme := "http"
 	if middleware.IsHTTPS(r) {
 		scheme = "https"

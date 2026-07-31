@@ -75,6 +75,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
 | `server.shutdown_timeout_seconds` | `GOZONE_SHUTDOWN_TIMEOUT` | `30` |
 | `server.trusted_proxies` | `GOZONE_TRUSTED_PROXIES` | *empty* (TCP source IP only) | Comma-separated CIDR ranges whose X-Forwarded-For headers are trusted. Use `/32` for a single IPv4 host, `/128` for IPv6. Plain IPs without a prefix are rejected at startup. |
+| `server.external_url` | `GOZONE_EXTERNAL_URL` | *empty* | Canonical base URL GoZone is served at (e.g. `https://dns.example.com`). When set, OIDC `redirect_uri` values are built from it instead of being derived from the client-controlled `Host` header (defense-in-depth; the IdP already validates `redirect_uri`). Must be an absolute `http(s)` URL with a host and no path; validated and normalised to `scheme://host` at startup. When empty, the callback URL is derived per-request from the resolved scheme and `Host` header. |
 
 ### Database
 

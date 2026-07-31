@@ -114,10 +114,18 @@ func TestSplitName(t *testing.T) {
 func TestOidcCallbackURL(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/callback", nil)
 	r.Host = "gozone.example.com"
-	got := oidcCallbackURL(r, "gitea")
+	got := oidcCallbackURL("", r, "gitea")
 	want := "http://gozone.example.com/auth/oidc/gitea/callback"
 	if got != want {
-		t.Errorf("oidcCallbackURL = %q, want %q", got, want)
+		t.Errorf("oidcCallbackURL (derived) = %q, want %q", got, want)
+	}
+
+	// When external_url is set it is used verbatim as the base, ignoring the
+	// client-controlled Host header (defense-in-depth, see server.external_url).
+	got = oidcCallbackURL("https://dns.example.com", r, "gitea")
+	want = "https://dns.example.com/auth/oidc/gitea/callback"
+	if got != want {
+		t.Errorf("oidcCallbackURL (external_url) = %q, want %q", got, want)
 	}
 }
 

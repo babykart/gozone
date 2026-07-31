@@ -100,6 +100,16 @@ type ServerConfig struct {
 	// leaving it empty is safe (and recommended) for direct internet
 	// exposure because attackers cannot forge their IP.
 	TrustedProxies []string `yaml:"trusted_proxies"`
+	// ExternalURL is the canonical base URL GoZone is served at (e.g.
+	// "https://dns.example.com"). When set, OIDC redirect_uri values are built
+	// from it instead of being derived per-request from the client-controlled
+	// Host header (defense-in-depth: the IdP already validates redirect_uri
+	// against its registered list, but this removes the app's reliance on the
+	// Host header for the SSO flow). When empty, the callback URL is derived
+	// from the resolved scheme (trusted-proxy aware) and r.Host — the original
+	// behaviour. Must be an absolute http(s) URL with a host and no path; it is
+	// validated and normalised to "scheme://host" at load. Optional.
+	ExternalURL string `yaml:"external_url"`
 	// JWTKey is derived from SecretKey via HKDF-SHA256 for JWT signing.
 	JWTKey []byte `yaml:"-"`
 	// CSRFKey is derived from SecretKey via HKDF-SHA256 for CSRF tokens.
@@ -371,7 +381,7 @@ func DefaultConfig() *Config {
 //
 // Supported environment variables: GOZONE_SERVER_HOST, GOZONE_SERVER_PORT,
 // GOZONE_APP_NAME, GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES,
-// GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
+// GOZONE_EXTERNAL_URL, GOZONE_SHUTDOWN_TIMEOUT, GOZONE_DB_DRIVER,
 // GOZONE_DB_DSN, GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY,
 // GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
 // GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS, GOZONE_ACTIVITY_RETENTION_DAYS,
@@ -571,6 +581,23 @@ func (cfg *Config) validate() error {
 		_ = prefix // validation only; chi re-parses at middleware setup
 	}
 
+	// server.external_url: optional canonical base URL for OIDC redirect_uri
+	// building (defense-in-depth against Host-header derivation). When set it
+	// must be an absolute http(s) URL with a host and no path. Normalise to
+	// "scheme://host" so callers can append root-anchored paths without
+	// worrying about trailing slashes or stray path/query components.
+	if cfg.Server.ExternalURL != "" {
+		u, err := url.Parse(cfg.Server.ExternalURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("invalid server.external_url %q: must be an absolute http(s) URL with a host (e.g. %q)",
+				cfg.Server.ExternalURL, "https://dns.example.com")
+		}
+		if p := u.Path; p != "" && p != "/" {
+			return fmt.Errorf("invalid server.external_url %q: must not contain a path (scheme and host only)", cfg.Server.ExternalURL)
+		}
+		cfg.Server.ExternalURL = u.Scheme + "://" + u.Host
+	}
+
 	// server.host is a bind address: numeric IPs only (a hostname would need
 	// resolution and is almost always a mistake). Empty is allowed — Go's
 	// net/http then listens on all interfaces. IPv6 may be written with or
@@ -728,6 +755,9 @@ func applyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Server.SecureCookies = b
+	}
+	if v := os.Getenv("GOZONE_EXTERNAL_URL"); v != "" {
+		cfg.Server.ExternalURL = v
 	}
 	if v := os.Getenv("GOZONE_SHUTDOWN_TIMEOUT"); v != "" {
 		n, err := envInt("GOZONE_SHUTDOWN_TIMEOUT", v)

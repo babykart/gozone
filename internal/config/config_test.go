@@ -525,6 +525,9 @@ func TestLoad_FieldValidation(t *testing.T) {
 		{"logging.level invalid", "logging:\n  level: \"verbose\"\n", "logging.level"},
 		{"admin.username too short", "admin:\n  username: \"ab\"\n", "admin.username"},
 		{"admin.username bad chars", "admin:\n  username: \"bad user\"\n", "admin.username"},
+		{"server.external_url missing scheme", "server:\n  external_url: \"dns.example.com\"\n", "server.external_url"},
+		{"server.external_url bad scheme", "server:\n  external_url: \"ftp://dns.example.com\"\n", "server.external_url"},
+		{"server.external_url with path", "server:\n  external_url: \"https://dns.example.com/gozone\"\n", "server.external_url"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -537,6 +540,43 @@ func TestLoad_FieldValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoad_ExternalURL covers the server.external_url option: a valid absolute
+// URL is accepted and normalised to "scheme://host" (trailing slash stripped),
+// empty is allowed (default), and the GOZONE_EXTERNAL_URL env var overrides the
+// YAML value with the same normalisation.
+func TestLoad_ExternalURL(t *testing.T) {
+	t.Run("accepts and normalises trailing slash", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  external_url: \"https://dns.example.com/\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if got, want := cfg.Server.ExternalURL, "https://dns.example.com"; got != want {
+			t.Errorf("expected normalised %q, got %q", want, got)
+		}
+	})
+
+	t.Run("empty by default", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"127.0.0.1\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.ExternalURL != "" {
+			t.Errorf("expected empty external_url by default, got %q", cfg.Server.ExternalURL)
+		}
+	})
+
+	t.Run("env override normalises", func(t *testing.T) {
+		t.Setenv("GOZONE_EXTERNAL_URL", "https://ha.example.com/")
+		cfg, err := Load(writeTempConfig(t, "server:\n  host: \"127.0.0.1\"\n"))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if got, want := cfg.Server.ExternalURL, "https://ha.example.com"; got != want {
+			t.Errorf("env override: expected normalised %q, got %q", want, got)
+		}
+	})
 }
 
 // TestLoad_FieldValidation_AcceptsValid ensures the new guards do not reject
