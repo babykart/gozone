@@ -309,11 +309,23 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // maxAttempts > 0, increments the per-account counter (possibly triggering a
 // lockout). Errors are logged but never abort the login flow.
 //
+// The increment + conditional lockout reuse the single core implementation
+// (Tx.IncrementFailedLoginsInTx, shared with DB.IncrementFailedLogins); this
+// handler only layers the last-admin exemption on top, so there is no longer a
+// second parallel lockout code path.
+//
+// Lock order: IsLastEnabledAdmin is evaluated FIRST — it locks the
+// enabled-admin set (via CountEnabledAdmins' FOR UPDATE) before the target
+// row — then the increment locks the target row. This matches
+// UpdateUser/DeleteUser and avoids the inverted-order deadlock documented on
+// Tx.IsLastEnabledAdmin.
+//
 // Last-admin exemption: when the threshold is reached on the only enabled
-// admin, the lockout is refused — the counter is reset to maxAttempts-1 so
-// the next failure still counts, and a CRITICAL warning is logged. This
-// prevents a distributed attacker from locking every admin out of the
-// instance by spraying wrong passwords at admin accounts. Recovery paths:
+// admin, the lockout is refused — the lock this call just applied is undone
+// and the counter is reset to maxAttempts-1 so the next failure still counts,
+// with a CRITICAL warning logged. This prevents a distributed attacker from
+// locking every admin out of the instance by spraying wrong passwords at admin
+// accounts. Recovery paths:
 //   - another admin (or the same one, when there is one) logs in successfully
 //     (the per-IP/per-username rate limiters will throttle the attacker);
 //   - the CLI `gozone user unlock <id|username>` command;
@@ -344,29 +356,18 @@ func (h *Handler) recordFailedAttempt(ctx context.Context, username string, user
 		return
 	}
 
-	// Bump the counter and read the new value back. Mirrors DB.IncrementFailedLogins
-	// but executes inside the calling tx so we can both check last-admin and
-	// react under the same FOR UPDATE row lock (MySQL/Postgres).
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
-		userID,
-	); err != nil {
+	count, locked, err := tx.IncrementFailedLoginsInTx(ctx, userID, maxAttempts, lockout)
+	if err != nil {
 		logger.Error("failed to increment failed-login counter", "user_id", userID, "error", err)
 		return
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx,
-		"SELECT failed_login_attempts FROM users WHERE id = ?", userID,
-	).Scan(&count); err != nil {
-		logger.Error("failed to read failed-login counter", "user_id", userID, "error", err)
-		return
-	}
 
-	if count >= maxAttempts && last {
-		// Refuse to lock the last admin out. Reset the counter to one below
-		// the threshold so the next failure still counts towards a lockout
-		// (and so concurrent failure storms do not bypass future locks once
-		// the situation changes).
+	if locked && last {
+		// Refuse to lock the last enabled admin. Undo the lockout this call
+		// just applied (same transaction, so it is never observable committed)
+		// and reset the counter to one below the threshold so the next failure
+		// still counts (and so concurrent failure storms cannot bypass future
+		// locks once the situation changes).
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE users SET failed_login_attempts = ?, locked_until = NULL WHERE id = ?",
 			maxAttempts-1, userID,
@@ -384,15 +385,7 @@ func (h *Handler) recordFailedAttempt(ctx context.Context, username string, user
 		return
 	}
 
-	if count >= maxAttempts {
-		lockedUntil := time.Now().UTC().Add(lockout)
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE users SET locked_until = ? WHERE id = ?",
-			lockedUntil, userID,
-		); err != nil {
-			logger.Error("failed to set locked_until", "user_id", userID, "error", err)
-			return
-		}
+	if locked {
 		logger.Warn("account locked after failed attempts", "user_id", userID, "count", count)
 	}
 

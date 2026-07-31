@@ -414,12 +414,11 @@ func parseAttemptedAt(s string) (time.Time, error) {
 // attack keeps extending the lockout. Returns the new failed_login_attempts
 // count after the increment.
 //
-// The increment and the conditional lockout are applied as a single atomic
-// UPDATE inside a transaction (REVIEW.md m19). This removes the previous
-// read-modify-write race where two concurrent failures could each observe a
-// stale count and disagree on whether the lockout threshold was reached; the
-// SELECT reading the new count back runs in the same transaction, under the
-// row lock held by the UPDATE, so it always sees the value this call wrote.
+// It is a thin wrapper around the transaction-scoped
+// IncrementFailedLoginsInTx core, so the increment + conditional-lockout SQL
+// lives in exactly one place. The handler login path reuses the same core and
+// layers the last-admin exemption on top, instead of re-implementing a second
+// parallel lockout path.
 func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold int, lockFor time.Duration) (int, error) {
 	if threshold <= 0 {
 		return 0, nil
@@ -430,30 +429,48 @@ func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold
 	}
 	defer tx.Rollback() // no-op after Commit
 
+	count, _, err := tx.IncrementFailedLoginsInTx(ctx, userID, threshold, lockFor)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// IncrementFailedLoginsInTx is the single source of truth for the atomic
+// failed-login increment + conditional lockout. It runs inside the caller's
+// transaction: the increment and the lockout are applied as a single atomic
+// UPDATE, and the SELECT reading the new count back runs in the same
+// transaction, under the row lock held by that UPDATE, so it always sees the
+// value this call wrote — removing the read-modify-write race where two
+// concurrent failures could each observe a stale count and disagree on whether
+// the lockout threshold was reached (REVIEW.md m19).
+//
+// Returns the new failed_login_attempts count and whether a lockout was
+// applied (count reached threshold). A caller that needs to override the
+// lockout decision (e.g. the last-admin exemption in the login handler) does
+// so in the same transaction after this call returns locked=true.
+func (tx *Tx) IncrementFailedLoginsInTx(ctx context.Context, userID int64, threshold int, lockFor time.Duration) (count int, locked bool, err error) {
 	lockedUntil := time.Now().UTC().Add(lockFor)
 	// Atomic increment + conditional lock: the CASE references the pre-update
 	// failed_login_attempts, so "failed_login_attempts + 1" is the new count.
-	if _, err := tx.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		UPDATE users
 		SET failed_login_attempts = failed_login_attempts + 1,
 		    locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END
 		WHERE id = ?`,
 		threshold, lockedUntil, userID,
 	); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-
-	var count int
-	if err := tx.QueryRowContext(ctx,
+	if err = tx.QueryRowContext(ctx,
 		"SELECT failed_login_attempts FROM users WHERE id = ?", userID,
 	).Scan(&count); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return count, nil
+	return count, count >= threshold, nil
 }
 
 // ResetFailedLogins clears the failed-login counter and every lockout (both
