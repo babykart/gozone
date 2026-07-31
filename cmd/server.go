@@ -665,7 +665,7 @@ func relativeName(recordName, zoneName string) string {
 // on every content change regardless of the version label.
 func staticAssetVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"static/js/app.js", "static/css/style.css"} {
+	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css"} {
 		data, err := web.FS.ReadFile(name)
 		if err != nil {
 			// Embedded files: unreachable in practice. Fall back to the build

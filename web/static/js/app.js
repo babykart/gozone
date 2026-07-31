@@ -14,9 +14,10 @@ function updateThemeIcon() {
 }
 
 (function() {
-    var theme = localStorage.getItem('gozone-theme') || 'light';
-    document.documentElement.setAttribute('data-theme', theme);
-
+    // The colour theme is applied in <head> by theme.js (FOUC fix); here we
+    // restore the persisted sidebar state and paint the theme-toggle icon,
+    // both of which need the <body> DOM that is present once app.js runs at the
+    // end of <body>.
     var collapsed = localStorage.getItem('gozone-sidebar') === 'true';
     if (collapsed) {
         document.body.classList.add('sidebar-collapsed');

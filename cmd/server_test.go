@@ -55,7 +55,7 @@ func TestStaticAssetVersion(t *testing.T) {
 	// Determinism: the version must match an independent computation over the
 	// same embedded bytes.
 	h := sha256.New()
-	for _, name := range []string{"static/js/app.js", "static/css/style.css"} {
+	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css"} {
 		data, err := web.FS.ReadFile(name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
@@ -81,6 +81,11 @@ func TestAssetVersionRenderedInTemplates(t *testing.T) {
 	}
 	if !strings.Contains(head.String(), "/static/css/style.css?v=") {
 		t.Errorf("head partial missing cache-busted style.css:\n%s", head.String())
+	}
+	// FOUC fix: theme.js runs synchronously in <head> so the persisted colour
+	// theme is applied before the body paints.
+	if !strings.Contains(head.String(), "/static/js/theme.js?v=") {
+		t.Errorf("head partial missing cache-busted theme.js:\n%s", head.String())
 	}
 
 	var tail strings.Builder
