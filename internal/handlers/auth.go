@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -161,7 +162,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	user.Enabled = enabled == 1
 	user.MustChangePassword = mustChange == 1
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Constant-time dummy bcrypt compare so missing-vs-wrong-password
 		// cannot be distinguished by response time.
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation

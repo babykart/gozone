@@ -158,7 +158,7 @@ func (h *Handler) EditTemplatePage(w http.ResponseWriter, r *http.Request) {
 	err = h.DB.QueryRow(
 		"SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates WHERE id = ?", templateID,
 	).Scan(&t.ID, &t.Name, &t.Description, &t.IsBuiltin, &t.CreatedAt, &t.UpdatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		h.renderErrorStatus(w, r, http.StatusNotFound, "Template not found")
 		return
 	}
