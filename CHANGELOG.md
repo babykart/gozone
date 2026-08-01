@@ -1,16 +1,36 @@
 
-## [v0.16.4] - 2026-07-24
+## [v0.16.5] - 2026-08-01
 
 ### 🐛 Bug Fixes
 
-- **(ui)** ([5fbf591](https://github.com/babykart/gozone/commit/5fbf5910e629e129896221011cbc519a4761456c)) - [gozone] send error page back to the previous page, not the dashboard - ([babykart](https://github.com/babykart))
+- **(license)** ([a907acd](https://github.com/babykart/gozone/commit/a907acda30f15dd106e0f3e213e872ae12cdf1a0)) - [gozone] rename LICENSE file - ([babykart](https://github.com/babykart))
+- **(middleware)** ([cc29411](https://github.com/babykart/gozone/commit/cc29411c944760e23202a24847f79d14cdec6eb3)) - [gozone] surface DB errors in CheckZoneAccess instead of masking as 403 - ([babykart](https://github.com/babykart))
+- **(security)** ([7c6949d](https://github.com/babykart/gozone/commit/7c6949df762632df0695c1a2398138c4ba55f18b)) - [gozone] revoke active sessions on password change/reset and account disable - ([babykart](https://github.com/babykart))
+- **(security)** ([2409075](https://github.com/babykart/gozone/commit/2409075ca97ae0c0f38f70b14928ae0ee2c97e31)) - [gozone] revoke active sessions on manual admin lock - ([babykart](https://github.com/babykart))
+- **(security)** ([90d4608](https://github.com/babykart/gozone/commit/90d46086f3b73ebfb25c5a195ec9bc671ec6351f)) - [gozone] encrypt OIDC state parameter with AES-256-GCM - ([babykart](https://github.com/babykart))
+- **(security)** ([00f132f](https://github.com/babykart/gozone/commit/00f132f2009eb47659e0c8650241441b067e1bd3)) - [gozone] decouple manual admin lock from the brute-force counter - ([babykart](https://github.com/babykart))
+- **(security)** ([9ba49c2](https://github.com/babykart/gozone/commit/9ba49c288b3ea95bc2f4c0bdca654447f124bf7b)) - [gozone] drop CSP style-src 'unsafe-inline' via inline-style externalisation - ([babykart](https://github.com/babykart))
+- **(security)** ([a1e6d56](https://github.com/babykart/gozone/commit/a1e6d5696c6f067d8d7efc25305d594c6a4da626)) - [gozone] add server.external_url to pin OIDC redirect_uri - ([babykart](https://github.com/babykart))
+- **(web)** ([f033b16](https://github.com/babykart/gozone/commit/f033b16f967c0e65a5dd3c6f985722076983449c)) - [gozone] apply colour theme in <head> to prevent light flash - ([babykart](https://github.com/babykart))
+- **(web)** ([18c9215](https://github.com/babykart/gozone/commit/18c9215e9473624a8cc924eaf670029b4a3ad39f)) - [gozone] apply colour theme in <head> to prevent light flash - ([babykart](https://github.com/babykart))
+
+### 🚜 Refactor
+
+- **(auth)** ([81a8f64](https://github.com/babykart/gozone/commit/81a8f64aff11346ef49d0f0a2568e14fc8637656)) - [gozone] unify the two parallel failed-login lockout paths - ([babykart](https://github.com/babykart))
+- **(config)** ([e27341c](https://github.com/babykart/gozone/commit/e27341cb454ac1f364cb68bd9595daf46535b0b8)) - [gozone] drive env-var overrides from a static {env, setter} table - ([babykart](https://github.com/babykart))
+- **(handlers)** ([30e0396](https://github.com/babykart/gozone/commit/30e03963e51e58e6bff412bf48422f620e126576)) - [gozone] centralise activity_logs writes in a logActivity helper - ([babykart](https://github.com/babykart))
+- **(handlers)** ([552145d](https://github.com/babykart/gozone/commit/552145d0fae33d0fd242f5062023b8c52c89b1df)) - [gozone] use errors.Is for sql.ErrNoRows checks - ([babykart](https://github.com/babykart))
+- **(models)** ([ca69fdf](https://github.com/babykart/gozone/commit/ca69fdf0d35a53b198dcbbb890dc4c2b51357eb5)) - [gozone] remove dead ZoneWithInfo.RecordCount field - ([babykart](https://github.com/babykart))
+- **(records)** ([096a458](https://github.com/babykart/gozone/commit/096a458b1a02f2ba99c9eed8c515430a21ed4d49)) - [gozone] split BatchCreateRecords into focused helpers - ([babykart](https://github.com/babykart))
+- **(web)** ([99d0ee4](https://github.com/babykart/gozone/commit/99d0ee474d8b7d3f652c516218cda178f5a4f394)) - [gozone] collapse app.js bulk-selection duplication into a factory - ([babykart](https://github.com/babykart))
 
 ### 📚 Documentation
 
-- **(ai)** ([cb6ac36](https://github.com/babykart/gozone/commit/cb6ac3628e1035bcadd66b1eb1e0b325e75c734b)) - [gozone] update AGENTS.md - ([babykart](https://github.com/babykart))
+- **(architecture)** ([2d7fdf8](https://github.com/babykart/gozone/commit/2d7fdf895ee79ac350c14e2e8f5e05b6785ae316)) - [gozone] bring ARCHITECTURE.md back in sync with the codebase - ([babykart](https://github.com/babykart))
+- **(ha)** ([c0fe5ff](https://github.com/babykart/gozone/commit/c0fe5ff6a4f7aa8a2f13c4fd4668b9a72933895d)) - [gozone] document per-node vs cluster-wide state for HA deployments - ([babykart](https://github.com/babykart))
 
-### 🧪 Testing
+### 🌀 Miscellaneous Tasks
 
-- **(oidc)** ([5aa70ee](https://github.com/babykart/gozone/commit/5aa70ee3730c418fa9992ba8dfef30ba2a6f66f2)) - [gozone] cover Service discovery and HandleCallback flow - ([babykart](https://github.com/babykart))
+- **(pdns)** ([7533d0d](https://github.com/babykart/gozone/commit/7533d0d117895e09347478b510b5300a517d2f2d)) - [gozone] log per-request PowerDNS calls at Debug instead of Info - ([babykart](https://github.com/babykart))
 
 <!-- generated by git-cliff -->
