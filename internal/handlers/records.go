@@ -846,9 +846,14 @@ func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, pr
 	return
 }
 
-// DeleteRecord deletes a DNS record from a zone (POST /zones/{zone_id}/records/delete).
+// DeleteRecord deletes a single DNS record from a zone (POST /zones/{zone_id}/records/delete).
 //
-// Identifies the record by "name" and "type" form values.
+// Identifies the record by "name", "type", "content" and "priority" form
+// values. When the RRSet holds several records only the selected one is removed
+// (the RRSet is REPLACEd with the remaining records); when it is the sole
+// record the whole RRSet is DELETEd. MX/SRV priority is re-embedded into the
+// content of the remaining records because PowerDNS rejects a separate priority
+// element in a PATCH.
 func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
@@ -871,18 +876,40 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var oldRRSet *models.RRSet
+	content := strings.TrimSpace(r.FormValue("content"))
+	priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
+
+	// removal identifies the single record to drop by content+priority, matching
+	// the recordIdentity used on the PowerDNS read path (SplitPriority has
+	// already detached the priority for MX/SRV).
+	removal := map[string]map[recordIdentity]struct{}{
+		recordName + "|" + recordType: {
+			{Content: content, Priority: priority}: {},
+		},
+	}
+
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
-	if err == nil {
-		for _, rr := range allRecords {
-			if rr.Name == recordName && rr.Type == recordType {
-				oldRRSet = &rr
-				break
-			}
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch records", err)
+		return
+	}
+
+	// Snapshot the full RRSet before mutation for the activity log.
+	var oldRRSet *models.RRSet
+	for i := range allRecords {
+		if allRecords[i].Name == recordName && allRecords[i].Type == recordType {
+			oldRRSet = &allRecords[i]
+			break
 		}
 	}
 
-	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, recordName, recordType); err != nil {
+	patch, _, _ := buildRemovalPatch(allRecords, removal)
+	if len(patch) == 0 {
+		h.renderError(w, r, "Record not found")
+		return
+	}
+
+	if err := h.PDNS.PatchRecords(r.Context(), zoneID, patch); err != nil {
 		h.renderInternalError(w, r, "Failed to delete record", err)
 		return
 	}
@@ -902,6 +929,66 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 type recordIdentity struct {
 	Content  string
 	Priority int
+}
+
+// buildRemovalPatch computes the RRSet PATCH body needed to drop the records
+// identified by removal (keyed "name|type" -> set of record identities) from
+// allRecords. When every record of an RRSet is selected the whole RRSet is
+// removed with changetype DELETE; otherwise the RRSet is REPLACEd with the
+// remaining records, re-encoding MX/SRV priority into the content (PowerDNS
+// rejects a separate priority element in a PATCH) and re-applying FQDN/quote
+// normalisation idempotently.
+//
+// It also returns a snapshot of the records actually removed (for the activity
+// log) and the total count. RRSets referenced by removal whose selected
+// records no longer exist (stale rows) are skipped. allRecords is not mutated.
+func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordIdentity]struct{}) (patch []models.RRSet, removedSnapshot []models.RRSet, totalRemoved int) {
+	for i := range allRecords {
+		rr := allRecords[i]
+		key := rr.Name + "|" + rr.Type
+		drop, ok := removal[key]
+		if !ok {
+			continue
+		}
+
+		var remaining, removed []models.RecordInfo
+		for _, rec := range rr.Records {
+			if _, hit := drop[recordIdentity{Content: rec.Content, Priority: rec.Priority}]; hit {
+				removed = append(removed, rec)
+			} else {
+				remaining = append(remaining, rec)
+			}
+		}
+		if len(removed) == 0 {
+			// Selection referenced nothing that still exists (stale row); skip.
+			continue
+		}
+
+		if len(remaining) == 0 {
+			patch = append(patch, models.RRSet{Name: rr.Name, Type: rr.Type, ChangeType: "DELETE"})
+		} else {
+			for j := range remaining {
+				remaining[j].Content, remaining[j].Priority =
+					prepareRecordContent(rr.Type, remaining[j].Content, remaining[j].Priority)
+			}
+			patch = append(patch, models.RRSet{
+				Name:       rr.Name,
+				Type:       rr.Type,
+				TTL:        rr.TTL,
+				ChangeType: "REPLACE",
+				Records:    remaining,
+			})
+		}
+
+		removedSnapshot = append(removedSnapshot, models.RRSet{
+			Name:    rr.Name,
+			Type:    rr.Type,
+			TTL:     rr.TTL,
+			Records: removed,
+		})
+		totalRemoved += len(removed)
+	}
+	return patch, removedSnapshot, totalRemoved
 }
 
 // BulkDeleteRecords deletes several records from a zone in a single PATCH
@@ -985,58 +1072,7 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var patch []models.RRSet
-	var removedSnapshot []models.RRSet
-	totalRemoved := 0
-
-	for i := range allRecords {
-		rr := allRecords[i]
-		key := rr.Name + "|" + rr.Type
-		drop, ok := removal[key]
-		if !ok {
-			continue
-		}
-
-		var remaining, removed []models.RecordInfo
-		for _, rec := range rr.Records {
-			if _, hit := drop[recordIdentity{Content: rec.Content, Priority: rec.Priority}]; hit {
-				removed = append(removed, rec)
-			} else {
-				remaining = append(remaining, rec)
-			}
-		}
-		if len(removed) == 0 {
-			// Selection referenced nothing that still exists (stale row); skip.
-			continue
-		}
-
-		if len(remaining) == 0 {
-			patch = append(patch, models.RRSet{Name: rr.Name, Type: rr.Type, ChangeType: "DELETE"})
-		} else {
-			// Re-embed MX/SRV priority into content (PowerDNS rejects a separate
-			// priority element in a PATCH) and re-apply FQDN/quote normalisation
-			// idempotently before sending the trimmed RRSet back.
-			for j := range remaining {
-				remaining[j].Content, remaining[j].Priority =
-					prepareRecordContent(rr.Type, remaining[j].Content, remaining[j].Priority)
-			}
-			patch = append(patch, models.RRSet{
-				Name:       rr.Name,
-				Type:       rr.Type,
-				TTL:        rr.TTL,
-				ChangeType: "REPLACE",
-				Records:    remaining,
-			})
-		}
-
-		removedSnapshot = append(removedSnapshot, models.RRSet{
-			Name:    rr.Name,
-			Type:    rr.Type,
-			TTL:     rr.TTL,
-			Records: removed,
-		})
-		totalRemoved += len(removed)
-	}
+	patch, removedSnapshot, totalRemoved := buildRemovalPatch(allRecords, removal)
 
 	if len(patch) > 0 {
 		if err := h.PDNS.PatchRecords(r.Context(), zoneID, patch); err != nil {

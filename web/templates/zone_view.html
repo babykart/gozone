@@ -93,6 +93,8 @@
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="name" value="{{.Name}}">
                         <input type="hidden" name="type" value="{{.Type}}">
+                        <input type="hidden" name="content" value="{{.Record.Content}}">
+                        <input type="hidden" name="priority" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                     </form>
                 </td>

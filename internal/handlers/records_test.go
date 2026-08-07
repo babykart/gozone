@@ -242,16 +242,13 @@ func TestUpdateRecord_Success(t *testing.T) {
 }
 
 func TestDeleteRecord_Success(t *testing.T) {
-	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPatch {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(models.Zone{
-			ID: "example.com", Name: "example.com", Kind: "Native",
-		})
-	})
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
 	defer pdnsSrv.Close()
 
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
@@ -259,7 +256,7 @@ func TestDeleteRecord_Success(t *testing.T) {
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
-	body := "name=www.example.com&type=A"
+	body := "name=www.example.com&type=A&content=1.2.3.4&priority=0"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -283,14 +280,19 @@ func TestDeleteRecord_Success(t *testing.T) {
 // PowerDNS.
 func TestDeleteRecord_NormalizesName(t *testing.T) {
 	var sent []models.RRSet
-	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
 	defer pdnsSrv.Close()
 
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
-	body := "name=www&type=A"
+	body := "name=www&type=A&content=1.2.3.4&priority=0"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -303,6 +305,154 @@ func TestDeleteRecord_NormalizesName(t *testing.T) {
 	}
 	if len(sent) != 1 || sent[0].Name != "www.example.com." {
 		t.Errorf("expected PDNS to receive name www.example.com., got %+v", sent)
+	}
+}
+
+// TestDeleteRecord_PartialRRSet is the core regression guard for the reported
+// bug: deleting one record out of an RRSet that holds several must REPLACE the
+// RRSet with the remaining records, not DELETE the whole RRSet.
+func TestDeleteRecord_PartialRRSet(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+			{Content: "5.6.7.8", Disabled: true},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// Delete only the 1.2.3.4 record -> REPLACE with 5.6.7.8 (Disabled preserved).
+	body := "name=www.example.com&type=A&content=1.2.3.4&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "REPLACE" {
+		t.Fatalf("expected 1 REPLACE RRSet, got %+v", sent)
+	}
+	if len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 remaining record, got %d", len(sent[0].Records))
+	}
+	if sent[0].Records[0].Content != "5.6.7.8" {
+		t.Errorf("expected remaining 5.6.7.8, got %q", sent[0].Records[0].Content)
+	}
+	if !sent[0].Records[0].Disabled {
+		t.Errorf("expected remaining record to keep Disabled=true")
+	}
+}
+
+// TestDeleteRecord_SoleRecordDeletesRRSet verifies that removing the last
+// remaining record of an RRSet falls back to a whole-RRSet DELETE.
+func TestDeleteRecord_SoleRecordDeletesRRSet(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www.example.com&type=A&content=1.2.3.4&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "DELETE" {
+		t.Fatalf("expected 1 DELETE RRSet, got %+v", sent)
+	}
+	if sent[0].Name != "www.example.com." || sent[0].Type != "A" {
+		t.Errorf("expected www.example.com. A DELETE, got %s %s", sent[0].Name, sent[0].Type)
+	}
+}
+
+// TestDeleteRecord_MXReEmbedsPriority mirrors the bulk-delete guard: after the
+// read path splits MX priority into a dedicated field, the remaining record
+// must be re-encoded with the priority embedded in its content for the PATCH
+// (PowerDNS rejects a separate priority element).
+func TestDeleteRecord_MXReEmbedsPriority(t *testing.T) {
+	var sent []models.RRSet
+	// Wire form as PDNS stores it: priority leads. ListRecords splits it.
+	list := []models.RRSet{
+		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "10 mail1.example.com.", Priority: 0, Disabled: false},
+			{Content: "20 mail2.example.com.", Priority: 0, Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// After read-path split the row carries content "mail2.example.com." /
+	// priority 20 — exactly what the form now forwards.
+	body := "name=example.com&type=MX&content=mail2.example.com.&priority=20"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].ChangeType != "REPLACE" || len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 REPLACE RRSet with 1 record, got %+v", sent)
+	}
+	if sent[0].Records[0].Content != "10 mail1.example.com." {
+		t.Errorf("expected remaining MX with priority embedded, got %q", sent[0].Records[0].Content)
+	}
+}
+
+// TestDeleteRecord_NotFound verifies that a content+priority tuple that matches
+// no existing record is rejected (400) instead of silently deleting siblings.
+func TestDeleteRecord_NotFound(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www.example.com&type=A&content=9.9.9.9&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing record, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 0 {
+		t.Errorf("expected no PATCH sent, got %+v", sent)
 	}
 }
 
