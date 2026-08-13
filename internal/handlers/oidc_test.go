@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -139,7 +140,7 @@ func TestIssueSSOSessionSetsCookieAndLogs(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	if err := h.issueSSOSession(w, r, user, "iss"); err != nil {
+	if err := h.issueSSOSession(w, r, user, "iss", ""); err != nil {
 		t.Fatalf("issueSSOSession: %v", err)
 	}
 	cookieFound := false
@@ -160,6 +161,50 @@ func TestIssueSSOSessionSetsCookieAndLogs(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("expected 1 sso_login activity log, got %d", n)
+	}
+}
+
+// TestIssueSSOSession_DropsHintWhenCookieTooLarge verifies the defensive guard
+// in issueSSOSession: an ID token large enough to push the session cookie past
+// the browser limit is dropped (and the token re-signed) so login never breaks
+// on an oversized IdP token — RP logout then degrades to no id_token_hint.
+func TestIssueSSOSession_DropsHintWhenCookieTooLarge(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-hint-guard!")
+	ctx := context.Background()
+	user, err := h.DB.CreateExternalUser(ctx, "bigtoken", "bigtoken@example.com", "", "", "user", "iss", "sub")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	// A token payload well over maxSessionCookieBytes.
+	hugeHint := "eyJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", maxSessionCookieBytes) + ".sig"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := h.issueSSOSession(w, r, user, "iss", hugeHint); err != nil {
+		t.Fatalf("issueSSOSession: %v", err)
+	}
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("expected a session cookie")
+	}
+	if len(cookie.Value) > maxSessionCookieBytes {
+		t.Errorf("session cookie %d bytes exceeds limit %d (hint not dropped)", len(cookie.Value), maxSessionCookieBytes)
+	}
+	// The hint must have been dropped so the cookie stays small.
+	claims, err := middleware.ParseToken(cookie.Value, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	if claims.IDTokenHint != "" {
+		t.Errorf("expected IDTokenHint dropped, got %d bytes", len(claims.IDTokenHint))
+	}
+	if claims.AuthProvider != "iss" {
+		t.Errorf("AuthProvider = %q, want iss", claims.AuthProvider)
 	}
 }
 
@@ -527,10 +572,12 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateExternalUser: %v", err)
 	}
-	// Establish an SSO session (sets the cookie + AuthProvider=gitea).
+	// Establish an SSO session (sets the cookie + AuthProvider=gitea). Carry an
+	// ID token hint so the Logout handler can forward id_token_hint to the IdP.
+	const idTokenHint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJycHVzZXIifQ.fake-signature"
 	w0 := httptest.NewRecorder()
 	r0 := httptest.NewRequest(http.MethodGet, "/", nil)
-	if err := h.issueSSOSession(w0, r0, user, "gitea"); err != nil {
+	if err := h.issueSSOSession(w0, r0, user, "gitea", idTokenHint); err != nil {
 		t.Fatalf("issueSSOSession: %v", err)
 	}
 	var sessionCookie *http.Cookie
@@ -562,6 +609,11 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	}
 	if !strings.Contains(loc, "post_logout_redirect_uri=") {
 		t.Errorf("expected post_logout_redirect_uri param, got %q", loc)
+	}
+	// id_token_hint MUST be forwarded so Keycloak-like providers can identify
+	// the session to end (the value is URL-escaped by appendQuery).
+	if !strings.Contains(loc, "id_token_hint="+url.QueryEscape(idTokenHint)) {
+		t.Errorf("expected id_token_hint param, got %q", loc)
 	}
 	// Token revoked.
 	var revoked int

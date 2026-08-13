@@ -381,7 +381,7 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
   ├── verifyStateToken: AES-GCM decrypt (confidentiality + auth tag) + exp + provider match (else sso_error)
   ├── oauth2.Exchange(code, code_verifier) → {access_token, id_token, …}
   ├── idToken.Verify: JWKS signature (TTL-cached key set, proactively refreshed every oidc.jwks_cache_ttl_minutes) + iss/aud/exp/nonce (coreos/go-oidc)
-  └── normalize claims → {sub, iss, email, email_verified, preferred_username, name, Raw}
+  └── normalize claims → {sub, iss, email, email_verified, preferred_username, name, id_token, Raw}
   │
   ▼ resolveSSOUser
   ├── FindUserByExternalIdentity(iss, sub)        ← existing link (external_identities)
@@ -392,7 +392,7 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
         └── groups (group_claim + group_mapping → add zone_group memberships, additive)
   │
   ▼ issueSSOSession
-  ├── GenerateSessionToken(user, JWTKey, duration, provider)  ← AuthProvider embedded for RP logout
+   ├── GenerateSessionToken(user, JWTKey, duration, provider, idTokenHint)  ← AuthProvider + id_token_hint for RP logout
   ├── Set-Cookie gozone_session=<JWT>; SameSite=Lax (SSO callback is cross-site)
   └── INSERT activity_logs (action='sso_login')
   └── redirect /dashboard
@@ -401,8 +401,10 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
 Logout (RP-initiated): when the session's JWT carries an OIDC `auth_provider`
 and the provider advertises `end_session_endpoint`, `POST /logout` clears the
 local session + revokes the JWT, then 302s to the IdP end-session URL with
-`post_logout_redirect_uri=https://<host>/login`. Local-login sessions skip the
-IdP round-trip.
+`post_logout_redirect_uri=https://<host>/login` and
+`id_token_hint=<ID token from login>` (carried in the session JWT; required by
+providers like Keycloak, dropped if it would overflow the ~4 KiB cookie limit).
+Local-login sessions skip the IdP round-trip.
 
 Session policy (applies to local **and** SSO sessions): when
 `auth.idle_timeout_minutes` / `auth.absolute_session_timeout_hours` are set, the

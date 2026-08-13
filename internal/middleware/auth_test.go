@@ -55,6 +55,46 @@ func TestGenerateAndParseToken(t *testing.T) {
 	}
 }
 
+// TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint verifies the
+// raw ID token is embedded as id_token_hint in an SSO session token and that a
+// transparent refresh keeps it, so RP-initiated logout can forward it even
+// after the access token has rotated.
+func TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint(t *testing.T) {
+	user := &models.User{ID: 7, Username: "ssouser", Role: "user"}
+	const hint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzc28ifQ.sig"
+
+	tok, err := GenerateSessionToken(user, testSecret, time.Hour, "keycloak", hint)
+	if err != nil {
+		t.Fatalf("GenerateSessionToken: %v", err)
+	}
+	claims, err := ParseToken(tok, testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	if claims.AuthProvider != "keycloak" {
+		t.Errorf("AuthProvider = %q, want keycloak", claims.AuthProvider)
+	}
+	if claims.IDTokenHint != hint {
+		t.Errorf("IDTokenHint = %q, want the raw ID token", claims.IDTokenHint)
+	}
+
+	// Refresh rotates the jti but must preserve provider, sid and hint.
+	refreshed, err := RefreshSessionToken(user, testSecret, time.Hour, claims.AuthProvider, claims.SessionID, claims.IDTokenHint)
+	if err != nil {
+		t.Fatalf("RefreshSessionToken: %v", err)
+	}
+	rcl, err := ParseToken(refreshed, testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken refreshed: %v", err)
+	}
+	if rcl.ID == claims.ID {
+		t.Error("refresh must mint a new jti")
+	}
+	if rcl.AuthProvider != "keycloak" || rcl.IDTokenHint != hint {
+		t.Errorf("refresh lost SSO claims: provider=%q hint-set=%v", rcl.AuthProvider, rcl.IDTokenHint == hint)
+	}
+}
+
 func TestParseToken_Revoked(t *testing.T) {
 	db := newTestAuthDB(t)
 	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9), so the user

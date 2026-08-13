@@ -33,6 +33,11 @@ type Claims struct {
 	PreferredUsername string
 	// Name mirrors "name", split into first/last for the local user record.
 	Name string
+	// IDToken is the raw ID token JWT received at login. It is retained so the
+	// handler can carry it in the session for RP-initiated logout: some IdPs
+	// (notably Keycloak) require id_token_hint at their end_session_endpoint to
+	// identify the SSO session to end.
+	IDToken string
 	// Raw is the full decoded ID-token claim set. It lets the handler apply
 	// config-driven claim mappings (role/group extraction along arbitrary
 	// dotted paths such as "realm_access.roles") without the oidc package
@@ -342,5 +347,9 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 	claims.EmailVerified = raw.EmailVerified
 	claims.PreferredUsername = raw.PreferredUsername
 	claims.Name = raw.Name
+	// Retain the verified ID token so the session can pass it as id_token_hint
+	// at RP-initiated logout (the verifier above already checked signature and
+	// iss/aud/exp/nonce).
+	claims.IDToken = rawIDToken
 	return claims, nil
 }

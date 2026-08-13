@@ -354,6 +354,11 @@ func TestHandleCallback_HappyPath(t *testing.T) {
 	if claims.Raw == nil {
 		t.Error("Raw claims must be populated for handler-side role/group mapping")
 	}
+	// The raw ID token must be retained so the session can forward it as
+	// id_token_hint at RP-initiated logout (required by Keycloak-like IdPs).
+	if claims.IDToken == "" || strings.Count(claims.IDToken, ".") != 2 {
+		t.Errorf("IDToken = %q, want a compact JWS", claims.IDToken)
+	}
 }
 
 // TestHandleCallback_NonceMismatch verifies the C-1 replay guard: an id_token

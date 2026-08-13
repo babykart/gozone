@@ -407,7 +407,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the auth provider + current token claims up front so we can route
 	// to RP-initiated logout after local cleanup.
-	var authProvider string
+	var authProvider, idTokenHint string
 	tokenString := ""
 	if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
 		tokenString = cookie.Value
@@ -421,6 +421,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if tokenString != "" {
 		if claims, err := middleware.ParseToken(tokenString, h.Cfg.Server.JWTKey); err == nil && claims.ID != "" {
 			authProvider = claims.AuthProvider
+			idTokenHint = claims.IDTokenHint
 			if user != nil {
 				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
 					logger.Error("failed to revoke token on logout", "user_id", user.ID, "error", err)
@@ -449,12 +450,17 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	// RP-initiated logout: when the session came from an OIDC provider that
 	// advertises an end_session_endpoint, redirect there so the IdP clears its
-	// own SSO cookie. post_logout_redirect_uri sends the browser back to /login.
-	// authProvider "" / "local" means a password login → no IdP round-trip.
+	// own SSO cookie. post_logout_redirect_uri sends the browser back to /login
+	// and id_token_hint lets the IdP identify the session to end (required by
+	// some providers, e.g. Keycloak). authProvider "" / "local" means a password
+	// login → no IdP round-trip.
 	if h.OIDC != nil && authProvider != "" && authProvider != "local" {
 		if endSession := h.OIDC.EndSessionURL(authProvider); endSession != "" {
 			postLogout := oidcPostLogoutURL(r)
 			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
+			if idTokenHint != "" {
+				target = appendQuery(target, "id_token_hint", idTokenHint)
+			}
 			if isAbsoluteHTTPURLAuth(target) {
 				// #nosec G710 -- target is the server-side discovered
 				// end_session_endpoint, validated as absolute http(s) here.
