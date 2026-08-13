@@ -173,9 +173,11 @@ type OIDCConfig struct {
 	// API tooling keep working). Default true.
 	AllowLocalLogin bool `yaml:"allow_local_login"`
 	// AutoProvision creates a local user automatically on first successful SSO
-	// login. When false, a matching local user (linked by email or a
-	// pre-existing external identity) is required; otherwise login is refused.
-	// Default false — operators must opt in to JIT provisioning.
+	// login. It gates ONLY the creation of new accounts: linking an existing
+	// local account by a verified email always works (email_verified must be
+	// true), as does a pre-existing external-identity link. When false and no
+	// matching existing account is found, login is refused. Default false —
+	// operators must opt in to JIT provisioning.
 	AutoProvision bool `yaml:"auto_provision"`
 	// DefaultRole is the role assigned to auto-provisioned users ("admin" or
 	// "user"). Default "user".

@@ -112,14 +112,15 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 // resolveSSOUser maps OIDC claims to a local GoZone user. Resolution order:
 //  1. existing external-identity link (issuer, subject) → user;
-//  2. when auto_provision is on and the email is verified, an existing local
-//     account with a matching email is linked to the identity and used;
+//  2. an existing local account with a matching *verified* email is linked to
+//     the identity and used — regardless of auto_provision, since linking an
+//     existing account is not provisioning;
 //  3. otherwise, when auto_provision is on, a new user is provisioned and
 //     linked atomically.
 //
 // Returns an error (causing an sso_error redirect) when no account can be
-// resolved — e.g. auto_provision disabled with no prior link, or a unique
-// collision that cannot be resolved deterministically.
+// resolved — e.g. no matching account with auto_provision disabled, or a
+// unique collision that cannot be resolved deterministically.
 func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*models.User, error) {
 	role := h.desiredRole(claims)
 	if user, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject); err != nil {
@@ -133,13 +134,11 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 		return user, nil
 	}
 
-	if !h.Cfg.OIDC.AutoProvision {
-		return nil, errors.New("no linked local account and auto_provision is disabled")
-	}
-
 	// Email linking: only when the provider asserts the email is verified, to
-	// avoid an attacker provisioning as a victim by asserting an unverified
-	// email at a compromised IdP.
+	// avoid an attacker taking over a victim's account by asserting an
+	// unverified email at a compromised IdP. This links an EXISTING local
+	// account and creates nothing, so it runs regardless of auto_provision —
+	// the flag below gates only the creation of NEW accounts.
 	if claims.EmailVerified && claims.Email != "" {
 		if existing, err := h.DB.FindUserByEmail(ctx, claims.Email); err != nil {
 			return nil, fmt.Errorf("lookup user by email: %w", err)
@@ -152,6 +151,10 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 			}
 			return existing, nil
 		}
+	}
+
+	if !h.Cfg.OIDC.AutoProvision {
+		return nil, errors.New("no linked local account and auto_provision is disabled")
 	}
 
 	first, last := splitName(claims.Name)

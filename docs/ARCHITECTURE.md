@@ -385,8 +385,8 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
   │
   ▼ resolveSSOUser
   ├── FindUserByExternalIdentity(iss, sub)        ← existing link (external_identities)
-  ├── else email link (only if email_verified):   FindUserByEmail → link identity
-  ├── else auto_provision (if enabled):           CreateExternalUser + link
+   ├── else email link (only if email_verified):   FindUserByEmail → link identity  (links EXISTING account, regardless of auto_provision)
+   ├── else auto_provision (if enabled):           CreateExternalUser + link        (gates only NEW account creation)
   └── syncSSOAttributes (IdP-authoritative):
         ├── role (role_claim + admin_role_values, last-admin guarded)
         └── groups (group_claim + group_mapping → add zone_group memberships, additive)

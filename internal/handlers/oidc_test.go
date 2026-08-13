@@ -192,6 +192,66 @@ func TestResolveSSOUser_NoProvisioning(t *testing.T) {
 	}
 }
 
+func TestResolveSSOUser_EmailLinkWithoutAutoProvision(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false
+	ctx := context.Background()
+	// Pre-create a local account whose verified email the IdP will assert.
+	_, err := h.DB.ExecContext(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"localuser", "local@example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "user")
+	if err != nil {
+		t.Fatalf("insert local user: %v", err)
+	}
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-new",
+		Email: "local@example.com", EmailVerified: true,
+	}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser with auto_provision=false and verified email: %v", err)
+	}
+	if got.Username != "localuser" || got.Email != "local@example.com" {
+		t.Errorf("expected email-linked local account localuser, got %+v", got)
+	}
+	// The identity must now be linked so a subsequent login resolves by link.
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if err != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", err)
+	}
+	if linked == nil || linked.ID != got.ID {
+		t.Errorf("identity not linked to user %d: %+v", got.ID, linked)
+	}
+}
+
+func TestResolveSSOUser_UnverifiedEmailNoAutoProvision(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false
+	ctx := context.Background()
+	_, err := h.DB.ExecContext(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"localuser2", "unverified@example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "user")
+	if err != nil {
+		t.Fatalf("insert local user: %v", err)
+	}
+	// Email matches but the IdP does not assert it is verified: linking must
+	// be refused (the email_verified gate is the takeover mitigation).
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-unverified",
+		Email: "unverified@example.com", EmailVerified: false,
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Error("expected error when email is unverified and auto_provision is disabled")
+	}
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if err != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", err)
+	}
+	if linked != nil {
+		t.Errorf("unverified email must not create an identity link, got %+v", linked)
+	}
+}
+
 func TestResolveSSOUser_EmailLinkVerified(t *testing.T) {
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true

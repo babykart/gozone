@@ -70,7 +70,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 |-----------|----------------------|---------|-------------|
 | `oidc.enabled` | `GOZONE_OIDC_ENABLED` | `false` | Master switch. |
 | `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` | Keep the username/password form alongside SSO buttons. `false` hides the form (the `POST /login` endpoint stays wired). |
-| `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. `false` requires a pre-linked account. |
+| `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. Gates only NEW account creation. When `false`, login still succeeds for a pre-existing external-identity link, or for an existing local account whose email matches a *verified* IdP email (`email_verified: true`). |
 | `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` | Role for auto-provisioned users (`admin` or `user`). |
 | `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` | Global fallback scopes (`openid` is always added). |
 | `oidc.role_claim` | `GOZONE_OIDC_ROLE_CLAIM` | *(none)* | Dotted claim path inspected for role mapping (e.g. `groups`, `realm_access.roles`). Empty disables role mapping. |
@@ -416,7 +416,7 @@ writes, so cross-instance idle lags by at most ~1 minute).
 |---------|--------------|-----|
 | `oidc provider discovery failed; skipping` at startup | `issuer_url` wrong, or the provider does not expose `/.well-known/openid-configuration` | `curl` the discovery URL; correct `issuer_url`; ensure the provider supports OIDC (GitHub user OAuth does not — see [GitHub](#github--not-directly-supported)). |
 | No "Sign in with…" button on `/login` | `oidc.enabled: false`, or no provider could be discovered | Check the startup log; at least one provider must discover successfully. |
-| `Single sign-on failed.` after the IdP redirect | `state` mismatch/expired, token verification failed, or the account is disabled / not provisioned | Verify clocks are in sync (JWT `exp`/`iat`); set `auto_provision: true` or pre-link the account; check the server log for the specific `oidc callback:` warning. |
+| `Single sign-on failed.` after the IdP redirect | `state` mismatch/expired, token verification failed, or the account is disabled / not provisioned | Verify clocks are in sync (JWT `exp`/`iat`); decode the ID token (e.g. `jwt.io`) and check `email_verified` is `true`; set `auto_provision: true`, pre-link the account, or ensure a local account exists with the matching verified email; check the server log for the specific `oidc callback:` warning. |
 | Provider returns an error about the redirect URI | The callback URL registered at the provider does not match `https://<host>/auth/oidc/<name>/callback` exactly (scheme/host/path) | Re-register the exact redirect URI; remember the `<name>` segment. |
 | RP-initiated logout does not reach the IdP | The session was a local login, or the provider has no `end_session_endpoint` | Check the discovery document for `end_session_endpoint`; SSO logout only fires for SSO sessions. |
 | Users not promoted to admin | `role_claim` / `admin_role_values` mismatch, or the claim is nested under a different path | Decode the ID token (e.g. `jwt.io`) to confirm the claim path and exact values (case-sensitive). |
