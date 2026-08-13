@@ -252,12 +252,17 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 				return
 			}
 
-			// Force-change gate: a user flagged must_change_password (admin reset
-			// or password expiry) may only reach the change-password page and
-			// logout until they set a new password. Everything else redirects to
-			// /change-password so the session cannot be used until the password
-			// is rotated.
-			if user.MustChangePassword && !mustChangeAllowedPath(r.URL.Path) {
+			// Force-change gate: a LOCAL-login user flagged must_change_password
+			// (admin reset or password expiry) may only reach the change-password
+			// page and logout until they set a new password. The gate is skipped
+			// for SSO-established sessions: the user authenticates against the
+			// IdP, so the local password (e.g. an admin-set temp password) is
+			// irrelevant to that session, and forcing its change would deadlock
+			// an SSO user on /change-password — they cannot complete it without
+			// the temp password. Local login still enforces the flag via the
+			// Login handler.
+			isSSOSession := claims.AuthProvider != "" && claims.AuthProvider != "local"
+			if user.MustChangePassword && !isSSOSession && !mustChangeAllowedPath(r.URL.Path) {
 				http.Redirect(w, r, "/change-password", http.StatusSeeOther)
 				return
 			}

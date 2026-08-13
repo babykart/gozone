@@ -405,6 +405,14 @@ state is persisted in the `sessions` table, so the limits are enforced
 **cluster-wide** across multiple GoZone instances (an in-memory cache coarsens
 writes, so cross-instance idle lags by at most ~1 minute).
 
+> **Forced password change vs SSO:** the `must_change_password` gate (set when an
+> admin resets a local password, or on `password.max_age_days` expiry) only
+> applies to **local-login** sessions. An SSO-established session bypasses it,
+> because the user is authenticated by the IdP and the local password (e.g. an
+> admin-set temp password) is irrelevant to that session — forcing its change
+> would deadlock an SSO user on `/change-password`. Local login still honours the
+> flag.
+
 > **Multi-instance note:** the session *lifetime* is cluster-wide, but the
 > OIDC `state` **single-use (anti-replay) store is in-process and per-node**.
 > In a multi-instance deployment a captured `state` replayed at a different
@@ -426,6 +434,7 @@ writes, so cross-instance idle lags by at most ~1 minute).
 | Provider returns an error about the redirect URI | The callback URL registered at the provider does not match `https://<host>/auth/oidc/<name>/callback` exactly (scheme/host/path) | Re-register the exact redirect URI; remember the `<name>` segment. |
 | RP-initiated logout does not reach the IdP | The session was a local login, or the provider has no `end_session_endpoint` | Check the discovery document for `end_session_endpoint`; SSO logout only fires for SSO sessions. |
 | Keycloak logout shows *"Paramètres manquants : id_token_hint"* | The session predates `id_token_hint` support, or the ID token was too large to carry (dropped) | Re-login so a fresh session carries the ID token; if it recurs, check the server log for the `dropping id_token_hint` warning (very large IdP tokens). |
+| SSO user can't reach the app after an admin set/reset their local password | `must_change_password` was set and trapped the session | Expected for *local* login; SSO sessions bypass the gate. If the user only uses SSO, no action is needed — the flag still applies if they log in locally. |
 | Users not promoted to admin | `role_claim` / `admin_role_values` mismatch, or the claim is nested under a different path | Decode the ID token (e.g. `jwt.io`) to confirm the claim path and exact values (case-sensitive). |
 
 ---

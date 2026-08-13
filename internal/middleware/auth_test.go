@@ -1049,6 +1049,44 @@ func TestAuth_MustChangePasswordGate(t *testing.T) {
 	}
 }
 
+// TestAuth_MustChangePasswordGate_SSOBypass verifies the force-change gate does
+// NOT trap an SSO-established session: an IdP-authenticated user flagged
+// must_change_password (e.g. an admin set a local password on the account) can
+// still reach protected pages, because the local password is irrelevant to an
+// SSO session and forcing its change would deadlock them on /change-password.
+func TestAuth_MustChangePasswordGate_SSOBypass(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "ssomustchange", "user", true)
+	if _, err := db.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", userID); err != nil {
+		t.Fatal(err)
+	}
+
+	// SSO session: AuthProvider set to a provider slug (not "" / "local").
+	token, err := GenerateSessionToken(&models.User{ID: userID, Username: "ssomustchange", Role: "user"}, testSecret, time.Hour, "keycloak", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if !reached {
+		t.Error("SSO session must reach the handler despite must_change_password")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 (gate bypassed for SSO), got %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
 // TestLoadUser_PopulatesMustChangePassword verifies loadUser reads the
 // must_change_password column into the user struct.
 func TestLoadUser_PopulatesMustChangePassword(t *testing.T) {
