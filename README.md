@@ -1,3 +1,5 @@
+
+
 # GoZone - PowerDNS Admin Interface in Go
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/licenses/MIT)
@@ -44,9 +46,9 @@ Open http://localhost:8080 — default admin credentials: `admin` / `admin`
 # Start with docker-compose (includes PowerDNS)
 make docker-up   # or: just docker-up
 
-# Or build and run standalone
+# Or build and run standalone (requires external PowerDNS; mount a volume to persist ./data/gozone.db)
 make docker-build   # or: just docker-build
-docker run -d -p 8080:8080 gozone
+docker run -d -p 8080:8080 -v "$(pwd)/data:/app/data" gozone
 ```
 
 ### Kubernetes (Helm)
