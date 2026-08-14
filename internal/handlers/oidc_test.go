@@ -297,6 +297,43 @@ func TestResolveSSOUser_UnverifiedEmailNoAutoProvision(t *testing.T) {
 	}
 }
 
+// TestResolveSSOUser_UnverifiedEmailLinksWhenRequireVerifiedEmailFalse verifies
+// that with oidc.require_verified_email=false, an existing local account is
+// linked by email even when the IdP does not assert email_verified — the
+// operator-opted-in path for trusted IdPs (e.g. Keycloak realms that do not
+// emit email_verified). Also covers the auto_provision=true case where the
+// unverified gate would otherwise cause an "account provisioning conflict".
+func TestResolveSSOUser_UnverifiedEmailLinksWhenRequireVerifiedEmailFalse(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true // even with provisioning on, the email match must link, not conflict.
+	h.Cfg.OIDC.RequireVerifiedEmail = false
+	ctx := context.Background()
+	_, err := h.DB.ExecContext(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"localuser3", "match@example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "user")
+	if err != nil {
+		t.Fatalf("insert local user: %v", err)
+	}
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-unverified-trusted",
+		Email: "match@example.com", EmailVerified: false,
+	}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser with require_verified_email=false: %v", err)
+	}
+	if got.Email != "match@example.com" || got.Username != "localuser3" {
+		t.Errorf("expected the existing local account, got %+v", got)
+	}
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if err != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", err)
+	}
+	if linked == nil || linked.ID != got.ID {
+		t.Errorf("identity not linked to user %d: %+v", got.ID, linked)
+	}
+}
+
 func TestResolveSSOUser_EmailLinkVerified(t *testing.T) {
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true

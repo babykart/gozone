@@ -179,6 +179,15 @@ type OIDCConfig struct {
 	// matching existing account is found, login is refused. Default false —
 	// operators must opt in to JIT provisioning.
 	AutoProvision bool `yaml:"auto_provision"`
+	// RequireVerifiedEmail gates email-based linking to an existing local
+	// account on the IdP's email_verified claim. Default true (secure): an
+	// existing account is linked by email only when the IdP asserts the email
+	// is verified, preventing account takeover via an unverified email asserted
+	// at a compromised IdP. Set to false when the IdP is trusted and its emails
+	// are authoritative but not necessarily marked verified (e.g. a Keycloak
+	// realm where email_verified is not emitted); linking then keys on the email
+	// alone. Has no effect when no local account matches the email.
+	RequireVerifiedEmail bool `yaml:"require_verified_email"`
 	// DefaultRole is the role assigned to auto-provisioned users ("admin" or
 	// "user"). Default "user".
 	DefaultRole string `yaml:"default_role"`
@@ -359,12 +368,13 @@ func DefaultConfig() *Config {
 			HistorySize:      0,
 		},
 		OIDC: OIDCConfig{
-			Enabled:             false,
-			AllowLocalLogin:     true,
-			AutoProvision:       false,
-			DefaultRole:         "user",
-			Scopes:              []string{"openid", "profile", "email"},
-			JWKSCacheTTLMinutes: 60,
+			Enabled:              false,
+			AllowLocalLogin:      true,
+			AutoProvision:        false,
+			RequireVerifiedEmail: true,
+			DefaultRole:          "user",
+			Scopes:               []string{"openid", "profile", "email"},
+			JWKSCacheTTLMinutes:  60,
 		},
 	}
 	// JWTKey/CSRFKey are intentionally NOT derived here: DefaultConfig has no
@@ -393,7 +403,7 @@ func DefaultConfig() *Config {
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
 // GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_OIDC_ENABLED,
 // GOZONE_OIDC_ALLOW_LOCAL_LOGIN, GOZONE_OIDC_AUTO_PROVISION,
-// GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
+// GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL, GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
 // GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
 // GOZONE_OIDC_PROVIDER_NAME,
 // GOZONE_OIDC_ISSUER_URL, GOZONE_OIDC_CLIENT_ID, GOZONE_OIDC_CLIENT_SECRET.
@@ -846,6 +856,7 @@ var envOverrides = []envOverride{
 	boolOverride{"GOZONE_OIDC_ENABLED", func(c *Config, b bool) { c.OIDC.Enabled = b }},
 	boolOverride{"GOZONE_OIDC_ALLOW_LOCAL_LOGIN", func(c *Config, b bool) { c.OIDC.AllowLocalLogin = b }},
 	boolOverride{"GOZONE_OIDC_AUTO_PROVISION", func(c *Config, b bool) { c.OIDC.AutoProvision = b }},
+	boolOverride{"GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL", func(c *Config, b bool) { c.OIDC.RequireVerifiedEmail = b }},
 	strOverride{"GOZONE_OIDC_DEFAULT_ROLE", func(c *Config, v string) { c.OIDC.DefaultRole = v }},
 	sliceOverride{"GOZONE_OIDC_SCOPES", func(c *Config, v []string) { c.OIDC.Scopes = v }},
 	strOverride{"GOZONE_OIDC_ROLE_CLAIM", func(c *Config, v string) { c.OIDC.RoleClaim = v }},

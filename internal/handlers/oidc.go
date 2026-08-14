@@ -120,9 +120,11 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 // resolveSSOUser maps OIDC claims to a local GoZone user. Resolution order:
 //  1. existing external-identity link (issuer, subject) → user;
-//  2. an existing local account with a matching *verified* email is linked to
-//     the identity and used — regardless of auto_provision, since linking an
-//     existing account is not provisioning;
+//  2. an existing local account with a matching email is linked to the identity
+//     and used — regardless of auto_provision, since linking an existing account
+//     is not provisioning. By default the email must be verified
+//     (oidc.require_verified_email, default true); setting that to false links
+//     on the email alone for trusted IdPs that do not assert email_verified;
 //  3. otherwise, when auto_provision is on, a new user is provisioned and
 //     linked atomically.
 //
@@ -142,12 +144,17 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 		return user, nil
 	}
 
-	// Email linking: only when the provider asserts the email is verified, to
+	// Email linking: link an EXISTING local account whose email matches the
+	// IdP claim. By default the provider must assert the email is verified, to
 	// avoid an attacker taking over a victim's account by asserting an
-	// unverified email at a compromised IdP. This links an EXISTING local
-	// account and creates nothing, so it runs regardless of auto_provision —
-	// the flag below gates only the creation of NEW accounts.
-	if claims.EmailVerified && claims.Email != "" {
+	// unverified email at a compromised IdP. Operators who trust their IdP and
+	// whose emails are authoritative but not marked verified (e.g. a Keycloak
+	// realm that does not emit email_verified) can set
+	// oidc.require_verified_email=false to link on the email alone. This links
+	// an existing account and creates nothing, so it runs regardless of
+	// auto_provision — the flag below gates only the creation of NEW accounts.
+	allowUnverifiedEmail := !h.Cfg.OIDC.RequireVerifiedEmail
+	if claims.Email != "" && (claims.EmailVerified || allowUnverifiedEmail) {
 		if existing, err := h.DB.FindUserByEmail(ctx, claims.Email); err != nil {
 			return nil, fmt.Errorf("lookup user by email: %w", err)
 		} else if existing != nil {

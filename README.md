@@ -119,6 +119,7 @@ Azure AD (any other name is treated as a generic OIDC provider).
 | `oidc.enabled` | `GOZONE_OIDC_ENABLED` | `false` |
 | `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` |
 | `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` |
+| `oidc.require_verified_email` | `GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL` | `true` |
 | `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` |
 | `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` |
 | `oidc.role_claim` | `GOZONE_OIDC_ROLE_CLAIM` | *(none)* |

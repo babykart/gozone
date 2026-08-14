@@ -20,6 +20,9 @@ func TestOIDCDefaultDisabled(t *testing.T) {
 	if cfg.OIDC.AutoProvision {
 		t.Error("auto_provision must default to false")
 	}
+	if !cfg.OIDC.RequireVerifiedEmail {
+		t.Error("require_verified_email must default to true (secure)")
+	}
 	if cfg.OIDC.DefaultRole != "user" {
 		t.Errorf("default_role default = %q, want user", cfg.OIDC.DefaultRole)
 	}
@@ -175,6 +178,7 @@ func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	t.Setenv("GOZONE_OIDC_ENABLED", "true")
 	t.Setenv("GOZONE_OIDC_ALLOW_LOCAL_LOGIN", "false")
 	t.Setenv("GOZONE_OIDC_AUTO_PROVISION", "yes")
+	t.Setenv("GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL", "false")
 	t.Setenv("GOZONE_OIDC_DEFAULT_ROLE", "user")
 	t.Setenv("GOZONE_OIDC_SCOPES", "openid,profile,email,groups")
 	t.Setenv("GOZONE_OIDC_PROVIDER_NAME", "gitea")
@@ -194,6 +198,9 @@ func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	}
 	if !cfg.OIDC.AutoProvision {
 		t.Error("AutoProvision should be true")
+	}
+	if cfg.OIDC.RequireVerifiedEmail {
+		t.Error("RequireVerifiedEmail should be false")
 	}
 	if len(cfg.OIDC.Scopes) != 4 || cfg.OIDC.Scopes[3] != "groups" {
 		t.Errorf("unexpected scopes: %v", cfg.OIDC.Scopes)
