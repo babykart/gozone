@@ -358,5 +358,15 @@ func (m *mysqlDialect) Migrations() []string {
 		// Distinct marker for an admin-imposed manual lock. See
 		// sqlite_dialect.go for the rationale.
 		`ALTER TABLE users ADD COLUMN manual_lock_until DATETIME NULL`,
+		// Server-side storage of SSO ID tokens for RP-initiated logout
+		// (id_token_hint). See sqlite_dialect.go for the rationale. MEDIUMTEXT
+		// because Keycloak tokens carrying many realm roles/groups can exceed
+		// the 64 KiB TEXT ceiling.
+		`CREATE TABLE IF NOT EXISTS sso_id_tokens (
+			session_id VARCHAR(64) PRIMARY KEY,
+			id_token MEDIUMTEXT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			KEY idx_sso_id_tokens_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

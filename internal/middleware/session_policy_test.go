@@ -17,7 +17,7 @@ import (
 // relative to the refresh threshold and the absolute cap.
 func issueTokenWithSID(t *testing.T, user *models.User, sid string, expIn time.Duration) string {
 	t.Helper()
-	tok, err := RefreshSessionToken(user, testSecret, expIn, "", sid, "")
+	tok, err := RefreshSessionToken(user, testSecret, expIn, "", sid)
 	if err != nil {
 		t.Fatalf("RefreshSessionToken: %v", err)
 	}

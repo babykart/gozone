@@ -391,20 +391,22 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
         ├── role (role_claim + admin_role_values, last-admin guarded)
         └── groups (group_claim + group_mapping → add zone_group memberships, additive)
   │
-  ▼ issueSSOSession
-   ├── GenerateSessionToken(user, JWTKey, duration, provider, idTokenHint)  ← AuthProvider + id_token_hint for RP logout
-  ├── Set-Cookie gozone_session=<JWT>; SameSite=Lax (SSO callback is cross-site)
-  └── INSERT activity_logs (action='sso_login')
-  └── redirect /dashboard
+   ▼ issueSSOSession
+   ├── GenerateSessionToken(user, JWTKey, duration, provider)  ← AuthProvider + fresh sid in the JWT
+   ├── UpsertSSOIDToken(sid, id_token, expires ≤ session max lifetime)  ← server-side id_token_hint for RP logout (cookie stays small)
+   ├── Set-Cookie gozone_session=<JWT>; SameSite=Lax (SSO callback is cross-site)
+   └── INSERT activity_logs (action='sso_login')
+   └── redirect /dashboard
 ```
 
 Logout (RP-initiated): when the session's JWT carries an OIDC `auth_provider`
 and the provider advertises `end_session_endpoint`, `POST /logout` clears the
 local session + revokes the JWT, then 302s to the IdP end-session URL with
 `post_logout_redirect_uri=https://<host>/login` and
-`id_token_hint=<ID token from login>` (carried in the session JWT; required by
-providers like Keycloak, dropped if it would overflow the ~4 KiB cookie limit).
-Local-login sessions skip the IdP round-trip.
+`id_token_hint=<ID token from login>` (stored server-side in `sso_id_tokens`
+keyed by the session ID — large Keycloak tokens would overflow the ~4 KiB
+cookie; the row is deleted after use and purged hourly; sessions from ≤ v0.16.7
+still read the legacy claim). Local-login sessions skip the IdP round-trip.
 
 Session policy (applies to local **and** SSO sessions): when
 `auth.idle_timeout_minutes` / `auth.absolute_session_timeout_hours` are set, the

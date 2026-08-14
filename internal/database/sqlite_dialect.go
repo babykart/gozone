@@ -281,5 +281,17 @@ func (s *sqliteDialect) Migrations() []string {
 		// to the same expiry so the existing locked_until-based display and
 		// UserLockStatus keep working unchanged.
 		`ALTER TABLE users ADD COLUMN manual_lock_until DATETIME`,
+		// Server-side storage of SSO ID tokens for RP-initiated logout
+		// (id_token_hint). Keycloak-like IdPs require the hint at their
+		// end_session_endpoint, but the ID token can exceed what fits in the
+		// ~4 KiB session cookie (many realm roles/groups), so the hint is
+		// persisted keyed by the session ID instead. Purged by expires_at
+		// (aligned with the session's maximum possible lifetime).
+		`CREATE TABLE IF NOT EXISTS sso_id_tokens (
+			session_id TEXT PRIMARY KEY,
+			id_token TEXT NOT NULL,
+			expires_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sso_id_tokens_expires_at ON sso_id_tokens(expires_at)`,
 	}
 }

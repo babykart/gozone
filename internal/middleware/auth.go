@@ -52,13 +52,16 @@ type Claims struct {
 	// SessionID is a stable identifier for the logical session, preserved
 	// across access-token refreshes (the jti rotates on every refresh; the
 	// SessionID does not). The SessionTracker keys idle/absolute bookkeeping
-	// by SessionID so a refreshed token keeps the same inactivity/age budget.
+	// by SessionID so a refreshed token keeps the same inactivity/age budget,
+	// and it is the key under which the SSO ID token (id_token_hint for
+	// RP-initiated logout) is stored server-side in the sso_id_tokens table.
 	SessionID string `json:"sid,omitempty"`
-	// IDTokenHint carries the raw OIDC ID token received at SSO login, so the
-	// Logout handler can pass it as id_token_hint to the IdP
-	// end_session_endpoint (RP-initiated logout). Some providers — notably
-	// Keycloak — require it to identify the SSO session to end. Empty for
-	// local sessions. Preserved across access-token refreshes.
+	// IDTokenHint is a LEGACY, read-only claim: sessions issued while the SSO
+	// ID token was carried inside the session JWT (≤ v0.16.7) embed it here,
+	// and the Logout handler still reads it as a fast path so those sessions
+	// keep working across the upgrade. New sessions never set it — the hint is
+	// stored server-side (see SessionID) because large IdP ID tokens (e.g.
+	// Keycloak with many realm roles) exceeded the ~4 KiB cookie limit.
 	IDTokenHint string `json:"id_token_hint,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -77,36 +80,36 @@ type Claims struct {
 //
 // Returns the encoded JWT string and any signing error.
 func GenerateToken(user *models.User, secret []byte, duration time.Duration) (string, error) {
-	return GenerateSessionToken(user, secret, duration, "", "")
+	return GenerateSessionToken(user, secret, duration, "")
 }
 
 // GenerateSessionToken creates a signed JWT token, recording the authentication
 // provider and minting a fresh SessionID. provider is "" / "local" for password
-// login, or the OIDC provider slug for single sign-on. idTokenHint is the raw
-// ID token to carry for RP-initiated logout (id_token_hint); pass "" for local
-// sessions. provider and idTokenHint are embedded in the claims so the Logout
-// handler can route SSO sessions to the IdP end_session_endpoint.
-func GenerateSessionToken(user *models.User, secret []byte, duration time.Duration, provider, idTokenHint string) (string, error) {
+// login, or the OIDC provider slug for single sign-on. The SessionID is the key
+// under which the caller persists the SSO ID token server-side for RP-initiated
+// logout (see database.UpsertSSOIDToken) — the token itself is never embedded in
+// the JWT, keeping the session cookie small regardless of IdP token size.
+func GenerateSessionToken(user *models.User, secret []byte, duration time.Duration, provider string) (string, error) {
 	sid, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
-	return generateSessionToken(user, secret, duration, provider, sid.String(), idTokenHint)
+	return generateSessionToken(user, secret, duration, provider, sid.String())
 }
 
 // RefreshSessionToken re-issues an access token for an existing session,
-// preserving the AuthProvider, SessionID and IDTokenHint so the refreshed
-// token keeps the same SSO logout routing and the same idle/absolute budget in
-// the tracker. The old jti MUST be revoked by the caller (the refresh path
-// does so).
-func RefreshSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID, idTokenHint string) (string, error) {
-	return generateSessionToken(user, secret, duration, provider, sessionID, idTokenHint)
+// preserving the AuthProvider and SessionID so the refreshed token keeps the
+// same SSO logout routing (server-side id_token_hint lookup keyed by sid) and
+// the same idle/absolute budget in the tracker. The old jti MUST be revoked by
+// the caller (the refresh path does so).
+func RefreshSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID string) (string, error) {
+	return generateSessionToken(user, secret, duration, provider, sessionID)
 }
 
 // generateSessionToken is the single signing primitive: a fresh jti is always
-// minted (so each access token is independently revocable), while the provider,
-// sessionID and idTokenHint are caller-supplied (preserved across refreshes).
-func generateSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID, idTokenHint string) (string, error) {
+// minted (so each access token is independently revocable), while the provider
+// and sessionID are caller-supplied (preserved across refreshes).
+func generateSessionToken(user *models.User, secret []byte, duration time.Duration, provider, sessionID string) (string, error) {
 	jti, err := uuid.NewRandom()
 	if err != nil {
 		return "", fmt.Errorf("generate jti: %w", err)
@@ -118,7 +121,6 @@ func generateSessionToken(user *models.User, secret []byte, duration time.Durati
 		Role:         user.Role,
 		AuthProvider: provider,
 		SessionID:    sessionID,
-		IDTokenHint:  idTokenHint,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
@@ -334,7 +336,7 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	if claims.ExpiresAt.Time.Sub(now) >= threshold {
 		return true
 	}
-	newToken, err := RefreshSessionToken(user, secret, accessTTL, claims.AuthProvider, sid, claims.IDTokenHint)
+	newToken, err := RefreshSessionToken(user, secret, accessTTL, claims.AuthProvider, sid)
 	if err != nil {
 		logger.Error("failed to refresh session token", "user_id", user.ID, "error", err)
 		return true

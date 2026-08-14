@@ -209,6 +209,18 @@ func runServer(cfg *config.Config) error {
 		})
 	}
 
+	// Periodically purge expired SSO ID-token hints (server-side id_token_hint
+	// storage for RP-initiated logout) so the sso_id_tokens table does not grow
+	// without bound. Runs once at startup, then hourly until shutdown; rows are
+	// also deleted at logout. Only needed when SSO is configured.
+	var stopSSOTokensPurge func()
+	if cfg.OIDC.Enabled {
+		stopSSOTokensPurge = startPeriodicJob(context.Background(), "purge expired SSO id tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
+			_, err := db.PurgeExpiredSSOIDTokens(ctx, time.Now().UTC())
+			return err
+		})
+	}
+
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
@@ -220,6 +232,9 @@ func runServer(cfg *config.Config) error {
 	}
 	if stopLoginAttemptsPurge != nil {
 		defer stopLoginAttemptsPurge()
+	}
+	if stopSSOTokensPurge != nil {
+		defer stopSSOTokensPurge()
 	}
 
 	// Parse templates

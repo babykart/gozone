@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -164,20 +166,21 @@ func TestIssueSSOSessionSetsCookieAndLogs(t *testing.T) {
 	}
 }
 
-// TestIssueSSOSession_DropsHintWhenCookieTooLarge verifies the defensive guard
-// in issueSSOSession: an ID token large enough to push the session cookie past
-// the browser limit is dropped (and the token re-signed) so login never breaks
-// on an oversized IdP token — RP logout then degrades to no id_token_hint.
-func TestIssueSSOSession_DropsHintWhenCookieTooLarge(t *testing.T) {
+// TestIssueSSOSession_StoresHintServerSide verifies that an oversized IdP ID
+// token (many realm roles/groups — bigger than the ~4 KiB browser cookie limit)
+// is stored server-side keyed by the session ID instead of being dropped: the
+// session cookie stays small, carries no id_token_hint claim, and the Logout
+// handler can still retrieve the hint for RP-initiated logout.
+func TestIssueSSOSession_StoresHintServerSide(t *testing.T) {
 	h := newTestHandler(t)
-	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-hint-guard!")
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-hint-store!")
 	ctx := context.Background()
 	user, err := h.DB.CreateExternalUser(ctx, "bigtoken", "bigtoken@example.com", "", "", "user", "iss", "sub")
 	if err != nil {
 		t.Fatalf("CreateExternalUser: %v", err)
 	}
-	// A token payload well over maxSessionCookieBytes.
-	hugeHint := "eyJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", maxSessionCookieBytes) + ".sig"
+	// A token payload well over the ~4 KiB cookie limit.
+	hugeHint := "eyJhbGciOiJSUzI1NiJ9." + strings.Repeat("A", 8192) + ".sig"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	if err := h.issueSSOSession(w, r, user, "iss", hugeHint); err != nil {
@@ -192,19 +195,28 @@ func TestIssueSSOSession_DropsHintWhenCookieTooLarge(t *testing.T) {
 	if cookie == nil {
 		t.Fatal("expected a session cookie")
 	}
-	if len(cookie.Value) > maxSessionCookieBytes {
-		t.Errorf("session cookie %d bytes exceeds limit %d (hint not dropped)", len(cookie.Value), maxSessionCookieBytes)
+	// The cookie must stay far below the browser limit: the hint is never
+	// embedded.
+	if len(cookie.Value) >= 4000 {
+		t.Errorf("session cookie %d bytes — hint leaked into the JWT", len(cookie.Value))
 	}
-	// The hint must have been dropped so the cookie stays small.
 	claims, err := middleware.ParseToken(cookie.Value, h.Cfg.Server.JWTKey)
 	if err != nil {
 		t.Fatalf("ParseToken: %v", err)
 	}
 	if claims.IDTokenHint != "" {
-		t.Errorf("expected IDTokenHint dropped, got %d bytes", len(claims.IDTokenHint))
+		t.Errorf("IDTokenHint must not be embedded, got %d bytes", len(claims.IDTokenHint))
 	}
 	if claims.AuthProvider != "iss" {
 		t.Errorf("AuthProvider = %q, want iss", claims.AuthProvider)
+	}
+	// The full hint must be retrievable server-side via the sid.
+	stored, err := h.DB.FindSSOIDToken(ctx, claims.SessionID)
+	if err != nil {
+		t.Fatalf("FindSSOIDToken: %v", err)
+	}
+	if stored != hugeHint {
+		t.Errorf("stored hint = %d bytes, want the full %d-byte ID token", len(stored), len(hugeHint))
 	}
 }
 
@@ -609,8 +621,9 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateExternalUser: %v", err)
 	}
-	// Establish an SSO session (sets the cookie + AuthProvider=gitea). Carry an
-	// ID token hint so the Logout handler can forward id_token_hint to the IdP.
+	// Establish an SSO session (sets the cookie + AuthProvider=gitea). The ID
+	// token hint is stored server-side keyed by the session's sid so the Logout
+	// handler can forward id_token_hint to the IdP.
 	const idTokenHint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJycHVzZXIifQ.fake-signature"
 	w0 := httptest.NewRecorder()
 	r0 := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -625,6 +638,13 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	}
 	if sessionCookie == nil {
 		t.Fatal("expected a session cookie")
+	}
+	sessionClaims, err := middleware.ParseToken(sessionCookie.Value, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("ParseToken session: %v", err)
+	}
+	if stored, err := h.DB.FindSSOIDToken(ctx, sessionClaims.SessionID); err != nil || stored != idTokenHint {
+		t.Fatalf("hint must be stored server-side before logout: stored-ok=%v err=%v", stored == idTokenHint, err)
 	}
 
 	// POST /logout with that cookie → must redirect to the IdP end_session URL.
@@ -652,11 +672,62 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	if !strings.Contains(loc, "id_token_hint="+url.QueryEscape(idTokenHint)) {
 		t.Errorf("expected id_token_hint param, got %q", loc)
 	}
+	// The consumed server-side hint must be deleted.
+	if stored, err := h.DB.FindSSOIDToken(ctx, sessionClaims.SessionID); err != nil || stored != "" {
+		t.Errorf("hint must be deleted after logout: stored=%d bytes err=%v", len(stored), err)
+	}
 	// Token revoked.
 	var revoked int
 	h.DB.QueryRow("SELECT COUNT(*) FROM revoked_tokens").Scan(&revoked)
 	if revoked != 1 {
 		t.Errorf("expected 1 revoked token, got %d", revoked)
+	}
+}
+
+// TestLogout_RPInitiated_LegacyHintInClaim covers sessions minted while the
+// ID token was embedded in the session JWT itself (≤ v0.16.7): the Logout
+// handler must still forward the claim-carried hint, with no server-side row.
+func TestLogout_RPInitiated_LegacyHintInClaim(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-legacy-hint!")
+	h.OIDC = &fakeSSOService{
+		providers:  []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+		endSession: "https://idp.example.com/logout",
+	}
+	const legacyHint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJsZWdhY3kifQ.legacy-signature"
+	// Mint a legacy-shaped token by hand: provider + hint in the claims, no
+	// sso_id_tokens row (that storage postdates these sessions).
+	legacyToken := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
+		UserID:       1,
+		Username:     "legacy",
+		Role:         "user",
+		AuthProvider: "gitea",
+		SessionID:    "legacy-sid",
+		IDTokenHint:  legacyHint,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "legacy-jti",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "gozone",
+		},
+	})
+	signed, err := legacyToken.SignedString(h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("sign legacy token: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: signed})
+	r.Host = "gozone.test"
+	h.Logout(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "id_token_hint="+url.QueryEscape(legacyHint)) {
+		t.Errorf("legacy claim-carried hint must be forwarded, got %q", loc)
 	}
 }
 

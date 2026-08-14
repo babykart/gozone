@@ -55,15 +55,15 @@ func TestGenerateAndParseToken(t *testing.T) {
 	}
 }
 
-// TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint verifies the
-// raw ID token is embedded as id_token_hint in an SSO session token and that a
-// transparent refresh keeps it, so RP-initiated logout can forward it even
-// after the access token has rotated.
-func TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint(t *testing.T) {
+// TestGenerateSessionToken_NoIDTokenHintEmbeddedAndRefreshPreservesSession
+// verifies that SSO session tokens never embed the ID token (it is stored
+// server-side keyed by sid — large IdP tokens would overflow the session
+// cookie), and that a transparent refresh preserves the provider and the sid
+// that keys the server-side id_token_hint lookup at RP-initiated logout.
+func TestGenerateSessionToken_NoIDTokenHintEmbeddedAndRefreshPreservesSession(t *testing.T) {
 	user := &models.User{ID: 7, Username: "ssouser", Role: "user"}
-	const hint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzc28ifQ.sig"
 
-	tok, err := GenerateSessionToken(user, testSecret, time.Hour, "keycloak", hint)
+	tok, err := GenerateSessionToken(user, testSecret, time.Hour, "keycloak")
 	if err != nil {
 		t.Fatalf("GenerateSessionToken: %v", err)
 	}
@@ -74,12 +74,16 @@ func TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint(t *testing.T
 	if claims.AuthProvider != "keycloak" {
 		t.Errorf("AuthProvider = %q, want keycloak", claims.AuthProvider)
 	}
-	if claims.IDTokenHint != hint {
-		t.Errorf("IDTokenHint = %q, want the raw ID token", claims.IDTokenHint)
+	if claims.SessionID == "" {
+		t.Error("SessionID must be set — it keys the server-side id_token_hint row")
+	}
+	if claims.IDTokenHint != "" {
+		t.Errorf("IDTokenHint must never be embedded in new tokens, got %d bytes", len(claims.IDTokenHint))
 	}
 
-	// Refresh rotates the jti but must preserve provider, sid and hint.
-	refreshed, err := RefreshSessionToken(user, testSecret, time.Hour, claims.AuthProvider, claims.SessionID, claims.IDTokenHint)
+	// Refresh rotates the jti but must preserve provider and sid (the logout
+	// hint lookup and the idle/absolute budget key on them).
+	refreshed, err := RefreshSessionToken(user, testSecret, time.Hour, claims.AuthProvider, claims.SessionID)
 	if err != nil {
 		t.Fatalf("RefreshSessionToken: %v", err)
 	}
@@ -90,8 +94,8 @@ func TestGenerateSessionToken_CarriesAndRefreshPreservesIDTokenHint(t *testing.T
 	if rcl.ID == claims.ID {
 		t.Error("refresh must mint a new jti")
 	}
-	if rcl.AuthProvider != "keycloak" || rcl.IDTokenHint != hint {
-		t.Errorf("refresh lost SSO claims: provider=%q hint-set=%v", rcl.AuthProvider, rcl.IDTokenHint == hint)
+	if rcl.AuthProvider != "keycloak" || rcl.SessionID != claims.SessionID {
+		t.Errorf("refresh lost SSO session claims: provider=%q sid-preserved=%v", rcl.AuthProvider, rcl.SessionID == claims.SessionID)
 	}
 }
 
@@ -1062,7 +1066,7 @@ func TestAuth_MustChangePasswordGate_SSOBypass(t *testing.T) {
 	}
 
 	// SSO session: AuthProvider set to a provider slug (not "" / "local").
-	token, err := GenerateSessionToken(&models.User{ID: userID, Username: "ssomustchange", Role: "user"}, testSecret, time.Hour, "keycloak", "")
+	token, err := GenerateSessionToken(&models.User{ID: userID, Username: "ssomustchange", Role: "user"}, testSecret, time.Hour, "keycloak")
 	if err != nil {
 		t.Fatal(err)
 	}

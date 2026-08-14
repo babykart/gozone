@@ -287,5 +287,13 @@ func (p *postgresDialect) Migrations() []string {
 		// Distinct marker for an admin-imposed manual lock. See
 		// sqlite_dialect.go for the rationale.
 		`ALTER TABLE users ADD COLUMN manual_lock_until TIMESTAMP`,
+		// Server-side storage of SSO ID tokens for RP-initiated logout
+		// (id_token_hint). See sqlite_dialect.go for the rationale.
+		`CREATE TABLE IF NOT EXISTS sso_id_tokens (
+			session_id VARCHAR(64) PRIMARY KEY,
+			id_token TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sso_id_tokens_expires_at ON sso_id_tokens(expires_at)`,
 	}
 }

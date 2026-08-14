@@ -23,14 +23,6 @@ import (
 // ceiling) used when deriving a login name from IdP claims.
 const ssoLoginMaxNameLen = 32
 
-// maxSessionCookieBytes bounds the signed session JWT length. Browsers cap a
-// single cookie at ~4 KiB; the ID token carried for RP logout (id_token_hint)
-// can be large on IdPs with many role/group claims, so when the signed token
-// would exceed this size the hint is dropped (see issueSSOSession) to avoid a
-// silently-rejected cookie that would break login entirely. 3600 leaves
-// headroom for the cookie name and attributes.
-const maxSessionCookieBytes = 3600
-
 // OIDCLogin starts the authorization-code flow for the requested provider,
 // redirecting the browser to the IdP authorization endpoint with a signed
 // state parameter (CSRF), a PKCE challenge (S256) and a nonce. The provider is
@@ -365,24 +357,37 @@ func (h *Handler) linkIdentity(ctx context.Context, userID int64, issuer, subjec
 // Login handler so SSO and local sessions are indistinguishable to the Auth
 // middleware. The provider name is embedded as AuthProvider so the Logout
 // handler can perform RP-initiated logout at the IdP end_session_endpoint.
-// idTokenHint (the raw IdP ID token) is carried in the session so the Logout
-// handler can pass it as id_token_hint, which providers like Keycloak require.
+// idTokenHint (the raw IdP ID token) is persisted server-side keyed by the
+// session ID so the Logout handler can pass it as id_token_hint, which
+// providers like Keycloak require — the token is never embedded in the JWT, so
+// an oversized IdP token (many realm roles/groups) cannot push the session
+// cookie past the browser's ~4 KiB limit.
 func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *models.User, provider, idTokenHint string) error {
 	duration := time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour
-	token, err := middleware.GenerateSessionToken(user, h.Cfg.Server.JWTKey, duration, provider, idTokenHint)
+	token, err := middleware.GenerateSessionToken(user, h.Cfg.Server.JWTKey, duration, provider)
 	if err != nil {
 		return fmt.Errorf("generate token: %w", err)
 	}
-	// The ID token rides in the cookie so RP logout can forward id_token_hint.
-	// A very large ID token (many IdP roles/groups) could push the session
-	// cookie past the browser's ~4 KiB limit and silently break login, so when
-	// that threshold is crossed drop the hint and re-sign: RP logout then falls
-	// back to no hint (graceful degradation) rather than a login outage.
-	if idTokenHint != "" && len(token) > maxSessionCookieBytes {
-		logger.Warn("oidc session: dropping id_token_hint to keep session cookie under browser limit; RP logout may lack id_token_hint",
-			"user_id", user.ID, "token_bytes", len(token))
-		if token, err = middleware.GenerateSessionToken(user, h.Cfg.Server.JWTKey, duration, provider, ""); err != nil {
-			return fmt.Errorf("generate token (no hint): %w", err)
+	// Persist the ID token for RP-initiated logout, keyed by the freshly
+	// minted sid (stable across access-token refreshes, so the hint survives
+	// the whole logical session). Retention must outlive every token the
+	// session may still hold: refresh slides the session up to the absolute
+	// cap when configured, so use the larger of the two plus a buffer.
+	// Best-effort: a failure degrades RP logout (no id_token_hint) but must
+	// not fail the login itself.
+	if idTokenHint != "" {
+		claims, err := middleware.ParseToken(token, h.Cfg.Server.JWTKey)
+		if err != nil {
+			return fmt.Errorf("parse minted token: %w", err)
+		}
+		retention := duration
+		if absolute := time.Duration(h.Cfg.Auth.AbsoluteSessionTimeoutHours) * time.Hour; absolute > retention {
+			retention = absolute
+		}
+		retention += 24 * time.Hour
+		if err := h.DB.UpsertSSOIDToken(r.Context(), claims.SessionID, idTokenHint, time.Now().UTC().Add(retention)); err != nil {
+			logger.Warn("oidc session: failed to store id_token_hint server-side; RP logout may lack id_token_hint",
+				"user_id", user.ID, "error", err)
 		}
 	}
 	// The SSO session cookie uses SameSite=Lax, intentionally diverging from

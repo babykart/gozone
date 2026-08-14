@@ -376,11 +376,14 @@ redirects the browser to the IdP's end-session URL with
 `id_token_hint=<the ID token issued at login>` so the IdP's SSO cookie is
 cleared too. The `id_token_hint` lets the IdP identify the exact session to
 end and is required by some providers (e.g. **Keycloak**, which otherwise
-returns *"Paramètres manquants : id_token_hint"*). The ID token is carried in
-the session cookie; if an unusually large IdP token would push the cookie past
-the browser's ~4 KiB limit, the hint is dropped (RP logout then degrades to no
-hint rather than breaking login). Local-login sessions skip the IdP round-trip
-and return to `/login` as before.
+returns *"Missing parameters : id_token_hint"*). The ID token is stored
+**server-side** in the `sso_id_tokens` table, keyed by the session ID —
+Keycloak tokens carrying many realm roles/groups can exceed what fits in the
+~4 KiB session cookie, so the hint never rides in the cookie. The row is
+deleted at logout and expired rows are purged hourly (the retention covers the
+session's maximum possible lifetime, including refresh up to the absolute
+cap). Local-login sessions skip the IdP round-trip and return to `/login` as
+before.
 
 Register `https://<host>/login` as a allowed *post-logout redirect URI* at
 providers that require it (e.g. Authentik, Keycloak).
@@ -435,7 +438,7 @@ writes, so cross-instance idle lags by at most ~1 minute).
 | `account provisioning conflict; ask an administrator to link your account` | `auto_provision: true` but the IdP did not assert `email_verified: true`, so the matching existing account was not linked and provisioning collided with it | Preferred: verify the user's email in the IdP realm so `email_verified: true` is emitted. Or, for a trusted IdP, set `oidc.require_verified_email: false` to link on the email alone. (This message implies `auto_provision` is on at runtime.) |
 | Provider returns an error about the redirect URI | The callback URL registered at the provider does not match `https://<host>/auth/oidc/<name>/callback` exactly (scheme/host/path) | Re-register the exact redirect URI; remember the `<name>` segment. |
 | RP-initiated logout does not reach the IdP | The session was a local login, or the provider has no `end_session_endpoint` | Check the discovery document for `end_session_endpoint`; SSO logout only fires for SSO sessions. |
-| Keycloak logout shows *"Paramètres manquants : id_token_hint"* | The session predates `id_token_hint` support, or the ID token was too large to carry (dropped) | Re-login so a fresh session carries the ID token; if it recurs, check the server log for the `dropping id_token_hint` warning (very large IdP tokens). |
+| Keycloak logout shows *"Paramètres manquants : id_token_hint"* | The session predates server-side hint storage (≤ v0.16.7), or the server-side write failed at login | Re-login so a fresh session stores the ID token server-side; check the server log for the `failed to store id_token_hint` warning. |
 | SSO user can't reach the app after an admin set/reset their local password | `must_change_password` was set and trapped the session | Expected for *local* login; SSO sessions bypass the gate. If the user only uses SSO, no action is needed — the flag still applies if they log in locally. |
 | Users not promoted to admin | `role_claim` / `admin_role_values` mismatch, or the claim is nested under a different path | Decode the ID token (e.g. `jwt.io`) to confirm the claim path and exact values (case-sensitive). |
 

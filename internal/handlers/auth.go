@@ -407,7 +407,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the auth provider + current token claims up front so we can route
 	// to RP-initiated logout after local cleanup.
-	var authProvider, idTokenHint string
+	var authProvider, idTokenHint, sessionID string
 	tokenString := ""
 	if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
 		tokenString = cookie.Value
@@ -421,6 +421,9 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if tokenString != "" {
 		if claims, err := middleware.ParseToken(tokenString, h.Cfg.Server.JWTKey); err == nil && claims.ID != "" {
 			authProvider = claims.AuthProvider
+			sessionID = claims.SessionID
+			// Fast path: sessions issued by ≤ v0.16.7 embedded the hint in
+			// the JWT itself. Newer sessions store it server-side.
 			idTokenHint = claims.IDTokenHint
 			if user != nil {
 				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
@@ -456,18 +459,34 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	// login → no IdP round-trip.
 	if h.OIDC != nil && authProvider != "" && authProvider != "local" {
 		if endSession := h.OIDC.EndSessionURL(authProvider); endSession != "" {
+			// The hint is embedded in the JWT only for legacy (≤ v0.16.7)
+			// sessions; current sessions store it server-side keyed by sid
+			// (large IdP ID tokens would overflow the session cookie).
+			if idTokenHint == "" && sessionID != "" {
+				if stored, err := h.DB.FindSSOIDToken(ctx, sessionID); err != nil {
+					logger.Error("oidc logout: failed to load stored id_token_hint",
+						"provider", authProvider, "error", err)
+				} else {
+					idTokenHint = stored
+				}
+			}
 			postLogout := oidcPostLogoutURL(r)
 			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
 			if idTokenHint != "" {
 				target = appendQuery(target, "id_token_hint", idTokenHint)
+				// The hint is single-purpose: drop it once consumed.
+				if sessionID != "" {
+					if err := h.DB.DeleteSSOIDToken(ctx, sessionID); err != nil {
+						logger.Error("oidc logout: failed to delete stored id_token_hint",
+							"provider", authProvider, "error", err)
+					}
+				}
 			} else {
-				// No id_token_hint available: either the session was opened
-				// before id_token_hint was carried in the session JWT (a
-				// login before this was deployed), or the hint was dropped at
-				// login because the IdP ID token was too large for the cookie
-				// (see the "dropping id_token_hint" warning). Strict providers
-				// (Keycloak) reject the logout without it — re-login picks up a
-				// fresh session that carries the hint.
+				// No id_token_hint available: either the session predates hint
+				// storage, or the server-side write failed at login (see the
+				// "failed to store id_token_hint" warning). Strict providers
+				// (Keycloak) reject the logout without it — a re-login mints a
+				// session whose hint is stored correctly.
 				logger.Warn("oidc logout: SSO session has no id_token_hint; provider may reject the logout",
 					"provider", authProvider)
 			}
