@@ -460,6 +460,16 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
 			if idTokenHint != "" {
 				target = appendQuery(target, "id_token_hint", idTokenHint)
+			} else {
+				// No id_token_hint available: either the session was opened
+				// before id_token_hint was carried in the session JWT (a
+				// login before this was deployed), or the hint was dropped at
+				// login because the IdP ID token was too large for the cookie
+				// (see the "dropping id_token_hint" warning). Strict providers
+				// (Keycloak) reject the logout without it — re-login picks up a
+				// fresh session that carries the hint.
+				logger.Warn("oidc logout: SSO session has no id_token_hint; provider may reject the logout",
+					"provider", authProvider)
 			}
 			if isAbsoluteHTTPURLAuth(target) {
 				// #nosec G710 -- target is the server-side discovered
