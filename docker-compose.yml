@@ -21,7 +21,9 @@ services:
       - gozone_data:/app/data
     restart: unless-stopped
     # No healthcheck override: the image carries its own (Dockerfile HEALTHCHECK
-    # probing /health/ready), inherited here (REVIEW.md B-10).
+    # probing /health/live — liveness only, no dependency checks), inherited
+    # here. Use an orchestrator-level readiness probe on /health/ready when
+    # load or rollout decisions should account for DB + PowerDNS reachability.
 
   powerdns:
     # Pinned by immutable digest for reproducible builds (c12). To update,

@@ -43,9 +43,14 @@ USER nonroot
 EXPOSE 8080
 
 # Image-level healthcheck so orchestrators that read only the image (plain
-# `docker run`, Kubernetes, Nomad) benefit, not just docker-compose. The
-# readiness endpoint returns 200 only when DB + PowerDNS are reachable.
-# busybox wget ships with alpine (REVIEW.md B-10).
+# `docker run`, Kubernetes, Nomad) benefit, not just docker-compose. It probes
+# the LIVENESS endpoint: the process is up and serving HTTP. Dependency health
+# (database, PowerDNS) is deliberately excluded — an unreachable PowerDNS or a
+# database hiccup must not mark the container unhealthy and trigger restart
+# cascades across a fleet. Orchestrators that want dependency-aware gating
+# (load-balancer removal, rollout checks) should probe /health/ready, which
+# returns 503 when DB or PowerDNS is unreachable. busybox wget ships with
+# alpine.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q --spider http://localhost:8080/health/live || exit 1
 

@@ -612,7 +612,7 @@ Every state-changing POST in the Web UI requires a gorilla/csrf token. The CSRF 
 
 ### PowerDNS as Source of Truth
 
-GoZone never stores DNS zones/records locally. All zone data is fetched live from the PowerDNS API. A `cachedClient` (defined in `internal/pdns/cached.go`, wrapping `*Client` via the `ZoneService` interface) provides a read-through TTL cache for frequently-read endpoints (zones, zone info, statistics, server info, TSIG keys) and is invalidated on record mutations. If PowerDNS is unreachable, the web UI shows errors. The health check endpoint (`/health/ready`) verifies this connectivity directly, bypassing the cache.
+GoZone never stores DNS zones/records locally. All zone data is fetched live from the PowerDNS API. A `cachedClient` (defined in `internal/pdns/cached.go`, wrapping `*Client` via the `ZoneService` interface) provides a read-through TTL cache for frequently-read endpoints (zones, zone info, statistics, server info, TSIG keys) and is invalidated on record mutations. If PowerDNS is unreachable, the web UI shows errors. The readiness endpoint (`/health/ready`) verifies this connectivity directly, bypassing the cache, and returns 503 while either dependency is down; the Docker image's HEALTHCHECK intentionally probes only liveness (`/health/live`) so an unreachable PowerDNS does not restart the container.
 
 ### Activity Logging
 
