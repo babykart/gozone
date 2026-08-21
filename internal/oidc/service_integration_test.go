@@ -36,10 +36,17 @@ type fakeIdP struct {
 	issuer   string
 	clientID string
 
-	mu        sync.Mutex
-	nonce     string // nonce embedded in the minted id_token
-	omitToken bool   // when true, /token omits the id_token
-	tokenFail bool   // when true, /token returns 500
+	mu             sync.Mutex
+	nonce          string   // nonce embedded in the minted id_token
+	omitToken      bool     // when true, /token omits the id_token
+	tokenFail      bool     // when true, /token returns 500
+	advertisedAlgs []string // when non-nil, overrides the discovery signing-alg list
+}
+
+func (idp *fakeIdP) setAdvertisedAlgs(algs []string) {
+	idp.mu.Lock()
+	idp.advertisedAlgs = algs
+	idp.mu.Unlock()
 }
 
 func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
@@ -82,13 +89,17 @@ func (idp *fakeIdP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (idp *fakeIdP) handleDiscovery(w http.ResponseWriter) {
+	algs := idp.advertisedAlgs
+	if algs == nil {
+		algs = []string{"RS256"}
+	}
 	doc := map[string]interface{}{
 		"issuer":                                idp.issuer,
 		"authorization_endpoint":                idp.issuer + "/auth",
 		"token_endpoint":                        idp.issuer + "/token",
 		"jwks_uri":                              idp.issuer + "/jwks",
 		"end_session_endpoint":                  idp.issuer + "/logout",
-		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"id_token_signing_alg_values_supported": algs,
 		"response_types_supported":              []string{"code"},
 		"subject_types_supported":               []string{"public"},
 	}
@@ -473,5 +484,55 @@ func TestNewService_ProvidersConfigurationOrder(t *testing.T) {
 			names[i] = p.Name
 		}
 		t.Errorf("Providers after failed discovery = %v, want [zeta mid] in configuration order", names)
+	}
+}
+
+// TestNewService_UnsafeAdvertisedAlgsKeptOutOfVerifier exercises the verifier
+// crypto policy end-to-end through the fake IdP. The discovery document
+// advertises a mix of RS256 (what the IdP actually signs with) and unsafe
+// algorithms (HS256, none): the verifier must still accept the RS256-signed
+// token — the safe advertisement survives the intersection — while the unsafe
+// entries never reach SupportedSigningAlgs (locked at the unit level by
+// TestVerifierSupportedAlgs).
+func TestNewService_UnsafeAdvertisedAlgsKeptOutOfVerifier(t *testing.T) {
+	idp := newFakeIdP(t, "gozone-client")
+	idp.setAdvertisedAlgs([]string{"RS256", "HS256", "none"})
+	svc := newIntegrationService(t, idp, "fake")
+	callbackURL := idp.issuer + "/auth/oidc/fake/callback"
+	state := extractState(t, mustAuthCodeURL(t, svc, "fake", callbackURL))
+	idp.setNonce(stateNonce(t, state))
+
+	claims, err := svc.HandleCallback(context.Background(), "fake", "code", state, callbackURL)
+	if err != nil {
+		t.Fatalf("RS256 token must still verify when the advertisement mixes safe and unsafe algs: %v", err)
+	}
+	if claims.Subject == "" {
+		t.Error("expected non-empty subject claims")
+	}
+}
+
+// TestNewService_UnsafeOnlyAdvertisementFallsBackToAcceptedSet exercises the
+// fallback: a discovery document that advertises only unsafe algorithms must
+// not import them into the verifier's policy. The full accepted set is used
+// instead, so the RS256-signed token still verifies — the advertisement can
+// only ever narrow the accepted set, never widen it. (Before the
+// intersection, the raw ["HS256"] advertisement was copied into
+// SupportedSigningAlgs and the correctly RS256-signed token was rejected for
+// the wrong reason, breaking login against a misconfigured-but-correctly-
+// signing IdP while offering no real protection.)
+func TestNewService_UnsafeOnlyAdvertisementFallsBackToAcceptedSet(t *testing.T) {
+	idp := newFakeIdP(t, "gozone-client")
+	idp.setAdvertisedAlgs([]string{"HS256"})
+	svc := newIntegrationService(t, idp, "fake")
+	callbackURL := idp.issuer + "/auth/oidc/fake/callback"
+	state := extractState(t, mustAuthCodeURL(t, svc, "fake", callbackURL))
+	idp.setNonce(stateNonce(t, state))
+
+	claims, err := svc.HandleCallback(context.Background(), "fake", "code", state, callbackURL)
+	if err != nil {
+		t.Fatalf("RS256 token must verify when the unsafe-only advertisement falls back to the accepted set: %v", err)
+	}
+	if claims.Subject == "" {
+		t.Error("expected non-empty subject claims")
 	}
 }

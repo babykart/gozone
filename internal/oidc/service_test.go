@@ -288,6 +288,51 @@ func TestEndSessionURL(t *testing.T) {
 	}
 }
 
+// TestVerifierSupportedAlgs verifies that the verifier's signing-algorithm
+// policy is the intersection of what the IdP advertises and what this package
+// accepts — never the advertised list wholesale. The discovery document comes
+// from an external party; importing its algorithm list unfiltered would let a
+// compromised or misconfigured IdP dictate GoZone's crypto policy.
+func TestVerifierSupportedAlgs(t *testing.T) {
+	// Mixed advertisement: safe asymmetric algs interleaved with unsafe ones
+	// (HS* are symmetric, "none" means unsigned). Only the safe ones survive,
+	// in discovery order.
+	mixed := verifierSupportedAlgs([]string{"RS256", "HS256", "none", "ES384", "HS512"})
+	want := []string{"RS256", "ES384"}
+	if len(mixed) != len(want) {
+		t.Fatalf("verifierSupportedAlgs(mixed) = %v, want %v", mixed, want)
+	}
+	for i := range want {
+		if mixed[i] != want[i] {
+			t.Errorf("verifierSupportedAlgs(mixed)[%d] = %q, want %q (full: %v)", i, mixed[i], want[i], mixed)
+		}
+	}
+
+	// Nothing advertised is acceptable: the full accepted set is returned
+	// rather than an empty slice. go-oidc copies the provider's unfiltered
+	// discovered algorithms when SupportedSigningAlgs is empty, so an empty
+	// result would silently reintroduce the unfiltered list.
+	unsafe := verifierSupportedAlgs([]string{"HS256", "none", "HS512"})
+	if len(unsafe) != len(oidcSigAlgs) {
+		t.Fatalf("verifierSupportedAlgs(unsafe-only) returned %d algs (%v), want the full accepted set of %d", len(unsafe), unsafe, len(oidcSigAlgs))
+	}
+	unsafeSet := make(map[string]bool, len(unsafe))
+	for _, a := range unsafe {
+		unsafeSet[a] = true
+	}
+	for _, a := range oidcSigAlgs {
+		if !unsafeSet[string(a)] {
+			t.Errorf("fallback set is missing accepted alg %q", a)
+		}
+	}
+
+	// Field absent from discovery: nil in, nil out — the caller leaves the
+	// library default in place.
+	if got := verifierSupportedAlgs(nil); got != nil {
+		t.Errorf("verifierSupportedAlgs(nil) = %v, want nil", got)
+	}
+}
+
 // TestService_CloseNilSafe verifies the nil-receiver guard on Close.
 func TestService_CloseNilSafe(t *testing.T) {
 	var nilSvc *Service

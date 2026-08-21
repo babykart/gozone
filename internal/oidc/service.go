@@ -192,6 +192,42 @@ func (s *Service) Providers() []*ProviderInstance {
 	return out
 }
 
+// verifierSupportedAlgs intersects the IdP-advertised ID-token signing
+// algorithms with the set this package accepts, preserving discovery order.
+//
+// The discovery document is served by an external party and its advertised
+// list directly shapes the verifier's crypto policy (go-oidc rejects a token
+// whose alg is absent from SupportedSigningAlgs), so the list must never be
+// imported wholesale: a compromised or misconfigured IdP could otherwise
+// dictate which algorithms GoZone accepts. Advertised-but-unsafe entries
+// (symmetric HMAC variants, "none", exotic algs) are dropped.
+//
+// When nothing advertised is acceptable the full accepted set is returned
+// instead of an empty slice: go-oidc silently copies the provider's unfiltered
+// discovered algorithms when SupportedSigningAlgs is left empty, so an empty
+// result would reintroduce the very list this filter removes. With the full
+// set, verification fails closed unless the IdP signs with an accepted
+// asymmetric algorithm. A nil input (field absent from discovery) returns nil
+// so the caller leaves the library default in place.
+func verifierSupportedAlgs(advertised []string) []string {
+	if len(advertised) == 0 {
+		return nil
+	}
+	kept := make([]string, 0, len(advertised))
+	for _, alg := range advertised {
+		if supportedAlg(alg) {
+			kept = append(kept, alg)
+		}
+	}
+	if len(kept) == 0 {
+		kept = make([]string, 0, len(oidcSigAlgs))
+		for _, a := range oidcSigAlgs {
+			kept = append(kept, string(a))
+		}
+	}
+	return kept
+}
+
 // discover performs OIDC discovery for a single provider config and builds the
 // oauth2 client + ID-token verifier. jwksTTL controls the signing-key cache
 // TTL (proactive background refresh); 0 disables proactive refresh.
@@ -231,8 +267,8 @@ func discover(ctx context.Context, pc *config.OIDCProviderConfig, globalScopes [
 	var verifier *oidc.IDTokenVerifier
 	var keySet *cachedKeySet
 	vcfg := &oidc.Config{ClientID: pc.ClientID}
-	if len(meta.IDTokenSigningAlgValuesSupported) > 0 {
-		vcfg.SupportedSigningAlgs = meta.IDTokenSigningAlgValuesSupported
+	if algs := verifierSupportedAlgs(meta.IDTokenSigningAlgValuesSupported); algs != nil {
+		vcfg.SupportedSigningAlgs = algs
 	}
 	if meta.JWKSURL != "" {
 		keySet = newCachedKeySet(meta.JWKSURL, jwksTTL)
