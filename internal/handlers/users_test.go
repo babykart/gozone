@@ -3,12 +3,15 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -1302,5 +1305,48 @@ func TestBulkDeleteUsers_NoSelection(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
+	}
+}
+
+// TestCreateUser_PasswordTooLongGetsClearMessage verifies that a passphrase
+// longer than 72 bytes is rejected by the password policy with an actionable
+// byte-based message. Previously no upper bound existed: bcrypt refused the
+// hash and the admin saw an opaque "Failed to hash password" that read like a
+// server fault — for exactly the long passphrases a password manager produces.
+func TestCreateUser_PasswordTooLongGetsClearMessage(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Password.MaxLength = 72
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	tooLong := strings.Repeat("a", 73)
+	body := "username=longuser&email=long@example.com&password=" + tooLong + "&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Fatal("73-byte password must not create the user")
+	}
+	page := w.Body.String()
+	if !strings.Contains(page, "at most 72 bytes") {
+		t.Errorf("expected the byte-based validation message, got: %s", page)
+	}
+	if strings.Contains(page, "Failed to hash password") {
+		t.Error("the opaque hashing failure must not be the surfaced message")
+	}
+}
+
+// TestPasswordHashErrorMessage pins the bcrypt sentinel translation: an
+// over-long password reads as an actionable limit, anything else stays the
+// generic hashing failure.
+func TestPasswordHashErrorMessage(t *testing.T) {
+	if got := passwordHashErrorMessage(bcrypt.ErrPasswordTooLong); !strings.Contains(got, "72 bytes") {
+		t.Errorf("ErrPasswordTooLong message = %q, want it to mention the 72-byte limit", got)
+	}
+	if got := passwordHashErrorMessage(errors.New("some other failure")); got != "Failed to hash password" {
+		t.Errorf("unrelated error message = %q, want the generic failure", got)
 	}
 }

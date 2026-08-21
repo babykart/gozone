@@ -824,6 +824,13 @@ type PasswordPolicy struct {
 	RequireLowercase bool
 	RequireDigit     bool
 	RequireSpecial   bool
+	// MaxLength is the maximum password length in BYTES (0 disables the
+	// check). Note the unit difference with MinLength, which counts runes:
+	// bcrypt silently truncates at, and its Go implementation rejects
+	// passwords beyond, 72 bytes, so the byte count is the one that matters
+	// for hashing. A multi-byte passphrase can exceed the cap while still
+	// being under it in characters.
+	MaxLength int
 }
 
 // ValidatePassword checks a candidate password against the policy. A rule with
@@ -837,6 +844,13 @@ func ValidatePassword(password string, p PasswordPolicy) error {
 	}
 	if p.MinLength > 0 && utf8.RuneCountInString(password) < p.MinLength {
 		return fmt.Errorf("password must be at least %d characters long", p.MinLength)
+	}
+	// Enforced in bytes (not runes, unlike MinLength) to mirror bcrypt's own
+	// limit: hashing rejects anything longer than 72 bytes. Checking here
+	// turns what would surface as an opaque "failed to hash" error into an
+	// actionable validation message at every password-set site.
+	if p.MaxLength > 0 && len(password) > p.MaxLength {
+		return fmt.Errorf("password must be at most %d bytes long (got %d)", p.MaxLength, len(password))
 	}
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
 	for _, r := range password {

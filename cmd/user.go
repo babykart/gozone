@@ -228,6 +228,13 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), cfg.Auth.BcryptCost)
 	if err != nil {
+		// A dedicated message for over-72-byte passphrases: the policy
+		// normally rejects them first (max_length defaults to bcrypt's
+		// limit), but a relaxed policy must not turn a predictable input
+		// condition into an opaque hashing failure.
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			return fmt.Errorf("password is too long: bcrypt accepts at most 72 bytes")
+		}
 		return fmt.Errorf("hash password: %w", err)
 	}
 

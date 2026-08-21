@@ -952,6 +952,21 @@ func TestLoad_RejectsBadPasswordBounds(t *testing.T) {
 		t.Fatal("expected error for password.min_length > 256, got nil")
 	}
 	t.Setenv("GOZONE_PASSWORD_MIN_LENGTH", "") // clear
+	// max_length bounds: negative or above bcrypt's 72-byte hard limit are
+	// rejected at load time (bcrypt would fail the hash regardless).
+	t.Setenv("GOZONE_PASSWORD_MAX_LENGTH", "-1")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for negative password.max_length, got nil")
+	}
+	t.Setenv("GOZONE_PASSWORD_MAX_LENGTH", "128")
+	if _, err := Load(""); err == nil {
+		t.Fatal("expected error for password.max_length above 72, got nil")
+	}
+	t.Setenv("GOZONE_PASSWORD_MAX_LENGTH", "0") // explicitly disabled: valid
+	if _, err := Load(""); err != nil {
+		t.Fatalf("password.max_length 0 (disabled) must be accepted, got %v", err)
+	}
+	t.Setenv("GOZONE_PASSWORD_MAX_LENGTH", "") // clear
 	t.Setenv("GOZONE_PASSWORD_HISTORY_SIZE", "-3")
 	if _, err := Load(""); err == nil {
 		t.Fatal("expected error for negative password.history_size, got nil")
@@ -959,9 +974,12 @@ func TestLoad_RejectsBadPasswordBounds(t *testing.T) {
 }
 
 func TestPasswordConfig_Policy(t *testing.T) {
-	p := PasswordConfig{MinLength: 10, RequireUppercase: true, RequireDigit: true}.Policy()
+	p := PasswordConfig{MinLength: 10, MaxLength: 64, RequireUppercase: true, RequireDigit: true}.Policy()
 	if p.MinLength != 10 || !p.RequireUppercase || !p.RequireDigit {
 		t.Errorf("Policy() did not mirror fields: %+v", p)
+	}
+	if p.MaxLength != 64 {
+		t.Errorf("Policy() MaxLength = %d, want 64", p.MaxLength)
 	}
 	// HistorySize is intentionally not part of the validators policy.
 }

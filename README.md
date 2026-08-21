@@ -165,6 +165,7 @@ A password complexity policy is enforced whenever a password is set or changed: 
 | YAML Path | Environment Variable | Default | Description |
 |-----------|---------------------|---------|-------------|
 | `password.min_length` | `GOZONE_PASSWORD_MIN_LENGTH` | `8` | Minimum length in runes. `0` disables the length check. |
+| `password.max_length` | `GOZONE_PASSWORD_MAX_LENGTH` | `72` | Maximum length in **bytes** (bcrypt's hard limit). `0` disables the check; values above 72 are rejected at startup. |
 | `password.require_uppercase` | `GOZONE_PASSWORD_REQUIRE_UPPERCASE` | `true` | Require at least one uppercase letter. |
 | `password.require_lowercase` | `GOZONE_PASSWORD_REQUIRE_LOWERCASE` | `true` | Require at least one lowercase letter. |
 | `password.require_digit` | `GOZONE_PASSWORD_REQUIRE_DIGIT` | `true` | Require at least one digit. |

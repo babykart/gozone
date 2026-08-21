@@ -739,3 +739,35 @@ func TestValidatePassword(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatePassword_MaxLengthBytes covers the byte-based maximum length.
+// The unit is bytes, not runes (unlike MinLength), because bcrypt — the
+// hashing backend — rejects passwords beyond 72 bytes; a multi-byte
+// passphrase can be under the cap in characters while over it in bytes.
+func TestValidatePassword_MaxLengthBytes(t *testing.T) {
+	p := PasswordPolicy{MaxLength: 72}
+
+	if err := ValidatePassword(strings.Repeat("a", 72), p); err != nil {
+		t.Errorf("72 ASCII bytes must pass a MaxLength of 72, got %v", err)
+	}
+	err := ValidatePassword(strings.Repeat("a", 73), p)
+	if err == nil || !strings.Contains(err.Error(), "at most 72 bytes") {
+		t.Errorf("73 ASCII bytes must be rejected with a byte-based message, got %v", err)
+	}
+
+	// 40 two-byte runes = 80 bytes: under the cap in characters, over it in
+	// bytes. The byte count is what bcrypt enforces, so the check must too.
+	err = ValidatePassword(strings.Repeat("é", 40), p)
+	if err == nil || !strings.Contains(err.Error(), "at most 72 bytes") {
+		t.Errorf("40 two-byte runes (80 bytes) must be rejected in bytes, got %v", err)
+	}
+	// 36 two-byte runes = 72 bytes exactly: passes.
+	if err := ValidatePassword(strings.Repeat("é", 36), p); err != nil {
+		t.Errorf("36 two-byte runes (72 bytes) must pass, got %v", err)
+	}
+
+	// MaxLength = 0 disables the check entirely (relaxed-policy semantics).
+	if err := ValidatePassword(strings.Repeat("a", 200), PasswordPolicy{}); err != nil {
+		t.Errorf("MaxLength 0 must disable the byte check, got %v", err)
+	}
+}

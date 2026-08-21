@@ -261,6 +261,14 @@ type OIDCProviderConfig struct {
 type PasswordConfig struct {
 	// MinLength is the minimum password length in runes. 0 disables the check.
 	MinLength int `yaml:"min_length"`
+	// MaxLength is the maximum password length in BYTES (not runes, unlike
+	// min_length). bcrypt — the hashing backend — rejects passwords longer
+	// than 72 bytes, so the default of 72 surfaces that hard limit as a clear
+	// validation message at every password-set site instead of an opaque
+	// "failed to hash" error. Values above 72 are rejected at load time
+	// because the hash would fail regardless. 0 disables the check (bcrypt's
+	// own limit then applies at hash time).
+	MaxLength int `yaml:"max_length"`
 	// RequireUppercase/Lowercase/Digit/Special require at least one character
 	// of each class. "Special" means any non-letter, non-digit rune (punctuation,
 	// symbols, spaces).
@@ -291,6 +299,7 @@ func (p PasswordConfig) Policy() validators.PasswordPolicy {
 		RequireLowercase: p.RequireLowercase,
 		RequireDigit:     p.RequireDigit,
 		RequireSpecial:   p.RequireSpecial,
+		MaxLength:        p.MaxLength,
 	}
 }
 
@@ -368,6 +377,7 @@ func DefaultConfig() *Config {
 		},
 		Password: PasswordConfig{
 			MinLength:        8,
+			MaxLength:        72,
 			RequireUppercase: true,
 			RequireLowercase: true,
 			RequireDigit:     true,
@@ -405,7 +415,7 @@ func DefaultConfig() *Config {
 // GOZONE_PDNS_SERVER_ID, GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
 // GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS, GOZONE_ACTIVITY_RETENTION_DAYS,
 // GOZONE_ACTIVITY_BATCH_SIZE, GOZONE_PASSWORD_MIN_LENGTH,
-// GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
+// GOZONE_PASSWORD_MAX_LENGTH, GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
 // GOZONE_PASSWORD_EXPIRY_WARN_DAYS, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
 // GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_OIDC_ENABLED,
@@ -571,6 +581,9 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.Password.MinLength > 256 {
 		return fmt.Errorf("invalid password.min_length %d: must be at most 256", cfg.Password.MinLength)
+	}
+	if cfg.Password.MaxLength < 0 || cfg.Password.MaxLength > 72 {
+		return fmt.Errorf("invalid password.max_length %d: must be between 0 (disabled) and 72 (bcrypt's hard limit)", cfg.Password.MaxLength)
 	}
 	if cfg.Password.HistorySize < 0 {
 		return fmt.Errorf("invalid password.history_size %d: must be non-negative", cfg.Password.HistorySize)
@@ -857,6 +870,7 @@ var envOverrides = []envOverride{
 	intOverride{"GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", func(c *Config, n int) { c.LoginLock.AttemptsRetentionHours = n }},
 	// password policy
 	intOverride{"GOZONE_PASSWORD_MIN_LENGTH", func(c *Config, n int) { c.Password.MinLength = n }},
+	intOverride{"GOZONE_PASSWORD_MAX_LENGTH", func(c *Config, n int) { c.Password.MaxLength = n }},
 	intOverride{"GOZONE_PASSWORD_HISTORY_SIZE", func(c *Config, n int) { c.Password.HistorySize = n }},
 	boolOverride{"GOZONE_PASSWORD_REQUIRE_UPPERCASE", func(c *Config, b bool) { c.Password.RequireUppercase = b }},
 	boolOverride{"GOZONE_PASSWORD_REQUIRE_LOWERCASE", func(c *Config, b bool) { c.Password.RequireLowercase = b }},

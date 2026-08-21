@@ -80,6 +80,10 @@ auth:
 # must_change_password, forcing the user to pick their own on next login.
 password:
   min_length: 8
+  # Maximum length in BYTES (unlike min_length, which counts runes). bcrypt
+  # rejects passwords longer than 72 bytes at hash time, so this surfaces the
+  # limit as a clear validation message. 0 disables the check.
+  max_length: 72
   require_uppercase: true
   require_lowercase: true
   require_digit: true

@@ -19,6 +19,20 @@ import (
 	"github.com/babykart/gozone/internal/validators"
 )
 
+// passwordHashErrorMessage turns a bcrypt hashing failure into a user-facing
+// message. A password longer than 72 bytes — typically a long passphrase from
+// a password manager — is rejected by bcrypt with a dedicated sentinel; the
+// password policy normally catches this first (max_length defaults to
+// bcrypt's limit), but the translation stays so a relaxed policy (max_length
+// disabled) surfaces an actionable message instead of an opaque "failed to
+// hash" that reads like a server fault.
+func passwordHashErrorMessage(err error) string {
+	if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+		return "Password is too long: bcrypt accepts at most 72 bytes"
+	}
+	return "Failed to hash password"
+}
+
 // ListUsers renders the user management page (GET /users).
 //
 // Admin-only. Lists users ordered by username with optional search, pagination,
@@ -158,7 +172,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), h.Cfg.Auth.BcryptCost)
 	if err != nil {
-		h.renderError(w, r, "Failed to hash password")
+		h.renderError(w, r, passwordHashErrorMessage(err))
 		return
 	}
 
@@ -365,7 +379,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), h.Cfg.Auth.BcryptCost)
 		if err != nil {
-			h.renderError(w, r, "Failed to hash password")
+			h.renderError(w, r, passwordHashErrorMessage(err))
 			return
 		}
 		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?", string(hash), userID)

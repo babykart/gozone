@@ -229,3 +229,22 @@ func TestResetPassword_RevokesSessions(t *testing.T) {
 		t.Error("expected tokens_valid_after to be bumped after CLI reset-password (M1)")
 	}
 }
+
+// TestResetPassword_TooLongGetsByteLimitMessage verifies the CLI counterpart
+// of the byte-based cap: a passphrase longer than 72 bytes (the kind a
+// password manager generates) is rejected with the actionable limit, not an
+// opaque hashing failure.
+func TestResetPassword_TooLongGetsByteLimitMessage(t *testing.T) {
+	cfgPath, _ := writeUnlockTestConfig(t)
+	openUnlockTestDB(t, cfgPath)
+
+	// The test config bakes a lenient password policy; make sure the byte cap
+	// applies for this run (it defaults to 72).
+	err := executeResetPassword("--config", cfgPath, "--password", strings.Repeat("a", 73), "admin")
+	if err == nil {
+		t.Fatal("expected 73-byte password to be rejected")
+	}
+	if !strings.Contains(err.Error(), "at most 72 bytes") {
+		t.Errorf("expected the byte-limit message, got: %v", err)
+	}
+}
