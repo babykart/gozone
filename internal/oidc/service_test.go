@@ -333,6 +333,48 @@ func TestVerifierSupportedAlgs(t *testing.T) {
 	}
 }
 
+// TestParseEmailVerified covers the tolerant decoding of the email_verified
+// claim. Several identity providers emit it as a string or a number instead
+// of the spec's JSON boolean; a strict decode would fail the whole claim
+// unmarshal and break the entire SSO login on those providers. Anything not
+// recognisably truthy must decode as false so the require_verified_email
+// gate fails safe on malformed values.
+func TestParseEmailVerified(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"boolean true", `true`, true},
+		{"boolean false", `false`, false},
+		{"string true", `"true"`, true},
+		{"string True case-insensitive", `"True"`, true},
+		{"string TRUE", `"TRUE"`, true},
+		{"string true with whitespace", `" true "`, true},
+		{"string one", `"1"`, true},
+		{"number one", `1`, true},
+		{"string false", `"false"`, false},
+		{"string zero", `"0"`, false},
+		{"number zero", `0`, false},
+		{"unrecognised string", `"maybe"`, false},
+		{"empty string", `""`, false},
+		{"null", `null`, false},
+		{"object", `{"x":1}`, false},
+		{"array", `[]`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseEmailVerified([]byte(tt.raw)); got != tt.want {
+				t.Errorf("parseEmailVerified(%s) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+	// Absent claim: nil RawMessage decodes as false.
+	if got := parseEmailVerified(nil); got {
+		t.Error("parseEmailVerified(nil) = true, want false")
+	}
+}
+
 // TestService_CloseNilSafe verifies the nil-receiver guard on Close.
 func TestService_CloseNilSafe(t *testing.T) {
 	var nilSvc *Service

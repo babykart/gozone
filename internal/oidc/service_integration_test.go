@@ -41,11 +41,22 @@ type fakeIdP struct {
 	omitToken      bool     // when true, /token omits the id_token
 	tokenFail      bool     // when true, /token returns 500
 	advertisedAlgs []string // when non-nil, overrides the discovery signing-alg list
+	// emailVerifiedOverride, when non-nil, replaces the id_token's
+	// email_verified claim with the given value verbatim — used to emit the
+	// non-boolean spellings some real IdPs produce ("true" as a string, 1 as
+	// a number).
+	emailVerifiedOverride interface{}
 }
 
 func (idp *fakeIdP) setAdvertisedAlgs(algs []string) {
 	idp.mu.Lock()
 	idp.advertisedAlgs = algs
+	idp.mu.Unlock()
+}
+
+func (idp *fakeIdP) setEmailVerified(v interface{}) {
+	idp.mu.Lock()
+	idp.emailVerifiedOverride = v
 	idp.mu.Unlock()
 }
 
@@ -137,12 +148,18 @@ func (idp *fakeIdP) mintIDToken(nonce string) string {
 		"aud":                idp.clientID,
 		"nonce":              nonce,
 		"email":              "alice@example.com",
-		"email_verified":     true,
 		"preferred_username": "alice",
 		"name":               "Alice Example",
 		"exp":                now.Add(time.Hour).Unix(),
 		"iat":                now.Unix(),
 	}
+	idp.mu.Lock()
+	if idp.emailVerifiedOverride != nil {
+		claims["email_verified"] = idp.emailVerifiedOverride
+	} else {
+		claims["email_verified"] = true
+	}
+	idp.mu.Unlock()
 	payload, _ := json.Marshal(claims)
 	signer, err := jose.NewSigner(
 		jose.SigningKey{Algorithm: jose.RS256, Key: idp.priv},
@@ -534,5 +551,75 @@ func TestNewService_UnsafeOnlyAdvertisementFallsBackToAcceptedSet(t *testing.T) 
 	}
 	if claims.Subject == "" {
 		t.Error("expected non-empty subject claims")
+	}
+}
+
+// TestHandleCallback_NonBooleanEmailVerified exercises the tolerant
+// email_verified decoding end-to-end. Some identity providers emit the claim
+// as a string ("true") or a number (1) instead of the spec's JSON boolean;
+// a strict decode used to fail the whole claim unmarshal, so the entire SSO
+// login broke on those providers with an opaque "decode id token claims"
+// error and every profile claim (email, preferred_username, name) was lost.
+func TestHandleCallback_NonBooleanEmailVerified(t *testing.T) {
+	cases := []struct {
+		name         string
+		emailValue   interface{}
+		wantVerified bool
+	}{
+		{"string true", "true", true},
+		{"string True", "True", true},
+		{"number one", 1, true},
+		{"string one", "1", true},
+		{"string false", "false", false},
+		{"unrecognised string", "maybe", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idp := newFakeIdP(t, "gozone-client")
+			idp.setEmailVerified(tc.emailValue)
+			svc := newIntegrationService(t, idp, "fake")
+			callbackURL := idp.issuer + "/auth/oidc/fake/callback"
+			state := extractState(t, mustAuthCodeURL(t, svc, "fake", callbackURL))
+			idp.setNonce(stateNonce(t, state))
+
+			claims, err := svc.HandleCallback(context.Background(), "fake", "code", state, callbackURL)
+			if err != nil {
+				t.Fatalf("login must succeed with email_verified=%v (%T): %v", tc.emailValue, tc.emailValue, err)
+			}
+			// The other profile claims must survive alongside the tolerant
+			// field — they used to be lost wholesale when the strict decode
+			// failed.
+			if claims.Email != "alice@example.com" {
+				t.Errorf("email claim = %q, want alice@example.com", claims.Email)
+			}
+			if claims.PreferredUsername != "alice" {
+				t.Errorf("preferred_username claim = %q, want alice", claims.PreferredUsername)
+			}
+			if claims.Name != "Alice Example" {
+				t.Errorf("name claim = %q, want Alice Example", claims.Name)
+			}
+			if claims.EmailVerified != tc.wantVerified {
+				t.Errorf("email_verified = %v, want %v", claims.EmailVerified, tc.wantVerified)
+			}
+		})
+	}
+}
+
+// TestHandleCallback_BooleanEmailVerifiedStillWorks pins the spec-compliant
+// spelling: with the default boolean true the flow behaves exactly as before
+// the tolerant decoding was introduced.
+func TestHandleCallback_BooleanEmailVerifiedStillWorks(t *testing.T) {
+	idp := newFakeIdP(t, "gozone-client")
+	svc := newIntegrationService(t, idp, "fake")
+	callbackURL := idp.issuer + "/auth/oidc/fake/callback"
+	state := extractState(t, mustAuthCodeURL(t, svc, "fake", callbackURL))
+	idp.setNonce(stateNonce(t, state))
+
+	claims, err := svc.HandleCallback(context.Background(), "fake", "code", state, callbackURL)
+	if err != nil {
+		t.Fatalf("boolean email_verified must keep working: %v", err)
+	}
+	if !claims.EmailVerified {
+		t.Error("boolean true email_verified must decode as verified")
 	}
 }

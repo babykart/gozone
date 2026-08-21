@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -324,6 +325,42 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 	), nil
 }
 
+// parseEmailVerified decodes the "email_verified" claim tolerantly.
+//
+// The OIDC core spec defines it as a JSON boolean, but several identity
+// providers emit it as a string ("true") or a number (1). Decoding it as part
+// of a strict struct would fail the entire unmarshal on those providers —
+// not just this field — turning a cosmetic spec deviation into a total login
+// outage with an unhelpful "decode id token claims" error. Recognised truthy
+// spellings: the boolean true, the strings "true"/"1" (case-insensitive,
+// surrounding whitespace tolerated), and the number 1.
+//
+// Anything else — absent, null, false, "false", "0", or an unrecognisable
+// value — decodes as false so the claim fails safe: the email never counts as
+// verified for the require_verified_email link gate on a malformed value.
+func parseEmailVerified(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err == nil {
+		return b
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "true", "1":
+			return true
+		}
+		return false
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String() == "1"
+	}
+	return false
+}
+
 // HandleCallback verifies the state token, exchanges the authorization code for
 // tokens (PKCE), verifies the ID token signature and claims, and returns the
 // normalized user claims. The callbackURL MUST be identical to the one used in
@@ -383,10 +420,15 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 	_ = idToken.Claims(&rawMap)
 	claims.Raw = rawMap
 	// Extract the common profile claims. Unknown/missing claims are left zero —
-	// the handler falls back to the subject for the username.
+	// the handler falls back to the subject for the username. email_verified
+	// is deliberately NOT part of this struct: several identity providers
+	// emit it as a string ("true") or a number (1) instead of the JSON
+	// boolean the OIDC spec prescribes, and a type mismatch there would fail
+	// the whole unmarshal — losing email, preferred_username and name with it
+	// and breaking the entire login. It is decoded separately, tolerantly,
+	// from the raw claim set stashed above.
 	var raw struct {
 		Email             string `json:"email"`
-		EmailVerified     bool   `json:"email_verified"`
 		PreferredUsername string `json:"preferred_username"`
 		Name              string `json:"name"`
 	}
@@ -394,7 +436,7 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 		return nil, fmt.Errorf("decode id token claims: %w", err)
 	}
 	claims.Email = raw.Email
-	claims.EmailVerified = raw.EmailVerified
+	claims.EmailVerified = parseEmailVerified(rawMap["email_verified"])
 	claims.PreferredUsername = raw.PreferredUsername
 	claims.Name = raw.Name
 	// Retain the verified ID token so the session can pass it as id_token_hint
