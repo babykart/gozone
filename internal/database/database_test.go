@@ -573,6 +573,82 @@ func TestSanitizeDSN_NoCredentials(t *testing.T) {
 	}
 }
 
+func TestSanitizeDSN_URLForm(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// lib/pq accepts URL-form DSNs; the password must not survive the
+		// startup log line.
+		{
+			"postgres://user:secret@db:5432/gozone",
+			"postgres://user:***@db:5432/gozone",
+		},
+		{
+			"postgresql://user:secret@db/gozone?sslmode=require",
+			"postgresql://user:***@db/gozone?sslmode=require",
+		},
+		{
+			"postgres://admin:hunter2@db.example.com:5432/prod?sslmode=verify-full&connect_timeout=5",
+			"postgres://admin:***@db.example.com:5432/prod?sslmode=verify-full&connect_timeout=5",
+		},
+		// Percent-encoded '@' in the password: decoded by url.Parse, and the
+		// redacted URL is re-encoded cleanly.
+		{
+			"postgres://user:p%40ss@db:5432/gozone",
+			"postgres://user:***@db:5432/gozone",
+		},
+		// No password in the userinfo: nothing to redact.
+		{
+			"postgres://user@db:5432/gozone",
+			"postgres://user@db:5432/gozone",
+		},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeDSN(tt.input)
+		if got != tt.expected {
+			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestSanitizeDSN_MySQLDefaultProtocol(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// go-sql-driver accepts a DSN without an explicit protocol: the
+		// password sits directly before "@/".
+		{
+			"user:secret@/gozone",
+			"user:***@/gozone",
+		},
+		{
+			"root:pass@/dbname?parseTime=true",
+			"root:***@/dbname?parseTime=true",
+		},
+		// Password containing '@': the delimiter match lands on the '@' right
+		// before the "/", so the password is still redacted.
+		{
+			"admin:p@ss@/db",
+			"admin:***@/db",
+		},
+		// No password present.
+		{
+			"user@/db",
+			"user@/db",
+		},
+	}
+
+	for _, tt := range tests {
+		got := sanitizeDSN(tt.input)
+		if got != tt.expected {
+			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func TestMigrationVersion_Stability(t *testing.T) {
 	v1 := migrationVersion("CREATE TABLE t (id INTEGER)")
 	v2 := migrationVersion("CREATE TABLE t (id INTEGER)")

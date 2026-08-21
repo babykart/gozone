@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -971,16 +972,20 @@ func (db *DB) migrateOldVersions() error {
 }
 
 // sanitizeDSN redacts passwords from database connection strings for safe
-// logging. It handles MySQL-style DSNs — both TCP (user:password@tcp(host))
-// and unix-socket (user:password@unix(/path)) — PostgreSQL
-// (password=secret), and SQLite (file path) formats.
+// logging. Recognised forms:
+//   - MySQL DSNs with an explicit protocol: user:password@tcp(host)/db and
+//     user:password@unix(/path)/db;
+//   - URL-style DSNs carrying userinfo credentials: postgres://user:secret@host/db,
+//     postgresql://…, mysql://…;
+//   - MySQL DSNs with the default protocol: user:password@/db;
+//   - PostgreSQL keyword/value DSNs: password=secret;
+//   - SQLite file paths: no credentials, returned unchanged.
 func sanitizeDSN(dsn string) string {
 	// MySQL-style userinfo: user:password@<protocol>(<addr>)/db, where
 	// <protocol> is tcp or unix. Searching for the "@tcp(" / "@unix(" delimiter
 	// (rather than a bare "@") redacts passwords that themselves contain '@'
 	// correctly: strings.Index lands on the '@' immediately before the protocol
-	// keyword. REVIEW.md m20: "@unix(" socket DSNs were previously leaked
-	// verbatim because only "@tcp(" was recognised.
+	// keyword.
 	for _, sep := range []string{"@unix(", "@tcp("} {
 		if idx := strings.Index(dsn, sep); idx >= 0 {
 			prefix := dsn[:idx]
@@ -989,6 +994,46 @@ func sanitizeDSN(dsn string) string {
 			}
 			return dsn // no password present in userinfo
 		}
+	}
+	// URL-style DSNs: scheme://user:password@host:port/db?param=value. url.Parse
+	// is used as a detector: the branch is only taken when the string carries
+	// both a scheme and a userinfo authority, so the MySQL and keyword/value
+	// forms handled above and below fall through untouched. Redaction is done
+	// by string surgery on the original DSN — mirroring net/url's own split
+	// (userinfo ends at the last '@' of the authority, password starts after
+	// the first ':') — so every byte outside the password, percent-encoding
+	// included, is logged verbatim. A URL whose password fails to parse
+	// (invalid percent-encoding) would also be rejected by the driver, so it
+	// never reaches the log line.
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" && u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			if i := strings.Index(dsn, "://"); i >= 0 {
+				rest := dsn[i+3:]
+				end := strings.IndexAny(rest, "/?#")
+				if end < 0 {
+					end = len(rest)
+				}
+				authority := rest[:end]
+				if at := strings.LastIndex(authority, "@"); at >= 0 {
+					userinfo := authority[:at]
+					if colon := strings.Index(userinfo, ":"); colon >= 0 {
+						return dsn[:i+3] + userinfo[:colon+1] + "***" + dsn[i+3+at:]
+					}
+				}
+			}
+		}
+	}
+	// MySQL default-protocol form: user:password@/db (no tcp()/unix() group).
+	// The colon must be a userinfo separator, not a scheme separator: skipping
+	// a colon directly followed by "/" leaves URL-form DSNs without a password
+	// (e.g. postgres://user@host/db) unmangled.
+	if idx := strings.Index(dsn, "@/"); idx >= 0 {
+		prefix := dsn[:idx]
+		if colon := strings.Index(prefix, ":"); colon >= 0 &&
+			(colon+1 >= len(prefix) || prefix[colon+1] != '/') {
+			return prefix[:colon+1] + "***" + dsn[idx:]
+		}
+		return dsn // no password present in userinfo
 	}
 	// PostgreSQL-style: password=secret
 	re := regexp.MustCompile(`password=[^ ]+`)
