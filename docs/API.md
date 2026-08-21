@@ -1,6 +1,6 @@
 # GoZone REST API
 
-All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time.
+All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time. Each key optionally carries an expiry (30 days / 90 days / 1 year / never, chosen at creation); an expired key stops authenticating immediately with HTTP 401 `{"error":"api_key_expired"}`, and the number of keys a user may own is capped by `auth.max_api_keys_per_user`.
 
 ## Authentication
 

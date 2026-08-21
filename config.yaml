@@ -49,6 +49,10 @@ powerdns:
 auth:
   session_duration_hours: 24
   bcrypt_cost: 12
+  # Maximum number of API keys a single user may own at once. Creating one
+  # more is rejected until old keys are deleted (expired keys count toward
+  # the cap). 0 disables the cap.
+  max_api_keys_per_user: 10
   # Idle inactivity timeout (minutes). A session untouched for longer than this
   # is forced to re-authenticate, even if the JWT has not expired. 0 (default)
   # disables the idle check. Applies to both local and SSO sessions. Enforced

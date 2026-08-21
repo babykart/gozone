@@ -29,6 +29,10 @@
 <div class="alert alert-error">API key not found.</div>
 {{end}}
 
+{{if eq .Error "limit_reached"}}
+<div class="alert alert-error">You have reached the maximum number of API keys. Delete unused or expired keys before creating a new one.</div>
+{{end}}
+
 {{if eq .Error "forbidden"}}
 <div class="alert alert-error">You can only delete your own API keys.</div>
 {{end}}
@@ -38,6 +42,16 @@
     <div class="form-group">
         <label for="description">New API Key Description</label>
         <input type="text" id="description" name="description" placeholder="My API Key" required>
+    </div>
+    <div class="form-group">
+        <label for="expires_in">Expires In</label>
+        <select id="expires_in" name="expires_in" class="form-control">
+            <option value="90" selected>90 days</option>
+            <option value="30">30 days</option>
+            <option value="365">1 year</option>
+            <option value="0">Never</option>
+        </select>
+        <small class="form-hint">Expired keys stop authenticating immediately; delete them to free quota.</small>
     </div>
     <button type="submit" class="btn btn-primary">Generate Key</button>
 </form>
@@ -60,6 +74,7 @@
                 <th>Description</th>
                 <th>Created</th>
                 <th>Last Used</th>
+                <th>Expires</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -70,6 +85,7 @@
                 <td><strong>{{.Description}}</strong></td>
                 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                 <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
+                <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02"}}{{else}}Never{{end}}</td>
                 <td>
                     <form method="POST" action="/profile/api-keys/delete" class="inline" data-confirm="Delete key {{.Description}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">

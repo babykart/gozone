@@ -10,4 +10,8 @@ const (
 const (
 	DefaultBcryptCost = 12
 	MaxOpenConns      = 1
+	// DefaultMaxAPIKeysPerUser is the default auth.max_api_keys_per_user cap:
+	// the number of API keys a single user may own at once before creation is
+	// rejected (0 would disable the cap entirely).
+	DefaultMaxAPIKeysPerUser = 10
 )

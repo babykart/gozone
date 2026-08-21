@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/logger"
@@ -33,19 +35,21 @@ func generateAPIKey() (string, string, error) {
 // apiKeyValidFlashCodes / apiKeyValidErrorCodes are the allow-lists of ?flash
 // and ?error query codes the server actually emits for /profile/api-keys
 // (CreateAPIKey -> flash=created, DeleteAPIKey -> flash=deleted /
-// error=not_found). ListAPIKeys validates the incoming query params against
-// these sets so a crafted link such as ?flash=Your+account+is+compromised
-// cannot inject arbitrary text into the page — the handler is the trust
-// boundary, mirroring loginErrorBanner (REVIEW.md L-1). The template already
-// gates display on {{if eq .Flash "…"}} so this is defence-in-depth against a
-// future template edit that renders the value verbatim.
+// error=not_found / error=limit_reached). ListAPIKeys validates the incoming
+// query params against these sets so a crafted link such as
+// ?flash=Your+account+is+compromised cannot inject arbitrary text into the
+// page — the handler is the trust boundary, mirroring loginErrorBanner
+// (REVIEW.md L-1). The template already gates display on {{if eq .Flash "…"}}
+// so this is defence-in-depth against a future template edit that renders the
+// value verbatim.
 var (
 	apiKeyValidFlashCodes = map[string]struct{}{
 		"created": {},
 		"deleted": {},
 	}
 	apiKeyValidErrorCodes = map[string]struct{}{
-		"not_found": {},
+		"not_found":     {},
+		"limit_reached": {},
 	}
 )
 
@@ -149,6 +153,35 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "api_keys.html", data)
 }
 
+// apiKeyExpiryChoices is the closed set of expiry durations (in days) the
+// creation form may request, mirroring the <select> options in api_keys.html.
+// A closed allow-list rather than a parsed duration keeps a forged request
+// from minting a key with an arbitrary (e.g. multi-decade) lifetime. 0 means
+// the key never expires.
+var apiKeyExpiryChoices = map[int]struct{}{
+	0:   {},
+	30:  {},
+	90:  {},
+	365: {},
+}
+
+// parseAPIKeyExpiryDays validates the form's expires_in value (a day count
+// from apiKeyExpiryChoices, or "" meaning the field was not submitted).
+// Returns an error for any other value.
+func parseAPIKeyExpiryDays(formValue string) (int, error) {
+	if formValue == "" {
+		return 0, nil
+	}
+	days, err := strconv.Atoi(strings.TrimSpace(formValue))
+	if err != nil {
+		return 0, fmt.Errorf("invalid expiry %q", formValue)
+	}
+	if _, ok := apiKeyExpiryChoices[days]; !ok {
+		return 0, fmt.Errorf("invalid expiry %q: must be one of the offered durations", formValue)
+	}
+	return days, nil
+}
+
 func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
@@ -156,6 +189,12 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	description := strings.TrimSpace(r.FormValue("description"))
 	if description == "" {
 		description = "API Key"
+	}
+
+	expiryDays, err := parseAPIKeyExpiryDays(r.FormValue("expires_in"))
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
 	}
 
 	rawKey, keyHash, err := generateAPIKey()
@@ -171,16 +210,45 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// Cap the number of keys a single user may own. An API key carries its
+	// owner's full permissions, so unbounded accumulation defeats expiry
+	// hygiene. The count runs inside the creation transaction, and the limit
+	// is only enforced when positive (0 disables the cap). Expired keys count
+	// toward the cap: deleting them is what frees quota.
+	if h.Cfg.Auth.MaxAPIKeysPerUser > 0 {
+		var owned int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID,
+		).Scan(&owned); err != nil {
+			h.renderInternalError(w, r, "Failed to count API keys", err)
+			return
+		}
+		if owned >= h.Cfg.Auth.MaxAPIKeysPerUser {
+			http.Redirect(w, r, "/profile/api-keys?error=limit_reached", http.StatusSeeOther)
+			return
+		}
+	}
+
+	// expires_at is NULL for a non-expiring key; otherwise now + the chosen
+	// duration, in UTC per the project-wide DB timestamp convention.
+	var expiresAt any
+	if expiryDays > 0 {
+		expiresAt = time.Now().UTC().Add(time.Duration(expiryDays) * 24 * time.Hour)
+	}
 	_, err = tx.ExecContext(ctx,
-		"INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, ?)",
-		user.ID, keyHash, description,
+		"INSERT INTO api_keys (user_id, key_hash, description, expires_at) VALUES (?, ?, ?, ?)",
+		user.ID, keyHash, description, expiresAt,
 	)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to create API key", err)
 		return
 	}
 
-	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "create_api_key", Details: fmt.Sprintf("Created API key: %s", description)})
+	expiryDetail := "no expiry"
+	if expiryDays > 0 {
+		expiryDetail = fmt.Sprintf("expires in %d days", expiryDays)
+	}
+	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "create_api_key", Details: fmt.Sprintf("Created API key: %s (%s)", description, expiryDetail)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return

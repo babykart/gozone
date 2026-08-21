@@ -156,6 +156,12 @@ type AuthConfig struct {
 	// refresh: the session lives exactly SessionDurationHours. For refresh to
 	// ever trigger, this must be greater than SessionDurationHours.
 	AbsoluteSessionTimeoutHours int `yaml:"absolute_session_timeout_hours"`
+	// MaxAPIKeysPerUser caps how many non-deleted API keys a single user may
+	// own at once; creating one more is rejected until old keys are deleted.
+	// The cap bounds the blast radius of credential sprawl: an API key carries
+	// its owner's full permissions, so unbounded accumulation defeats expiry
+	// hygiene. 0 disables the cap.
+	MaxAPIKeysPerUser int `yaml:"max_api_keys_per_user"`
 }
 
 // OIDCConfig holds OpenID Connect / OAuth2 single sign-on settings. When
@@ -338,6 +344,7 @@ func DefaultConfig() *Config {
 		Auth: AuthConfig{
 			SessionDurationHours: 24,
 			BcryptCost:           constants.DefaultBcryptCost,
+			MaxAPIKeysPerUser:    constants.DefaultMaxAPIKeysPerUser,
 		},
 		Logging: LoggingConfig{
 			Level: "info",
@@ -506,6 +513,10 @@ func (cfg *Config) validate() error {
 
 	if cfg.Auth.SessionDurationHours <= 0 {
 		return fmt.Errorf("invalid session_duration_hours %d: must be a positive integer", cfg.Auth.SessionDurationHours)
+	}
+
+	if cfg.Auth.MaxAPIKeysPerUser < 0 {
+		return fmt.Errorf("invalid max_api_keys_per_user %d: must be non-negative (0 disables the cap)", cfg.Auth.MaxAPIKeysPerUser)
 	}
 
 	if cfg.Auth.IdleTimeoutMinutes < 0 {
@@ -831,6 +842,7 @@ var envOverrides = []envOverride{
 	intOverride{"GOZONE_SESSION_DURATION", func(c *Config, n int) { c.Auth.SessionDurationHours = n }},
 	intOverride{"GOZONE_IDLE_TIMEOUT_MINUTES", func(c *Config, n int) { c.Auth.IdleTimeoutMinutes = n }},
 	intOverride{"GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", func(c *Config, n int) { c.Auth.AbsoluteSessionTimeoutHours = n }},
+	intOverride{"GOZONE_MAX_API_KEYS", func(c *Config, n int) { c.Auth.MaxAPIKeysPerUser = n }},
 	intOverride{"GOZONE_BCRYPT_COST", func(c *Config, n int) { c.Auth.BcryptCost = n }},
 	strOverride{"GOZONE_ADMIN_USERNAME", func(c *Config, v string) { c.Admin.Username = v }},
 	strOverride{"GOZONE_ADMIN_PASSWORD", func(c *Config, v string) { c.Admin.Password = v }},

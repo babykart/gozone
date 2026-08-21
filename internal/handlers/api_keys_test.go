@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/database"
@@ -397,5 +399,145 @@ func TestListAPIKeys_AllowListsFlashErrorCodes(t *testing.T) {
 		if strings.Contains(body2, needle) {
 			t.Errorf("unknown flash/error code leaked into body: %q in %s", needle, body2)
 		}
+	}
+}
+
+// TestCreateAPIKey_DefaultFormNeverExpires verifies the expiry handling of the
+// original form (no expires_in field): the key is stored without an expiry and
+// therefore authenticates until deleted.
+func TestCreateAPIKey_DefaultFormNeverExpires(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=legacy"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateAPIKey(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var expires sql.NullTime
+	if err := h.DB.QueryRow("SELECT expires_at FROM api_keys WHERE user_id = ?", user.ID).Scan(&expires); err != nil {
+		t.Fatalf("select expires_at: %v", err)
+	}
+	if expires.Valid {
+		t.Errorf("expected NULL expires_at for a form without expires_in, got %v", expires.Time)
+	}
+}
+
+// TestCreateAPIKey_WithExpiry verifies the expiry allow-list happy path: a
+// 30-day key gets an expires_at ~30 days in the future, stored in UTC per the
+// project-wide DB timestamp convention.
+func TestCreateAPIKey_WithExpiry(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=shortlived&expires_in=30"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateAPIKey(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var expires sql.NullTime
+	if err := h.DB.QueryRow("SELECT expires_at FROM api_keys WHERE user_id = ?", user.ID).Scan(&expires); err != nil {
+		t.Fatalf("select expires_at: %v", err)
+	}
+	if !expires.Valid {
+		t.Fatal("expected a non-NULL expires_at for expires_in=30")
+	}
+	want := time.Now().UTC().Add(30 * 24 * time.Hour)
+	if d := expires.Time.Sub(want); d < -5*time.Minute || d > 5*time.Minute {
+		t.Errorf("expires_at = %v, want ~%v (skew %v)", expires.Time, want, d)
+	}
+}
+
+// TestCreateAPIKey_RejectsUnknownExpiry verifies the expiry allow-list is
+// closed: a forged duration (not offered by the form's select) is rejected and
+// no key row is inserted.
+func TestCreateAPIKey_RejectsUnknownExpiry(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=forged&expires_in=3650"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateAPIKey(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Fatalf("expected a non-redirect response for an off-list expiry, got %d -> %s", w.Code, w.Header().Get("Location"))
+	}
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected no API key row for an off-list expiry, got %d", count)
+	}
+}
+
+// TestCreateAPIKey_EnforcesPerUserCap verifies the per-user key cap: with a
+// cap of 2 the third creation is rejected with error=limit_reached (and no row
+// inserted), and cap=0 disables the limit entirely.
+func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	h.Cfg.Auth.MaxAPIKeysPerUser = 2
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.CreateAPIKey(w, r)
+		return w
+	}
+
+	for i := 1; i <= 2; i++ {
+		w := post(fmt.Sprintf("description=key-%d", i))
+		if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+			t.Fatalf("creation %d under the cap should succeed, got %d -> %s", i, w.Code, w.Header().Get("Location"))
+		}
+	}
+
+	w := post("description=key-3")
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "error=limit_reached") {
+		t.Fatalf("creation above the cap must redirect with error=limit_reached, got %d -> %s", w.Code, w.Header().Get("Location"))
+	}
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID).Scan(&count)
+	if count != 2 {
+		t.Errorf("expected 2 rows after the rejected creation, got %d", count)
+	}
+
+	// Deleting a key frees quota for a new one.
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/delete", strings.NewReader("key_id=1"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteAPIKey(w, r)
+	if w := post("description=key-3"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+		t.Fatalf("creation after freeing quota should succeed, got %d -> %s", w.Code, w.Header().Get("Location"))
+	}
+
+	// Cap disabled: 0 lets a user accumulate keys without bound.
+	h.Cfg.Auth.MaxAPIKeysPerUser = 0
+	if w := post("description=key-4"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+		t.Fatalf("creation with cap disabled should succeed, got %d -> %s", w.Code, w.Header().Get("Location"))
 	}
 }

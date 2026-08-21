@@ -100,6 +100,7 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 |-----------|---------------------|---------|
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
 | `auth.bcrypt_cost` | — | `12` |
+| `auth.max_api_keys_per_user` | `GOZONE_MAX_API_KEYS` | `10` |
 | `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `0` (disabled) |
 | `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `0` (disabled) |
 
