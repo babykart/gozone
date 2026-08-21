@@ -671,6 +671,22 @@ function closeConfirmDialog(ok) {
     }
 }
 
+// filterOptions narrows the options of the <select> referenced by the filter
+// input's data-target attribute to those whose label contains the typed text
+// (case-insensitive). An empty query restores every option. Purely cosmetic:
+// hidden options keep their value, so form submission is unaffected and the
+// page degrades to the plain native select without JS.
+function filterOptions(input) {
+    var select = document.getElementById(input.getAttribute('data-target'));
+    if (!select) return;
+    var query = (input.value || '').trim().toLowerCase();
+    var options = select.options;
+    for (var i = 0; i < options.length; i++) {
+        var label = (options[i].textContent || '').trim().toLowerCase();
+        options[i].hidden = query !== '' && label.indexOf(query) === -1;
+    }
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -767,6 +783,13 @@ function initDelegatedListeners() {
                 var rowUpdate = bulkUpdateByCheckboxClass[e.target.classList[ci]];
                 if (rowUpdate) { rowUpdate(); break; }
             }
+        }
+    });
+
+    document.addEventListener('input', function(e) {
+        var actionTarget = e.target.closest('[data-action]');
+        if (actionTarget && actionTarget.getAttribute('data-action') === 'filter-options') {
+            filterOptions(actionTarget);
         }
     });
 }

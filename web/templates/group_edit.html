@@ -27,21 +27,25 @@
     {{if eq .Group.ID 0}}
     <div class="form-group">
         <label for="user_ids">Members</label>
+        <input type="search" id="user_ids_filter" class="select-filter" placeholder="Filter users..."
+               aria-label="Filter users list" data-action="filter-options" data-target="user_ids" aria-controls="user_ids">
         <select id="user_ids" name="user_ids" multiple class="form-control" size="6">
             {{range .AllUsers}}
             <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
             {{end}}
         </select>
-        <small class="form-hint">Hold Ctrl (Cmd on macOS) to select multiple members.</small>
+        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple members.</small>
     </div>
     <div class="form-group">
         <label for="zone_ids">Zones</label>
+        <input type="search" id="zone_ids_filter" class="select-filter" placeholder="Filter zones..."
+               aria-label="Filter zones list" data-action="filter-options" data-target="zone_ids" aria-controls="zone_ids">
         <select id="zone_ids" name="zone_ids" multiple class="form-control" size="6">
             {{range .AllZones}}
             <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
             {{end}}
         </select>
-        <small class="form-hint">Hold Ctrl (Cmd on macOS) to select multiple zones.</small>
+        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple zones.</small>
     </div>
     {{end}}
 
@@ -85,6 +89,8 @@
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <div class="form-group m-0 flex-1">
             <label for="user_id">Add member</label>
+            <input type="search" id="user_id_filter" class="select-filter" placeholder="Filter users..."
+                   aria-label="Filter users list" data-action="filter-options" data-target="user_id" aria-controls="user_id">
             <select id="user_id" name="user_id" class="form-control">
                 {{range .AllUsers}}
                 <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
@@ -128,6 +134,8 @@
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <div class="form-group m-0 flex-1">
             <label for="zone_id">Add zone</label>
+            <input type="search" id="zone_id_filter" class="select-filter" placeholder="Filter zones..."
+                   aria-label="Filter zones list" data-action="filter-options" data-target="zone_id" aria-controls="zone_id">
             <select id="zone_id" name="zone_id" class="form-control">
                 {{range .AllZones}}
                 <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
