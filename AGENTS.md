@@ -20,6 +20,7 @@
 | `make clean` | `just clean` | Remove build artifacts and database |
 | `make gosec` | `just gosec` | Run security static analysis |
 | `make update` | `just update` | Update all dependencies + re-vendor |
+| `make docker-up` | `just docker-up` | Start gozone + PowerDNS via docker-compose |
 
 Run a single test: `go test -count=1 -run TestName -v ./internal/handlers/`
 Run a single package: `go test -count=1 ./internal/config/`
@@ -28,14 +29,12 @@ Write co-located `*_test.go` when adding code. After any change, run `just fmt` 
 
 CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test` does **not** use `-race`, so run `go test -race ./...` locally to catch what CI catches. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 
+Releases are git-cliff driven (`cliff.toml`): `just auto-gen-rel` (or `just gen-rel v0.x.y`) writes `CHANGELOG.md`, commits and signs tag `v0.x.y`; pushing a `v*` tag triggers `.github/workflows/release.yml` (multi-arch Docker image → ghcr.io + GitHub release).
+
 ## Security Analysis
 
-After any code change, run `just fmt` (or `make fmt`) then `just gosec` (or `make gosec`) and fix every issue reported before
-considering the task complete. Use `// #nosec Gxxx` annotations only for intentional suppressions
+gosec runs with `-no-fail` (non-blocking exit code), in CI and locally: read the output and fix all reported issues regardless of the exit code. Use `// #nosec Gxxx` annotations only for intentional suppressions
 (e.g. HTTP response writes, timing side-channel mitigation) and document the reason inline.
-
-Note: `gosec` runs with `-no-fail` (non-blocking exit code). An agent must read the output and fix
-all reported issues regardless of the exit code.
 
 ## Architecture
 
@@ -44,7 +43,7 @@ all reported issues regardless of the exit code.
 - **URL params**: uses Go 1.22+ `r.PathValue("name")`, **not** `chi.URLParam`
 - **Templates & static files**: embedded via `//go:embed` in `web/embed.go`, loaded with `template.ParseFS`; template FuncMap lives in `cmd/server.go` (`parseTemplates`) and includes `add`, `sub`, `urlquery`, `relativeName`, `dict`, `assetVersion`. `assetVersion` returns a short content-hash of the bundled JS/CSS (`staticAssetVersion`) for cache-busting; bumping static assets flows through automatically.
 - **Database**: migrations in `internal/database/database.go` and dialect files; content-hash versioning with `Dialect.LockMigrations` for multi-instance safety; exposed via `*database.DB` with raw SQL and context-aware methods (`ExecContext`, `QueryContext`, `QueryRowContext`, `BeginTx`)
-- **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`). `server.trusted_proxies` entries **must be CIDR** (e.g. `10.0.0.0/8`, `192.0.2.1/32`) — plain IPs without `/` cause a startup panic in chi's `netip.MustParsePrefix`.
+- **Config**: YAML file + env var overrides with `GOZONE_` prefix. Default admin: `admin` / `admin` (override via `GOZONE_ADMIN_PASSWORD`). Without `server.secret_key` / `GOZONE_SECRET_KEY` a random key is generated per restart — invalidating all sessions and CSRF tokens; set it for stable local sessions. `server.trusted_proxies` entries **must be CIDR** (e.g. `10.0.0.0/8`, `192.0.2.1/32`) — plain IPs without `/` cause a startup panic in chi's `netip.MustParsePrefix`.
 - **PowerDNS client**: `internal/pdns.Client` implements the `ZoneService` interface (`internal/pdns/service.go`); generic `doOK`/`doUnmarshal[T]` helpers handle HTTP status checks and JSON decoding; typed errors (`ErrNotFound`, `ErrValidation`, `ErrConflict`, `ErrUnauthorized`) map to correct HTTP status codes
 - **Caching**: generic TTL cache in `internal/cache/cache.go`; `cachedClient` wraps `ZoneService` and caches zone lists, zone info, stats and server info; record mutations invalidate affected caches
 - **Errors**: `internal/errors.AppError` carries an HTTP status code and supports `Unwrap()` for compatibility with `errors.Is/As`
@@ -52,7 +51,7 @@ all reported issues regardless of the exit code.
 
 ## Record Content Normalization
 
-The type-specific wire-format pipeline is in `internal/models/recordtype.go` (`recordTypeSpec` map) and `internal/handlers/records.go` (`prepareRecordContent`). Four cases:
+The type-specific wire-format pipeline is in `internal/models/recordtype.go` (`recordTypeSpecs` map) and `internal/handlers/records.go` (`prepareRecordContent`). Four cases:
 
 1. **Priority types** (MX, SRV): `JoinPriority` embeds priority into content, then `EnsureTrailingDot` dots the FQDN target (last field).
 2. **Quoted types** (TXT, SPF): `QuoteContent` wraps content in double quotes with `\"` escaping.
@@ -81,9 +80,9 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 ## Single Sign-On (OIDC)
 
 - Delegated login is **off** unless `oidc.enabled` (`GOZONE_OIDC_ENABLED`) is set; the `internal/oidc` package is the concrete impl behind `Handler.OIDC SSOService`. `SSOService.Enabled()` gates the login-page provider buttons and the `/auth/oidc/*` handlers (no-op → `/login` when disabled).
-- Flow: Authorization Code + PKCE (S256), signed `state` (CSRF), `nonce`, JWKS ID-token verification, just-in-time provisioning, role/group mapping from claims, RP-initiated logout. The `(issuer, subject)` pair is the link key to the local user; `oidc.Claims` exposes normalized fields plus `Raw` for config-driven dotted-path mapping (e.g. `realm_access.roles`).
-- The shared `oauth2.Config` is **cloned per callback** (`cloneOAuth2Config`) so concurrent callbacks cannot race on `RedirectURL` (REVIEW.md L-4).
-- Built-in provider presets: Gitea, Google, GitLab, Keycloak, Authentik, Azure AD (any other name = generic OIDC). The redirect URI is always `https://<host>/auth/oidc/<name>/callback`.
+- Flow: Authorization Code + PKCE (S256), AES-256-GCM encrypted `state` (confidentiality + CSRF), `nonce`, JWKS ID-token verification, just-in-time provisioning, role/group mapping from claims, RP-initiated logout. The `(issuer, subject)` pair is the link key to the local user; `oidc.Claims` exposes normalized fields plus `Raw` for config-driven dotted-path mapping (e.g. `realm_access.roles`).
+- The shared `oauth2.Config` is **cloned per callback** (`cloneOAuth2Config`) so concurrent callbacks cannot race on `RedirectURL`.
+- Built-in provider presets: Gitea, Google, GitHub, GitLab, Keycloak, Authentik, Azure AD (any other name = generic OIDC). The redirect URI is always `https://<host>/auth/oidc/<name>/callback`.
 - Idle/absolute session timeouts apply to local **and** SSO sessions, enforced cluster-wide via the `sessions` table (in-memory cache coarsens writes to ~1 min). See README "Authentication" and `docs/SSO.md` for full provider setup.
 
 ## Password Policy
@@ -110,12 +109,13 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - SQLite connection uses `SetMaxOpenConns(1)` — concurrent writes are serialized; not required for MySQL/PostgreSQL
 - No ORM — raw SQL queries throughout
 - All database methods support `context.Context`; legacy methods without context wrap `context.Background()`
+- **DB-bound timestamps are always UTC** (`time.Now().UTC()`): SQLite serializes `time.Time` with its offset and compares the strings lexicographically, so mixed offsets skew `WHERE expires_at <= ?`-style comparisons. In-memory `Before`/`After`/`Sub` calls are timezone-agnostic and need no annotation.
 
 ## Frontend Conventions
 
 - **No inline event handlers**: never add `onclick=`, `onchange=`, or `onsubmit=` to templates — they violate the Content-Security-Policy. Instead, use `data-action="action-name"` (and optionally `data-confirm="message"`) on the element, then handle via `initDelegatedListeners()` in `web/static/js/app.js`.
 - **CSRF token (gorilla/csrf)**: every POST form MUST include `<input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">`. JS-initiated POSTs must read `data-csrf="{{.CSRFToken}}"` and append `gorilla.csrf.Token` to the `FormData` (see existing `data-csrf` usage in templates and `app.js`). The CSRF middleware is configured with `csrf.Secure(false)` (static) and a per-request `csrfSecureCookieWriter` rewrites the `Secure` attribute from `middleware.IsHTTPS` — do not re-add `Secure` at the middleware level.
-- **CSP**: `script-src 'self'` and `style-src 'self'` only (neither has `'unsafe-inline'`). Only `app.js` is loaded. Former inline `style="..."` attributes are externalised to CSS classes; show/hide toggles in `app.js` use `classList` (`.hidden`), not `style.display=''`. JS CSSOM mutations (`element.style.foo`) remain allowed since CSP `style-src` governs document markup, not the CSSOM.
+- **CSP**: `script-src 'self'` and `style-src 'self'` only (neither has `'unsafe-inline'`). Only `app.js` and `theme.js` are loaded. Former inline `style="..."` attributes are externalised to CSS classes; show/hide toggles in `app.js` use `classList` (`.hidden`), not `style.display=''`. JS CSSOM mutations (`element.style.foo`) remain allowed since CSP `style-src` governs document markup, not the CSSOM.
 - **Layout partials**: use `{{template "app_layout_start" .}}` at the top and `{{template "app_layout_end" .}}` at the bottom of every authenticated page template. Never duplicate the `head`/`sidebar`/`topbar`/`main` wrapper directly.
 - **User feedback**: use `showNotification(message, type)` (from `app.js`) for flash-style alerts. `alert()` is not used.
 - **`dict` helper**: use `dict "key1" val1 "key2" val2` to pass parameters to template partials.
@@ -123,10 +123,10 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 
 ## Commit convention
 
-Commits must always respect the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification).
+Commits must always respect the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification), with the repo's `[gozone]` marker after the scope: `type(scope): [gozone] short description` (see `git log` and `CONTRIBUTING.md`).
 
-Messages must remain **concise and synthetic** — a one-line summary (≤ 72 chars on the subject line) plus a short body that lists the actual code/test/doc touchpoints and references the relevant REVIEW.md entry. Avoid prose-style prose, full code snippets, or rationale that belongs in the PR description rather than the commit log.
+Messages must remain **concise and synthetic** — a one-line summary (≤ 72 chars on the subject line) plus a short body that lists the actual code/test/doc touchpoints. Avoid prose-style bodies, full code snippets, or rationale that belongs in the PR description rather than the commit log.
 
 ## Project context
 
-- **`docs/API.md`** documents the REST API endpoints, payload schemas, and record content normalization behavior.
+- **`docs/API.md`** documents the REST API endpoints, payload schemas, and record content normalization behavior. **`docs/SSO.md`** covers OIDC provider setup; **`docs/ARCHITECTURE.md`** the system design. **`CONTRIBUTING.md`** has the full PR checklist (note: its "SQLite only" / "cmd: root, server, unlock" sections are stale — this file is current).
