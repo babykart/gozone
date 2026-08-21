@@ -53,14 +53,14 @@ www IN A 192.0.2.1
 
 	var count int
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='import_zone'").Scan(&count)
-	if count != 4 {
-		t.Errorf("expected 4 activity log entries (SOA, NS, A, MX), got %d", count)
+	if count != 1 {
+		t.Errorf("expected a single summary activity log entry, got %d", count)
 	}
 
 	var details string
-	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='import_zone' AND details LIKE 'Imported SOA%' LIMIT 1").Scan(&details)
-	if !strings.Contains(details, "Imported SOA") {
-		t.Errorf("expected SOA import log, got %q", details)
+	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='import_zone' LIMIT 1").Scan(&details)
+	if !strings.Contains(details, "Imported 4 RRSets (4 records) from BIND zone file") {
+		t.Errorf("expected the summary details to count RRSets and records, got %q", details)
 	}
 }
 
@@ -84,8 +84,13 @@ func TestImportZone_CSV(t *testing.T) {
 
 	var count int
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='import_zone'").Scan(&count)
-	if count != 3 {
-		t.Errorf("expected 3 activity log entries (SOA, NS, A), got %d", count)
+	if count != 1 {
+		t.Errorf("expected a single summary activity log entry, got %d", count)
+	}
+	var details string
+	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='import_zone' LIMIT 1").Scan(&details)
+	if !strings.Contains(details, "Imported 3 RRSets (3 records) from CSV zone file") {
+		t.Errorf("expected the summary details to count RRSets and records, got %q", details)
 	}
 }
 
@@ -263,6 +268,11 @@ www 300`
 	loc := w.Header().Get("Location")
 	if !strings.Contains(loc, "import_skipped=1") {
 		t.Errorf("expected redirect to carry ?import_skipped=1, got %q", loc)
+	}
+	var details string
+	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='import_zone' LIMIT 1").Scan(&details)
+	if !strings.Contains(details, "Imported 2 RRSets (2 records) from BIND zone file, 1 lines skipped") {
+		t.Errorf("expected the summary entry to mention the skipped line count, got %q", details)
 	}
 }
 

@@ -433,11 +433,23 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, e := range logEntries {
-		key := e.name + "|" + e.recordType
-		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_record", Details: fmt.Sprintf("Created %s record %s -> %s", e.recordType, e.name, e.content), NewValue: rrsetSnapshot(mergedMap[key])}); err != nil {
-			logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
-		}
+	// A single summary entry instead of one activity_logs row per form row —
+	// the same write-amplification fix as the zone import: each row was its
+	// own implicit transaction, and a large batch serialized the whole
+	// application behind the loop on SQLite's single connection. The summary
+	// counts records after merge/dedup (what PowerDNS actually received)
+	// alongside the submitted row count.
+	batchRecordCount := 0
+	for _, rr := range merged {
+		batchRecordCount += len(rr.Records)
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  user.ID,
+		ZoneID:  zoneID,
+		Action:  "create_record",
+		Details: fmt.Sprintf("Created %d records across %d record sets (batch of %d rows)", batchRecordCount, len(merged), len(logEntries)),
+	}); err != nil {
+		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern

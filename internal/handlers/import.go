@@ -95,15 +95,22 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("Zone import skipped invalid line", "zone", zoneID, "line", s.Line, "reason", s.Reason)
 	}
 
+	// A single summary entry instead of one activity_logs row per RRSet: a
+	// 10 MiB import can carry thousands of RRSets, and each row was its own
+	// implicit transaction — on SQLite (one connection) that serialized the
+	// whole application behind the loop and drowned the zone's activity view.
+	// Per-line detail stays available in the server log above and the skipped
+	// warnings below.
+	recordCount := 0
 	for _, rs := range rrsets {
-		contents := make([]string, 0, len(rs.Records))
-		for _, r := range rs.Records {
-			contents = append(contents, r.Content)
-		}
-		details := fmt.Sprintf("Imported %s %s -> %s", rs.Type, rs.Name, strings.Join(contents, ", "))
-		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details}); err != nil {
-			logger.Error("failed to log import_zone activity", "zone_id", zoneID, "error", err)
-		}
+		recordCount += len(rs.Records)
+	}
+	details := fmt.Sprintf("Imported %d RRSets (%d records) from %s zone file", len(rrsets), recordCount, strings.ToUpper(format))
+	if n := len(skipped); n > 0 {
+		details += fmt.Sprintf(", %d lines skipped", n)
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details}); err != nil {
+		logger.Error("failed to log import_zone activity", "zone_id", zoneID, "error", err)
 	}
 
 	redirectURL := "/zones/" + zoneID

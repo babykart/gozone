@@ -1126,14 +1126,23 @@ func TestBatchCreateRecords_Success(t *testing.T) {
 
 	var count int
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record'").Scan(&count)
-	if count != 2 {
-		t.Errorf("expected 2 activity logs, got %d", count)
+	if count != 1 {
+		t.Errorf("expected a single batch summary activity log, got %d", count)
 	}
 
+	var details string
+	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='create_record' LIMIT 1").Scan(&details)
+	if !strings.Contains(details, "Created 2 records across 2 record sets (batch of 2 rows)") {
+		t.Errorf("expected the summary details to count records, record sets and rows, got %q", details)
+	}
+
+	// The summary entry carries no per-RRSet snapshot (a multi-RRSet state is
+	// not representable in the single new_value column); the per-record
+	// snapshot remains on the single-record CreateRecord path.
 	var emptyNew int
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record' AND new_value = ''").Scan(&emptyNew)
-	if emptyNew != 0 {
-		t.Errorf("expected 0 logs with empty new_value, got %d", emptyNew)
+	if emptyNew != 1 {
+		t.Errorf("expected the batch summary to have an empty new_value, got %d", emptyNew)
 	}
 }
 
