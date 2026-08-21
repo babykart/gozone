@@ -408,3 +408,70 @@ func TestHandleCallback_TokenExchangeFailure(t *testing.T) {
 		t.Errorf("expected token exchange error, got %v", err)
 	}
 }
+
+// TestNewService_ProvidersConfigurationOrder verifies that Providers() returns
+// the providers in configuration order, not map order. Before the fix the
+// slice was built by ranging over the providers map, whose iteration order is
+// deliberately randomized by the Go runtime — on a multi-IdP deployment the
+// login page reordered its "Sign in with …" buttons on every render. The
+// configured names are deliberately not in alphabetical order so the test also
+// catches an accidental sort by name, and the order is asserted repeatedly
+// because a single map iteration can coincidentally match.
+func TestNewService_ProvidersConfigurationOrder(t *testing.T) {
+	idpZeta := newFakeIdP(t, "client-zeta")
+	idpAlpha := newFakeIdP(t, "client-alpha")
+	idpMid := newFakeIdP(t, "client-mid")
+	cfg := &config.Config{
+		OIDC: config.OIDCConfig{
+			Enabled: true,
+			Providers: []config.OIDCProviderConfig{
+				{Name: "zeta", IssuerURL: idpZeta.issuer, ClientID: idpZeta.clientID, ClientSecret: "s"},
+				{Name: "alpha", IssuerURL: idpAlpha.issuer, ClientID: idpAlpha.clientID, ClientSecret: "s"},
+				{Name: "mid", IssuerURL: idpMid.issuer, ClientID: idpMid.clientID, ClientSecret: "s"},
+			},
+			JWKSCacheTTLMinutes: 0,
+		},
+	}
+	svc := NewService(context.Background(), cfg, []byte(integrationStateKey))
+	t.Cleanup(svc.Close)
+
+	want := []string{"zeta", "alpha", "mid"}
+	for attempt := 0; attempt < 20; attempt++ {
+		ps := svc.Providers()
+		if len(ps) != len(want) {
+			t.Fatalf("Providers = %d items, want %d", len(ps), len(want))
+		}
+		for i, name := range want {
+			if ps[i].Name != name {
+				t.Fatalf("Providers order on attempt %d = [%s %s %s], want %v",
+					attempt, ps[0].Name, ps[1].Name, ps[2].Name, want)
+			}
+		}
+	}
+
+	// A provider whose discovery fails must not leave a gap: the remaining
+	// providers keep their relative configuration order. ".invalid" is a
+	// reserved TLD (RFC 2606) that can never resolve, so discovery fails
+	// without emitting real network traffic.
+	cfg2 := &config.Config{
+		OIDC: config.OIDCConfig{
+			Enabled: true,
+			Providers: []config.OIDCProviderConfig{
+				{Name: "broken", IssuerURL: "https://unreachable.invalid", ClientID: "c", ClientSecret: "s"},
+				{Name: "zeta", IssuerURL: idpZeta.issuer, ClientID: idpZeta.clientID, ClientSecret: "s"},
+				{Name: "mid", IssuerURL: idpMid.issuer, ClientID: idpMid.clientID, ClientSecret: "s"},
+			},
+			JWKSCacheTTLMinutes: 0,
+		},
+	}
+	svc2 := NewService(context.Background(), cfg2, []byte(integrationStateKey))
+	t.Cleanup(svc2.Close)
+	ps2 := svc2.Providers()
+	if len(ps2) != 2 || ps2[0].Name != "zeta" || ps2[1].Name != "mid" {
+		names := make([]string, len(ps2))
+		for i, p := range ps2 {
+			names[i] = p.Name
+		}
+		t.Errorf("Providers after failed discovery = %v, want [zeta mid] in configuration order", names)
+	}
+}

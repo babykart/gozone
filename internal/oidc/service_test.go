@@ -19,18 +19,18 @@ import (
 // without a live IdP.
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	return &Service{
-		stateKey: []byte("test-state-key-32-bytes-long-000"),
-		providers: map[string]*ProviderInstance{
-			"test": {
-				Name: "test",
-				oauth2: &oauth2.Config{
-					ClientID: "cid",
-					Endpoint: oauth2.Endpoint{AuthURL: "https://idp.example.com/auth"},
-				},
-			},
-		},
+	svc := &Service{
+		stateKey:  []byte("test-state-key-32-bytes-long-000"),
+		providers: map[string]*ProviderInstance{},
 	}
+	svc.addProvider(&ProviderInstance{
+		Name: "test",
+		oauth2: &oauth2.Config{
+			ClientID: "cid",
+			Endpoint: oauth2.Endpoint{AuthURL: "https://idp.example.com/auth"},
+		},
+	})
+	return svc
 }
 
 // TestAuthCodeURL_SendsNonce is the C-1 regression test: AuthCodeURL must send
@@ -242,7 +242,8 @@ func TestProvider_NilAndUnknown(t *testing.T) {
 }
 
 // TestProviders covers the nil/empty cases (must return nil, not an empty
-// slice) and the populated case.
+// slice), the populated case, and the returned-order contract: configuration
+// order, independent of the name-keyed lookup map.
 func TestProviders(t *testing.T) {
 	var nilSvc *Service
 	if ps := nilSvc.Providers(); ps != nil {
@@ -253,17 +254,18 @@ func TestProviders(t *testing.T) {
 	}
 	svc := newTestService(t)
 	// Add a second provider to guard against a single-element coincidence.
-	svc.providers["test2"] = &ProviderInstance{Name: "test2"}
+	svc.addProvider(&ProviderInstance{Name: "test2"})
 	ps := svc.Providers()
 	if len(ps) != 2 {
 		t.Fatalf("Providers = %d items, want 2", len(ps))
 	}
-	names := map[string]bool{}
-	for _, p := range ps {
-		names[p.Name] = true
+	if ps[0].Name != "test" || ps[1].Name != "test2" {
+		t.Errorf("Providers order = [%s, %s], want [test, test2] (configuration order)", ps[0].Name, ps[1].Name)
 	}
-	if !names["test"] || !names["test2"] {
-		t.Errorf("Providers missing expected names, got %v", names)
+	// The returned slice is a copy: mutating it must not affect the service.
+	ps[0], ps[1] = ps[1], ps[0]
+	if again := svc.Providers(); again[0].Name != "test" || again[1].Name != "test2" {
+		t.Errorf("Providers internal order mutated via returned slice: [%s, %s]", again[0].Name, again[1].Name)
 	}
 }
 

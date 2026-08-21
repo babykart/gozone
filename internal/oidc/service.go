@@ -76,7 +76,13 @@ func (inst *ProviderInstance) cloneOAuth2Config(callbackURL string) oauth2.Confi
 // stateless, PKCE-backed authorization flow. The zero value is a disabled
 // service (Enabled() == false, every provider lookup misses).
 type Service struct {
-	providers  map[string]*ProviderInstance
+	providers map[string]*ProviderInstance
+	// order preserves the configuration order of the discovered providers;
+	// Providers() iterates it so the login page renders the sign-in buttons
+	// in a stable, operator-defined sequence. Go map iteration is
+	// deliberately randomized, so the map alone cannot honour that contract.
+	// Kept in sync with providers by addProvider.
+	order      []*ProviderInstance
 	stateKey   []byte
 	keySets    []*cachedKeySet // started background refresh goroutines; Close stops them
 	usedStates *stateStore     // L-3: server-side single-use enforcement for OIDC state tokens
@@ -89,6 +95,15 @@ var ErrDisabled = errors.New("oidc: single sign-on is disabled")
 // ErrUnknownProvider is returned when a provider name has no configured
 // instance (e.g. a stale login button or a tampered state token).
 var ErrUnknownProvider = errors.New("oidc: unknown provider")
+
+// addProvider records a discovered provider in both lookup structures: the
+// name-keyed map used by Provider(), and the configuration-order slice iterated
+// by Providers(). Callers must never populate svc.providers directly or the two
+// structures drift apart.
+func (s *Service) addProvider(inst *ProviderInstance) {
+	s.providers[inst.Name] = inst
+	s.order = append(s.order, inst)
+}
 
 // NewService discovers and wires every provider declared in the configuration.
 //
@@ -115,7 +130,7 @@ func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Servi
 				"provider", pc.Name, "issuer", pc.IssuerURL, "error", err)
 			continue
 		}
-		svc.providers[pc.Name] = inst
+		svc.addProvider(inst)
 		if keySet != nil {
 			svc.keySets = append(svc.keySets, keySet)
 		}
@@ -166,15 +181,14 @@ func (s *Service) EndSessionURL(provider string) string {
 }
 
 // Providers returns the configured providers in a stable order (configuration
-// order) so the login page can render consistent buttons.
+// order) so the login page can render consistent buttons. The returned slice
+// is a copy: callers cannot reorder the service's internal state.
 func (s *Service) Providers() []*ProviderInstance {
-	if s == nil || len(s.providers) == 0 {
+	if s == nil || len(s.order) == 0 {
 		return nil
 	}
-	out := make([]*ProviderInstance, 0, len(s.providers))
-	for _, p := range s.providers {
-		out = append(out, p)
-	}
+	out := make([]*ProviderInstance, len(s.order))
+	copy(out, s.order)
 	return out
 }
 
