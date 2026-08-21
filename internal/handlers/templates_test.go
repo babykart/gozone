@@ -814,3 +814,84 @@ func TestBulkDeleteTemplates_NoSelection(t *testing.T) {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }
+
+// TestSubstituteTemplateRecords_ValueContainingPlaceholderFailsDeterministically
+// guards the single-pass substitution semantics. When a variable value itself
+// contains another variable's placeholder (here MX_HOST="{{ZONE}}"), the
+// placeholder must be emitted literally and reported as unresolved on EVERY
+// call — never substituted as a side effect of iteration order. The previous
+// map-range loop replaced each marker in the output of the previous one, so
+// the same request succeeded or failed at random: roughly half the runs
+// cascaded the nested {{ZONE}} into the zone name, the other half failed with
+// "missing template variable(s)". The 20-iteration loop makes this test fail
+// reliably against the old implementation.
+func TestSubstituteTemplateRecords_ValueContainingPlaceholderFailsDeterministically(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "@", Type: "MX", Content: "{{MX_HOST}}", TTL: 3600, Priority: 10},
+	}
+	vars := map[string]string{
+		"ZONE":    "example.com.",
+		"MX_HOST": "{{ZONE}}", // pathological: value contains another variable's marker
+	}
+
+	for i := 0; i < 20; i++ {
+		_, err := h.substituteTemplateRecords("example.com.", records, vars)
+		if err == nil {
+			t.Fatalf("iteration %d: nested placeholder must never cascade into a substitution", i)
+		}
+		if !strings.Contains(err.Error(), "ZONE") {
+			t.Fatalf("iteration %d: error must name the leftover placeholder, got %q", i, err.Error())
+		}
+	}
+}
+
+// TestSubstituteTemplateRecords_DeterministicAcrossRuns pins the happy path:
+// with several variables in play, repeated substitutions must be
+// byte-identical. Each call used to iterate the merged map in a fresh random
+// order, so an order-sensitive input could in principle flip results between
+// runs.
+func TestSubstituteTemplateRecords_DeterministicAcrossRuns(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "@", Type: "SOA", Content: "ns1.{{ZONE}} hostmaster.{{ZONE}} 1 {{REFRESH}} {{RETRY}} {{EXPIRE}} {{MINIMUM}}", TTL: 3600},
+		{Name: "www", Type: "A", Content: "{{IP}}", TTL: 3600},
+		{Name: "@", Type: "MX", Content: "{{MX_HOST}}", TTL: 3600, Priority: 10},
+	}
+	vars := map[string]string{
+		"ZONE":    "example.com.",
+		"IP":      "192.0.2.1",
+		"MX_HOST": "mail.example.com.",
+		"RETRY":   "7200", // override one SOA timer default
+	}
+
+	var first []models.RRSet
+	for i := 0; i < 20; i++ {
+		rrsets, err := h.substituteTemplateRecords("example.com.", records, vars)
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		if i == 0 {
+			first = rrsets
+			continue
+		}
+		if len(rrsets) != len(first) {
+			t.Fatalf("iteration %d: %d rrsets, want %d", i, len(rrsets), len(first))
+		}
+		for j := range rrsets {
+			if rrsets[j].Name != first[j].Name || rrsets[j].Records[0].Content != first[j].Records[0].Content {
+				t.Fatalf("iteration %d rrset %d differs: %+v vs %+v", i, j, rrsets[j], first[j])
+			}
+		}
+	}
+	// Spot-check the actual values so the stability being pinned is the
+	// correct output, not just a consistently wrong one.
+	if got := first[0].Records[0].Content; got != "ns1.example.com. hostmaster.example.com. 1 10800 7200 604800 3600" {
+		t.Errorf("SOA content = %q, want overridden RETRY and defaulted timers", got)
+	}
+	if got := first[2].Records[0].Content; got != "10 mail.example.com." {
+		t.Errorf("MX content = %q, want %q", got, "10 mail.example.com.")
+	}
+}

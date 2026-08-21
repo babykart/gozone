@@ -438,6 +438,16 @@ func (h *Handler) getAllTemplates() ([]models.ZoneTemplate, error) {
 // contents and converts template records to PowerDNS RRSets. Missing SOA timer
 // variables fall back to templateVarDefaults. It returns an error if any
 // placeholder is left unsubstituted (a required variable was not provided).
+//
+// Substitution is a single pass: a strings.Replacer never re-scans replacement
+// text, so a variable value that itself contains another variable's
+// placeholder (e.g. MX_HOST="{{ZONE}}") is emitted literally and reported as
+// unresolved instead of being substituted only when map iteration happened to
+// visit the outer variable first — the previous map-range loop made the same
+// request succeed or fail at random. The pair order is canonical
+// (TemplateVariables order, then any extra keys sorted) so the outcome never
+// depends on Go's randomised map iteration; the function still accepts
+// variables beyond TemplateVariables.
 func (h *Handler) substituteTemplateRecords(zoneID string, records []models.ZoneTemplateRecord, vars map[string]string) ([]models.RRSet, error) {
 	// Merge defaults under the caller-provided values without mutating vars.
 	merged := make(map[string]string, len(vars)+len(templateVarDefaults))
@@ -450,17 +460,14 @@ func (h *Handler) substituteTemplateRecords(zoneID string, records []models.Zone
 		}
 	}
 
+	replacer := templateVarReplacer(merged)
+
 	rrsets := make([]models.RRSet, 0, len(records))
 	missing := make(map[string]struct{})
 
 	for _, r := range records {
-		name := r.Name
-		content := r.Content
-
-		for v, val := range merged {
-			name = strings.ReplaceAll(name, "{{"+v+"}}", val)
-			content = strings.ReplaceAll(content, "{{"+v+"}}", val)
-		}
+		name := replacer.Replace(r.Name)
+		content := replacer.Replace(r.Content)
 
 		for _, leftover := range unsubstitutedVar.FindAllString(name+" "+content, -1) {
 			missing[strings.Trim(leftover, "{}")] = struct{}{}
@@ -494,6 +501,39 @@ func (h *Handler) substituteTemplateRecords(zoneID string, records []models.Zone
 	}
 
 	return rrsets, nil
+}
+
+// templateVarReplacer builds a single-pass replacer for the merged variable
+// set. Pair order is canonical — the declared TemplateVariables first, in
+// declaration order, then any extra keys sorted alphabetically — so two
+// identical calls always produce byte-identical substitutions regardless of
+// Go's randomised map iteration. Because strings.Replacer scans the input
+// once and never re-scans replacement text, a value containing another
+// variable's placeholder is emitted literally rather than substituted
+// depending on iteration order.
+func templateVarReplacer(merged map[string]string) *strings.Replacer {
+	known := make(map[string]struct{}, len(TemplateVariables))
+	for _, v := range TemplateVariables {
+		known[v] = struct{}{}
+	}
+	var extras []string
+	for k := range merged {
+		if _, ok := known[k]; !ok {
+			extras = append(extras, k)
+		}
+	}
+	sort.Strings(extras)
+
+	pairs := make([]string, 0, 2*(len(TemplateVariables)+len(extras)))
+	for _, v := range TemplateVariables {
+		if val, ok := merged[v]; ok {
+			pairs = append(pairs, "{{"+v+"}}", val)
+		}
+	}
+	for _, v := range extras {
+		pairs = append(pairs, "{{"+v+"}}", merged[v])
+	}
+	return strings.NewReplacer(pairs...)
 }
 
 // collectTemplateVars extracts template variable values from a form.
