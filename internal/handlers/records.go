@@ -13,6 +13,11 @@ import (
 	"github.com/babykart/gozone/internal/validators"
 )
 
+// defaultRecordTTL is applied when a record is created without an explicit
+// TTL preference (empty form field) and no existing RRSet TTL can be
+// inherited.
+const defaultRecordTTL = 3600
+
 // CreateRecordPage renders the record creation form for a zone (GET /zones/{zone_id}/records/new).
 func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
@@ -35,9 +40,14 @@ func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 
 // CreateRecord creates a DNS record in a zone from form data (POST /zones/{zone_id}/records/create).
 //
-// Accepts name, type, content, ttl, and priority form values. Defaults TTL to 3600.
+// Accepts name, type, content, ttl, and priority form values. An empty TTL
+// means "no preference": when the record merges into an existing RRSet the
+// RRSet's current TTL is kept (adding a sibling record must not silently
+// rewrite it), and for a brand-new RRSet the 3600 default applies. An explicit
+// TTL is applied as submitted, including on a merge.
 // Merges into existing RRSet when name+type matches, preserving sibling records.
 func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
+
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
@@ -49,10 +59,11 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	comment := r.FormValue("comment")
 	commentClear := r.FormValue("comment_clear") == "1" || r.FormValue("comment_clear") == "true"
 
-	// Empty TTL defaults to 3600; an explicit non-numeric or non-positive
-	// value is rejected so the activity log records what the user actually
-	// typed, not a silent substitution (REVIEW.md L-4).
-	ttl := 3600
+	// An empty TTL means "no preference" (kept as 0 until resolution below);
+	// an explicit non-numeric or non-positive value is rejected so the
+	// activity log records what the user actually typed, not a silent
+	// substitution.
+	ttl := 0
 	if ttlStr != "" {
 		v, err := strconv.Atoi(ttlStr)
 		if err != nil || v <= 0 {
@@ -111,6 +122,21 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		if rr.Name == name && rr.Type == recordType {
 			existingRRSet = &rr
 			break
+		}
+	}
+
+	// Resolve an unspecified TTL. On a merge the RRSet's current TTL wins:
+	// PowerDNS applies the RRSet-level TTL to every record in the set, so
+	// submitting the form default here would silently rewrite the TTL of the
+	// pre-existing sibling records (e.g. a deliberately short 300s TTL jumps
+	// to 3600 just by adding a second A record). For a brand-new RRSet the
+	// 3600 default applies. An explicitly submitted TTL bypasses this
+	// resolution entirely and is applied as typed.
+	if ttl == 0 {
+		if existingRRSet != nil {
+			ttl = existingRRSet.TTL
+		} else {
+			ttl = defaultRecordTTL
 		}
 	}
 
@@ -469,7 +495,12 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 			return nil, nil, nil, fmt.Errorf("Invalid record name '%s': %w", name, err)
 		}
 
-		ttl := 3600
+		// An empty TTL means "no preference" (0 until the merge resolves it:
+		// existing RRSet TTL on a merge, defaultRecordTTL otherwise); an
+		// explicit non-numeric or non-positive value is rejected rather than
+		// silently substituted, so the activity log records what the user
+		// actually typed.
+		ttl := 0
 		if i < len(ttls) {
 			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
 				v, err := strconv.Atoi(ttlStr)
@@ -531,8 +562,11 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 // mergeBatchRRSets groups the new one-record RRSets by name+type and merges
 // them into the existing RRSets fetched from PowerDNS, so a batch that adds
 // several records to the same RRSet (or to an existing one) produces a single
-// merged RRSet per name+type. The TTL follows the new submission. Returns the
-// merged RRSets keyed by "name|type".
+// merged RRSet per name+type. An explicit TTL on the new submission is applied
+// to the merged RRSet; an unspecified (0) TTL keeps the existing RRSet's TTL —
+// PowerDNS applies the RRSet-level TTL to every record, so inheriting the
+// submission default here would silently rewrite the siblings' TTL. Returns
+// the merged RRSets keyed by "name|type".
 func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) map[string]*models.RRSet {
 	existingMap := make(map[string]*models.RRSet)
 	for i := range existing {
@@ -550,7 +584,9 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) map[str
 				for _, nr := range newRR.Records {
 					clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
 				}
-				clone.TTL = newRR.TTL
+				if newRR.TTL > 0 {
+					clone.TTL = newRR.TTL
+				}
 				merged[key] = &clone
 			}
 		} else {
@@ -579,6 +615,12 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) map[str
 func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment) []models.RRSet {
 	var out []models.RRSet
 	for key, rr := range merged {
+		// Last-resort TTL resolution: a merged RRSet that neither inherited an
+		// existing TTL (new RRSet) nor carried an explicit one still needs a
+		// positive value for PowerDNS.
+		if rr.TTL <= 0 {
+			rr.TTL = defaultRecordTTL
+		}
 		for i := range rr.Records {
 			rr.Records[i].Content, rr.Records[i].Priority =
 				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)

@@ -3112,3 +3112,173 @@ func TestRRSetSnapshot_NonPriorityUntouched(t *testing.T) {
 		t.Errorf("expected A content unchanged, got %s", got)
 	}
 }
+
+// TestCreateRecord_EmptyTTLKeepsExistingRRSetTTL guards the TTL semantics of
+// the create form: an empty TTL field means "no preference", so adding a
+// record to an existing RRSet must keep the RRSet's current TTL. PowerDNS
+// applies the RRSet-level TTL to every record in the set, so inheriting a form
+// default here would silently rewrite the TTL of the pre-existing siblings.
+func TestCreateRecord_EmptyTTLKeepsExistingRRSetTTL(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader("name=www&type=A&content=2.2.2.2"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(sent))
+	}
+	if sent[0].TTL != 300 {
+		t.Errorf("merge without an explicit TTL must keep the existing RRSet TTL 300, got %d", sent[0].TTL)
+	}
+	if len(sent[0].Records) != 2 {
+		t.Errorf("expected 2 records (original + new), got %d", len(sent[0].Records))
+	}
+}
+
+// TestCreateRecord_ExplicitTTLAppliesOnMerge complements the preservation
+// test: a TTL the operator actually typed is applied to the merged RRSet,
+// overriding the existing value — the explicit path stays an intentional
+// TTL change.
+func TestCreateRecord_ExplicitTTLAppliesOnMerge(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader("name=www&type=A&content=2.2.2.2&ttl=900"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 900 {
+		t.Fatalf("explicit TTL 900 must apply on merge, got %+v", sent)
+	}
+}
+
+// TestCreateRecord_EmptyTTLDefaultsOnNewRRSet verifies the other side of the
+// empty-TTL resolution: with no existing RRSet to inherit from, the 3600
+// default applies (previously hard-coded both in the handler and in the form).
+func TestCreateRecord_EmptyTTLDefaultsOnNewRRSet(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader("name=www&type=A&content=2.2.2.2"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 3600 {
+		t.Fatalf("new RRSet without an explicit TTL must get the 3600 default, got %+v", sent)
+	}
+}
+
+// TestBatchCreateRecords_EmptyTTLPreservesExistingAndDefaultsNew exercises
+// both empty-TTL branches of the batch path in a single submission: the row
+// merging into an existing RRSet inherits its TTL, the row creating a new
+// RRSet gets the 3600 default.
+func TestBatchCreateRecords_EmptyTTLPreservesExistingAndDefaultsNew(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www&type=A&content=2.2.2.2&name=api&type=A&content=9.9.9.9"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 2 {
+		t.Fatalf("expected 2 patched RRSets, got %d (%+v)", len(sent), sent)
+	}
+	ttls := map[string]int{}
+	for _, rr := range sent {
+		ttls[rr.Name] = rr.TTL
+	}
+	if ttls["www.example.com."] != 300 {
+		t.Errorf("merged row without explicit TTL must keep the existing RRSet TTL 300, got %d", ttls["www.example.com."])
+	}
+	if ttls["api.example.com."] != 3600 {
+		t.Errorf("new RRSet without explicit TTL must get the 3600 default, got %d", ttls["api.example.com."])
+	}
+}
+
+// TestBatchCreateRecords_ExplicitTTLAppliesOnMerge verifies the batch
+// counterpart of the explicit-TTL path.
+func TestBatchCreateRecords_ExplicitTTLAppliesOnMerge(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader("name=www&type=A&content=2.2.2.2&ttl=900"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 900 {
+		t.Fatalf("explicit TTL 900 must apply on merge, got %+v", sent)
+	}
+}

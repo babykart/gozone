@@ -251,11 +251,13 @@ function addRecordRow() {
     }
     var inputs = template.querySelectorAll('input[type=text], input[type=number]');
     for (var i = 0; i < inputs.length; i++) {
-        if (inputs[i].name === 'ttl') {
-            inputs[i].value = '3600';
-        } else if (inputs[i].name === 'priority') {
+        if (inputs[i].name === 'priority') {
             inputs[i].value = '0';
         } else {
+            // Includes ttl: an empty field means "no preference" — the server
+            // keeps the existing RRSet TTL when merging and applies the 3600
+            // default for a new RRSet, so a cloned row never silently rewrites
+            // the TTL of records already in the set.
             inputs[i].value = '';
         }
     }
