@@ -335,7 +335,7 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 				if vars["ZONE"] == "" {
 					vars["ZONE"] = zone.Name
 				}
-				rrsets, err := h.substituteTemplateRecords(zone.ID, records, vars)
+				rrsets, err := h.substituteTemplateRecords(zone.ID, h.templateLabelFor(templateID, templateIDStr), records, vars)
 				if err == nil {
 					err = h.PDNS.CreateRecords(r.Context(), zone.ID, rrsets)
 				}

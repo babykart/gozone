@@ -344,6 +344,26 @@ func (h *Handler) DeleteTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
 }
 
+// getTemplateName returns the template's display name, or "" when it cannot
+// be determined (unknown id or query failure). Callers use it to label
+// apply-time validation errors so the operator knows which template to fix.
+func (h *Handler) getTemplateName(templateID int64) string {
+	var name string
+	if err := h.DB.QueryRow("SELECT name FROM zone_templates WHERE id = ?", templateID).Scan(&name); err != nil {
+		return ""
+	}
+	return name
+}
+
+// templateLabelFor returns a human-readable label for a template id: its
+// name, or a "#<id>" fallback when the name is unavailable.
+func (h *Handler) templateLabelFor(templateID int64, templateIDStr string) string {
+	if name := h.getTemplateName(templateID); name != "" {
+		return name
+	}
+	return "#" + templateIDStr
+}
+
 // ApplyTemplateToZone applies template records to an existing zone.
 func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
@@ -370,7 +390,7 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	if vars["ZONE"] == "" {
 		vars["ZONE"] = zoneID
 	}
-	rrsets, err := h.substituteTemplateRecords(zoneID, records, vars)
+	rrsets, err := h.substituteTemplateRecords(zoneID, h.templateLabelFor(templateID, templateIDStr), records, vars)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return
@@ -439,6 +459,15 @@ func (h *Handler) getAllTemplates() ([]models.ZoneTemplate, error) {
 // variables fall back to templateVarDefaults. It returns an error if any
 // placeholder is left unsubstituted (a required variable was not provided).
 //
+// Each fully-substituted record is validated (type, name, content, priority)
+// exactly like the other write paths — web form, REST API, BIND/CSV import —
+// so a stored template with a placeholder that resolves to an invalid value
+// fails with a precise message instead of an opaque PowerDNS rejection.
+// templateLabel names the template in validation errors so the operator knows
+// which definition to fix. Records with unresolved variables skip validation:
+// they are already reported by the aggregated missing-variable error, which
+// stays the primary diagnosis.
+//
 // Substitution is a single pass: a strings.Replacer never re-scans replacement
 // text, so a variable value that itself contains another variable's
 // placeholder (e.g. MX_HOST="{{ZONE}}") is emitted literally and reported as
@@ -448,7 +477,7 @@ func (h *Handler) getAllTemplates() ([]models.ZoneTemplate, error) {
 // (TemplateVariables order, then any extra keys sorted) so the outcome never
 // depends on Go's randomised map iteration; the function still accepts
 // variables beyond TemplateVariables.
-func (h *Handler) substituteTemplateRecords(zoneID string, records []models.ZoneTemplateRecord, vars map[string]string) ([]models.RRSet, error) {
+func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, records []models.ZoneTemplateRecord, vars map[string]string) ([]models.RRSet, error) {
 	// Merge defaults under the caller-provided values without mutating vars.
 	merged := make(map[string]string, len(vars)+len(templateVarDefaults))
 	for k, v := range templateVarDefaults {
@@ -465,18 +494,31 @@ func (h *Handler) substituteTemplateRecords(zoneID string, records []models.Zone
 	rrsets := make([]models.RRSet, 0, len(records))
 	missing := make(map[string]struct{})
 
-	for _, r := range records {
+	for i, r := range records {
 		name := replacer.Replace(r.Name)
 		content := replacer.Replace(r.Content)
 
+		incomplete := false
 		for _, leftover := range unsubstitutedVar.FindAllString(name+" "+content, -1) {
 			missing[strings.Trim(leftover, "{}")] = struct{}{}
+			incomplete = true
 		}
 
 		if name == "@" {
 			name = zoneID
 		} else if !strings.HasSuffix(name, ".") {
 			name = name + "." + zoneID
+		}
+
+		if !incomplete {
+			// Validate the substituted record (final FQDN name, logical
+			// content before wire normalisation). The error names the
+			// template, the 1-based record index and the template's original
+			// (pre-substitution) name so the operator can locate the line to
+			// fix in the template editor.
+			if err := validateParsedRecord(r.Type, name, content, r.Priority); err != nil {
+				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, r.Type, r.Name, err)
+			}
 		}
 
 		// Embed MX/SRV priority into the content; PDNS rejects a separate

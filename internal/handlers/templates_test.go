@@ -503,7 +503,7 @@ func TestSubstituteTemplateRecords(t *testing.T) {
 		"POLICY":  "none",
 	}
 
-	rrsets, err := h.substituteTemplateRecords("example.com.", records, vars)
+	rrsets, err := h.substituteTemplateRecords("example.com.", "test", records, vars)
 	if err != nil {
 		t.Fatalf("substituteTemplateRecords: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestSubstituteTemplateRecords_AbsoluteName(t *testing.T) {
 	}
 
 	vars := map[string]string{"IP": "10.0.0.1"}
-	rrsets, err := h.substituteTemplateRecords("example.com.", records, vars)
+	rrsets, err := h.substituteTemplateRecords("example.com.", "test", records, vars)
 	if err != nil {
 		t.Fatalf("substituteTemplateRecords: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestSubstituteTemplateRecords_MissingVariable(t *testing.T) {
 	// Neither MX_HOST nor IP6 has a default; both must be reported (IP6 also
 	// guards the digit in the placeholder regex) instead of being emitted as
 	// literals that PDNS would reject.
-	_, err := h.substituteTemplateRecords("example.com.", records, map[string]string{"ZONE": "example.com."})
+	_, err := h.substituteTemplateRecords("example.com.", "test", records, map[string]string{"ZONE": "example.com."})
 	if err == nil {
 		t.Fatal("expected error for missing variables, got nil")
 	}
@@ -582,7 +582,7 @@ func TestSubstituteTemplateRecords_SOATimerDefaults(t *testing.T) {
 		{Name: "@", Type: "SOA", Content: "ns1.{{ZONE}} hostmaster.{{ZONE}} 1 {{REFRESH}} {{RETRY}} {{EXPIRE}} {{MINIMUM}}", TTL: 3600},
 	}
 
-	rrsets, err := h.substituteTemplateRecords("example.com.", records, map[string]string{"ZONE": "example.com."})
+	rrsets, err := h.substituteTemplateRecords("example.com.", "test", records, map[string]string{"ZONE": "example.com."})
 	if err != nil {
 		t.Fatalf("substituteTemplateRecords: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestSubstituteTemplateRecords_ValueContainingPlaceholderFailsDeterministica
 	}
 
 	for i := 0; i < 20; i++ {
-		_, err := h.substituteTemplateRecords("example.com.", records, vars)
+		_, err := h.substituteTemplateRecords("example.com.", "test", records, vars)
 		if err == nil {
 			t.Fatalf("iteration %d: nested placeholder must never cascade into a substitution", i)
 		}
@@ -869,7 +869,7 @@ func TestSubstituteTemplateRecords_DeterministicAcrossRuns(t *testing.T) {
 
 	var first []models.RRSet
 	for i := 0; i < 20; i++ {
-		rrsets, err := h.substituteTemplateRecords("example.com.", records, vars)
+		rrsets, err := h.substituteTemplateRecords("example.com.", "test", records, vars)
 		if err != nil {
 			t.Fatalf("iteration %d: %v", i, err)
 		}
@@ -893,5 +893,76 @@ func TestSubstituteTemplateRecords_DeterministicAcrossRuns(t *testing.T) {
 	}
 	if got := first[2].Records[0].Content; got != "10 mail.example.com." {
 		t.Errorf("MX content = %q, want %q", got, "10 mail.example.com.")
+	}
+}
+
+// TestSubstituteTemplateRecords_InvalidSubstitutedValue closes the validation
+// gap of the template apply path: every other write path (web form, REST API,
+// BIND/CSV import) validates records before they reach PowerDNS, but template
+// records were sent as-is once variables were substituted. A stored template
+// whose placeholder resolves to an invalid value must fail here with a message
+// naming the template, the record index and the template's original record —
+// not with a generic PowerDNS rejection after the PATCH.
+func TestSubstituteTemplateRecords_InvalidSubstitutedValue(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "@", Type: "A", Content: "192.0.2.1", TTL: 3600},
+		{Name: "www", Type: "A", Content: "{{IP}}", TTL: 3600},
+	}
+	// The template form skips content validation when a "{{" placeholder is
+	// present (the literal is invalid until substitution), so garbage values
+	// can only be caught at apply time.
+	vars := map[string]string{"ZONE": "example.com.", "IP": "not-an-ip"}
+
+	_, err := h.substituteTemplateRecords("example.com.", "web", records, vars)
+	if err == nil {
+		t.Fatal("expected an error for a substituted value that is not an IPv4 address")
+	}
+	for _, needle := range []string{`template "web"`, "record 2", "www", "not-an-ip"} {
+		if !strings.Contains(err.Error(), needle) {
+			t.Errorf("error %q should contain %q so the operator can locate the template line to fix", err.Error(), needle)
+		}
+	}
+}
+
+// TestApplyTemplateToZone_InvalidRecordRejected is the handler-level twin: a
+// seeded template record resolving to garbage must abort the apply with the
+// labelled validation message, and PowerDNS must never receive the PATCH.
+func TestApplyTemplateToZone_InvalidRecordRejected(t *testing.T) {
+	patched := false
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "broken-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "{{IP}}", 3600)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10) + "&var_IP=garbage"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if patched {
+		t.Error("PowerDNS must not be called when a template record fails validation")
+	}
+	page := w.Body.String()
+	for _, needle := range []string{"broken-tmpl", "record 1"} {
+		if !strings.Contains(page, needle) {
+			t.Errorf("error page should contain %q, got: %s", needle, page)
+		}
+	}
+	if strings.Contains(page, "Error: PowerDNS rejected") {
+		t.Error("the opaque PowerDNS failure must no longer be the surfaced message")
 	}
 }
