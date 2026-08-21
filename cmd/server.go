@@ -35,6 +35,7 @@ import (
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/oidc"
 	"github.com/babykart/gozone/internal/pdns"
+	"github.com/babykart/gozone/internal/validators"
 	versionpkg "github.com/babykart/gozone/internal/version"
 	"github.com/babykart/gozone/web"
 )
@@ -906,8 +907,10 @@ func httpsResolverMiddleware(cfg *config.Config) func(http.Handler) http.Handler
 }
 
 // emptyUsernameRateLimitKey is the shared rate-limit bucket for login attempts
-// that carry no username. It is not a valid username (ValidateUsername requires
-// ≥3 chars starting with a letter), so it cannot collide with a real account.
+// that carry no username, or one that is too long to be a valid username. It
+// is not a valid username (ValidateUsername requires ≥3 chars starting with a
+// letter, and at most MaxUsernameLength bytes), so it cannot collide with a
+// real account.
 const emptyUsernameRateLimitKey = "<empty-username>"
 
 // loginUsernameKey returns the attempted login username (lowercased and
@@ -918,9 +921,18 @@ const emptyUsernameRateLimitKey = "<empty-username>"
 // with no username do not bypass the per-username rate limiter —
 // RateLimiter.Limit skips enforcement when the key is "". The sentinel is not a
 // valid username, so it cannot collide with a real account's bucket.
+//
+// A username longer than MaxUsernameLength bytes also maps to the sentinel.
+// Two reasons: such an input cannot name a real account (validation rejects
+// it), so it needs no dedicated bucket; and the username is client-controlled
+// and used verbatim as the bucket map key — without the bound, an unauthenticated
+// caller could grow the limiter's memory by ~1 MiB of distinct keys per request
+// (the body limit). The byte-length check runs on the final value, after trim
+// and lowercasing, so every stored key is bounded by MaxUsernameLength bytes
+// regardless of how the transformations reshape the input.
 func loginUsernameKey(r *http.Request) string {
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
-	if username == "" {
+	if username == "" || len(username) > validators.MaxUsernameLength {
 		return emptyUsernameRateLimitKey
 	}
 	return username

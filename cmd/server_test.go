@@ -22,6 +22,7 @@ import (
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/validators"
 	"github.com/babykart/gozone/web"
 )
 
@@ -253,7 +254,8 @@ func TestAPIRateLimitRunsBeforeAuth(t *testing.T) {
 // TestLoginUsernameKey covers the m35 fix at the key-function level: an empty
 // (or whitespace-only) username must map to a dedicated sentinel bucket rather
 // than "" (which bypasses the per-username rate limiter), while real usernames
-// are lowercased and trimmed.
+// are lowercased and trimmed. Over-long usernames (which cannot name a real
+// account) also collapse onto the sentinel so the bucket map key stays bounded.
 func TestLoginUsernameKey(t *testing.T) {
 	tests := []struct {
 		name string
@@ -266,6 +268,18 @@ func TestLoginUsernameKey(t *testing.T) {
 		{"simple", "username=admin", "admin"},
 		{"uppercased", "username=ADMIN", "admin"},
 		{"surrounding spaces", "username=+admin+", "admin"},
+		// Exactly the maximum valid length: kept as its own key.
+		{"max length username", "username=" + strings.Repeat("a", validators.MaxUsernameLength), strings.Repeat("a", validators.MaxUsernameLength)},
+		// One byte past the maximum: cannot name a real account, shares the sentinel.
+		{"over max length", "username=" + strings.Repeat("a", validators.MaxUsernameLength+1), emptyUsernameRateLimitKey},
+		// Pathological payload: a kilobyte-long username collapses onto the sentinel.
+		{"kilobyte username", "username=" + strings.Repeat("z", 1024), emptyUsernameRateLimitKey},
+		// Multi-byte input is bounded by BYTES, not runes: 33 × 'é' is 33
+		// runes but 66 bytes — one byte past the cap even though the rune
+		// count is not — so it shares the sentinel. 10 × 'é' (20 bytes)
+		// stays under the cap and keeps its own key.
+		{"multi-byte over cap", "username=" + strings.Repeat("\u00e9", 33), emptyUsernameRateLimitKey},
+		{"multi-byte under cap", "username=" + strings.Repeat("\u00e9", 10), strings.Repeat("\u00e9", 10)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,6 +289,37 @@ func TestLoginUsernameKey(t *testing.T) {
 				t.Errorf("loginUsernameKey() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLoginUsernameRateLimit_LongUsernamesShareBucket is the behavioural
+// companion to the key-function table above: login attempts carrying many
+// distinct over-long usernames must all consume the same shared bucket (and
+// eventually hit 429) instead of allocating one bucket per distinct payload,
+// which previously let an unauthenticated caller grow the limiter's memory
+// with the request body as the only bound.
+func TestLoginUsernameRateLimit_LongUsernamesShareBucket(t *testing.T) {
+	const userLimit = 3
+	limiter := middleware.NewRateLimiter(userLimit)
+	t.Cleanup(limiter.Close)
+
+	handler := limiter.Limit(loginUsernameKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// userLimit+1 distinct over-long usernames: they share the sentinel
+	// bucket, so the last request must be 429.
+	var lastCode int
+	for i := 0; i < userLimit+1; i++ {
+		body := "username=" + strings.Repeat("a", 64) + fmt.Sprint(i)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handler.ServeHTTP(w, r)
+		lastCode = w.Code
+	}
+	if lastCode != http.StatusTooManyRequests {
+		t.Errorf("expected the last distinct over-long username to be rate-limited (shared bucket), got %d", lastCode)
 	}
 }
 

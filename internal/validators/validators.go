@@ -249,8 +249,14 @@ func ValidateTSIGAlgorithm(algorithm string) error {
 	return nil
 }
 
-// usernameRegex requires 3 to 32 characters: alphanumeric, underscores,
-// and hyphens. Must start with a letter.
+// MaxUsernameLength is the maximum length in bytes of a valid username, as
+// enforced by usernameRegex. Exported so callers that need to reason about
+// username validity (e.g. bounding the size of usernames used as rate-limit
+// bucket keys) stay in sync with the validation rules.
+const MaxUsernameLength = 32
+
+// usernameRegex requires 3 to MaxUsernameLength characters: alphanumeric,
+// underscores, and hyphens. Must start with a letter.
 var usernameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]{2,31}$`)
 
 // ValidateUsername checks that a username meets the application rules.
