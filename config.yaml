@@ -118,6 +118,9 @@ login_lock:
   attempts_retention_hours: 24
 
 logging:
+  # debug, info, warn or error. Overridable at runtime with GOZONE_LOG_LEVEL —
+  # the one-liner way to raise the level during an incident on a containerised
+  # deployment (docker run -e / kubectl set env) without mounting a config file.
   level: "info"
 
 # Activity log retention. Logs older than retention_days are automatically

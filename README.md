@@ -272,7 +272,7 @@ Like `unlock`, the reset writes a `reset_password_cli` entry to `activity_logs` 
 
 | YAML Path | Environment Variable | Default |
 |-----------|---------------------|---------|
-| `logging.level` | — | `info` |
+| `logging.level` | `GOZONE_LOG_LEVEL` | `info` |
 
 ### Activity Log Retention
 

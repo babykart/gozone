@@ -419,7 +419,7 @@ func DefaultConfig() *Config {
 // GOZONE_PASSWORD_MAX_LENGTH, GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
 // GOZONE_PASSWORD_EXPIRY_WARN_DAYS, GOZONE_PASSWORD_REQUIRE_UPPERCASE,
 // GOZONE_PASSWORD_REQUIRE_LOWERCASE, GOZONE_PASSWORD_REQUIRE_DIGIT,
-// GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_OIDC_ENABLED,
+// GOZONE_PASSWORD_REQUIRE_SPECIAL, GOZONE_LOG_LEVEL, GOZONE_OIDC_ENABLED,
 // GOZONE_OIDC_ALLOW_LOCAL_LOGIN, GOZONE_OIDC_AUTO_PROVISION,
 // GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL, GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
 // GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
@@ -879,6 +879,9 @@ var envOverrides = []envOverride{
 	boolOverride{"GOZONE_PASSWORD_REQUIRE_SPECIAL", func(c *Config, b bool) { c.Password.RequireSpecial = b }},
 	intOverride{"GOZONE_PASSWORD_MAX_AGE_DAYS", func(c *Config, n int) { c.Password.MaxAgeDays = n }},
 	intOverride{"GOZONE_PASSWORD_EXPIRY_WARN_DAYS", func(c *Config, n int) { c.Password.ExpiryWarnDays = n }},
+	// logging — the only way to raise the level during an incident on a
+	// containerised deployment without mounting a config file
+	strOverride{"GOZONE_LOG_LEVEL", func(c *Config, v string) { c.Logging.Level = v }},
 	// OIDC scalar toggles (single-provider block handled by applyOIDCProviderEnv)
 	boolOverride{"GOZONE_OIDC_ENABLED", func(c *Config, b bool) { c.OIDC.Enabled = b }},
 	boolOverride{"GOZONE_OIDC_ALLOW_LOCAL_LOGIN", func(c *Config, b bool) { c.OIDC.AllowLocalLogin = b }},

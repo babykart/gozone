@@ -1066,3 +1066,24 @@ func TestSplitNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestLoad_LogLevelEnvOverride covers the logging.level environment override:
+// GOZONE_LOG_LEVEL must set the level (the one setting that previously had no
+// env var, forcing containerised deployments to mount a config file just to
+// raise the level during an incident), and an invalid value must be rejected
+// by the existing validation.
+func TestLoad_LogLevelEnvOverride(t *testing.T) {
+	t.Setenv("GOZONE_LOG_LEVEL", "debug")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Logging.Level != "debug" {
+		t.Errorf("GOZONE_LOG_LEVEL=debug: level = %q", cfg.Logging.Level)
+	}
+
+	t.Setenv("GOZONE_LOG_LEVEL", "verbose")
+	if _, err := Load(""); err == nil {
+		t.Error("an invalid GOZONE_LOG_LEVEL must be rejected")
+	}
+}
