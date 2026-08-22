@@ -40,6 +40,12 @@ import (
 	"github.com/babykart/gozone/web"
 )
 
+// healthReadyRateLimitPerMinute bounds unauthenticated /health/ready requests
+// per source IP (see healthLimiter in runServer for the rationale). Exported
+// scope: package-level so the wiring test references the same value the
+// server uses instead of duplicating the number.
+const healthReadyRateLimitPerMinute = 120
+
 // newServerCmd builds the `gozone server` command, which starts the HTTP
 // server. It is the primary process run by the container (see Dockerfile
 // CMD).
@@ -330,6 +336,16 @@ func runServer(cfg *config.Config) error {
 	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
 	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key (post-auth)
 	apiIPLimiter := middleware.NewRateLimiter(300) // 300 requests per minute per IP (pre-auth gate)
+	// The readiness endpoint is unauthenticated and does real work per hit:
+	// a DB ping plus a PowerDNS HTTP call that deliberately bypasses the
+	// cache. Without a bound it is an amplification surface (each cheap
+	// request forces outbound work) and leaks dependency status to anonymous
+	// callers. The ceiling is generous on purpose: one probe per second
+	// sustained, which also absorbs several pods' kubelet probes aggregating
+	// behind a single node IP. Liveness (/health/live) is deliberately NOT
+	// limited: it does no work (constant response) and throttling it could
+	// get a healthy container killed during a traffic spike.
+	healthLimiter := middleware.NewRateLimiter(healthReadyRateLimitPerMinute)
 	var loginUsernameLimiter *middleware.RateLimiter
 	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
 		loginUsernameLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
@@ -346,6 +362,7 @@ func runServer(cfg *config.Config) error {
 	defer loginLimiter.Close()
 	defer apiLimiter.Close()
 	defer apiIPLimiter.Close()
+	defer healthLimiter.Close()
 	if loginUsernameLimiter != nil {
 		defer loginUsernameLimiter.Close()
 	}
@@ -513,12 +530,13 @@ func runServer(cfg *config.Config) error {
 		})
 	})
 
-	// Health checks
+	// Health checks. Readiness is rate-limited per IP (see healthLimiter);
+	// liveness and the /health alias are unlimited constant responders.
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`)) // #nosec G104
 	})
-	r.Get("/health/ready", h.HealthReady)
+	r.With(healthLimiter.Limit(middleware.ExtractIP)).Get("/health/ready", h.HealthReady)
 	r.Get("/health/live", h.HealthLive)
 
 	// Start server

@@ -331,5 +331,5 @@ Response `200`:
 | Method | Path | Response |
 |--------|------|----------|
 | `GET` | `/health` | `{"status":"ok"}` |
-| `GET` | `/health/ready` | PowerDNS connectivity check |
-| `GET` | `/health/live` | Liveness probe |
+| `GET` | `/health/ready` | Dependency check (DB ping + uncached PowerDNS call); returns 503 while either dependency is down. Rate-limited to 120 requests/minute per source IP (429 with `Retry-After` beyond) — keep probe intervals at or above a few seconds. |
+| `GET` | `/health/live` | Liveness probe (constant response, no dependency checks, not rate-limited) |

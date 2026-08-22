@@ -781,3 +781,53 @@ func TestAdminRoutesProtectedByRequireAdmin(t *testing.T) {
 	}
 	t.Logf("verified %d admin routes are guarded by RequireAdmin", checked)
 }
+
+// TestHealthReadyRateLimit_BlocksBeforeOutboundWork pins the readiness wiring
+// semantics: the per-IP limiter runs BEFORE the handler, so once the bucket is
+// drained an anonymous flooder gets 429s and the handler — which performs a DB
+// ping and an uncached outbound PowerDNS call per hit — is never invoked.
+// Without the bound, every cheap request forced real outbound work (an
+// amplification surface) and leaked dependency status to unauthenticated
+// callers.
+func TestHealthReadyRateLimit_BlocksBeforeOutboundWork(t *testing.T) {
+	limiter := middleware.NewRateLimiter(healthReadyRateLimitPerMinute)
+	t.Cleanup(limiter.Close)
+
+	var handlerCalls int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&handlerCalls, 1)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	stack := limiter.Limit(middleware.ExtractIP)(handler)
+
+	// httptest pins RemoteAddr to "192.0.2.1:1234", so every request draws
+	// from the same per-IP bucket.
+	var lastCode int
+	for i := 0; i < healthReadyRateLimitPerMinute+5; i++ {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+		stack.ServeHTTP(w, r)
+		lastCode = w.Code
+	}
+
+	if lastCode != http.StatusTooManyRequests {
+		t.Errorf("request past the bucket must return 429, got %d", lastCode)
+	}
+	if got := atomic.LoadInt32(&handlerCalls); got != healthReadyRateLimitPerMinute {
+		t.Errorf("handler invoked %d times, want exactly %d (the limiter must gate the outbound DB/PowerDNS work)",
+			got, healthReadyRateLimitPerMinute)
+	}
+	if ra := lastRetryAfter(stack); ra == "" {
+		t.Error("expected a Retry-After header on the 429 response")
+	}
+}
+
+// lastRetryAfter drives one more request through the (drained) stack and
+// returns its Retry-After header value, or "" when absent.
+func lastRetryAfter(stack http.Handler) string {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	stack.ServeHTTP(w, r)
+	return w.Header().Get("Retry-After")
+}
