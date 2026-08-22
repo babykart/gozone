@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/logger"
@@ -337,5 +338,45 @@ func TestSeedAdminUser_ConcurrentBootstrapIsIdempotent(t *testing.T) {
 	}
 	if histCount != 1 {
 		t.Errorf("expected exactly 1 password_history row after concurrent bootstrap, got %d", histCount)
+	}
+}
+
+// TestSeedAdminUser_PasswordChangedAtSet locks the age anchor of the bootstrap
+// password: the seed INSERT must record password_changed_at explicitly so
+// password expiry (password.max_age_days) applies to the initial admin from
+// the first login — the account most likely to still carry the default
+// password must not be the one exempt from ageing. The value was previously
+// filled only by the schema-level column DEFAULT, an implicit mechanism no
+// test verified. must_change_password stays 0: forcing a change on first
+// login is a separate, deliberate bootstrap exemption.
+func TestSeedAdminUser_PasswordChangedAtSet(t *testing.T) {
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+	before := time.Now().UTC()
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var changedAt time.Time
+	var mustChange int
+	if err := db.QueryRow(
+		"SELECT password_changed_at, must_change_password FROM users WHERE username = 'admin'",
+	).Scan(&changedAt, &mustChange); err != nil {
+		t.Fatalf("select seeded admin: %v", err)
+	}
+	if changedAt.IsZero() {
+		t.Fatal("seeded admin must carry a password_changed_at value so the bootstrap password ages")
+	}
+	if d := changedAt.Sub(before); d < 0 || d > 5*time.Minute {
+		t.Errorf("password_changed_at = %v, want ~now UTC (seeded between %v and now, skew %v)", changedAt, before, d)
+	}
+	if mustChange != 0 {
+		t.Errorf("bootstrap exemption: must_change_password = %d, want 0", mustChange)
 	}
 }

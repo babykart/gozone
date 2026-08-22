@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -32,6 +33,15 @@ import (
 // bootstrap nature; the row is harmless while history is disabled and is
 // pruned to history_size on the next password change once enabled
 // (REVIEW.md L-15a).
+//
+// password_changed_at is set explicitly to the seed time (UTC, per the
+// project-wide DB timestamp convention) so the bootstrap password has an age
+// anchor and password expiry (password.max_age_days) applies to it from the
+// first login — the account most likely to still carry the default password
+// must not be the one exempt from ageing. The explicit column also makes the
+// guarantee independent of the schema-level DEFAULT that backfills the
+// column; must_change_password stays 0: forcing a change on first login is a
+// separate, deliberate bootstrap exemption.
 //
 // Returns an error if the database query or user insertion fails.
 func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
@@ -66,10 +76,10 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	// no-op (RowsAffected == 0). The conflict target is the UNIQUE(username)
 	// constraint — the race always seeds the same admin (REVIEW.md L-15b).
 	res, err := tx.InsertIgnore(ctx, "users",
-		[]string{"username", "email", "password_hash", "first_name", "last_name", "role"},
+		[]string{"username", "email", "password_hash", "first_name", "last_name", "role", "password_changed_at"},
 		[]string{"username"},
 		cfg.Admin.Username, cfg.Admin.Email, string(hash),
-		cfg.Admin.FirstName, cfg.Admin.LastName, "admin",
+		cfg.Admin.FirstName, cfg.Admin.LastName, "admin", time.Now().UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("seed admin: insert user: %w", err)
