@@ -11,12 +11,19 @@ ARG DATE=unknown
 RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /app
-# Copy vendored dependencies first for Docker layer caching: this layer only
-# changes when go.mod/go.sum or vendor/ change. The build runs in vendor mode
-# (deps are committed under vendor/), so no `go mod download` is needed.
+# Vendored dependencies first for layer caching: these layers are only
+# invalidated when go.mod/go.sum or the vendored tree changes. The build runs
+# in vendor mode (deps are committed under vendor/), so no `go mod download`
+# is needed.
 COPY go.mod go.sum ./
 COPY vendor/ vendor/
-COPY . .
+# Application sources ONLY, as a targeted list: a plain `COPY . .` would
+# re-copy go.mod and vendor/ on top of the layers above — shipping their bytes
+# twice in the image and re-uploading them into a layer whose cache key is the
+# whole build context, defeating the split. The build needs exactly these
+# paths (web/ carries the go:embed templates and static assets); the .dockerignore
+# keeps test files and docs out of the context.
+COPY main.go cmd internal web ./
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X github.com/babykart/gozone/cmd.version=${VERSION} -X github.com/babykart/gozone/cmd.commit=${COMMIT} -X github.com/babykart/gozone/cmd.buildDate=${DATE}" \
     -o /gozone .

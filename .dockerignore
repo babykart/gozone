@@ -23,6 +23,7 @@ README.md
 REVIEW.md
 ROADMAP.md
 docs/
+screenshots/
 
 # Docker / CI tooling (not needed inside the image)
 Dockerfile
