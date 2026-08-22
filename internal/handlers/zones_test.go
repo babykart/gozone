@@ -1544,3 +1544,62 @@ func TestListZones_ZoneFilterErrorSurfaces500(t *testing.T) {
 		t.Fatalf("expected 500 for a failed zone-access lookup, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
+
+// TestBuildSearchLikeWhere_EscapesWildcards pins the literal-match semantics
+// of the search helper: a term containing % or _ must be neutralised in the
+// bound pattern (and the escape character doubled), with the paired ESCAPE
+// clause in the SQL — previously "%foo%" was bound verbatim, so searching for
+// "%" returned every row and "_" matched any single character.
+func TestBuildSearchLikeWhere_EscapesWildcards(t *testing.T) {
+	clause, args := buildSearchLikeWhere("100%_!", "name")
+	if !strings.Contains(clause, `LIKE ? ESCAPE '!'`) {
+		t.Errorf("clause must pair the LIKE with the ESCAPE character, got %q", clause)
+	}
+	want := "%100!%!_!!%"
+	if len(args) != 1 || args[0] != want {
+		t.Errorf("pattern = %v, want [%s]", args, want)
+	}
+
+	// Wildcard-free terms are bound unchanged (backwards compatible).
+	clause, args = buildSearchLikeWhere("Foo", "name")
+	if !strings.Contains(clause, `LIKE ? ESCAPE '!'`) {
+		t.Errorf("clause must carry the ESCAPE clause for plain terms too, got %q", clause)
+	}
+	if len(args) != 1 || args[0] != "%foo%" {
+		t.Errorf("plain term pattern = %v, want [%%foo%%]", args)
+	}
+}
+
+// TestBuildSearchLikeWhere_LiteralMatchAgainstDB executes a generated clause
+// against the real schema: rows whose values literally contain % or _ must be
+// findable by searching for those characters, while the same search must not
+// degenerate into a match-all.
+func TestBuildSearchLikeWhere_LiteralMatchAgainstDB(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "plainuser", "pass", "user", true)
+	testutil.SeedTestUser(t, h.DB, "has_underscore", "pass", "user", true)
+	testutil.SeedTestUser(t, h.DB, "has%percent", "pass", "user", true)
+
+	count := func(search string) int {
+		t.Helper()
+		where, args := buildSearchLikeWhere(search, "username")
+		var n int
+		if err := h.DB.QueryRow("SELECT COUNT(*) FROM users WHERE "+where, args...).Scan(&n); err != nil {
+			t.Fatalf("search %q: %v", search, err)
+		}
+		return n
+	}
+
+	if n := count("_"); n != 1 {
+		t.Errorf(`searching for "_" must match only the username containing a literal underscore, got %d`, n)
+	}
+	if n := count("%"); n != 1 {
+		t.Errorf(`searching for "%%" must match only the username containing a literal percent, got %d`, n)
+	}
+	if n := count("has"); n != 2 {
+		t.Errorf(`searching for "has" must match both wildcard-named users, got %d`, n)
+	}
+	if n := count("!"); n != 0 {
+		t.Errorf(`the escape character itself must match nothing here (no username contains one), got %d`, n)
+	}
+}

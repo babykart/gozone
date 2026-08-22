@@ -182,9 +182,13 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 	selectClause := "LEFT JOIN users u ON al.user_id = u.id "
 
 	if search != "" {
-		term := "%" + strings.ToLower(search) + "%"
+		// Wildcards in the term are neutralised (escapeLikePattern) and the
+		// ESCAPE clause is paired with every LIKE — same semantics as the
+		// list-view searches, so "%" or "_" in the input match literally.
+		term := "%" + strings.ToLower(escapeLikePattern(search)) + "%"
 		filters = append(filters,
-			"(LOWER(al.action) LIKE ? OR LOWER(al.details) LIKE ? OR LOWER(al.zone_id) LIKE ? OR LOWER(u.username) LIKE ?)")
+			"(LOWER(al.action) LIKE ? ESCAPE '"+likeEscapeChar+"' OR LOWER(al.details) LIKE ? ESCAPE '"+likeEscapeChar+"'"+
+				" OR LOWER(al.zone_id) LIKE ? ESCAPE '"+likeEscapeChar+"' OR LOWER(u.username) LIKE ? ESCAPE '"+likeEscapeChar+"')")
 		args = append(args, term, term, term, term)
 	}
 

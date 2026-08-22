@@ -184,16 +184,38 @@ func pageInfoFromTotal(total, page, perPage int) PageInfo {
 	}
 }
 
+// likeEscapeChar is the ESCAPE character paired with every LIKE the search
+// helpers generate. It is deliberately NOT the traditional backslash: inside
+// a SQL string literal a backslash is itself an escape character on MySQL
+// (unless NO_BACKSLASH_ESCAPES is set), so ESCAPE '\' does not survive the
+// trip — '!' is a valid single-character escape on SQLite, MySQL and
+// PostgreSQL alike and is unambiguous in a literal.
+const likeEscapeChar = "!"
+
+// escapeLikePattern neutralises the LIKE wildcards (% and _) and the escape
+// character itself in a user-supplied search term, so the term matches
+// literally instead of acting as a pattern. Without it, searching for "%"
+// returned every row and "_" matched any single character. The caller must
+// pair the result with LIKE ... ESCAPE '<likeEscapeChar>'.
+func escapeLikePattern(s string) string {
+	esc := likeEscapeChar
+	s = strings.ReplaceAll(s, esc, esc+esc)
+	s = strings.ReplaceAll(s, "%", esc+"%")
+	s = strings.ReplaceAll(s, "_", esc+"_")
+	return s
+}
+
 // buildSearchLikeWhere builds a SQL WHERE fragment that matches a search term
 // against one or more columns using case-insensitive LIKE. Column names must be
-// chosen by the caller and are never derived from user input. Returns an empty
-// string when search is empty.
+// chosen by the caller and are never derived from user input. The term's LIKE
+// wildcards are neutralised (see escapeLikePattern) so "%" or "_" in user
+// input match literally. Returns an empty string when search is empty.
 func buildSearchLikeWhere(search string, columns ...string) (string, []any) {
 	search = strings.TrimSpace(search)
 	if search == "" || len(columns) == 0 {
 		return "", nil
 	}
-	pattern := "%" + strings.ToLower(search) + "%"
+	pattern := "%" + strings.ToLower(escapeLikePattern(search)) + "%"
 	params := make([]any, 0, len(columns))
 	var b strings.Builder
 	b.WriteString("(")
@@ -201,7 +223,7 @@ func buildSearchLikeWhere(search string, columns ...string) (string, []any) {
 		if i > 0 {
 			b.WriteString(" OR ")
 		}
-		b.WriteString("LOWER(" + col + ") LIKE ?")
+		b.WriteString("LOWER(" + col + ") LIKE ? ESCAPE '" + likeEscapeChar + "'")
 		params = append(params, pattern)
 	}
 	b.WriteString(")")
