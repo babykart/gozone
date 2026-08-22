@@ -177,6 +177,11 @@ func TestValidateIPv4(t *testing.T) {
 		{"public", "8.8.8.8", false},
 		{"empty", "", true},
 		{"IPv6 fails", "2001:db8::1", true},
+		// IPv4-mapped IPv6: net.ParseIP().To4() is non-nil for this form, so
+		// the mapped literal used to pass here and travel all the way to
+		// PowerDNS, which rejected the A record with a generic upstream
+		// error. It must be refused at the validation boundary.
+		{"IPv4-mapped IPv6 fails", "::ffff:192.0.2.1", true},
 		{"out of range", "256.0.0.1", true},
 		{"garbage", "not-an-ip", true},
 	}
@@ -201,6 +206,9 @@ func TestValidateIPv6(t *testing.T) {
 		{"full", "2001:0db8:0000:0000:0000:0000:0000:0001", false},
 		{"empty", "", true},
 		{"IPv4 fails", "192.168.1.1", true},
+		// The mirrored case: the IPv4-mapped form is also refused for AAAA
+		// (To4() != nil) — pinned here so the two validators stay symmetric.
+		{"IPv4-mapped IPv6 fails", "::ffff:192.0.2.1", true},
 		{"garbage", "not-an-ip", true},
 	}
 	for _, tt := range tests {

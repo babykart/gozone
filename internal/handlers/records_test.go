@@ -3291,3 +3291,37 @@ func TestBatchCreateRecords_ExplicitTTLAppliesOnMerge(t *testing.T) {
 		t.Fatalf("explicit TTL 900 must apply on merge, got %+v", sent)
 	}
 }
+
+// TestCreateRecord_RejectsIPv4MappedAAAContent guards the validation boundary:
+// the IPv4-mapped literal "::ffff:192.0.2.1" has a non-nil To4(), so an A
+// record carrying it used to pass validation and only fail later at
+// PowerDNS with a generic upstream error. It must be refused here, with the
+// precise message, before any PDNS call.
+func TestCreateRecord_RejectsIPv4MappedAAAContent(t *testing.T) {
+	pdnsCalled := false
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader("name=www&type=A&content=::ffff:192.0.2.1"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Fatal("the IPv4-mapped literal must not create a record")
+	}
+	if pdnsCalled {
+		t.Error("PowerDNS must not be contacted when validation rejects the content")
+	}
+	if body := w.Body.String(); !strings.Contains(body, "not a valid IPv4") {
+		t.Errorf("expected the precise validation message, got: %s", body)
+	}
+}

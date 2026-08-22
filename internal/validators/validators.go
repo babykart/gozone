@@ -353,10 +353,17 @@ func ValidateIPAddress(ip string) error {
 	return nil
 }
 
-// ValidateIPv4 checks that a string is a valid IPv4 address.
+// ValidateIPv4 checks that a string is a valid IPv4 address. IPv6 spellings
+// are rejected wholesale, including the IPv4-mapped form: net.ParseIP's
+// To4() is non-nil for "::ffff:192.0.2.1", so without the explicit colon
+// check a mapped literal passed validation here and was only rejected later
+// by PowerDNS, with a generic upstream error instead of a precise one.
 func ValidateIPv4(ip string) error {
 	if ip == "" {
 		return fmt.Errorf("IPv4 address must not be empty")
+	}
+	if strings.Contains(ip, ":") {
+		return fmt.Errorf("%q is not a valid IPv4 address", ip)
 	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.To4() == nil {
