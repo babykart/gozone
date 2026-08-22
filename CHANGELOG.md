@@ -14,6 +14,7 @@
 - **(auth)** ([64c76a6](https://github.com/babykart/gozone/commit/64c76a62ce442718edd9999db2796d69269ea95b)) - [gozone] guard the nil ExpiresAt dereference in Logout - ([babykart](https://github.com/babykart))
 - **(database)** ([43e6223](https://github.com/babykart/gozone/commit/43e62231bbc290f23ee95b8ba2240bf9d0d3dea5)) - [gozone] redact passwords in URL-form DSNs at startup - ([babykart](https://github.com/babykart))
 - **(docker)** ([44e041d](https://github.com/babykart/gozone/commit/44e041dbbc474967e480f7808e1c5f1128f5f73b)) - [gozone] targeted source COPY so vendor layer caching is real - ([babykart](https://github.com/babykart))
+- **(docker)** ([040517b](https://github.com/babykart/gozone/commit/040517b190ca1880cd1d2cf0e39ec95f14f024ee)) - [gozone] one COPY per source dir so build works again - ([babykart](https://github.com/babykart))
 - **(export)** ([3a45bb1](https://github.com/babykart/gozone/commit/3a45bb16c3df20eb996de81950c495a267cd6223)) - [gozone] make sortRRSets a strict weak ordering - ([babykart](https://github.com/babykart))
 - **(groups)** ([f593bc7](https://github.com/babykart/gozone/commit/f593bc713a0a214d66d2fe9b7505cbfed9dc5d29)) - [gozone] batch the member-existence IN lookup past driver limits - ([babykart](https://github.com/babykart))
 - **(handlers)** ([a5718b1](https://github.com/babykart/gozone/commit/a5718b1f48a25b89ff7135609c765e0fc036612c)) - [gozone] type-check row ids before binding INTEGER columns - ([babykart](https://github.com/babykart))
