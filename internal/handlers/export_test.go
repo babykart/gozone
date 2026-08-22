@@ -395,3 +395,37 @@ func TestExportZone_ListRecordsError_Returns500(t *testing.T) {
 		t.Errorf("expected 500 on PDNS ListRecords failure, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
+
+// TestSortRRSets_TwoSOA and TestSortRRSets_TwoNS mirror the zone-view
+// regressions: comparing two records of the same priority type must not
+// return true in both directions. sortRRSets' SOA branch used to return true
+// regardless of the other element, so two SOAs compared inconsistent — an
+// ill-defined problem handed to the sort algorithm (pdqsort may panic on
+// some inputs). Unreachable in practice (one SOA per zone), but the invariant
+// must stay aligned with the zone-view twin.
+func TestSortRRSets_TwoSOA(t *testing.T) {
+	records := []models.RRSet{
+		{Name: "example.com.", Type: "SOA"},
+		{Name: "example.com.", Type: "SOA"},
+	}
+
+	// Should not panic from an invalid comparator.
+	sortRRSets(records)
+
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+}
+
+func TestSortRRSets_TwoNS(t *testing.T) {
+	records := []models.RRSet{
+		{Name: "ns2.example.com.", Type: "NS"},
+		{Name: "ns1.example.com.", Type: "NS"},
+	}
+
+	sortRRSets(records)
+
+	if records[0].Name != "ns1.example.com." || records[1].Name != "ns2.example.com." {
+		t.Errorf("expected ns1 before ns2, got %v", records)
+	}
+}

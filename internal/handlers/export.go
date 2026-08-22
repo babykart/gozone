@@ -191,14 +191,18 @@ func findSOATTL(records []models.RRSet) int {
 	return 3600
 }
 
-// sortRRSets orders records: SOA first, then NS, then others alphabetically by name.
+// sortRRSets orders records: SOA first, then NS, then others alphabetically
+// by name. The comparator is a strict weak ordering: two records of the same
+// priority are resolved by name+type, never by returning true in both
+// directions — an inconsistent comparator hands sort an ill-defined problem
+// (and pdqsort may panic on some inputs).
 func sortRRSets(records []models.RRSet) {
 	sort.SliceStable(records, func(i, j int) bool {
 		a, b := records[i], records[j]
-		if a.Type == "SOA" {
+		if a.Type == "SOA" && b.Type != "SOA" {
 			return true
 		}
-		if b.Type == "SOA" {
+		if b.Type == "SOA" && a.Type != "SOA" {
 			return false
 		}
 		if a.Type == "NS" && b.Type != "NS" {
