@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -58,13 +59,34 @@ func (h *Handler) ListTSIGKeys(w http.ResponseWriter, r *http.Request) {
 		paginated = []models.TSIGKey{}
 	}
 
+	// One-time reveal of a server-generated secret (see CreateTSIGKey): read
+	// the flash cookie and clear it immediately, so a refresh or a shared
+	// link never re-displays it. The value rides in a cookie rather than a
+	// query parameter precisely so it never lands in logs, history or the
+	// referer — mirroring the API key flash.
+	newKey := ""
+	if c, err := r.Cookie(constants.NewTSIGKeyCookieName); err == nil && c.Value != "" {
+		newKey = c.Value
+		// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+		http.SetCookie(w, &http.Cookie{
+			Name:     constants.NewTSIGKeyCookieName,
+			Value:    "",
+			Path:     "/tsigkeys",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   isSecure(r),
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+
 	data := map[string]interface{}{
-		"Title":    "TSIG Keys - " + h.Cfg.Server.AppName,
-		"User":     user,
-		"Keys":     paginated,
-		"PageInfo": pageInfo,
-		"Search":   search,
-		"IsAdmin":  user.IsAdmin(),
+		"Title":      "TSIG Keys - " + h.Cfg.Server.AppName,
+		"User":       user,
+		"Keys":       paginated,
+		"PageInfo":   pageInfo,
+		"Search":     search,
+		"IsAdmin":    user.IsAdmin(),
+		"NewTSIGKey": newKey,
 	}
 	h.render(w, r, "tsigkeys.html", data)
 }
@@ -82,7 +104,10 @@ func (h *Handler) CreateTSIGKeyPage(w http.ResponseWriter, r *http.Request) {
 
 // CreateTSIGKey creates a new TSIG key (POST /tsigkeys/create).
 // If the key material is left empty, a random 64-byte secret is
-// generated server-side before sending to PowerDNS.
+// generated server-side before sending to PowerDNS. That secret is then
+// carried to the listing page in a one-time cookie so the operator can copy
+// it — a server-generated secret that is never displayed could not be
+// configured on the peer, making the whole auto-generate path useless.
 func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
@@ -94,6 +119,14 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Key name is required")
 		return
 	}
+	// TSIG key names follow the DNS-name convention (PowerDNS itself treats
+	// them as FQDNs, and the form hints "must end with a dot"): reject an
+	// invalid name here with a precise message instead of letting PowerDNS
+	// fail with a generic error after the round-trip.
+	if err := validators.ValidateDNSName(name); err != nil {
+		h.renderError(w, r, "Invalid key name: "+err.Error())
+		return
+	}
 	if algorithm == "" {
 		h.renderError(w, r, "Algorithm is required")
 		return
@@ -102,6 +135,7 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid algorithm: "+err.Error())
 		return
 	}
+	serverGenerated := false
 	if key == "" {
 		var err error
 		key, err = generateTSIGSecret()
@@ -109,6 +143,7 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 			h.renderInternalError(w, r, "Failed to generate TSIG secret", err)
 			return
 		}
+		serverGenerated = true
 	}
 
 	tsigKey, err := h.PDNS.CreateTSIGKey(r.Context(), models.TSIGKey{
@@ -124,6 +159,23 @@ func (h *Handler) CreateTSIGKey(w http.ResponseWriter, r *http.Request) {
 
 	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, Action: "create_tsigkey", Details: fmt.Sprintf("Created TSIG key %s (alg: %s)", tsigKey.Name, tsigKey.Algorithm)}); err != nil {
 		logger.Error("failed to log create_tsigkey activity", "key_id", tsigKey.ID, "error", err)
+	}
+
+	// A secret the operator supplied is already known to them; only a
+	// server-generated one needs the one-time reveal. Same channel and
+	// lifetime discipline as the API key flash: HttpOnly, scoped to the
+	// listing path, 60 seconds, cleared as soon as the page reads it.
+	if serverGenerated {
+		// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+		http.SetCookie(w, &http.Cookie{
+			Name:     constants.NewTSIGKeyCookieName,
+			Value:    key,
+			Path:     "/tsigkeys",
+			MaxAge:   60,
+			HttpOnly: true,
+			Secure:   isSecure(r),
+			SameSite: http.SameSiteStrictMode,
+		})
 	}
 
 	http.Redirect(w, r, "/tsigkeys", http.StatusSeeOther)

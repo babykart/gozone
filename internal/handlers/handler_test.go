@@ -61,7 +61,7 @@ func testTemplateSet() *template.Template {
 		{{define "api_keys.html"}}API Keys{{range .APIKeys}} {{.Description}}{{end}}{{if .NewKey}} NewKey={{.NewKey}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{if .Flash}} Flash={{.Flash}}{{end}}{{if .Error}} Error={{.Error}}{{end}}{{end}}
 		{{define "groups.html"}}Groups: {{range .Groups}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "group_edit.html"}}GroupEdit: {{.Group.Name}} {{range .Members}}{{.Username}} {{end}}Zones: {{range .GroupZones}}{{.}} {{end}}AllUsers: {{range .AllUsers}}{{.Username}} {{end}}AllZones: {{range .AllZones}}{{.Zone.Name}} {{end}}{{end}}
-		{{define "tsigkeys.html"}}TSIG Keys{{range .Keys}} {{.Name}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
+		{{define "tsigkeys.html"}}TSIG Keys{{range .Keys}} {{.Name}}{{end}}{{if .NewTSIGKey}} NewTSIGKey={{.NewTSIGKey}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "tsigkey_create.html"}}Create TSIG Key{{end}}
 		{{define "tsigkey_edit.html"}}Edit TSIG Key Key={{.Key.Key}} Alg={{.Key.Algorithm}}{{end}}
 		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}

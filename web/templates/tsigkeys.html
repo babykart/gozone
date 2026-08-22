@@ -10,6 +10,16 @@
                 </div>
             </div>
 
+            {{if .NewTSIGKey}}
+            <div class="alert alert-success">
+                <strong>TSIG key created!</strong> Copy the secret now — it is stored by PowerDNS and won't be shown again.
+                <div class="api-key-reveal" data-key="{{.NewTSIGKey}}">
+                    <pre><code>{{.NewTSIGKey}}</code></pre>
+                    <button class="btn btn-sm btn-secondary" data-action="copy-api-key">Copy</button>
+                </div>
+            </div>
+            {{end}}
+
             {{if .Keys}}
             <div class="card">
                 <div class="bulk-actions" id="bulk-tsig-bar" data-csrf="{{.CSRFToken}}">

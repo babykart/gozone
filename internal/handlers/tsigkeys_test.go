@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
@@ -634,5 +635,158 @@ func TestGenerateTSIGSecret_DeterministicCheck(t *testing.T) {
 	// 64 bytes → base64 → 88 chars (including padding)
 	if len(key) != 88 {
 		t.Errorf("expected 88-char base64 key (64 bytes), got %d chars", len(key))
+	}
+}
+
+// TestCreateTSIGKey_ServerGeneratedSecretRevealedOnce guards the operator
+// usability of the auto-generate path: a secret minted server-side (empty key
+// field) used to be sent to PowerDNS and never displayed again — impossible
+// to configure on the peer, making the whole path useless without the
+// client-side Generate button. The secret must now ride a one-time cookie to
+// the listing page, which reads and clears it immediately.
+func TestCreateTSIGKey_ServerGeneratedSecretRevealedOnce(t *testing.T) {
+	var sentToPDNS models.TSIGKey
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			json.NewDecoder(r.Body).Decode(&sentToPDNS)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(sentToPDNS)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.TSIGKey{})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Empty key field -> server-side generation.
+	body := "name=my-key.&algorithm=hmac-sha512&key="
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateTSIGKey(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if sentToPDNS.Key == "" {
+		t.Fatal("PowerDNS must have received a generated secret")
+	}
+
+	// The one-time cookie must carry exactly the secret sent to PowerDNS.
+	var flash *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.NewTSIGKeyCookieName {
+			flash = c
+		}
+	}
+	if flash == nil {
+		t.Fatal("expected the one-time reveal cookie to be set for a server-generated secret")
+	}
+	if flash.Value != sentToPDNS.Key {
+		t.Errorf("reveal cookie value != secret sent to PowerDNS: %q vs %q", flash.Value, sentToPDNS.Key)
+	}
+	if flash.Path != "/tsigkeys" || flash.MaxAge != 60 || !flash.HttpOnly {
+		t.Errorf("reveal cookie must be path-scoped, 60s, HttpOnly: %+v", flash)
+	}
+
+	// The listing page reads and clears the cookie, revealing the secret once.
+	// html/template escapes '+' as &#43; (its text escaper's UTF-7 mitigation),
+	// and a random base64 secret contains '+' more often than not — undo that
+	// entity before matching so the assertion is deterministic for every
+	// generated secret.
+	lr := httptest.NewRequest(http.MethodGet, "/tsigkeys", nil)
+	lr.AddCookie(&http.Cookie{Name: constants.NewTSIGKeyCookieName, Value: sentToPDNS.Key})
+	lr = lr.WithContext(ctx)
+	lw := httptest.NewRecorder()
+	h.ListTSIGKeys(lw, lr)
+	rendered := strings.ReplaceAll(lw.Body.String(), "&#43;", "+")
+	if !strings.Contains(rendered, "NewTSIGKey="+sentToPDNS.Key) {
+		t.Errorf("listing must reveal the generated secret once, got: %s", lw.Body.String())
+	}
+	var cleared bool
+	for _, c := range lw.Result().Cookies() {
+		if c.Name == constants.NewTSIGKeyCookieName && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("the reveal cookie must be cleared as soon as the page reads it")
+	}
+
+	// A follow-up request without the cookie shows nothing.
+	lw2 := httptest.NewRecorder()
+	lr2 := httptest.NewRequest(http.MethodGet, "/tsigkeys", nil)
+	lr2 = lr2.WithContext(ctx)
+	h.ListTSIGKeys(lw2, lr2)
+	if strings.Contains(lw2.Body.String(), "NewTSIGKey=") {
+		t.Error("the secret must not be revealed without the one-time cookie")
+	}
+}
+
+// TestCreateTSIGKey_ProvidedSecretSetsNoRevealCookie: an operator-supplied
+// secret is already known to them — the reveal channel must stay unused so it
+// never re-displays material the user typed.
+func TestCreateTSIGKey_ProvidedSecretSetsNoRevealCookie(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(models.TSIGKey{Name: "my-key.", Algorithm: "hmac-sha256", Key: "c2VjcmV0"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.TSIGKey{})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/tsigkeys/create", strings.NewReader("name=my-key.&algorithm=hmac-sha256&key=c2VjcmV0"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateTSIGKey(w, r)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.NewTSIGKeyCookieName {
+			t.Errorf("no reveal cookie must be set for an operator-supplied secret, got %+v", c)
+		}
+	}
+}
+
+// TestCreateTSIGKey_InvalidNameRejected: the key name follows the DNS-name
+// convention (the form hints "must end with a dot"); an invalid name must be
+// rejected with a precise message before PowerDNS is contacted.
+func TestCreateTSIGKey_InvalidNameRejected(t *testing.T) {
+	pdnsCalled := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	for _, name := range []string{"not a name!", "-leadingdash..", strings.Repeat("a", 300) + "."} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/tsigkeys/create", strings.NewReader("name="+name+"&algorithm=hmac-sha256&key=c2VjcmV0"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.CreateTSIGKey(w, r)
+		if w.Code == http.StatusSeeOther {
+			t.Errorf("name %q must be rejected", name)
+		}
+		if pdnsCalled {
+			t.Fatalf("PowerDNS must not be contacted for an invalid name (%q)", name)
+		}
 	}
 }
