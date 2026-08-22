@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -316,5 +317,43 @@ func TestDashboard_NumericStats(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with numeric stats, got %d", w.Code)
+	}
+}
+
+// TestDashboard_ZoneFilterErrorSurfaces500 guards the semantics of a failed
+// zone-access lookup on the dashboard: it is a database fault and must render
+// the error page (500), not a dashboard showing "0 zones" — which a user
+// would read as their zones having vanished. Note the deliberate contrast
+// with TestDashboard_GetStatisticsError: PowerDNS statistics failures keep
+// the dashboard degraded-but-rendered; a broken local database does not.
+func TestDashboard_ZoneFilterErrorSurfaces500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/zones") {
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+			})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/statistics") {
+			json.NewEncoder(w).Encode([]map[string]interface{}{})
+			return
+		}
+		w.Write([]byte(`{"id":"localhost"}`))
+	})
+	defer pdnsSrv.Close()
+
+	userID := seedUserWithHash(t, h, "dashuser", "pass", "user")
+	if _, err := h.DB.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+
+	user := &models.User{ID: userID, Username: "dashuser", Role: "user"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/dashboard", nil), user)
+	w := httptest.NewRecorder()
+	h.Dashboard(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a failed zone-access lookup, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }

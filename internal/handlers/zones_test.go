@@ -1516,3 +1516,31 @@ func TestRenderError_BackURLWired(t *testing.T) {
 		}
 	})
 }
+
+// TestListZones_ZoneFilterErrorSurfaces500 guards the web zones list: a
+// failed zone-access lookup is a database fault and must render the error
+// page (500), not an empty list presented as "no zones" — indistinguishable
+// from a legitimate empty state during an outage.
+func TestListZones_ZoneFilterErrorSurfaces500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.Zone{
+			{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	userID := seedUserWithHash(t, h, "listuser", "pass", "user")
+	if _, err := h.DB.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+
+	user := &models.User{ID: userID, Username: "listuser", Role: "user"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/zones", nil), user)
+	w := httptest.NewRecorder()
+	h.ListZones(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a failed zone-access lookup, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}

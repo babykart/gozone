@@ -34,7 +34,14 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	zones, _ := h.PDNS.ListZones(r.Context())
 	filtered, filterErr := h.filterZonesForUser(r, zones)
 	if filterErr != nil {
-		logger.Error("failed to filter zones for user", "error", filterErr)
+		// A failed zone-access lookup is a database fault, not an empty
+		// result: rendering the dashboard with "0 zones" would present an
+		// outage as if the zones had vanished. Fail closed WITH a visible
+		// error. (PowerDNS statistics failures above stay degraded-by-design
+		// — the dashboard remains useful without them; a broken local
+		// database is a different class of failure.)
+		h.renderInternalError(w, r, "Failed to load zone access", filterErr)
+		return
 	}
 	zones = filtered
 	zoneCount := 0

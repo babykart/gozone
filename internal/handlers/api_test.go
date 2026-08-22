@@ -1028,8 +1028,10 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 
 // TestAPIListZones_FilterErrorFailClosed is the m25 regression test: when
 // filterZonesForUser fails (DB error in the zone-group lookup), the endpoint
-// must stay fail-closed — return HTTP 200 with an empty zone list, never the
-// unfiltered zones — while logging the error server-side (no longer silent).
+// must stay fail-closed — never return the unfiltered zones. It now surfaces
+// the outage as HTTP 500 instead of 200-with-empty-list: an empty list would
+// present a database fault as "you have no zones", indistinguishable from a
+// legitimate empty state.
 func TestAPIListZones_FilterErrorFailClosed(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1052,15 +1054,19 @@ func TestAPIListZones_FilterErrorFailClosed(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.APIListZones(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (fail-closed, not 500), got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (fail-closed with a visible error), got %d: %s", w.Code, w.Body.String())
 	}
-	var zones []models.Zone
-	if err := json.NewDecoder(w.Body).Decode(&zones); err != nil {
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(zones) != 0 {
-		t.Errorf("expected 0 zones on filter error (fail-closed), got %d: %+v", len(zones), zones)
+	if resp.Code != ErrCodeInternalError {
+		t.Errorf("expected code %s, got %s", ErrCodeInternalError, resp.Code)
+	}
+	// The fail-closed invariant: no zone name may ever appear in the body.
+	if body := w.Body.String(); strings.Contains(body, "a.example") || strings.Contains(body, "b.example") {
+		t.Errorf("unfiltered zones leaked into the error response: %s", body)
 	}
 }
 
@@ -1501,4 +1507,42 @@ func TestAPIStats_PDNSError(t *testing.T) {
 
 func jsonBody(s string) *strings.Reader {
 	return strings.NewReader(s)
+}
+
+// TestAPIStats_ZoneFilterErrorSurfaces500 is the /api/v1/stats variant: a
+// failed zone-access lookup must not answer 200 with zone_count: 0, which a
+// caller would read as an empty tenant rather than an outage.
+func TestAPIStats_ZoneFilterErrorSurfaces500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/zones") {
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+	})
+	defer pdnsSrv.Close()
+
+	userID := seedUserWithHash(t, h, "statsuser", "pass", "user")
+	if _, err := h.DB.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+
+	user := &models.User{ID: userID, Username: "statsuser", Role: "user"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil), user)
+	w := httptest.NewRecorder()
+	h.APIStats(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a failed zone-access lookup, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != ErrCodeInternalError {
+		t.Errorf("expected code %s, got %s", ErrCodeInternalError, resp.Code)
+	}
 }

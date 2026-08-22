@@ -217,7 +217,11 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 
 	filtered, filterErr := h.filterZonesWithInfoForUser(r, zones)
 	if filterErr != nil {
-		logger.Error("failed to filter zones for user", "error", filterErr)
+		// A failed zone-access lookup is a database fault, not an empty
+		// result: rendering an empty list here would present an outage as
+		// "you have no zones". Fail closed WITH a visible error.
+		h.renderInternalError(w, r, "Failed to load zone access", filterErr)
+		return
 	}
 	zones = filtered
 	if zones == nil {

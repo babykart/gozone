@@ -95,7 +95,12 @@ func (h *Handler) APIListZones(w http.ResponseWriter, r *http.Request) {
 	}
 	filtered, filterErr := h.filterZonesForUser(r, zones)
 	if filterErr != nil {
-		logger.Error("failed to filter zones for user", "error", filterErr)
+		// A failed zone-access lookup is a database fault, not an empty
+		// result: returning 200 with [] would present an outage as "you
+		// have no zones". Fail closed WITH a visible error — no zone is
+		// ever disclosed either way.
+		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to load zone access", filterErr)
+		return
 	}
 	zones = filtered
 	if zones == nil {
@@ -443,7 +448,11 @@ func (h *Handler) APIStats(w http.ResponseWriter, r *http.Request) {
 	zones, _ := h.PDNS.ListZones(r.Context())
 	filtered, filterErr := h.filterZonesForUser(r, zones)
 	if filterErr != nil {
-		logger.Error("failed to filter zones for user", "error", filterErr)
+		// Same fail-closed-with-error semantics as APIListZones: a failed
+		// zone-access lookup must not surface as zone_count: 0, which a
+		// caller would read as an empty tenant, not an outage.
+		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to load zone access", filterErr)
+		return
 	}
 	zones = filtered
 	zoneCount := 0
