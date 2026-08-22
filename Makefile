@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/babykart/gozone/cmd.version=$(VERSION) \
            -X github.com/babykart/gozone/cmd.commit=$(COMMIT) \
            -X github.com/babykart/gozone/cmd.buildDate=$(DATE)
 
-.PHONY: default build run test test-verbose clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
+.PHONY: default build run test test-verbose test-race clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
 
 default: help
 
@@ -20,13 +20,19 @@ build:
 run: build
 	$(BIN_DIR)/$(APP_NAME) server --config config.yaml
 
-# run tests
+# run tests (bypass the result cache: a branch switch or an edited test must
+# actually re-run, cached PASS results can mask both)
 test:
-	go test ./...
+	go test -count=1 ./...
 
 # run tests with verbose output
 test-verbose:
-	go test -v ./...
+	go test -count=1 -v ./...
+
+# run tests with the race detector — same flags as CI (pr.yml), so local
+# parity is verifiable instead of memorised
+test-race:
+	go test -race -count=1 ./...
 
 # remove build artifacts and database
 clean:
@@ -91,8 +97,9 @@ help:
 	@echo "Targets:"
 	@echo "  build           Build the binary"
 	@echo "  run             Build and run locally"
-	@echo "  test            Run tests"
+	@echo "  test            Run tests (bypassing the result cache)"
 	@echo "  test-verbose    Run tests with verbose output"
+	@echo "  test-race       Run tests with the race detector (matches CI)"
 	@echo "  clean           Remove build artifacts and database"
 	@echo "  fmt             Format all source files"
 	@echo "  vet             Run vet on all packages"

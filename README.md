@@ -429,8 +429,9 @@ GoZone exposes a REST API under `/api/v1` for automation (zone and record CRUD, 
 |------|------|-------------|
 | `make build` | `just build` | Build the binary |
 | `make run` | `just run` | Build and run locally |
-| `make test` | `just test` | Run tests |
+| `make test` | `just test` | Run tests (bypassing the result cache) |
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
+| `make test-race` | `just test-race` | Run tests with the race detector (same flags as CI) |
 | `make clean` | `just clean` | Remove build artifacts and database |
 | `make fmt` | `just fmt` | Format all source files |
 | `make vet` | `just vet` | Run vet on all packages |

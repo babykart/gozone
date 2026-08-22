@@ -23,13 +23,19 @@ build:
 run: build
     {{ bin_dir }}/{{ app_name }} server --config config.yaml
 
-# run tests
+# run tests (bypass the result cache: a branch switch or an edited test must
+# actually re-run, cached PASS results can mask both)
 test:
-    go test ./...
+    go test -count=1 ./...
 
 # run tests with verbose output
 test-verbose:
-    go test -v ./...
+    go test -count=1 -v ./...
+
+# run tests with the race detector — same flags as CI (pr.yml), so local
+# parity is verifiable instead of memorised
+test-race:
+    go test -race -count=1 ./...
 
 # remove build artifacts and database
 clean:

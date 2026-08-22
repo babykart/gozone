@@ -79,8 +79,9 @@ make run    # or: just run
 |-------------|--------------|---------|
 | `make build` | `just build` | Compile binary to `./bin/gozone` |
 | `make run` | `just run` | Build and start server |
-| `make test` | `just test` | Run all tests |
+| `make test` | `just test` | Run all tests (bypassing the result cache) |
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
+| `make test-race` | `just test-race` | Run tests with the race detector (same flags as CI) |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
 | `make clean` | `just clean` | Remove build artifacts and database |
@@ -302,7 +303,7 @@ refactor(pdns): [gozone] extract zone service interface
 ```bash
 make fmt
 make vet
-make test
+make test-race   # same flags as CI
 make gosec
 ```
 

@@ -13,8 +13,9 @@
 |-------------|--------------|---------|
 | `make build` | `just build` | Build binary to `./bin/gozone` |
 | `make run` | `just run` | Build and start server |
-| `make test` | `just test` | Run all tests |
+| `make test` | `just test` | Run all tests (bypassing the result cache via `-count=1`) |
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
+| `make test-race` | `just test-race` | Run tests with the race detector (same flags as CI) |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
 | `make clean` | `just clean` | Remove build artifacts and database |
@@ -27,7 +28,7 @@ Run a single package: `go test -count=1 ./internal/config/`
 
 Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete.
 
-CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test` does **not** use `-race`, so run `go test -race ./...` locally to catch what CI catches. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
+CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 
 Releases are git-cliff driven (`cliff.toml`): `just auto-gen-rel` (or `just gen-rel v0.x.y`) writes `CHANGELOG.md`, commits and signs tag `v0.x.y`; pushing a `v*` tag triggers `.github/workflows/release.yml` (multi-arch Docker image → ghcr.io + GitHub release).
 
