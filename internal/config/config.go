@@ -101,14 +101,15 @@ type ServerConfig struct {
 	// exposure because attackers cannot forge their IP.
 	TrustedProxies []string `yaml:"trusted_proxies"`
 	// ExternalURL is the canonical base URL GoZone is served at (e.g.
-	// "https://dns.example.com"). When set, OIDC redirect_uri values are built
-	// from it instead of being derived per-request from the client-controlled
-	// Host header (defense-in-depth: the IdP already validates redirect_uri
-	// against its registered list, but this removes the app's reliance on the
-	// Host header for the SSO flow). When empty, the callback URL is derived
-	// from the resolved scheme (trusted-proxy aware) and r.Host — the original
-	// behaviour. Must be an absolute http(s) URL with a host and no path; it is
-	// validated and normalised to "scheme://host" at load. Optional.
+	// "https://dns.example.com"). When set, OIDC redirect_uri and
+	// post_logout_redirect_uri values are built from it instead of being
+	// derived per-request from the client-controlled Host header
+	// (defense-in-depth: the IdP already validates both against its
+	// registered lists, but this removes the app's reliance on the Host
+	// header for the SSO flow). When empty, the URLs are derived from the
+	// resolved scheme (trusted-proxy aware) and r.Host — the original
+	// behaviour. Must be an absolute http(s) URL with a host and no path; it
+	// is validated and normalised to "scheme://host" at load. Optional.
 	ExternalURL string `yaml:"external_url"`
 	// JWTKey is derived from SecretKey via HKDF-SHA256 for JWT signing.
 	JWTKey []byte `yaml:"-"`

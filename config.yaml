@@ -36,6 +36,14 @@ server:
   # directly on the public Internet — the rate limiter then keys off the raw
   # TCP source address and cannot be bypassed by forging XFF headers.
   # trusted_proxies: []
+  # Canonical base URL GoZone is served at (e.g. "https://dns.example.com").
+  # When set, OIDC redirect_uri and post_logout_redirect_uri values are built
+  # from it instead of being derived per-request from the client-controlled
+  # Host header. Defense-in-depth: the IdP already validates both against its
+  # registered lists; this removes the app's reliance on an untrusted header.
+  # Must be an absolute http(s) URL with a host and no path (validated and
+  # normalised to scheme://host at startup). Leave empty to derive per-request.
+  # external_url: "https://dns.example.com"
 
 database:
   driver: "sqlite3"

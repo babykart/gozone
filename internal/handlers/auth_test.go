@@ -839,3 +839,20 @@ func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
 		t.Error("expected a session cookie after successful login past a stale auto-lock (I-2)")
 	}
 }
+
+// TestOidcPostLogoutURL mirrors TestOidcCallbackURL: when server.external_url
+// is configured, the post_logout_redirect_uri handed to the IdP at RP-initiated
+// logout is built from that canonical base — the client-controlled Host header
+// must not influence it. When empty, the URL keeps the original per-request
+// derivation (resolved scheme + Host).
+func TestOidcPostLogoutURL(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r.Host = "spoofed.example.com"
+
+	if got, want := oidcPostLogoutURL("", r), "http://spoofed.example.com/login"; got != want {
+		t.Errorf("oidcPostLogoutURL (derived) = %q, want %q", got, want)
+	}
+	if got, want := oidcPostLogoutURL("https://dns.example.com", r), "https://dns.example.com/login"; got != want {
+		t.Errorf("oidcPostLogoutURL (external_url) = %q, want %q", got, want)
+	}
+}

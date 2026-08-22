@@ -470,7 +470,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 					idTokenHint = stored
 				}
 			}
-			postLogout := oidcPostLogoutURL(r)
+			postLogout := oidcPostLogoutURL(h.Cfg.Server.ExternalURL, r)
 			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
 			if idTokenHint != "" {
 				target = appendQuery(target, "id_token_hint", idTokenHint)
@@ -505,9 +505,17 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // oidcPostLogoutURL builds the fully-qualified /login URL to hand the IdP as
-// post_logout_redirect_uri, derived from the request scheme/host (trusted-proxy
-// aware) so the browser returns to the same GoZone instance.
-func oidcPostLogoutURL(r *http.Request) string {
+// post_logout_redirect_uri. When externalURL is configured
+// (server.external_url) it is used as the base, ignoring the client-controlled
+// Host header — the same defense-in-depth as the OIDC callback URL: the IdP
+// validates post_logout_redirect_uri against its allow-list, but the app
+// should not derive the value from an untrusted header when a canonical base
+// is known. Otherwise the URL is derived per-request from the resolved scheme
+// (trusted-proxy aware) and r.Host.
+func oidcPostLogoutURL(externalURL string, r *http.Request) string {
+	if externalURL != "" {
+		return externalURL + "/login"
+	}
 	scheme := "http"
 	if middleware.IsHTTPS(r) {
 		scheme = "https"
