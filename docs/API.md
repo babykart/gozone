@@ -1,6 +1,6 @@
 # GoZone REST API
 
-All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time. Each key optionally carries an expiry (30 days / 90 days / 1 year / never, chosen at creation); an expired key stops authenticating immediately with HTTP 401 `{"error":"api_key_expired"}`, and the number of keys a user may own is capped by `auth.max_api_keys_per_user`.
+All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time. Each key optionally carries an expiry (30 days / 90 days / 1 year / never, chosen at creation); an expired key stops authenticating immediately with HTTP 401 and the `API_KEY_EXPIRED` error code (`error`: `"api_key_expired"`), and the number of keys a user may own is capped by `auth.max_api_keys_per_user`.
 
 ## Authentication
 
@@ -46,8 +46,14 @@ All errors return a JSON body:
 | `ZONE_NOT_FOUND` | 404 | Zone does not exist |
 | `RECORD_NOT_FOUND` | 404 | Record does not exist |
 | `CONFLICT` | 409 | Resource already exists |
-| `UNAUTHORIZED` | 401 | Invalid or expired API key |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| `UNAUTHORIZED` | 401 | Invalid or missing API key, or the key's user is disabled |
+| `API_KEY_EXPIRED` | 401 | The API key passed its expiry date |
+| `FORBIDDEN` | 403 | Authenticated as a non-admin on an admin-only endpoint, or no zone-group grants access to the zone |
+| `INTERNAL_ERROR` | 500 | Unexpected server error (also used when the zone-access lookup itself fails) |
+
+Middleware-level rejections (authentication, admin gate, zone access) use the
+same envelope as handler-level errors, so an API client never receives a
+`text/plain` body.
 
 ## Zones
 

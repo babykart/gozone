@@ -15,7 +15,11 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user := GetUser(r)
 			if user == nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				if isAPIRequest(r) {
+					writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+				} else {
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				}
 				return
 			}
 			if user.IsAdmin() {
@@ -61,10 +65,18 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 				!errors.Is(err, context.DeadlineExceeded) {
 				logger.Error("zone access check failed; denying fail-closed",
 					"user_id", user.ID, "zone_id", zoneID, "error", err)
-				http.Error(w, "zone access check failed", http.StatusInternalServerError)
+				if isAPIRequest(r) {
+					writeAPIErrorEnvelope(w, http.StatusInternalServerError, "INTERNAL_ERROR", "zone access check failed")
+				} else {
+					http.Error(w, "zone access check failed", http.StatusInternalServerError)
+				}
 				return
 			}
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			if isAPIRequest(r) {
+				writeAPIErrorEnvelope(w, http.StatusForbidden, "FORBIDDEN", "forbidden")
+			} else {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			}
 		})
 	}
 }

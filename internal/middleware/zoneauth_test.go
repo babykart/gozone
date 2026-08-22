@@ -230,3 +230,60 @@ func TestCheckZoneAccess_DBError_FailsClosed500(t *testing.T) {
 		t.Errorf("expected 500 on DB error (not an indistinguishable 403), got %d", rr.Code)
 	}
 }
+
+// TestCheckZoneAccess_APIRequestsUseJSONEnvelope locks the API variant of the
+// zone gate: on /api/v1 routes its rejections must use the standard JSON
+// envelope like every other API error. An API client used to receive
+// text/plain exclusively from middleware rejections (401 nil user, 403
+// denial, 500 lookup failure).
+func TestCheckZoneAccess_APIRequestsUseJSONEnvelope(t *testing.T) {
+	db := newTestAuthDB(t)
+	owner := seedTestUser(t, db, "zoneowner", "user", true)
+	seedZoneAccess(t, db, owner, "granted.example.")
+
+	serve := func(r *http.Request) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(w, r)
+		return w
+	}
+
+	// 401 — nil user on an API path.
+	w := serve(httptest.NewRequest(http.MethodGet, "/api/v1/zones/granted.example./records", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("nil user: expected 401, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("nil user: expected application/json, got %q", ct)
+	}
+	assertAPIErrorEnvelope(t, w, "UNAUTHORIZED")
+
+	// 403 — authenticated non-admin without a grant.
+	other := seedTestUser(t, db, "zoneoutsider", "user", true)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/granted.example./records", nil)
+	r.SetPathValue("zone_id", "granted.example.")
+	r = withTestUser(r, &models.User{ID: other, Username: "zoneoutsider", Role: "user"})
+	w = serve(r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("denied user: expected 403, got %d", w.Code)
+	}
+	assertAPIErrorEnvelope(t, w, "FORBIDDEN")
+
+	// 500 — lookup failure (broken table) fails closed with the envelope.
+	broken := newTestAuthDB(t)
+	if _, err := broken.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/zones/granted.example./records", nil)
+	r.SetPathValue("zone_id", "granted.example.")
+	r = withTestUser(r, &models.User{ID: owner, Username: "zoneowner", Role: "user"})
+	w = httptest.NewRecorder()
+	CheckZoneAccess(broken)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("db error: expected 500, got %d", w.Code)
+	}
+	assertAPIErrorEnvelope(t, w, "INTERNAL_ERROR")
+}

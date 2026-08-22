@@ -66,6 +66,28 @@ func isAPIRequest(r *http.Request) bool {
 	return r.Header.Get("Accept") == "application/json"
 }
 
+// apiErrorEnvelope mirrors the JSON error envelope used across the REST API
+// ({"error","code","message"} with a STRING code, e.g. "UNAUTHORIZED") so
+// middleware-level rejections blend in with the handler-level writeAPIError
+// responses. Declared here rather than shared with the handlers package
+// because middleware cannot import handlers (the reverse dependency already
+// exists); the shape is pinned by tests on both sides. Note the code is
+// deliberately not apperrors.AppError's serialized form, whose Code field is
+// an int — a numeric code would introduce a third shape on the API surface.
+type apiErrorEnvelope struct {
+	Error   string `json:"error"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// writeAPIErrorEnvelope writes the API JSON error envelope. Middlewares
+// mounted on both web and API routes use this for their rejections when
+// isAPIRequest(r) holds, and plain text otherwise — an API client then never
+// receives text/plain where every other endpoint answers JSON.
+func writeAPIErrorEnvelope(w http.ResponseWriter, status int, code, label string) {
+	respondJSON(w, status, apiErrorEnvelope{Error: label, Code: code, Message: label})
+}
+
 // respondJSON writes a JSON response with the given status code.
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

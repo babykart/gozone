@@ -1326,3 +1326,68 @@ func TestAPIKeyLastUsedTracker_CompactsPastMaxEntries(t *testing.T) {
 		t.Error("the fresh entry must survive compaction")
 	}
 }
+
+// TestRequireAdmin_APIRequestJSONEnvelope locks the API variant of the admin
+// gate: mounted on /api/v1, its 403 must use the standard JSON envelope
+// ({"error","code","message"}) like every other API error, not text/plain —
+// an API client used to receive plain text exclusively on middleware
+// rejections.
+func TestRequireAdmin_APIRequestJSONEnvelope(t *testing.T) {
+	regular := &models.User{ID: 2, Username: "user", Role: "user"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	r = r.WithContext(context.WithValue(r.Context(), UserContextKey, regular))
+
+	RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be reached")
+	})).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+	assertAPIErrorEnvelope(t, w, "FORBIDDEN")
+}
+
+// TestRequireAdmin_WebRequestStaysPlainText pins the web side of the switch:
+// the same rejection on a web route keeps its historical plain-text body.
+func TestRequireAdmin_WebRequestStaysPlainText(t *testing.T) {
+	regular := &models.User{ID: 2, Username: "user", Role: "user"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	r = r.WithContext(context.WithValue(r.Context(), UserContextKey, regular))
+
+	RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be reached")
+	})).ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	if body := w.Body.String(); body != "Forbidden\n" {
+		t.Errorf("web rejection must keep the plain-text body, got %q", body)
+	}
+}
+
+// assertAPIErrorEnvelope decodes the API error envelope and checks its code.
+func assertAPIErrorEnvelope(t *testing.T, w *httptest.ResponseRecorder, wantCode string) {
+	t.Helper()
+	var body struct {
+		Error   string `json:"error"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode envelope: %v (body: %s)", err, w.Body.String())
+	}
+	if body.Code != wantCode {
+		t.Errorf("envelope code = %q, want %q", body.Code, wantCode)
+	}
+	if body.Error == "" || body.Message == "" {
+		t.Errorf("envelope error/message must be non-empty, got %+v", body)
+	}
+}

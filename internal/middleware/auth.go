@@ -413,7 +413,7 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			}
 
 			if authHeader == "" {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 				return
 			}
 
@@ -427,18 +427,18 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			).Scan(&userID, &expiresAt)
 
 			if err != nil {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 				return
 			}
 
 			if expiresAt.Valid && expiresAt.Time.Before(time.Now()) {
-				http.Error(w, `{"error":"api_key_expired"}`, http.StatusUnauthorized)
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "API_KEY_EXPIRED", "api_key_expired")
 				return
 			}
 
 			user, err := loadUser(r.Context(), db, userID)
 			if err != nil || !user.Enabled {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 				return
 			}
 
@@ -470,7 +470,13 @@ func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil || !user.IsAdmin() {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			// The API mount of this middleware must answer with the JSON
+			// envelope like every other /api/v1 endpoint, not text/plain.
+			if isAPIRequest(r) {
+				writeAPIErrorEnvelope(w, http.StatusForbidden, "FORBIDDEN", "forbidden")
+			} else {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			}
 			return
 		}
 		next.ServeHTTP(w, r)
