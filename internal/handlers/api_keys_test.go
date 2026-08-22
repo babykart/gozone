@@ -541,3 +541,82 @@ func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
 		t.Fatalf("creation with cap disabled should succeed, got %d -> %s", w.Code, w.Header().Get("Location"))
 	}
 }
+
+// TestDeleteAPIKey_MalformedIDCollapsed extends the not_found/forbidden
+// collapse: a non-numeric key_id cannot designate any row (the column is
+// INTEGER and the value used to be bound as a raw string — a 500 on
+// PostgreSQL), so it must collapse into the same ?error=not_found rather than
+// a distinct error that would turn the parse outcome into an existence
+// oracle. No activity log may be written.
+func TestDeleteAPIKey_MalformedIDCollapsed(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	for _, keyID := range []string{"abc", "-5", "0", "1.5"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/delete", strings.NewReader("key_id="+keyID))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.DeleteAPIKey(w, r)
+
+		if w.Code != http.StatusSeeOther {
+			t.Fatalf("key_id=%q: expected 303, got %d", keyID, w.Code)
+		}
+		if loc := w.Header().Get("Location"); !strings.Contains(loc, "error=not_found") {
+			t.Errorf("key_id=%q: expected error=not_found, got %s", keyID, loc)
+		}
+	}
+
+	var logCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_api_key'").Scan(&logCount)
+	if logCount != 0 {
+		t.Errorf("expected 0 delete logs for malformed ids, got %d", logCount)
+	}
+}
+
+// TestBulkDeleteAPIKeys_MalformedIDReportedFailed guards the batch variant: a
+// non-numeric selection value cannot match any row and must be reported in
+// `failed` (the batch is best-effort) while the valid selection still deletes
+// — previously the raw string was bound against the INTEGER column, aborting
+// the whole batch with a 500 on PostgreSQL.
+func TestBulkDeleteAPIKeys_MalformedIDReportedFailed(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	mine := seedAPIKey(t, h.DB, 1, "mine", "h1")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := fmt.Sprintf("key_id=abc&key_id=%d", mine)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteAPIKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 {
+		t.Errorf("expected the valid key to be deleted, got %d", resp.Deleted)
+	}
+	if len(resp.Failed) != 1 || resp.Failed[0] != "abc" {
+		t.Errorf("expected the malformed id in failed, got %v", resp.Failed)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE id = ?", mine).Scan(&count)
+	if count != 0 {
+		t.Error("expected the owned key to be gone")
+	}
+}

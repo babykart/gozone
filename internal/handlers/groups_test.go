@@ -987,3 +987,42 @@ func TestBulkDeleteGroups_NoSelection(t *testing.T) {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
 	}
 }
+
+// TestDeleteGroup_InvalidID guards the typed binding of the group id: the
+// column is INTEGER, and a non-numeric path value used to be bound as a raw
+// string — a guaranteed 500 on PostgreSQL and a confusing partial result
+// elsewhere. It must be rejected with a 400 before any statement runs.
+func TestDeleteGroup_InvalidID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/abc/delete", nil)
+	r.SetPathValue("group_id", "abc")
+	r = withUserContext(r, user)
+	h.DeleteGroup(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a non-numeric group id, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestDeleteGroup_NotFound guards RowsAffected: deleting a group that does not
+// exist (already deleted, stale link) used to report silent success via the
+// plain redirect. It must surface 404 like EditGroupPage.
+func TestDeleteGroup_NotFound(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/999999/delete", nil)
+	r.SetPathValue("group_id", "999999")
+	r = withUserContext(r, user)
+	h.DeleteGroup(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for a missing group, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}

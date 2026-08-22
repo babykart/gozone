@@ -356,11 +356,28 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 // DeleteGroup deletes a group (POST /groups/{group_id}/delete).
 func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
-	if _, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupIDStr); err != nil {
+	// Validate as a positive int before binding: the column is typed INTEGER,
+	// so an unvalidated string yields a 500 on PostgreSQL and a confusing
+	// partial result on MySQL/SQLite — the same class the neighbouring
+	// member/zone handlers guard against.
+	groupID, err := strconv.ParseInt(groupIDStr, 10, 64)
+	if err != nil || groupID <= 0 {
+		h.renderError(w, r, "Invalid group ID")
+		return
+	}
+
+	res, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupID)
+	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete group", err)
 		return
 	}
-	// #nosec G710 -- groupIDStr from chi r.PathValue, controlled by route pattern
+	// A delete that matched no row is a missing group (already deleted or a
+	// stale link): surface 404 instead of a silent success redirect, mirroring
+	// EditGroupPage.
+	if n, _ := res.RowsAffected(); n == 0 {
+		h.renderErrorStatus(w, r, http.StatusNotFound, "Group not found")
+		return
+	}
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
 

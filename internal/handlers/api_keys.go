@@ -277,7 +277,18 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
 
-	keyID := strings.TrimSpace(r.FormValue("key_id"))
+	keyIDStr := strings.TrimSpace(r.FormValue("key_id"))
+	// Validate as a positive int before binding: the column is typed INTEGER,
+	// so an unvalidated string yields a 500 on PostgreSQL. A malformed id
+	// cannot designate any row, so it collapses into the same ?error=not_found
+	// as a missing or foreign key — a distinct error would turn the parse
+	// outcome into an existence oracle, exactly what the collapsed branch
+	// below exists to prevent.
+	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	if err != nil || keyID <= 0 {
+		http.Redirect(w, r, "/profile/api-keys?error=not_found", http.StatusSeeOther)
+		return
+	}
 
 	tx, err := h.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -302,7 +313,7 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %s", keyID)})
+	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %d", keyID)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return
@@ -364,7 +375,17 @@ func (h *Handler) BulkDeleteAPIKeys(w http.ResponseWriter, r *http.Request) {
 
 	deleted := 0
 	var failed []string
-	for _, keyID := range keyIDs {
+	for _, keyIDStr := range keyIDs {
+		// Validate as a positive int before binding: the column is typed
+		// INTEGER, so an unvalidated string aborts the whole batch with a 500
+		// on PostgreSQL. A malformed id cannot designate any row: report it
+		// as failed and continue, exactly like a not-owned id (the batch is
+		// best-effort), without opening a per-id existence oracle.
+		keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+		if err != nil || keyID <= 0 {
+			failed = append(failed, keyIDStr)
+			continue
+		}
 		// Ownership-scoped delete: RowsAffected==0 means not owned or already
 		// gone — report as failed and continue without aborting the batch.
 		res, err := tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ? AND user_id = ?", keyID, user.ID)
@@ -374,10 +395,10 @@ func (h *Handler) BulkDeleteAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			failed = append(failed, keyID)
+			failed = append(failed, keyIDStr)
 			continue
 		}
-		if err := logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %s", keyID)}); err != nil {
+		if err := logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "delete_api_key", Details: fmt.Sprintf("Deleted API key %d", keyID)}); err != nil {
 			h.renderInternalError(w, r, "Failed to log activity", err)
 			return
 		}
