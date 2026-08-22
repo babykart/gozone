@@ -90,23 +90,38 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "groups.html", data)
 }
 
+// maxGroupSelectOptions caps how many users/zones the group forms render in
+// their <select> dropdowns. Rendering the full tables made the page grow with
+// the deployment (every user, every PowerDNS zone) while every other list
+// view is paginated or searchable server-side. Beyond the cap the edit page
+// narrows the list through its server-side search fields; the create form
+// keeps its first-N slice and points larger selections at the edit page.
+const maxGroupSelectOptions = 100
+
 // CreateGroupPage renders the group creation form (GET /groups/new).
 func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 
-	allUsers, _ := h.getAllUsers()
-	allZones, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	// No search fields here: the multi-select carries the operator's pending
+	// selection in the DOM, and a server-side search reload would drop it.
+	// The lists are merely capped; the truncation flags let the template
+	// point large selections at the edit page's incremental add + search.
+	allUsers, usersTruncated, _ := h.getAllUsers("")
+	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, "")
 
 	data := map[string]interface{}{
-		"Title":      "Create Group - " + h.Cfg.Server.AppName,
-		"User":       user,
-		"Group":      groupInfo{},
-		"Members":    []models.User{},
-		"GroupZones": []string{},
-		"AllUsers":   allUsers,
-		"AllZones":   allZones,
-		"IsAdmin":    user.IsAdmin(),
-		"FormAction": "/groups/create",
+		"Title":          "Create Group - " + h.Cfg.Server.AppName,
+		"User":           user,
+		"Group":          groupInfo{},
+		"Members":        []models.User{},
+		"GroupZones":     []string{},
+		"AllUsers":       allUsers,
+		"AllZones":       allZones,
+		"UsersTruncated": usersTruncated,
+		"ZonesTruncated": zonesTruncated,
+		"IsAdmin":        user.IsAdmin(),
+		"FormAction":     "/groups/create",
 	}
 	h.render(w, r, "group_edit.html", data)
 }
@@ -317,23 +332,33 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	members := h.getGroupMembers(groupID)
 	zones := h.getGroupZones(groupID)
 
-	allUsers, _ := h.getAllUsers()
-
-	allZones, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	// Server-side search for the incremental add dropdowns. Unlike the create
+	// form (whose multi-select carries the pending selection in the DOM and
+	// must not reload), these are single-selects: narrowing via a GET reload
+	// is lossless and matches how every other list view searches.
+	userSearch := strings.TrimSpace(r.URL.Query().Get("uq"))
+	zoneSearch := strings.TrimSpace(r.URL.Query().Get("zq"))
+	allUsers, usersTruncated, _ := h.getAllUsers(userSearch)
+	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, zoneSearch)
 
 	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
 
 	data := map[string]interface{}{
-		"Title":      g.Name + " - " + h.Cfg.Server.AppName,
-		"User":       user,
-		"Group":      g,
-		"Members":    members,
-		"GroupZones": zones,
-		"AllUsers":   allUsers,
-		"AllZones":   allZones,
-		"IsAdmin":    user.IsAdmin(),
-		"FormAction": "/groups/" + groupIDStr + "/update",
-		"Flash":      flash,
+		"Title":          g.Name + " - " + h.Cfg.Server.AppName,
+		"User":           user,
+		"Group":          g,
+		"Members":        members,
+		"GroupZones":     zones,
+		"AllUsers":       allUsers,
+		"AllZones":       allZones,
+		"UsersTruncated": usersTruncated,
+		"ZonesTruncated": zonesTruncated,
+		"UserSearch":     userSearch,
+		"ZoneSearch":     zoneSearch,
+		"IsAdmin":        user.IsAdmin(),
+		"FormAction":     "/groups/" + groupIDStr + "/update",
+		"Flash":          flash,
 	}
 	h.render(w, r, "group_edit.html", data)
 }
@@ -614,17 +639,23 @@ func (h *Handler) getGroupZones(groupID int64) []string {
 	return zones
 }
 
-func (h *Handler) getAllUsers() ([]models.User, error) {
-	rows, err := h.DB.Query(
-		`SELECT id, username, email, first_name, last_name, role, enabled
-		 FROM users ORDER BY username`,
-	)
+// getAllUsers returns the users for the group-form dropdowns: ordered by
+// username, narrowed by an optional case-insensitive search over
+// username/email, capped at maxGroupSelectOptions, with a flag reporting
+// whether matching rows exist beyond the cap.
+func (h *Handler) getAllUsers(search string) (users []models.User, truncated bool, err error) {
+	where, args := buildSearchLikeWhere(search, "username", "email")
+	q := `SELECT id, username, email, first_name, last_name, role, enabled FROM users`
+	if where != "" {
+		q += " WHERE " + where
+	}
+	q += " ORDER BY username LIMIT " + strconv.Itoa(maxGroupSelectOptions)
+	rows, err := h.DB.Query(q, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
-	var users []models.User
 	for rows.Next() {
 		var u models.User
 		var enabled int
@@ -636,9 +667,45 @@ func (h *Handler) getAllUsers() ([]models.User, error) {
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return users, nil
+
+	if len(users) == maxGroupSelectOptions {
+		// A full page may or may not be all the matches; one COUNT settles
+		// the truncation flag so the template hint only shows when rows were
+		// actually left out.
+		countQ := "SELECT COUNT(*) FROM users"
+		if where != "" {
+			countQ += " WHERE " + where
+		}
+		var total int
+		if err := h.DB.QueryRow(countQ, args...).Scan(&total); err != nil {
+			return nil, false, err
+		}
+		truncated = total > maxGroupSelectOptions
+	}
+	return users, truncated, nil
+}
+
+// filterZonesWithInfoForSearch narrows a zone list by a case-insensitive name
+// substring and caps it at maxGroupSelectOptions, reporting whether matching
+// zones exist beyond the cap. The input comes from the cached ListZones call,
+// so filtering in-process avoids a second PowerDNS round-trip per keystroke.
+func filterZonesWithInfoForSearch(zones []models.ZoneWithInfo, search string) ([]models.ZoneWithInfo, bool) {
+	search = strings.ToLower(strings.TrimSpace(search))
+	filtered := make([]models.ZoneWithInfo, 0, min(maxGroupSelectOptions, len(zones)))
+	truncated := false
+	for _, z := range zones {
+		if search != "" && !strings.Contains(strings.ToLower(z.Zone.Name), search) {
+			continue
+		}
+		if len(filtered) >= maxGroupSelectOptions {
+			truncated = true
+			break
+		}
+		filtered = append(filtered, z)
+	}
+	return filtered, truncated
 }
 
 // getUserAllowedZoneIDs returns the set of zone IDs accessible to a non-admin user.

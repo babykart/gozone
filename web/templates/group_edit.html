@@ -23,7 +23,9 @@
         <input type="text" id="description" name="description" value="{{.Group.Description}}" class="form-control">
     </div>
 
-    {{/* Multi-select members + zones are part of the create flow only. */}}
+    {{/* Multi-select members + zones are part of the create flow only. The
+         lists are capped server-side; a server-side search here would drop
+         the operator's pending multi-selection on reload. */}}
     {{if eq .Group.ID 0}}
     <div class="form-group">
         <label for="user_ids">Members</label>
@@ -34,7 +36,7 @@
             <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
             {{end}}
         </select>
-        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple members.</small>
+        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple members.{{if .UsersTruncated}} Showing the first 100 users — for more, create the group and use the search on the edit page.{{end}}</small>
     </div>
     <div class="form-group">
         <label for="zone_ids">Zones</label>
@@ -45,7 +47,7 @@
             <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
             {{end}}
         </select>
-        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple zones.</small>
+        <small class="form-hint">Type to filter. Hold Ctrl (Cmd on macOS) to select multiple zones.{{if .ZonesTruncated}} Showing the first 100 zones — for more, create the group and use the search on the edit page.{{end}}</small>
     </div>
     {{end}}
 
@@ -85,6 +87,10 @@
     <p class="empty-state text-left">No members in this group.</p>
     {{end}}
 
+    <form method="GET" action="/groups/{{.Group.ID}}/edit" class="search-form mb-1">
+        <input type="hidden" name="zq" value="{{.ZoneSearch}}">
+        <input type="search" name="uq" value="{{.UserSearch}}" placeholder="Search users..." class="search-input" aria-label="Search users to add">
+    </form>
     <form method="POST" action="/groups/{{.Group.ID}}/add-member" class="add-row">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <div class="form-group m-0 flex-1">
@@ -96,6 +102,7 @@
                 <option value="{{.ID}}">{{.Username}} ({{.Email}})</option>
                 {{end}}
             </select>
+            {{if .UsersTruncated}}<small class="form-hint">Showing the first 100 matches — refine the search above to narrow the list.</small>{{end}}
         </div>
         <button type="submit" class="btn btn-secondary">Add</button>
     </form>
@@ -130,6 +137,10 @@
     <p class="empty-state text-left">No zones assigned to this group.</p>
     {{end}}
 
+    <form method="GET" action="/groups/{{.Group.ID}}/edit" class="search-form mb-1">
+        <input type="hidden" name="uq" value="{{.UserSearch}}">
+        <input type="search" name="zq" value="{{.ZoneSearch}}" placeholder="Search zones..." class="search-input" aria-label="Search zones to add">
+    </form>
     <form method="POST" action="/groups/{{.Group.ID}}/add-zone" class="add-row">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">
         <div class="form-group m-0 flex-1">
@@ -141,6 +152,7 @@
                 <option value="{{.Zone.ID}}">{{.Zone.Name}}</option>
                 {{end}}
             </select>
+            {{if .ZonesTruncated}}<small class="form-hint">Showing the first 100 matches — refine the search above to narrow the list.</small>{{end}}
         </div>
         <button type="submit" class="btn btn-secondary">Add</button>
     </form>

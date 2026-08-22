@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1078,5 +1079,165 @@ func TestExistingUserIDs_BatchBoundary(t *testing.T) {
 		if len(exists) != 1 {
 			t.Errorf("selection of %d ids: expected 1 distinct existing id, got %d", n, len(exists))
 		}
+	}
+}
+
+// seedBulkUsers inserts n users with direct SQL (a fixed dummy hash — the
+// group dropdowns never read the hash column), fast enough for the >100-row
+// cap tests where per-user bcrypt would dominate the runtime.
+func seedBulkUsers(t *testing.T, h *Handler, prefix string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("%s-%03d", prefix, i)
+		if _, err := h.DB.Exec(
+			`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, 'dummy-hash', 'user')`,
+			name, name+"@example.com",
+		); err != nil {
+			t.Fatalf("seed bulk user %s: %v", name, err)
+		}
+	}
+}
+
+// TestGetAllUsers_CappedAndSearched guards the server-side bounding of the
+// group-form user dropdown: unbounded, the page rendered one <option> per
+// user row. The list must be capped at maxGroupSelectOptions (with the
+// truncation flag), and a search must narrow it below the cap.
+func TestGetAllUsers_CappedAndSearched(t *testing.T) {
+	h := newTestHandler(t)
+	seedBulkUsers(t, h, "bulk", maxGroupSelectOptions+5)
+
+	users, truncated, err := h.getAllUsers("")
+	if err != nil {
+		t.Fatalf("getAllUsers: %v", err)
+	}
+	if len(users) != maxGroupSelectOptions {
+		t.Errorf("unsearched list must be capped at %d, got %d", maxGroupSelectOptions, len(users))
+	}
+	if !truncated {
+		t.Error("truncated must be true when matching rows exist beyond the cap")
+	}
+
+	// "bulk-10" matches bulk-100..bulk-104 (bulk-010 does not contain it).
+	users, truncated, err = h.getAllUsers("bulk-10")
+	if err != nil {
+		t.Fatalf("getAllUsers(bulk-10): %v", err)
+	}
+	if len(users) != 5 {
+		t.Errorf("expected 5 matches for bulk-10, got %d", len(users))
+	}
+	if truncated {
+		t.Error("truncated must be false when all matches fit under the cap")
+	}
+
+	// Exactly-cap edge: len == cap but nothing beyond -> truncated stays false.
+	users, truncated, err = h.getAllUsers("bulk-0")
+	if err != nil {
+		t.Fatalf("getAllUsers(bulk-0): %v", err)
+	}
+	if len(users) != maxGroupSelectOptions {
+		t.Fatalf("bulk-0 should match exactly the cap (bulk-000..bulk-099), got %d", len(users))
+	}
+	if truncated {
+		t.Errorf("a full-but-exact match set must not report truncated (total should equal the cap)")
+	}
+}
+
+// TestFilterZonesWithInfoForSearch_CappedAndSearched is the zone twin of the
+// user cap test: the dropdown renders at most maxGroupSelectOptions zones,
+// narrowed by a case-insensitive name substring.
+func TestFilterZonesWithInfoForSearch_CappedAndSearched(t *testing.T) {
+	zones := make([]models.ZoneWithInfo, 0, maxGroupSelectOptions+3)
+	for i := 0; i < maxGroupSelectOptions+3; i++ {
+		zones = append(zones, models.ZoneWithInfo{Zone: models.Zone{
+			ID: fmt.Sprintf("z%03d.example.", i), Name: fmt.Sprintf("z%03d.example.", i), Kind: "Native",
+		}})
+	}
+
+	got, truncated := filterZonesWithInfoForSearch(zones, "")
+	if len(got) != maxGroupSelectOptions {
+		t.Errorf("unsearched list must be capped at %d, got %d", maxGroupSelectOptions, len(got))
+	}
+	if !truncated {
+		t.Error("truncated must be true when matching zones exist beyond the cap")
+	}
+
+	// Case-insensitive: "Z10" lowercased matches only z100..z102 ("z010"
+	// does not contain "z10" — the z there is followed by a 0).
+	got, truncated = filterZonesWithInfoForSearch(zones, "Z10")
+	if len(got) != 3 {
+		t.Errorf("expected 3 matches for Z10 (z100..z102), got %d", len(got))
+	}
+	if truncated {
+		t.Error("a small match set must not report truncated")
+	}
+}
+
+// TestEditGroupPage_SearchNarrowsDropdowns drives the server-side search of
+// the edit page: ?uq=/?zq= must narrow the add-member/add-zone dropdowns, and
+// each search form must preserve the other field's query parameter.
+func TestEditGroupPage_SearchNarrowsDropdowns(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones") {
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "alpha.example.", Name: "alpha.example.", Kind: "Native"},
+				{ID: "beta.example.", Name: "beta.example.", Kind: "Native"},
+				{ID: "gamma.example.", Name: "gamma.example.", Kind: "Native"},
+			})
+			return
+		}
+		w.Write([]byte(`[]`))
+	})
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "alice", "pass", "user", true)
+	testutil.SeedTestUser(t, h.DB, "bob", "pass", "user", true)
+	groupID := seedGroup(t, h, "searched", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	r := httptest.NewRequest(http.MethodGet, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit?uq=alice&zq=beta", nil)
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r = withUserContext(r, user)
+	w := httptest.NewRecorder()
+	h.EditGroupPage(w, r)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "AllUsers: alice") {
+		t.Errorf("user search must narrow the dropdown to alice, got: %s", body)
+	}
+	if strings.Contains(body, "bob@example") || strings.Contains(body, "AllUsers: bob") {
+		t.Errorf("bob must be filtered out by uq=alice, got: %s", body)
+	}
+	if !strings.Contains(body, "AllZones: beta.example.") {
+		t.Errorf("zone search must narrow the dropdown to beta, got: %s", body)
+	}
+	if strings.Contains(body, "alpha.example.") || strings.Contains(body, "gamma.example.") {
+		t.Errorf("non-matching zones must be filtered out by zq=beta, got: %s", body)
+	}
+	if !strings.Contains(body, "UserSearch=alice") || !strings.Contains(body, "ZoneSearch=beta") {
+		t.Errorf("the searches must round-trip into the page state, got: %s", body)
+	}
+}
+
+// TestCreateGroupPage_TruncationHints: with more users than the render cap,
+// the create form must render only the capped slice and expose the
+// truncation flag so the template can point operators at the edit page.
+func TestCreateGroupPage_TruncationHints(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	seedBulkUsers(t, h, "bulk", maxGroupSelectOptions+2)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/groups/new", nil), user)
+	w := httptest.NewRecorder()
+	h.CreateGroupPage(w, r)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "UsersTruncated") {
+		t.Errorf("expected the users truncation flag to reach the template, got: %s", body)
+	}
+	if strings.Contains(body, "ZonesTruncated") {
+		t.Error("an empty zone list must not report truncation")
 	}
 }
