@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/babykart/gozone/internal/constants"
@@ -854,5 +855,71 @@ func TestOidcPostLogoutURL(t *testing.T) {
 	}
 	if got, want := oidcPostLogoutURL("https://dns.example.com", r), "https://dns.example.com/login"; got != want {
 		t.Errorf("oidcPostLogoutURL (external_url) = %q, want %q", got, want)
+	}
+}
+
+// TestLogout_TokenWithoutExpiryDoesNotPanic guards the nil-ExpiresAt path of
+// the logout revocation. Every issuance path embeds an exp today, but a JWT
+// without one parses fine — Logout used to dereference claims.ExpiresAt.Time
+// unconditionally, so a future issuance change would have turned the token
+// cookie into a guaranteed panic (the middleware session-policy path already
+// guards the same field). Such a token never expires on its own, so its
+// revocation row must carry a far-future expiry instead of being pruned with
+// the token still usable.
+func TestLogout_TokenWithoutExpiryDoesNotPanic(t *testing.T) {
+	h := newTestHandler(t)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), 4)
+	h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"noexp", "noexp@example.com", string(hash), "user",
+	)
+
+	user := &models.User{ID: 1, Username: "noexp", Role: "user"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Mint a token with NO ExpiresAt claim, mimicking a hypothetical issuance
+	// path that omits it (ParseToken does not require exp to succeed).
+	noExpToken := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:       "no-exp-jti",
+			IssuedAt: jwt.NewNumericDate(time.Now()),
+			Issuer:   "gozone",
+		},
+	})
+	signed, err := noExpToken.SignedString(h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r = r.WithContext(ctx)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: signed})
+	h.Logout(w, r) // must not panic
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+
+	// The token must still be revoked — with a far-future expiry so the
+	// revoked_tokens purge does not drop the row while the token remains
+	// usable (it never expires on its own).
+	revoked, err := h.DB.IsTokenRevoked(context.Background(), "no-exp-jti")
+	if err != nil {
+		t.Fatalf("check revocation: %v", err)
+	}
+	if !revoked {
+		t.Error("expected the exp-less token to be revoked on logout")
+	}
+	var expiresAt time.Time
+	if err := h.DB.QueryRow("SELECT expires_at FROM revoked_tokens WHERE jti = ?", "no-exp-jti").Scan(&expiresAt); err != nil {
+		t.Fatalf("read revocation row: %v", err)
+	}
+	if time.Until(expiresAt) < 99*365*24*time.Hour {
+		t.Errorf("revocation of an exp-less token must carry a far-future expiry, got %v", expiresAt)
 	}
 }

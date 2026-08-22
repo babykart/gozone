@@ -426,7 +426,18 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 			// the JWT itself. Newer sessions store it server-side.
 			idTokenHint = claims.IDTokenHint
 			if user != nil {
-				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, claims.ExpiresAt.Time); err != nil {
+				// The token's own expiry bounds the revocation row: it is
+				// pruned once the token could no longer authenticate anyway.
+				// Every issuance path currently embeds an exp, but a JWT
+				// without one parses fine — guard the dereference and revoke
+				// such a token far into the future instead of panicking: it
+				// never expires on its own, so its revocation must not be
+				// pruned early either.
+				expiresAt := time.Now().AddDate(100, 0, 0)
+				if claims.ExpiresAt != nil {
+					expiresAt = claims.ExpiresAt.Time
+				}
+				if err := h.DB.RevokeToken(ctx, claims.ID, user.ID, expiresAt); err != nil {
 					logger.Error("failed to revoke token on logout", "user_id", user.ID, "error", err)
 				}
 			}
