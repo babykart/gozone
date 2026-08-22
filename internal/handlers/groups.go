@@ -106,7 +106,7 @@ func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 	// selection in the DOM, and a server-side search reload would drop it.
 	// The lists are merely capped; the truncation flags let the template
 	// point large selections at the edit page's incremental add + search.
-	allUsers, usersTruncated, _ := h.getAllUsers("")
+	allUsers, usersTruncated, _ := h.getAllUsers(r.Context(), "")
 	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
 	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, "")
 
@@ -329,8 +329,8 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members := h.getGroupMembers(groupID)
-	zones := h.getGroupZones(groupID)
+	members := h.getGroupMembers(r.Context(), groupID)
+	zones := h.getGroupZones(r.Context(), groupID)
 
 	// Server-side search for the incremental add dropdowns. Unlike the create
 	// form (whose multi-select carries the pending selection in the DOM and
@@ -338,7 +338,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	// is lossless and matches how every other list view searches.
 	userSearch := strings.TrimSpace(r.URL.Query().Get("uq"))
 	zoneSearch := strings.TrimSpace(r.URL.Query().Get("zq"))
-	allUsers, usersTruncated, _ := h.getAllUsers(userSearch)
+	allUsers, usersTruncated, _ := h.getAllUsers(r.Context(), userSearch)
 	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
 	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, zoneSearch)
 
@@ -585,8 +585,11 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
-func (h *Handler) getGroupMembers(groupID int64) []models.User {
-	rows, err := h.DB.Query(
+// getGroupMembers returns the group's members, ordered by username. ctx
+// propagates cancellation: a client that gives up aborts the query instead of
+// holding the (serialised, on SQLite) connection.
+func (h *Handler) getGroupMembers(ctx context.Context, groupID int64) []models.User {
+	rows, err := h.DB.QueryContext(ctx,
 		`SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role, u.enabled
 		 FROM zone_group_members m
 		 JOIN users u ON m.user_id = u.id
@@ -615,8 +618,10 @@ func (h *Handler) getGroupMembers(groupID int64) []models.User {
 	return members
 }
 
-func (h *Handler) getGroupZones(groupID int64) []string {
-	rows, err := h.DB.Query(
+// getGroupZones returns the zone IDs assigned to the group, ordered. See
+// getGroupMembers for the ctx rationale.
+func (h *Handler) getGroupZones(ctx context.Context, groupID int64) []string {
+	rows, err := h.DB.QueryContext(ctx,
 		"SELECT zone_id FROM zone_group_zones WHERE group_id = ? ORDER BY zone_id", groupID,
 	)
 	if err != nil {
@@ -643,14 +648,14 @@ func (h *Handler) getGroupZones(groupID int64) []string {
 // username, narrowed by an optional case-insensitive search over
 // username/email, capped at maxGroupSelectOptions, with a flag reporting
 // whether matching rows exist beyond the cap.
-func (h *Handler) getAllUsers(search string) (users []models.User, truncated bool, err error) {
+func (h *Handler) getAllUsers(ctx context.Context, search string) (users []models.User, truncated bool, err error) {
 	where, args := buildSearchLikeWhere(search, "username", "email")
 	q := `SELECT id, username, email, first_name, last_name, role, enabled FROM users`
 	if where != "" {
 		q += " WHERE " + where
 	}
 	q += " ORDER BY username LIMIT " + strconv.Itoa(maxGroupSelectOptions)
-	rows, err := h.DB.Query(q, args...)
+	rows, err := h.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -679,7 +684,7 @@ func (h *Handler) getAllUsers(search string) (users []models.User, truncated boo
 			countQ += " WHERE " + where
 		}
 		var total int
-		if err := h.DB.QueryRow(countQ, args...).Scan(&total); err != nil {
+		if err := h.DB.QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
 			return nil, false, err
 		}
 		truncated = total > maxGroupSelectOptions
@@ -708,9 +713,12 @@ func filterZonesWithInfoForSearch(zones []models.ZoneWithInfo, search string) ([
 	return filtered, truncated
 }
 
-// getUserAllowedZoneIDs returns the set of zone IDs accessible to a non-admin user.
-func (h *Handler) getUserAllowedZoneIDs(userID int64) (map[string]bool, error) {
-	rows, err := h.DB.Query(
+// getUserAllowedZoneIDs returns the set of zone IDs accessible to a non-admin
+// user. It sits on the authorization hot path (every zone list/filter), so ctx
+// propagation matters most here: a client that gives up cancels the lookup
+// instead of holding the connection while the response has no reader left.
+func (h *Handler) getUserAllowedZoneIDs(ctx context.Context, userID int64) (map[string]bool, error) {
+	rows, err := h.DB.QueryContext(ctx,
 		`SELECT z.zone_id FROM zone_group_members m
 		 JOIN zone_group_zones z ON m.group_id = z.group_id
 		 WHERE m.user_id = ?`, userID,
@@ -742,7 +750,7 @@ func (h *Handler) filterZonesForUser(r *http.Request, zones []models.Zone) ([]mo
 		return zones, nil
 	}
 
-	allowed, err := h.getUserAllowedZoneIDs(user.ID)
+	allowed, err := h.getUserAllowedZoneIDs(r.Context(), user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user zone permissions: %w", err)
 	}
@@ -763,7 +771,7 @@ func (h *Handler) filterZonesWithInfoForUser(r *http.Request, zones []models.Zon
 		return zones, nil
 	}
 
-	allowed, err := h.getUserAllowedZoneIDs(user.ID)
+	allowed, err := h.getUserAllowedZoneIDs(r.Context(), user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user zone permissions: %w", err)
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -578,7 +579,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	paginatedRows, recordPageInfo := paginate(rows, recordPage, recordPerPage)
 
 	logPage, logPerPage := parseLogPaginationParams(r, 10)
-	logs, logTotal := h.getZoneActivityLogs(zoneID, logPage, logPerPage)
+	logs, logTotal := h.getZoneActivityLogs(r.Context(), zoneID, logPage, logPerPage)
 	logTotalPages := 0
 	if logPerPage > 0 {
 		logTotalPages = (logTotal + logPerPage - 1) / logPerPage
@@ -736,9 +737,9 @@ func (h *Handler) DeleteMetadata(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
-func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]models.ActivityLog, int) {
+func (h *Handler) getZoneActivityLogs(ctx context.Context, zoneID string, page, perPage int) ([]models.ActivityLog, int) {
 	var total int
-	if err := h.DB.QueryRow(
+	if err := h.DB.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM activity_logs WHERE zone_id = ?", zoneID,
 	).Scan(&total); err != nil {
 		logger.Error("failed to count zone activity logs", "zone_id", zoneID, "error", err)
@@ -774,7 +775,7 @@ func (h *Handler) getZoneActivityLogs(zoneID string, page, perPage int) ([]model
 		args = append(args, zoneID)
 	}
 
-	rows, err := h.DB.Query(query, args...)
+	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0
 	}

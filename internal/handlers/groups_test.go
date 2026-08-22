@@ -872,7 +872,7 @@ func TestGetUserAllowedZoneIDs(t *testing.T) {
 	h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "zone-a.com.")
 	h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "zone-b.com.")
 
-	zones, err := h.getUserAllowedZoneIDs(userID)
+	zones, err := h.getUserAllowedZoneIDs(context.Background(), userID)
 	if err != nil {
 		t.Fatalf("getUserAllowedZoneIDs: %v", err)
 	}
@@ -896,7 +896,7 @@ func TestGetUserAllowedZoneIDs_NoMemberships(t *testing.T) {
 
 	userID := seedUserWithHash(t, h, "isolateduser", "pass", "user")
 
-	zones, err := h.getUserAllowedZoneIDs(userID)
+	zones, err := h.getUserAllowedZoneIDs(context.Background(), userID)
 	if err != nil {
 		t.Fatalf("getUserAllowedZoneIDs: %v", err)
 	}
@@ -1106,7 +1106,7 @@ func TestGetAllUsers_CappedAndSearched(t *testing.T) {
 	h := newTestHandler(t)
 	seedBulkUsers(t, h, "bulk", maxGroupSelectOptions+5)
 
-	users, truncated, err := h.getAllUsers("")
+	users, truncated, err := h.getAllUsers(context.Background(), "")
 	if err != nil {
 		t.Fatalf("getAllUsers: %v", err)
 	}
@@ -1118,7 +1118,7 @@ func TestGetAllUsers_CappedAndSearched(t *testing.T) {
 	}
 
 	// "bulk-10" matches bulk-100..bulk-104 (bulk-010 does not contain it).
-	users, truncated, err = h.getAllUsers("bulk-10")
+	users, truncated, err = h.getAllUsers(context.Background(), "bulk-10")
 	if err != nil {
 		t.Fatalf("getAllUsers(bulk-10): %v", err)
 	}
@@ -1130,7 +1130,7 @@ func TestGetAllUsers_CappedAndSearched(t *testing.T) {
 	}
 
 	// Exactly-cap edge: len == cap but nothing beyond -> truncated stays false.
-	users, truncated, err = h.getAllUsers("bulk-0")
+	users, truncated, err = h.getAllUsers(context.Background(), "bulk-0")
 	if err != nil {
 		t.Fatalf("getAllUsers(bulk-0): %v", err)
 	}
@@ -1239,5 +1239,36 @@ func TestCreateGroupPage_TruncationHints(t *testing.T) {
 	}
 	if strings.Contains(body, "ZonesTruncated") {
 		t.Error("an empty zone list must not report truncation")
+	}
+}
+
+// TestGetUserAllowedZoneIDs_ContextCancellation locks the context
+// propagation of the authorization hot path: the zone-permission lookup used
+// to run on context.Background(), so a client that gave up mid-request left
+// the query running (holding SQLite's single serialised connection). With a
+// cancelled context the lookup must abort instead of returning rows.
+func TestGetUserAllowedZoneIDs_ContextCancellation(t *testing.T) {
+	h := newTestHandler(t)
+	userID := testutil.SeedTestUser(t, h.DB, "ctxuser", "pass", "user", true)
+	gid := seedGroup(t, h, "ctx-group", "")
+	if _, err := h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", gid, "ctx.example."); err != nil {
+		t.Fatalf("seed zone grant: %v", err)
+	}
+	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", gid, userID); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	allowed, err := h.getUserAllowedZoneIDs(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("uncancelled lookup: %v", err)
+	}
+	if !allowed["ctx.example."] {
+		t.Fatal("expected the granted zone to be returned")
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.getUserAllowedZoneIDs(cancelled, userID); err == nil {
+		t.Error("a cancelled context must abort the lookup instead of returning rows")
 	}
 }
