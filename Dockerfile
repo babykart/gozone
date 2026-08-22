@@ -23,7 +23,15 @@ COPY vendor/ vendor/
 # whole build context, defeating the split. The build needs exactly these
 # paths (web/ carries the go:embed templates and static assets); the .dockerignore
 # keeps test files and docs out of the context.
-COPY main.go cmd internal web ./
+#
+# Each directory source gets its own COPY with an explicit destination: a
+# multi-source `COPY main.go cmd internal web ./` merges directory CONTENTS
+# into dest (Docker semantics: "the directory itself is not copied"), which
+# flattens cmd/internal/web into /app and breaks the build.
+COPY main.go ./
+COPY cmd ./cmd
+COPY internal ./internal
+COPY web ./web
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X github.com/babykart/gozone/cmd.version=${VERSION} -X github.com/babykart/gozone/cmd.commit=${COMMIT} -X github.com/babykart/gozone/cmd.buildDate=${DATE}" \
     -o /gozone .
