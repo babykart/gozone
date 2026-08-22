@@ -233,7 +233,7 @@ Browser ──POST /login──► chi Router
                           ├── if found:
                           │     ├── UserLockStatus? reject if locked (no bcrypt)
                           │     ├── bcrypt compare
-                          │     ├── wrong → IncrementFailedLogins
+                          │     ├── wrong → IncrementFailedLoginsInTx
                           │     │           → if count >= max_failed_attempts:
                           │     │               → UPDATE users SET locked_until = now+lockout
                           │     ├── correct → Generate JWT, set cookie
@@ -301,7 +301,7 @@ LoginHandler
   │   │
   │   ├── Wrong password OR locked account:
   │   │   ├── INSERT login_attempts (success=0, user_id=user.ID)
-  │   │   ├── IncrementFailedLogins:
+  │   │   ├── IncrementFailedLoginsInTx:
   │   │   │   ├── UPDATE users SET failed_login_attempts = failed_login_attempts + 1
   │   │   │   └── if count >= max_failed_attempts:
   │   │   │       └── UPDATE users SET locked_until = now+lockout_duration

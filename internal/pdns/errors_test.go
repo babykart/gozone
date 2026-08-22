@@ -122,7 +122,7 @@ func TestClient_CreateRecord_TypedValidation(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(&config.PowerDNSConfig{APIURL: srv.URL, APIKey: "k", ServerID: "localhost"})
-	err := client.CreateRecord(context.Background(), "test.", models.RRSet{})
+	err := client.CreateRecords(context.Background(), "test.", []models.RRSet{{}})
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("expected ErrValidation, got %v", err)
 	}

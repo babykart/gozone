@@ -198,11 +198,6 @@ func (c *Client) zonePath(zoneID string) string {
 	return c.serverPath() + "/zones/" + url.PathEscape(zoneID)
 }
 
-// GetServers returns the list of PowerDNS servers.
-func (c *Client) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
-	return doUnmarshal[[]models.ServerInfo](c, ctx, "GET", "/servers", nil, "servers")
-}
-
 // GetServer returns a single server's info.
 func (c *Client) GetServer(ctx context.Context) (*models.ServerInfo, error) {
 	server, err := doUnmarshal[models.ServerInfo](c, ctx, "GET", c.serverPath(), nil, "server")
@@ -320,12 +315,6 @@ func (c *Client) listZoneRRSets(ctx context.Context, zoneID, name, rrType string
 		}
 	}
 	return full.RRSets, nil
-}
-
-// CreateRecord creates a new RRSet in a zone.
-func (c *Client) CreateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error {
-	rrset.ChangeType = "REPLACE"
-	return c.patchZone(ctx, zoneID, []models.RRSet{rrset})
 }
 
 // UpdateRecord updates an existing RRSet.

@@ -95,30 +95,6 @@ func TestNewClient_Transport(t *testing.T) {
 	}
 }
 
-func TestGetServers(t *testing.T) {
-	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-API-Key") != "test-api-key" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]models.ServerInfo{
-			{ID: "localhost", Type: "Server", Daemon: "pdns", Version: "4.8.0"},
-		})
-	})
-
-	servers, err := client.GetServers(context.Background())
-	if err != nil {
-		t.Fatalf("GetServers failed: %v", err)
-	}
-	if len(servers) != 1 {
-		t.Fatalf("expected 1 server, got %d", len(servers))
-	}
-	if servers[0].ID != "localhost" {
-		t.Errorf("expected ID localhost, got %s", servers[0].ID)
-	}
-}
-
 func TestGetServer(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -465,34 +441,6 @@ func TestListRecord_EmptyFilters_ListAll(t *testing.T) {
 	}
 }
 
-func TestCreateRecord(t *testing.T) {
-	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			t.Errorf("expected PATCH, got %s", r.Method)
-		}
-		var payload map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&payload)
-
-		rrsets, ok := payload["rrsets"].([]interface{})
-		if !ok || len(rrsets) != 1 {
-			t.Errorf("expected 1 rrset in payload")
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	err := client.CreateRecord(context.Background(), "example.com", models.RRSet{
-		Name: "www.example.com",
-		Type: "A",
-		TTL:  300,
-		Records: []models.RecordInfo{
-			{Content: "1.2.3.4"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateRecord failed: %v", err)
-	}
-}
-
 func TestCreateRecords(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
@@ -627,7 +575,7 @@ func TestClientUnauthorized(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	})
 
-	_, err := client.GetServers(context.Background())
+	_, err := client.GetServer(context.Background())
 	if err == nil {
 		t.Error("expected error for 401 response")
 	}

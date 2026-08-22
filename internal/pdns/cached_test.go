@@ -325,7 +325,7 @@ func TestCached_UncachedPassthrough(t *testing.T) {
 	ctx := context.Background()
 
 	cached.GetZone(ctx, "test.")
-	cached.CreateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}})
+	cached.CreateRecords(ctx, "test.", []models.RRSet{{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}}})
 	if recordCalls.Load() != 1 {
 		t.Errorf("expected 1 record create call, got %d", recordCalls.Load())
 	}
@@ -397,7 +397,7 @@ func TestCachedRecordMutations_InvalidateZonesAndStats(t *testing.T) {
 	}
 
 	// CreateRecord should invalidate zone list/info and stats caches
-	if err := cached.CreateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}}); err != nil {
+	if err := cached.CreateRecords(ctx, "test.", []models.RRSet{{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "1.2.3.4"}}}}); err != nil {
 		t.Fatalf("CreateRecord: %v", err)
 	}
 	cached.ListZones(ctx)
@@ -467,7 +467,7 @@ func TestCachedRecordMutation_ErrorDoesNotInvalidateCache(t *testing.T) {
 		t.Fatalf("expected 1 list call, got %d", listCalls.Load())
 	}
 
-	err := cached.CreateRecord(ctx, "test.", models.RRSet{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "bad"}}})
+	err := cached.CreateRecords(ctx, "test.", []models.RRSet{{Name: "www.test.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "bad"}}}})
 	if err == nil {
 		t.Fatal("expected CreateRecord to fail")
 	}
@@ -671,10 +671,10 @@ func TestCachedRead_NoStaleRepopulationAfterInvalidation(t *testing.T) {
 		runtime.Gosched()
 	}
 	// An invalidation lands while A's fetch is still in flight.
-	if err := cached.CreateRecord(ctx, "x.", models.RRSet{
+	if err := cached.CreateRecords(ctx, "x.", []models.RRSet{{
 		Name: "www.x.", Type: "A", TTL: 60, Records: []models.RecordInfo{{Content: "1.2.3.4"}},
-	}); err != nil {
-		t.Fatalf("CreateRecord: %v", err)
+	}}); err != nil {
+		t.Fatalf("CreateRecords: %v", err)
 	}
 	// Release A; it returns stale data but must NOT have cached it.
 	close(releaseStale)

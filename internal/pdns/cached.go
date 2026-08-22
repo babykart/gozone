@@ -111,10 +111,6 @@ func readThrough[V any](
 
 // --- Read operations (cached) ---
 
-func (c *cachedClient) GetServers(ctx context.Context) ([]models.ServerInfo, error) {
-	return c.client.GetServers(ctx)
-}
-
 func (c *cachedClient) GetServer(ctx context.Context) (*models.ServerInfo, error) {
 	return readThrough(c, c.server, cacheKeyServer, ctx, c.client.GetServer)
 }
@@ -177,14 +173,6 @@ func (c *cachedClient) CreateZone(ctx context.Context, req models.ZoneCreateRequ
 
 func (c *cachedClient) DeleteZone(ctx context.Context, zoneID string) error {
 	if err := c.client.DeleteZone(ctx, zoneID); err != nil {
-		return err
-	}
-	c.invalidateZones()
-	return nil
-}
-
-func (c *cachedClient) CreateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error {
-	if err := c.client.CreateRecord(ctx, zoneID, rrset); err != nil {
 		return err
 	}
 	c.invalidateZones()

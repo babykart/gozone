@@ -123,63 +123,27 @@ func TestPurgeLoginAttempts_Disabled(t *testing.T) {
 	}
 }
 
-func TestFailedLoginStats(t *testing.T) {
-	db := newLoginAttemptsTestDB(t)
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	if _, err := db.ExecContext(ctx,
-		"INSERT INTO login_attempts (username, ip_address, success, attempted_at) VALUES ('alice', '1.1.1.1', 0, ?)",
-		now.Add(-2*time.Hour)); err != nil {
-		t.Fatalf("insert 1: %v", err)
-	}
-	if _, err := db.ExecContext(ctx,
-		"INSERT INTO login_attempts (username, ip_address, success, attempted_at) VALUES ('alice', '1.1.1.1', 0, ?)",
-		now.Add(-1*time.Hour)); err != nil {
-		t.Fatalf("insert 2: %v", err)
-	}
-	if _, err := db.ExecContext(ctx,
-		"INSERT INTO login_attempts (username, ip_address, success, attempted_at) VALUES ('alice', '1.1.1.1', 1, ?)",
-		now.Add(-30*time.Minute)); err != nil {
-		t.Fatalf("insert success: %v", err)
-	}
-
-	count, last, err := db.FailedLoginStats(ctx, "alice", 3*time.Hour)
+// bumpFailedLogins drives the transaction-scoped increment core the way the
+// login handler does: open a transaction, run IncrementFailedLoginsInTx,
+// commit. It replaces the former DB-level convenience wrapper that was removed
+// as production-dead code (the handler calls the Tx core directly); the
+// behavioural coverage of the core lives here, not in a public wrapper kept
+// alive only by tests.
+func bumpFailedLogins(ctx context.Context, db *DB, userID int64, threshold int, lockFor time.Duration) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		t.Fatalf("FailedLoginStats: %v", err)
+		return 0, err
 	}
-	if count != 2 {
-		t.Errorf("expected 2 failed attempts in window, got %d", count)
-	}
-	if last.IsZero() {
-		t.Fatalf("expected non-zero last failure timestamp")
-	}
-	// The two failures are at now-2h and now-1h; MAX must return the more
-	// recent one (now-1h), not the older. -90min sits between them, so a correct
-	// MAX is strictly after it (REVIEW.md L-16f).
-	if !last.After(now.Add(-90 * time.Minute)) {
-		t.Errorf("expected last failure to be the most recent (~now-1h), got %v", last)
-	}
-}
+	defer tx.Rollback() // no-op after Commit
 
-func TestFailedLoginStats_Window(t *testing.T) {
-	db := newLoginAttemptsTestDB(t)
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	if _, err := db.ExecContext(ctx,
-		"INSERT INTO login_attempts (username, ip_address, success, attempted_at) VALUES ('alice', '1.1.1.1', 0, ?)",
-		now.Add(-10*time.Hour)); err != nil {
-		t.Fatalf("insert old: %v", err)
-	}
-
-	count, _, err := db.FailedLoginStats(ctx, "alice", 1*time.Hour)
+	count, _, err := tx.IncrementFailedLoginsInTx(ctx, userID, threshold, lockFor)
 	if err != nil {
-		t.Fatalf("FailedLoginStats: %v", err)
+		return 0, err
 	}
-	if count != 0 {
-		t.Errorf("expected 0 attempts in short window, got %d", count)
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
+	return count, nil
 }
 
 func TestIncrementFailedLogins_TriggersLockout(t *testing.T) {
@@ -188,9 +152,9 @@ func TestIncrementFailedLogins_TriggersLockout(t *testing.T) {
 	uid := insertUserForLoginTests(t, db, "alice")
 
 	for i := 1; i <= 3; i++ {
-		count, err := db.IncrementFailedLogins(ctx, uid, 3, 15*time.Minute)
+		count, err := bumpFailedLogins(ctx, db, uid, 3, 15*time.Minute)
 		if err != nil {
-			t.Fatalf("IncrementFailedLogins #%d: %v", i, err)
+			t.Fatalf("increment #%d: %v", i, err)
 		}
 		if count != i {
 			t.Errorf("after %d increments, expected count %d, got %d", i, i, count)
@@ -214,12 +178,16 @@ func TestIncrementFailedLogins_DisabledWhenZeroThreshold(t *testing.T) {
 	ctx := context.Background()
 	uid := insertUserForLoginTests(t, db, "alice")
 
-	count, err := db.IncrementFailedLogins(ctx, uid, 0, 15*time.Minute)
+	// The threshold gate lives in the caller (the login handler skips the
+	// increment entirely when maxAttempts <= 0); the Tx core itself always
+	// increments and locks once the count reaches the threshold. Drive one
+	// increment below a threshold of 2: the counter moves but no lock fires.
+	count, err := bumpFailedLogins(ctx, db, uid, 2, 15*time.Minute)
 	if err != nil {
-		t.Fatalf("IncrementFailedLogins: %v", err)
+		t.Fatalf("bumpFailedLogins: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("expected 0 when threshold is 0, got %d", count)
+	if count != 1 {
+		t.Errorf("expected 1 increment, got %d", count)
 	}
 
 	locked, _, err := db.UserLockStatus(ctx, uid)
@@ -227,7 +195,7 @@ func TestIncrementFailedLogins_DisabledWhenZeroThreshold(t *testing.T) {
 		t.Fatalf("UserLockStatus: %v", err)
 	}
 	if locked {
-		t.Error("expected no lockout when threshold is 0")
+		t.Error("expected no lockout below the threshold")
 	}
 }
 
@@ -253,7 +221,7 @@ func TestIncrementFailedLogins_ConcurrentNoLostIncrements(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := db.IncrementFailedLogins(ctx, uid, threshold, 15*time.Minute); err != nil {
+			if _, err := bumpFailedLogins(ctx, db, uid, threshold, 15*time.Minute); err != nil {
 				failures.Add(1)
 			}
 		}()
@@ -289,7 +257,7 @@ func TestResetFailedLogins(t *testing.T) {
 	uid := insertUserForLoginTests(t, db, "alice")
 
 	// Push counter up and lock the account.
-	if _, err := db.IncrementFailedLogins(ctx, uid, 1, time.Hour); err != nil {
+	if _, err := bumpFailedLogins(ctx, db, uid, 1, time.Hour); err != nil {
 		t.Fatalf("IncrementFailedLogins: %v", err)
 	}
 
@@ -586,7 +554,7 @@ func TestIncrementFailedLogins_DoesNotRevokeSessions(t *testing.T) {
 
 	// Cross the threshold to trigger the automatic lockout.
 	for i := 0; i < 3; i++ {
-		if _, err := db.IncrementFailedLogins(ctx, uid, 3, 15*time.Minute); err != nil {
+		if _, err := bumpFailedLogins(ctx, db, uid, 3, 15*time.Minute); err != nil {
 			t.Fatalf("IncrementFailedLogins #%d: %v", i+1, err)
 		}
 	}
@@ -651,7 +619,7 @@ func TestIncrementFailedLogins_DoesNotSetManualLockMarker(t *testing.T) {
 	uid := insertUserForLoginTests(t, db, "frank")
 
 	for i := 0; i < 3; i++ {
-		if _, err := db.IncrementFailedLogins(ctx, uid, 3, 15*time.Minute); err != nil {
+		if _, err := bumpFailedLogins(ctx, db, uid, 3, 15*time.Minute); err != nil {
 			t.Fatalf("IncrementFailedLogins #%d: %v", i+1, err)
 		}
 	}

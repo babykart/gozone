@@ -310,7 +310,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // lockout). Errors are logged but never abort the login flow.
 //
 // The increment + conditional lockout reuse the single core implementation
-// (Tx.IncrementFailedLoginsInTx, shared with DB.IncrementFailedLogins); this
+// (Tx.IncrementFailedLoginsInTx); this
 // handler only layers the last-admin exemption on top, so there is no longer a
 // second parallel lockout code path.
 //

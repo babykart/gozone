@@ -12,7 +12,6 @@ import (
 // requiring an HTTP server. The *Client type implements this interface.
 type ZoneService interface {
 	// Servers
-	GetServers(ctx context.Context) ([]models.ServerInfo, error)
 	GetServer(ctx context.Context) (*models.ServerInfo, error)
 	GetStatistics(ctx context.Context) ([]models.StatisticItem, error)
 	HealthCheck(ctx context.Context) error
@@ -28,7 +27,6 @@ type ZoneService interface {
 	// Records
 	ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error)
 	ListRecord(ctx context.Context, zoneID, name, rrType string) ([]models.RRSet, error)
-	CreateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error
 	CreateRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error
 	UpdateRecord(ctx context.Context, zoneID string, rrset models.RRSet) error
 	DeleteRecord(ctx context.Context, zoneID string, name, recordType string) error

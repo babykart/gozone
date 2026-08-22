@@ -359,87 +359,6 @@ func (db *DB) PurgeLoginAttempts(ctx context.Context, retentionHours int) (int64
 	return res.RowsAffected()
 }
 
-// FailedLoginStats reports the number of failed login attempts within the
-// given rolling window for the supplied username, and the most recent failure
-// timestamp. Returns zeros / zero time when no attempts match.
-//
-// Both aggregates are computed in a single SELECT so count and lastFailed are
-// read from one consistent snapshot (a concurrent insert/purge between two
-// separate queries could otherwise make them disagree) (REVIEW.md L-16f).
-func (db *DB) FailedLoginStats(ctx context.Context, username string, window time.Duration) (count int, lastFailed time.Time, err error) {
-	cutoff := time.Now().UTC().Add(-window)
-	var last sql.NullString
-	if err = db.QueryRowContext(ctx,
-		"SELECT COUNT(*), MAX(attempted_at) FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at >= ?",
-		username, cutoff,
-	).Scan(&count, &last); err != nil {
-		return 0, time.Time{}, err
-	}
-	if last.Valid {
-		if parsed, perr := parseAttemptedAt(last.String); perr == nil {
-			lastFailed = parsed
-		}
-	}
-	return count, lastFailed, nil
-}
-
-// parseAttemptedAt parses the datetime format used by the login_attempts
-// attempted_at column. SQLite stores CURRENT_TIMESTAMP as "YYYY-MM-DD HH:MM:SS"
-// in UTC; go-sqlite3 marshals time.Time as a SQLite datetime literal with
-// variable sub-second precision (truncated at microseconds on some platforms)
-// and a "+00:00" offset suffix. We accept both shapes plus the standard
-// RFC3339 forms.
-func parseAttemptedAt(s string) (time.Time, error) {
-	for _, layout := range []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04:05.999999",
-		"2006-01-02 15:04:05.999",
-		"2006-01-02 15:04:05.999999999",
-		"2006-01-02 15:04:05-07:00",
-		"2006-01-02 15:04:05.999-07:00",
-		"2006-01-02 15:04:05.999999-07:00",
-		"2006-01-02 15:04:05.999999999-07:00",
-		time.RFC3339Nano,
-		time.RFC3339,
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognised attempted_at format: %q", s)
-}
-
-// IncrementFailedLogins bumps failed_login_attempts on the user and, when
-// threshold is reached, sets locked_until to now+lockFor. A locked_until value
-// that has already elapsed is reset by every new failure so a sliding-window
-// attack keeps extending the lockout. Returns the new failed_login_attempts
-// count after the increment.
-//
-// It is a thin wrapper around the transaction-scoped
-// IncrementFailedLoginsInTx core, so the increment + conditional-lockout SQL
-// lives in exactly one place. The handler login path reuses the same core and
-// layers the last-admin exemption on top, instead of re-implementing a second
-// parallel lockout path.
-func (db *DB) IncrementFailedLogins(ctx context.Context, userID int64, threshold int, lockFor time.Duration) (int, error) {
-	if threshold <= 0 {
-		return 0, nil
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback() // no-op after Commit
-
-	count, _, err := tx.IncrementFailedLoginsInTx(ctx, userID, threshold, lockFor)
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
 // IncrementFailedLoginsInTx is the single source of truth for the atomic
 // failed-login increment + conditional lockout. It runs inside the caller's
 // transaction: the increment and the lockout are applied as a single atomic
@@ -507,13 +426,13 @@ func (db *DB) UserLockStatus(ctx context.Context, userID int64) (locked bool, un
 
 // AdminLockUser locks the user account for the given duration, resetting the
 // failed-login counter so the lockout window starts fresh. Used by the admin
-// manual-lock UI; the per-account automatic lockout uses
-// IncrementFailedLogins instead.
+// manual-lock UI; the per-account automatic lockout uses the
+// transaction-scoped IncrementFailedLoginsInTx core directly.
 //
 // A manual lock also revokes every active session by bumping
 // tokens_valid_after: an admin who locks an account expects it frozen on all
 // devices immediately, not just blocked at the next login. The automatic
-// brute-force lockout (IncrementFailedLogins) deliberately does NOT do this,
+// brute-force lockout deliberately does NOT do this,
 // so an attacker triggering the threshold cannot kick the legitimate user off
 // their other sessions (DoS amplification) — only the manual, admin-initiated
 // lock cuts sessions. The user recovers by logging in again once the lock
