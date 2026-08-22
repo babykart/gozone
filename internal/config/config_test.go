@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -1085,5 +1087,54 @@ func TestLoad_LogLevelEnvOverride(t *testing.T) {
 	t.Setenv("GOZONE_LOG_LEVEL", "verbose")
 	if _, err := Load(""); err == nil {
 		t.Error("an invalid GOZONE_LOG_LEVEL must be rejected")
+	}
+}
+
+// TestLoadDocListsEveryEnvOverride keeps Load's doc-comment inventory honest.
+// The documentation had drifted by over a dozen variables (admin seed, login
+// lockout, bcrypt cost, trusted proxies, ...) while the override tables kept
+// growing; a hand-maintained list always re-drifts, so this test compares the
+// two mechanically: every "GOZONE_..." string literal handled by the code
+// must be named in the "Supported environment variables" paragraph, and the
+// paragraph must not name anything the code no longer handles.
+func TestLoadDocListsEveryEnvOverride(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate config.go next to the test")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "config.go"))
+	if err != nil {
+		t.Fatalf("read config.go source: %v", err)
+	}
+
+	// Handled variables: the "GOZONE_..." string literals of the override
+	// tables and the single-provider block (quoted form only exists in code —
+	// the doc comment names variables without quotes).
+	handled := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"(GOZONE_[A-Z_0-9]+)"`).FindAllStringSubmatch(string(src), -1) {
+		handled[m[1]] = true
+	}
+
+	// Documented variables: everything named in the paragraph between the
+	// "Supported environment variables" marker and the "Parameters:" marker.
+	docRe := regexp.MustCompile(`(?s)Supported environment variables.*?//\s*Parameters:`)
+	block := docRe.FindString(string(src))
+	if block == "" {
+		t.Fatal("could not locate the 'Supported environment variables' paragraph in Load's doc comment")
+	}
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile(`GOZONE_[A-Z_0-9]+`).FindAllStringSubmatch(block, -1) {
+		documented[m[0]] = true
+	}
+
+	for v := range handled {
+		if !documented[v] {
+			t.Errorf("%s is handled by the override tables but missing from Load's doc comment — add it to the list (and its group)", v)
+		}
+	}
+	for v := range documented {
+		if !handled[v] {
+			t.Errorf("%s is documented in Load's comment but no code handles it — remove it from the list", v)
+		}
 	}
 }
