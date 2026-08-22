@@ -1026,3 +1026,57 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 		t.Errorf("expected 404 for a missing group, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
+
+// TestExistingUserIDs_LargeSelectionBatched drives the member-existence
+// validation with a selection far beyond any engine's per-statement bound
+// variable limit (SQLite >= 3.32: 32766, older builds 999). The query used to
+// carry one placeholder per submitted id, so a large group-create selection —
+// achievable within the request body limit — failed wholesale instead of
+// validating; it must now batch and return the correct subset.
+func TestExistingUserIDs_LargeSelectionBatched(t *testing.T) {
+	h := newTestHandler(t)
+	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	// Real id first, then tens of thousands of ids matching no row.
+	ids := make([]int64, 1, 40000)
+	ids[0] = adminID
+	for i := int64(100000); len(ids) < 40000; i++ {
+		ids = append(ids, i)
+	}
+
+	exists, err := h.existingUserIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("validation must succeed past the driver's variable limit via batching: %v", err)
+	}
+	if !exists[adminID] {
+		t.Error("the seeded user must be found within the batched selection")
+	}
+	if len(exists) != 1 {
+		t.Errorf("expected exactly one existing id among the selection, got %d", len(exists))
+	}
+}
+
+// TestExistingUserIDs_BatchBoundary pins the batch edges: a selection of
+// exactly the batch size (single full batch) and one past it (full batch +
+// remainder of one) both validate correctly.
+func TestExistingUserIDs_BatchBoundary(t *testing.T) {
+	h := newTestHandler(t)
+	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	for _, n := range []int{existingUserIDBatchSize, existingUserIDBatchSize + 1} {
+		ids := make([]int64, n)
+		for i := range ids {
+			ids[i] = adminID
+		}
+		exists, err := h.existingUserIDs(context.Background(), ids)
+		if err != nil {
+			t.Fatalf("selection of %d ids: %v", n, err)
+		}
+		if !exists[adminID] {
+			t.Errorf("selection of %d ids must find the seeded user", n)
+		}
+		if len(exists) != 1 {
+			t.Errorf("selection of %d ids: expected 1 distinct existing id, got %d", n, len(exists))
+		}
+	}
+}

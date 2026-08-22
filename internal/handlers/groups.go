@@ -166,34 +166,51 @@ var groupValidFlashCodes = map[string]struct{}{
 	"members_skipped": {},
 }
 
+// existingUserIDBatchSize caps how many bound parameters one validation query
+// carries. SQL engines limit the number of variables per statement (SQLite
+// historically 999, modern SQLite 32766, some servers 2100); an IN (...) built
+// with one placeholder per submitted id fails wholesale once a selection
+// exceeds that limit. 500 stays comfortably below the strictest common limit.
+const existingUserIDBatchSize = 500
+
 // existingUserIDs returns the subset of ids that exist in the users table. It
-// batches a single SELECT so member validation on the group form is one
-// round-trip regardless of selection size.
+// validates in batches of existingUserIDBatchSize bound parameters, so a
+// selection of any size works regardless of the driver's per-statement
+// variable limit — one round-trip per 500 ids.
 func (h *Handler) existingUserIDs(ctx context.Context, ids []int64) (map[int64]bool, error) {
 	exists := make(map[int64]bool, len(ids))
-	if len(ids) == 0 {
-		return exists, nil
+	for start := 0; start < len(ids); start += existingUserIDBatchSize {
+		end := min(start+existingUserIDBatchSize, len(ids))
+		if err := h.queryExistingUserIDs(ctx, ids[start:end], exists); err != nil {
+			return nil, err
+		}
 	}
-	placeholders := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
+	return exists, nil
+}
+
+// queryExistingUserIDs runs the single-batch IN (...) lookup, recording the
+// ids that match a users row into exists.
+func (h *Handler) queryExistingUserIDs(ctx context.Context, batch []int64, exists map[int64]bool) error {
+	placeholders := make([]string, len(batch))
+	args := make([]any, len(batch))
+	for i, id := range batch {
 		placeholders[i] = "?"
 		args[i] = id
 	}
 	q := "SELECT id FROM users WHERE id IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := h.DB.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return err
 		}
 		exists[id] = true
 	}
-	return exists, rows.Err()
+	return rows.Err()
 }
 
 // attachGroupSelections inserts the multi-select members (user_ids) and zones
