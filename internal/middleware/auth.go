@@ -394,8 +394,17 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 // The incoming key is SHA-256 hashed before comparison against stored hashes.
 // Expired API keys return HTTP 401 with the message "api_key_expired".
 // The authenticated user is stored in the request context via UserContextKey
-// and the API key's last_used_at timestamp is updated on each request.
+// and the API key's last_used_at timestamp is recorded — coarsened to at most
+// one write per key per minute (see apiKeyLastUsedTracker), since the column
+// is informational.
 func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
+	return apiKeyAuth(db, newAPIKeyLastUsedTracker())
+}
+
+// apiKeyAuth is APIKeyAuth with an explicit last_used_at tracker, so tests
+// can drive the write-coarsening (age entries past the interval, observe the
+// skipped/refreshed writes).
+func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("X-API-Key")
@@ -433,13 +442,13 @@ func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Record last use only once the key has authenticated a valid, enabled
-			// user (m36). Updating it earlier bumped last_used_at for orphaned keys
-			// (user deleted) and disabled-user keys, misrepresenting real usage.
-			// UTC keeps the column consistent across TZ/DST (REVIEW.md M-1).
-			if _, err := db.ExecContext(r.Context(), "UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?", time.Now().UTC(), keyHash); err != nil {
-				logger.Warn("failed to update api_key last_used_at", "key_hash", keyHash[:8]+"...", "error", err)
-			}
+			// Record last use only once the key has authenticated a valid,
+			// enabled user: updating it earlier bumped last_used_at for
+			// orphaned keys (user deleted) and disabled-user keys,
+			// misrepresenting real usage. The write is coarsened to at most
+			// one per key per minute; UTC keeps the column consistent across
+			// TZ/DST (SQLite compares the serialized strings).
+			tracker.touch(r.Context(), db, keyHash)
 
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))

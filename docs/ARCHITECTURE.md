@@ -427,7 +427,10 @@ APIKeyAuth middleware
   ├── SELECT user_id, expires_at FROM api_keys WHERE key_hash = SHA256(key)
   ├── Check expiration
   ├── loadUser(DB, UserID) → ensure enabled
-  ├── UPDATE api_keys SET last_used_at = NOW()
+  ├── UPDATE api_keys SET last_used_at = NOW()   ← coarsened: at most one write
+  │                                                per key per minute (in-memory
+  │                                                tracker), the column is
+  │                                                informational
   ├── RateLimiter per API key (100/min)
   └── context.WithValue(UserContextKey, user)
 ```

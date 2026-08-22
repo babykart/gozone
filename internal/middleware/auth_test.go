@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1244,5 +1245,84 @@ func TestAuth_TokensValidAfterAllowsFreshToken(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+// TestAPIKeyAuth_LastUsedWriteCoarsened guards the write coarsening: two
+// authenticated requests within the interval must not rewrite last_used_at
+// (the UPDATE used to run on every request — on SQLite's single serialised
+// writer it was the dominant cost of API authentication), while a request
+// after the interval must refresh it.
+func TestAPIKeyAuth_LastUsedWriteCoarsened(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "coarsened", "user", true)
+	seedTestAPIKey(t, db, userID, "coarse-key", nil)
+
+	tracker := newAPIKeyLastUsedTracker()
+	handler := apiKeyAuth(db, tracker)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	lastUsed := func() time.Time {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		r.Header.Set("X-API-Key", "coarse-key")
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var last sql.NullTime
+		if err := db.QueryRow("SELECT last_used_at FROM api_keys WHERE key_hash = ?", hashAPIKey("coarse-key")).Scan(&last); err != nil {
+			t.Fatalf("query last_used_at: %v", err)
+		}
+		if !last.Valid {
+			t.Fatal("last_used_at must be set after a successful authentication")
+		}
+		return last.Time
+	}
+
+	first := lastUsed()
+	second := lastUsed()
+	if !first.Equal(second) {
+		t.Errorf("two requests within the interval must not rewrite last_used_at: %v vs %v", first, second)
+	}
+
+	// Age the tracker entry past the interval (simulating a minute of
+	// inactivity without sleeping): the next request must write fresh state.
+	tracker.mu.Lock()
+	tracker.written[hashAPIKey("coarse-key")] = time.Now().UTC().Add(-2 * apiKeyLastUsedWriteInterval)
+	tracker.mu.Unlock()
+	third := lastUsed()
+	if third.Equal(first) {
+		t.Error("a request after the interval must refresh last_used_at")
+	}
+}
+
+// TestAPIKeyLastUsedTracker_CompactsPastMaxEntries pins the memory bound:
+// when the map outgrows apiKeyTrackerMaxEntries, stale entries (older than
+// the write interval) are dropped and re-seeded by the next use; fresh ones
+// survive.
+func TestAPIKeyLastUsedTracker_CompactsPastMaxEntries(t *testing.T) {
+	tr := newAPIKeyLastUsedTracker()
+	now := time.Now().UTC()
+
+	tr.mu.Lock()
+	for i := 0; i < apiKeyTrackerMaxEntries+10; i++ {
+		tr.written["stale-"+strconv.Itoa(i)] = now.Add(-2 * apiKeyLastUsedWriteInterval)
+	}
+	tr.written["fresh"] = now
+	tr.compactLocked(now)
+	kept := len(tr.written)
+	tr.mu.Unlock()
+
+	if kept != 1 {
+		t.Errorf("compaction must keep only the fresh entry, kept %d", kept)
+	}
+	tr.mu.Lock()
+	_, ok := tr.written["fresh"]
+	tr.mu.Unlock()
+	if !ok {
+		t.Error("the fresh entry must survive compaction")
 	}
 }
