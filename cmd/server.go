@@ -176,6 +176,15 @@ func runServer(cfg *config.Config) error {
 	})
 	defer stopCleanupRevokedTokens()
 
+	// Periodically purge stale cluster-wide rate-limit windows (they are one
+	// minute wide; anything a few minutes old can never be incremented again)
+	// so the rate_limit_counters table does not grow without bound.
+	stopPurgeRateLimits := startPeriodicJob(context.Background(), "purge rate limit counters", time.Hour, 30*time.Second, func(ctx context.Context) error {
+		_, err := db.PurgeRateLimitCounters(ctx, time.Now().UTC().Add(-15*time.Minute))
+		return err
+	})
+	defer stopPurgeRateLimits()
+
 	// Periodically purge old activity logs based on the configured retention
 	// period (default 90 days). Runs once at startup, then daily. A retention
 	// period of 0 means "keep forever" and skips the background job entirely.
@@ -336,6 +345,18 @@ func runServer(cfg *config.Config) error {
 	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
 	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key (post-auth)
 	apiIPLimiter := middleware.NewRateLimiter(300) // 300 requests per minute per IP (pre-auth gate)
+	// Cluster-wide counterparts of the login limiters, backed by the shared
+	// rate_limit_counters table: every replica draws from the same budget, so
+	// the login ceiling no longer scales with the instance count. The
+	// in-process limiters stay in front as a cheap pre-DB gate — a flood is
+	// absorbed there before it reaches the database. The API and health
+	// limiters remain per-instance on purpose: they are anti-flood throttles,
+	// and the health limiter must never depend on the database it probes.
+	dbLoginIPLimiter := middleware.NewDBRateLimiter(db, 5)
+	var dbLoginUserLimiter *middleware.DBRateLimiter
+	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
+		dbLoginUserLimiter = middleware.NewDBRateLimiter(db, cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
 	// The readiness endpoint is unauthenticated and does real work per hit:
 	// a DB ping plus a PowerDNS HTTP call that deliberately bypasses the
 	// cache. Without a bound it is an amplification surface (each cheap
@@ -413,23 +434,32 @@ func runServer(cfg *config.Config) error {
 		r.Get("/login", h.LoginPage)
 		// Both limiters run BEFORE the Login handler (no separate auth
 		// middleware — see the rate-limiter documentation above for the
-		// /login vs /api ordering asymmetry, m7).
+		// /login vs /api ordering asymmetry, m7). Each in-process limiter is
+		// paired with its cluster-wide DB counterpart: in-memory absorbs
+		// floods cheaply, the shared counter caps the real budget across
+		// replicas.
 		loginChain := []func(http.Handler) http.Handler{
 			loginLimiter.Limit(middleware.ExtractIP),
+			dbLoginIPLimiter.Limit(middleware.ExtractIP),
 		}
 		if loginUsernameLimiter != nil {
 			loginChain = append(loginChain, loginUsernameLimiter.Limit(loginUsernameKey))
+		}
+		if dbLoginUserLimiter != nil {
+			loginChain = append(loginChain, dbLoginUserLimiter.Limit(loginUsernameKey))
 		}
 		r.With(loginChain...).Post("/login", h.Login)
 
 		// OpenID Connect / OAuth2 SSO endpoints. These are public (the user
 		// is not authenticated yet): the login endpoint redirects to the IdP,
 		// and the callback completes the flow and establishes a session. They
-		// share the login rate limiter to throttle callback brute-forcing of
+		// share the login rate limiters to throttle callback brute-forcing of
 		// the state parameter (ROADMAP "Security").
-		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+		r.With(loginLimiter.Limit(middleware.ExtractIP),
+			dbLoginIPLimiter.Limit(middleware.ExtractIP)).
 			Get("/auth/oidc/{provider}/login", h.OIDCLogin)
-		r.With(loginLimiter.Limit(middleware.ExtractIP)).
+		r.With(loginLimiter.Limit(middleware.ExtractIP),
+			dbLoginIPLimiter.Limit(middleware.ExtractIP)).
 			Get("/auth/oidc/{provider}/callback", h.OIDCCallback)
 
 		// Authenticated routes (web UI)

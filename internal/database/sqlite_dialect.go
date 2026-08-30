@@ -293,5 +293,18 @@ func (s *sqliteDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sso_id_tokens_expires_at ON sso_id_tokens(expires_at)`,
+		// Cluster-wide fixed-window rate-limit counters. One row per
+		// (bucket, window): the shared primary key makes the counter durable
+		// across instances, so the login rate limits no longer scale with the
+		// replica count. hits starts at 0 so the incrementing UPDATE below can
+		// run unconditionally after the INSERT OR IGNORE seeding. Purged by
+		// the hourly background job (windows are one minute wide; anything
+		// older than a few minutes is dead).
+		`CREATE TABLE IF NOT EXISTS rate_limit_counters (
+			bucket_key TEXT NOT NULL,
+			window_start DATETIME NOT NULL,
+			hits INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (bucket_key, window_start)
+		)`,
 	}
 }

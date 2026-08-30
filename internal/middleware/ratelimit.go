@@ -21,9 +21,15 @@ import (
 // Buckets are held in-process: the limit is enforced **per instance**, not
 // shared across a fleet. In a multi-instance deployment the effective ceiling
 // per client therefore scales with the instance count (N instances → up to
-// roughly N× the configured rate). Durable brute-force protection (account
-// lockout in the DB) is independent of this and stays cluster-wide. See the
-// README "High Availability / Multi-Instance Deployments" section.
+// roughly N× the configured rate). For the login endpoints this is mitigated:
+// DBRateLimiter (dbratelimit.go) enforces the authoritative, cluster-wide
+// budget in the shared database, with this in-process limiter kept in front
+// as a cheap pre-DB gate for floods. The API and health limiters stay
+// per-instance deliberately — they are anti-flood throttles, and the health
+// limiter must never depend on the database it probes. Durable brute-force
+// protection (account lockout in the DB) is independent of both and stays
+// cluster-wide. See the README "High Availability / Multi-Instance
+// Deployments" section.
 type RateLimiter struct {
 	mu       sync.Mutex
 	limiters map[string]*rateLimiterEntry

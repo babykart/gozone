@@ -295,5 +295,14 @@ func (p *postgresDialect) Migrations() []string {
 			expires_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sso_id_tokens_expires_at ON sso_id_tokens(expires_at)`,
+		// Cluster-wide fixed-window rate-limit counters. See
+		// sqlite_dialect.go for the rationale. TIMESTAMP (not DATETIME) per
+		// the schema_migrations regression: PostgreSQL has no DATETIME.
+		`CREATE TABLE IF NOT EXISTS rate_limit_counters (
+			bucket_key TEXT NOT NULL,
+			window_start TIMESTAMP NOT NULL,
+			hits INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (bucket_key, window_start)
+		)`,
 	}
 }

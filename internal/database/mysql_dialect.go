@@ -368,5 +368,14 @@ func (m *mysqlDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL,
 			KEY idx_sso_id_tokens_expires_at (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		// Cluster-wide fixed-window rate-limit counters. See
+		// sqlite_dialect.go for the rationale. VARCHAR(191) keeps the
+		// composite PRIMARY KEY under InnoDB's utf8mb4 index-length limit.
+		`CREATE TABLE IF NOT EXISTS rate_limit_counters (
+			bucket_key VARCHAR(191) NOT NULL,
+			window_start DATETIME NOT NULL,
+			hits INT NOT NULL DEFAULT 0,
+			PRIMARY KEY (bucket_key, window_start)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
