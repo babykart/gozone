@@ -32,6 +32,10 @@ test:
 test-verbose:
     go test -count=1 -v ./...
 
+# run frontend (app.js) unit tests; pure Node, no browser or npm deps
+test-js:
+    node --test web/jstest/
+
 # run tests with the race detector — same flags as CI (pr.yml), so local
 # parity is verifiable instead of memorised
 test-race:

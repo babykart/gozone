@@ -16,6 +16,7 @@
 | `make test` | `just test` | Run all tests (bypassing the result cache via `-count=1`) |
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
 | `make test-race` | `just test-race` | Run tests with the race detector (same flags as CI) |
+| `make test-js` | `just test-js` | Run frontend (app.js) unit tests via `node --test web/jstest/` |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
 | `make clean` | `just clean` | Remove build artifacts and database |
@@ -28,7 +29,7 @@ Run a single package: `go test -count=1 ./internal/config/`
 
 Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete.
 
-CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
+CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, the frontend unit tests (`node --test web/jstest/`), `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 
 CI additionally runs the full suite against live `mysql:8` and `postgres:16` service containers (jobs `test-mysql` / `test-postgres`) with `go test -race -count=1 -tags dbmatrix ./...`: the `dbmatrix` build tag plus `GOZONE_TEST_DB_DRIVER`/`GOZONE_TEST_DB_DSN` redirects `testutil.NewTestDB` to `NewTestDBDialect`, which provisions a fresh per-test database on the server (the legacy `GOZONE_TEST_MYSQL_DSN`/`GOZONE_TEST_POSTGRES_DSN` also activate the database package's dialect integration tests). Plain local `go test ./...` ignores those variables and stays on in-memory SQLite; to reproduce a dialect job locally, run the same command with the tag and variables set against a reachable server.
 
@@ -117,6 +118,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 
 ## Frontend Conventions
 
+- **JS unit tests**: pure-function and delegated-listener logic in `app.js` is tested under `web/jstest/` (`node --test`, no npm deps; the dir is NOT embedded in the binary). `app.js` loads inert under Node — its browser boot blocks are guarded on `typeof document` — and exposes the functions under test via a CommonJS export block that is dead code in browsers. Extend `web/jstest/app.test.js` (or add `*.test.js` siblings) when touching `filterOptions`, the delegated listeners or other testable logic; browser-level E2E (Playwright) is not yet in place.
 - **No inline event handlers**: never add `onclick=`, `onchange=`, or `onsubmit=` to templates — they violate the Content-Security-Policy. Instead, use `data-action="action-name"` (and optionally `data-confirm="message"`) on the element, then handle via `initDelegatedListeners()` in `web/static/js/app.js`.
 - **CSRF token (gorilla/csrf)**: every POST form MUST include `<input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">`. JS-initiated POSTs must read `data-csrf="{{.CSRFToken}}"` and append `gorilla.csrf.Token` to the `FormData` (see existing `data-csrf` usage in templates and `app.js`). The CSRF middleware is configured with `csrf.Secure(false)` (static) and a per-request `csrfSecureCookieWriter` rewrites the `Secure` attribute from `middleware.IsHTTPS` — do not re-add `Secure` at the middleware level.
 - **CSP**: `script-src 'self'` and `style-src 'self'` only (neither has `'unsafe-inline'`). Only `app.js` and `theme.js` are loaded. Former inline `style="..."` attributes are externalised to CSS classes; show/hide toggles in `app.js` use `classList` (`.hidden`), not `style.display=''`. JS CSSOM mutations (`element.style.foo`) remain allowed since CSP `style-src` governs document markup, not the CSSOM.

@@ -27,6 +27,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Frontend unit tests
+        # app.js logic (select filtering, delegated listeners) under
+        # web/jstest/ — pure node:test, no browser or npm dependencies.
+        run: node --test web/jstest/
+
   test:
     name: Test
     runs-on: ubuntu-latest

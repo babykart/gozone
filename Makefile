@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/babykart/gozone/cmd.version=$(VERSION) \
            -X github.com/babykart/gozone/cmd.commit=$(COMMIT) \
            -X github.com/babykart/gozone/cmd.buildDate=$(DATE)
 
-.PHONY: default build run test test-verbose test-race clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
+.PHONY: default build run test test-verbose test-race test-js clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
 
 default: help
 
@@ -28,6 +28,10 @@ test:
 # run tests with verbose output
 test-verbose:
 	go test -count=1 -v ./...
+
+# run frontend (app.js) unit tests; pure Node, no browser or npm deps
+test-js:
+	node --test web/jstest/
 
 # run tests with the race detector — same flags as CI (pr.yml), so local
 # parity is verifiable instead of memorised
@@ -100,6 +104,7 @@ help:
 	@echo "  test            Run tests (bypassing the result cache)"
 	@echo "  test-verbose    Run tests with verbose output"
 	@echo "  test-race       Run tests with the race detector (matches CI)"
+	@echo "  test-js         Run frontend (app.js) unit tests"
 	@echo "  clean           Remove build artifacts and database"
 	@echo "  fmt             Format all source files"
 	@echo "  vet             Run vet on all packages"

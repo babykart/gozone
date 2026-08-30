@@ -14,10 +14,11 @@ function updateThemeIcon() {
 }
 
 (function() {
-    // The colour theme is applied in <head> by theme.js (FOUC fix); here we
-    // restore the persisted sidebar state and paint the theme-toggle icon,
-    // both of which need the <body> DOM that is present once app.js runs at the
-    // end of <body>.
+    // Browser-only boot: restore the persisted sidebar state and paint the
+    // theme-toggle icon. Both need the <body> DOM that is present once
+    // app.js runs at the end of <body>. Guarded so the file also loads inert
+    // under Node (unit tests in web/jstest/) where no DOM exists.
+    if (typeof document === 'undefined') return;
     var collapsed = localStorage.getItem('gozone-sidebar') === 'true';
     if (collapsed) {
         document.body.classList.add('sidebar-collapsed');
@@ -836,16 +837,31 @@ function initDelegatedListeners() {
     });
 }
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
+// Browser boot: wire the delegated listeners and the per-page initializers.
+// Guarded so the file loads inert under Node (unit tests in web/jstest/);
+// tests call initDelegatedListeners explicitly against a DOM stub.
+if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            initDelegatedListeners();
+            initRecordPriority();
+            initImportFeedback();
+            syncAllBulkCounts();
+        });
+    } else {
         initDelegatedListeners();
         initRecordPriority();
         initImportFeedback();
         syncAllBulkCounts();
-    });
-} else {
-    initDelegatedListeners();
-    initRecordPriority();
-    initImportFeedback();
-    syncAllBulkCounts();
+    }
+}
+
+// Node unit-test export (web/jstest/). Browsers never define `module`, so
+// this block is inert in production.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        bulkFailedSuffix: bulkFailedSuffix,
+        filterOptions: filterOptions,
+        initDelegatedListeners: initDelegatedListeners
+    };
 }
