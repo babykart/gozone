@@ -24,12 +24,12 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 	fromDate := strings.TrimSpace(r.URL.Query().Get("from"))
 	toDate := strings.TrimSpace(r.URL.Query().Get("to"))
 
-	actions, err := h.getDistinctActivityActions(user)
+	actions, err := h.getDistinctActivityActions(r.Context(), user)
 	if err != nil {
 		logger.Error("failed to fetch activity actions", "error", err)
 	}
 
-	logs, total := h.getActivityLogs(user, search, action, fromDate, toDate, page, perPage)
+	logs, total := h.getActivityLogs(r.Context(), user, search, action, fromDate, toDate, page, perPage)
 	totalPages := 0
 	if perPage > 0 {
 		totalPages = (total + perPage - 1) / perPage
@@ -75,8 +75,8 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 // getDistinctActivityActions returns the distinct action values visible to the
 // given user, ordered alphabetically, so the filter dropdown can be built.
 // Admin users see all actions; non-admin users see only actions from logs they
-// are allowed to view.
-func (h *Handler) getDistinctActivityActions(user *models.User) ([]string, error) {
+// are allowed to view. ctx propagates request cancellation into the query.
+func (h *Handler) getDistinctActivityActions(ctx context.Context, user *models.User) ([]string, error) {
 	query := "SELECT DISTINCT action FROM activity_logs AS al"
 	var args []interface{}
 	if clause, clauseArgs := activityLogVisibilityClause(user); clause != "" {
@@ -85,7 +85,7 @@ func (h *Handler) getDistinctActivityActions(user *models.User) ([]string, error
 	}
 	query += " ORDER BY action"
 
-	rows, err := h.DB.Query(query, args...)
+	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +120,12 @@ func activityLogVisibilityClause(user *models.User) (string, []interface{}) {
 // getActivityLogs returns activity logs visible to the given user, after
 // applying text search, action filter, date range, and pagination. Admin users
 // see all logs; non-admin users see zone-scoped logs for zones assigned to
-// their groups together with non-zone logs created by themselves.
-func (h *Handler) getActivityLogs(user *models.User, search, action, fromDate, toDate string, page, perPage int) ([]models.ActivityLog, int) {
+// their groups together with non-zone logs created by themselves. ctx
+// propagates request cancellation into both queries.
+func (h *Handler) getActivityLogs(ctx context.Context, user *models.User, search, action, fromDate, toDate string, page, perPage int) ([]models.ActivityLog, int) {
 	var total int
 	countQuery, countArgs := h.buildActivityLogQuery(user, search, action, fromDate, toDate)
-	if err := h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs AS al "+countQuery, countArgs...).Scan(&total); err != nil {
+	if err := h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity_logs AS al "+countQuery, countArgs...).Scan(&total); err != nil {
 		logger.Error("failed to count activity logs", "error", err)
 		return nil, 0
 	}
@@ -147,7 +148,7 @@ func (h *Handler) getActivityLogs(user *models.User, search, action, fromDate, t
 		args = append(args, limit, offset)
 	}
 
-	rows, err := h.DB.Query(query, args...)
+	rows, err := h.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		logger.Error("failed to query activity logs", "error", err)
 		return nil, total

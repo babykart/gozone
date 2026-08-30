@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -692,7 +693,7 @@ func TestGetAllTemplates(t *testing.T) {
 	seedTemplate(t, h, "t1", "")
 	seedTemplate(t, h, "t2", "")
 
-	templates, err := h.getAllTemplates()
+	templates, err := h.getAllTemplates(context.Background())
 	if err != nil {
 		t.Fatalf("getAllTemplates: %v", err)
 	}

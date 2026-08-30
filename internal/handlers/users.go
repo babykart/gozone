@@ -53,7 +53,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	selectQuery += " ORDER BY username"
 
 	var total int
-	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+	if err := h.DB.QueryRowContext(r.Context(), countQuery, args...).Scan(&total); err != nil {
 		h.renderInternalError(w, r, "Failed to count users", err)
 		return
 	}
@@ -67,9 +67,9 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		offset := (pageInfo.Current - 1) * perPage
 		selectArgs := append([]any(nil), args...)
 		selectArgs = append(selectArgs, perPage, offset)
-		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
 	} else {
-		rows, err = h.DB.Query(selectQuery, args...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery, args...)
 	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch users", err)
@@ -235,7 +235,7 @@ func (h *Handler) EditUserPage(w http.ResponseWriter, r *http.Request) {
 
 	var target models.User
 	var enabled int
-	err = h.DB.QueryRow(
+	err = h.DB.QueryRowContext(r.Context(),
 		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at
 		 FROM users WHERE id = ?`, userID,
 	).Scan(&target.ID, &target.Username, &target.Email, &target.FirstName, &target.LastName,
@@ -295,7 +295,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// Fetch the target user to compare current role/enabled and enforce guards.
 	var target models.User
 	var targetEnabled int
-	err := h.DB.QueryRow(
+	err := h.DB.QueryRowContext(r.Context(),
 		`SELECT id, username, email, first_name, last_name, role, enabled
 		 FROM users WHERE id = ?`, userID,
 	).Scan(&target.ID, &target.Username, &target.Email, &target.FirstName, &target.LastName,

@@ -283,7 +283,7 @@ func (h *Handler) ListZones(w http.ResponseWriter, r *http.Request) {
 // CreateZonePage renders the zone creation form (GET /zones/new).
 func (h *Handler) CreateZonePage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
-	templates, _ := h.getAllTemplates()
+	templates, _ := h.getAllTemplates(r.Context())
 	data := map[string]interface{}{
 		"Title":        "Create Zone - " + h.Cfg.Server.AppName,
 		"User":         user,
@@ -356,13 +356,13 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 	// Apply template if selected
 	if templateIDStr := strings.TrimSpace(r.FormValue("template_id")); templateIDStr != "" {
 		if templateID, err := strconv.ParseInt(templateIDStr, 10, 64); err == nil {
-			records := h.getTemplateRecords(templateID)
+			records := h.getTemplateRecords(r.Context(), templateID)
 			if len(records) > 0 {
 				vars := h.collectTemplateVars(r)
 				if vars["ZONE"] == "" {
 					vars["ZONE"] = zone.Name
 				}
-				rrsets, err := h.substituteTemplateRecords(zone.ID, h.templateLabelFor(templateID, templateIDStr), records, vars)
+				rrsets, err := h.substituteTemplateRecords(zone.ID, h.templateLabelFor(r.Context(), templateID, templateIDStr), records, vars)
 				if err == nil {
 					err = h.PDNS.CreateRecords(r.Context(), zone.ID, rrsets)
 				}
@@ -615,7 +615,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		Total:      logTotal,
 	}
 
-	templates, _ := h.getAllTemplates()
+	templates, _ := h.getAllTemplates(r.Context())
 
 	pdnsVersion := "unknown"
 	if srv != nil {

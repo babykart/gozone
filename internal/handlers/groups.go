@@ -38,7 +38,7 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	selectQuery += " ORDER BY name"
 
 	var total int
-	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+	if err := h.DB.QueryRowContext(r.Context(), countQuery, args...).Scan(&total); err != nil {
 		h.renderInternalError(w, r, "Failed to count groups", err)
 		return
 	}
@@ -52,9 +52,9 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		offset := (pageInfo.Current - 1) * perPage
 		selectArgs := append([]any(nil), args...)
 		selectArgs = append(selectArgs, perPage, offset)
-		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
 	} else {
-		rows, err = h.DB.Query(selectQuery, args...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery, args...)
 	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch groups", err)
@@ -317,7 +317,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var g groupInfo
-	err = h.DB.QueryRow(
+	err = h.DB.QueryRowContext(r.Context(),
 		"SELECT id, name, description, created_at FROM zone_groups WHERE id = ?", groupID,
 	).Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -397,7 +397,7 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.DB.Exec(
+	_, err = h.DB.ExecContext(r.Context(),
 		"UPDATE zone_groups SET name = ?, description = ? WHERE id = ?",
 		name, description, groupID,
 	)
@@ -426,7 +426,7 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", groupID)
+	res, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_groups WHERE id = ?", groupID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to delete group", err)
 		return
@@ -478,7 +478,7 @@ func (h *Handler) BulkDeleteGroups(w http.ResponseWriter, r *http.Request) {
 	deleted := 0
 	var failed []string
 	for _, gid := range groupIDs {
-		res, err := h.DB.Exec("DELETE FROM zone_groups WHERE id = ?", gid)
+		res, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_groups WHERE id = ?", gid)
 		if err != nil {
 			logger.Error("bulk delete group failed", "group_id", gid, "error", err)
 			failed = append(failed, strconv.FormatInt(gid, 10))
@@ -554,7 +554,7 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, err := h.DB.Exec(
+	if _, err := h.DB.ExecContext(r.Context(),
 		"DELETE FROM zone_group_members WHERE group_id = ? AND user_id = ?",
 		groupID, userID,
 	); err != nil {
@@ -594,7 +594,7 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	zoneID := r.FormValue("zone_id")
 
-	if _, err := h.DB.Exec(
+	if _, err := h.DB.ExecContext(r.Context(),
 		"DELETE FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",
 		groupID, zoneID,
 	); err != nil {

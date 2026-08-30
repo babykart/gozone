@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -28,17 +29,17 @@ func TestActivityLogSearch_LiteralWildcardMatch(t *testing.T) {
 	seed("user_has_underscore logged in")
 	seed("plain entry")
 
-	logs, total := h.getActivityLogs(admin, "%", "", "", "", 1, 0)
+	logs, total := h.getActivityLogs(context.Background(), admin, "%", "", "", "", 1, 0)
 	if total != 1 || len(logs) != 1 || !strings.Contains(logs[0].Details, "100%") {
 		t.Errorf(`searching "%%" must match only the entry containing a literal percent, got total=%d`, total)
 	}
 
-	logs, total = h.getActivityLogs(admin, "_", "", "", "", 1, 0)
+	logs, total = h.getActivityLogs(context.Background(), admin, "_", "", "", "", 1, 0)
 	if total != 1 || len(logs) != 1 || !strings.Contains(logs[0].Details, "underscore") {
 		t.Errorf(`searching "_" must match only the entry containing a literal underscore, got total=%d`, total)
 	}
 
-	_, total = h.getActivityLogs(admin, "entry", "", "", "", 1, 0)
+	_, total = h.getActivityLogs(context.Background(), admin, "entry", "", "", "", 1, 0)
 	if total != 1 {
 		t.Errorf(`plain term must still match normally, got total=%d`, total)
 	}

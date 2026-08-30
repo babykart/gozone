@@ -52,7 +52,7 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	selectQuery += " ORDER BY name"
 
 	var total int
-	if err := h.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+	if err := h.DB.QueryRowContext(r.Context(), countQuery, args...).Scan(&total); err != nil {
 		h.renderInternalError(w, r, "Failed to count templates", err)
 		return
 	}
@@ -66,9 +66,9 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 		offset := (pageInfo.Current - 1) * perPage
 		selectArgs := append([]any(nil), args...)
 		selectArgs = append(selectArgs, perPage, offset)
-		rows, err = h.DB.Query(selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery+" LIMIT ? OFFSET ?", selectArgs...)
 	} else {
-		rows, err = h.DB.Query(selectQuery, args...)
+		rows, err = h.DB.QueryContext(r.Context(), selectQuery, args...)
 	}
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch templates", err)
@@ -155,7 +155,7 @@ func (h *Handler) EditTemplatePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var t models.ZoneTemplate
-	err = h.DB.QueryRow(
+	err = h.DB.QueryRowContext(r.Context(),
 		"SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates WHERE id = ?", templateID,
 	).Scan(&t.ID, &t.Name, &t.Description, &t.IsBuiltin, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -167,7 +167,7 @@ func (h *Handler) EditTemplatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records := h.getTemplateRecords(templateID)
+	records := h.getTemplateRecords(r.Context(), templateID)
 
 	data := map[string]interface{}{
 		"Title":        t.Name + " - " + h.Cfg.Server.AppName,
@@ -192,7 +192,7 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.DB.Exec(
+	_, err := h.DB.ExecContext(r.Context(),
 		"UPDATE zone_templates SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		name, description, templateIDStr,
 	)
@@ -214,7 +214,7 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
 
 	var isBuiltin bool
-	err := h.DB.QueryRow("SELECT is_builtin FROM zone_templates WHERE id = ?", templateIDStr).Scan(&isBuiltin)
+	err := h.DB.QueryRowContext(r.Context(), "SELECT is_builtin FROM zone_templates WHERE id = ?", templateIDStr).Scan(&isBuiltin)
 	if err != nil {
 		h.renderInternalError(w, r, "Template not found", err)
 		return
@@ -224,7 +224,7 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec("DELETE FROM zone_templates WHERE id = ?", templateIDStr); err != nil {
+	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_templates WHERE id = ?", templateIDStr); err != nil {
 		h.renderInternalError(w, r, "Failed to delete template", err)
 		return
 	}
@@ -270,7 +270,7 @@ func (h *Handler) BulkDeleteTemplates(w http.ResponseWriter, r *http.Request) {
 	var failed []string
 	for _, tid := range templateIDs {
 		// Built-in guard: "is_builtin = 0" refuses built-in templates atomically.
-		res, err := h.DB.Exec("DELETE FROM zone_templates WHERE id = ? AND is_builtin = 0", tid)
+		res, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_templates WHERE id = ? AND is_builtin = 0", tid)
 		if err != nil {
 			logger.Error("bulk delete template failed", "template_id", tid, "error", err)
 			failed = append(failed, strconv.FormatInt(tid, 10))
@@ -299,7 +299,7 @@ func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
+	if _, err := h.DB.ExecContext(r.Context(),
 		"INSERT INTO zone_template_records (template_id, name, type, content, ttl, priority, disabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		rec.TemplateID, rec.Name, rec.Type, rec.Content, rec.TTL, rec.Priority, rec.Disabled,
 	); err != nil {
@@ -320,7 +320,7 @@ func (h *Handler) UpdateTemplateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(
+	if _, err := h.DB.ExecContext(r.Context(),
 		"UPDATE zone_template_records SET name = ?, type = ?, content = ?, ttl = ?, priority = ?, disabled = ? WHERE id = ? AND template_id = ?",
 		rec.Name, rec.Type, rec.Content, rec.TTL, rec.Priority, rec.Disabled, recordIDStr, templateIDStr,
 	); err != nil {
@@ -336,7 +336,7 @@ func (h *Handler) DeleteTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
 	recordIDStr := r.PathValue("record_id")
 
-	if _, err := h.DB.Exec("DELETE FROM zone_template_records WHERE id = ? AND template_id = ?", recordIDStr, templateIDStr); err != nil {
+	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_template_records WHERE id = ? AND template_id = ?", recordIDStr, templateIDStr); err != nil {
 		h.renderInternalError(w, r, "Failed to delete record", err)
 		return
 	}
@@ -347,9 +347,9 @@ func (h *Handler) DeleteTemplateRecord(w http.ResponseWriter, r *http.Request) {
 // getTemplateName returns the template's display name, or "" when it cannot
 // be determined (unknown id or query failure). Callers use it to label
 // apply-time validation errors so the operator knows which template to fix.
-func (h *Handler) getTemplateName(templateID int64) string {
+func (h *Handler) getTemplateName(ctx context.Context, templateID int64) string {
 	var name string
-	if err := h.DB.QueryRow("SELECT name FROM zone_templates WHERE id = ?", templateID).Scan(&name); err != nil {
+	if err := h.DB.QueryRowContext(ctx, "SELECT name FROM zone_templates WHERE id = ?", templateID).Scan(&name); err != nil {
 		return ""
 	}
 	return name
@@ -357,8 +357,8 @@ func (h *Handler) getTemplateName(templateID int64) string {
 
 // templateLabelFor returns a human-readable label for a template id: its
 // name, or a "#<id>" fallback when the name is unavailable.
-func (h *Handler) templateLabelFor(templateID int64, templateIDStr string) string {
-	if name := h.getTemplateName(templateID); name != "" {
+func (h *Handler) templateLabelFor(ctx context.Context, templateID int64, templateIDStr string) string {
+	if name := h.getTemplateName(ctx, templateID); name != "" {
 		return name
 	}
 	return "#" + templateIDStr
@@ -380,7 +380,7 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records := h.getTemplateRecords(templateID)
+	records := h.getTemplateRecords(r.Context(), templateID)
 	if len(records) == 0 {
 		h.renderError(w, r, "Template has no records")
 		return
@@ -390,7 +390,7 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	if vars["ZONE"] == "" {
 		vars["ZONE"] = zoneID
 	}
-	rrsets, err := h.substituteTemplateRecords(zoneID, h.templateLabelFor(templateID, templateIDStr), records, vars)
+	rrsets, err := h.substituteTemplateRecords(zoneID, h.templateLabelFor(r.Context(), templateID, templateIDStr), records, vars)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return
@@ -409,9 +409,10 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
-// getTemplateRecords returns all records for a template.
-func (h *Handler) getTemplateRecords(templateID int64) []models.ZoneTemplateRecord {
-	rows, err := h.DB.Query(
+// getTemplateRecords returns all records for a template. ctx propagates
+// request cancellation into the query.
+func (h *Handler) getTemplateRecords(ctx context.Context, templateID int64) []models.ZoneTemplateRecord {
+	rows, err := h.DB.QueryContext(ctx,
 		"SELECT id, template_id, name, type, content, ttl, priority, disabled FROM zone_template_records WHERE template_id = ? ORDER BY type, name",
 		templateID,
 	)
@@ -435,9 +436,10 @@ func (h *Handler) getTemplateRecords(templateID int64) []models.ZoneTemplateReco
 	return records
 }
 
-// getAllTemplates returns all templates (for dropdown selectors).
-func (h *Handler) getAllTemplates() ([]models.ZoneTemplate, error) {
-	rows, err := h.DB.Query("SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates ORDER BY name")
+// getAllTemplates returns all templates (for dropdown selectors). ctx
+// propagates request cancellation into the query.
+func (h *Handler) getAllTemplates(ctx context.Context) ([]models.ZoneTemplate, error) {
+	rows, err := h.DB.QueryContext(ctx, "SELECT id, name, description, is_builtin, created_at, updated_at FROM zone_templates ORDER BY name")
 	if err != nil {
 		return nil, err
 	}

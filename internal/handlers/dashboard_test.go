@@ -104,7 +104,7 @@ func TestGetActivityLogs_Admin(t *testing.T) {
 		t.Fatalf("insert activity log: %v", err)
 	}
 
-	logs, total := h.getActivityLogs(user, "", "", "", "", 1, 10)
+	logs, total := h.getActivityLogs(context.Background(), user, "", "", "", "", 1, 10)
 	if total != 1 {
 		t.Errorf("expected total 1, got %d", total)
 	}
@@ -124,7 +124,7 @@ func TestGetActivityLogs_Search(t *testing.T) {
 		t.Fatalf("insert activity log: %v", err)
 	}
 
-	logs, total := h.getActivityLogs(user, "create_zone", "", "", "", 1, 10)
+	logs, total := h.getActivityLogs(context.Background(), user, "create_zone", "", "", "", 1, 10)
 	if total != 1 {
 		t.Errorf("expected total 1 for search, got %d", total)
 	}
@@ -162,7 +162,7 @@ func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
 
 	// The non-admin searches for a term that only appears in the hidden log.
 	user := &models.User{ID: userID, Username: "member", Role: "user"}
-	logs, total := h.getActivityLogs(user, "hidden", "", "", "", 1, 10)
+	logs, total := h.getActivityLogs(context.Background(), user, "hidden", "", "", "", 1, 10)
 	if total != 0 {
 		t.Errorf("expected total 0, got %d", total)
 	}
@@ -171,7 +171,7 @@ func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
 	}
 
 	// Searching for the visible term returns the allowed log.
-	logs, total = h.getActivityLogs(user, "visible", "", "", "", 1, 10)
+	logs, total = h.getActivityLogs(context.Background(), user, "visible", "", "", "", 1, 10)
 	if total != 1 {
 		t.Errorf("expected total 1 for visible search, got %d", total)
 	}
@@ -202,7 +202,7 @@ func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
 	}
 
 	admin := &models.User{ID: adminID, Username: "admin", Role: "admin"}
-	adminActions, err := h.getDistinctActivityActions(admin)
+	adminActions, err := h.getDistinctActivityActions(context.Background(), admin)
 	if err != nil {
 		t.Fatalf("fetch admin actions: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
 	}
 
 	member := &models.User{ID: userID, Username: "member", Role: "user"}
-	memberActions, err := h.getDistinctActivityActions(member)
+	memberActions, err := h.getDistinctActivityActions(context.Background(), member)
 	if err != nil {
 		t.Fatalf("fetch member actions: %v", err)
 	}

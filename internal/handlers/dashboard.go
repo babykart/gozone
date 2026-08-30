@@ -51,7 +51,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Get user count
 	var userCount int
-	if err := h.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
+	if err := h.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
 		logger.Error("failed to scan user count", "error", err)
 	}
 
