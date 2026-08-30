@@ -855,11 +855,14 @@ details summary {
     margin-top: 0.25rem;
 }
 
+/* input[type="search"] is included so the .select-filter boxes that narrow a
+   neighboring select share the exact metrics of the select below them. */
 .form-group input[type="text"],
 .form-group input[type="email"],
 .form-group input[type="password"],
 .form-group input[type="number"],
 .form-group input[type="url"],
+.form-group input[type="search"],
 .form-group select,
 .form-group textarea {
     width: 100%;
@@ -924,34 +927,20 @@ details summary {
     outline-offset: 2px;
 }
 
-.search-input::placeholder {
+.search-input::placeholder,
+.select-filter::placeholder {
     color: var(--text-muted);
 }
 
 /* Filter input narrowing the options of the <select> below it (see
-   filterOptions in app.js). Full width so it aligns with .form-control. */
+   filterOptions in app.js). It lives inside .form-group, where
+   input[type="search"] picks up the shared form-control metrics (padding,
+   font size, border, background, focus ring) so it stacks seamlessly on the
+   select it filters; this rule only adds block layout and spacing. */
 .select-filter {
     display: block;
     width: 100%;
-    box-sizing: border-box;
     margin-bottom: 0.35rem;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.85rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    color: var(--text);
-}
-
-.select-filter:focus-visible {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-    outline: 2px solid transparent;
-    outline-offset: 2px;
-}
-
-.select-filter::placeholder {
-    color: var(--text-muted);
 }
 
 .form-control-inline {
