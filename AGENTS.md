@@ -135,4 +135,4 @@ Messages must remain **concise and synthetic** — a one-line summary (≤ 72 ch
 
 ## Project context
 
-- **`docs/API.md`** documents the REST API endpoints, payload schemas, and record content normalization behavior. **`docs/SSO.md`** covers OIDC provider setup; **`docs/ARCHITECTURE.md`** the system design. **`CONTRIBUTING.md`** has the full PR checklist (note: its "SQLite only" / "cmd: root, server, unlock" sections are stale — this file is current).
+- **`docs/API.md`** documents the REST API endpoints, payload schemas, and record content normalization behavior. **`docs/SSO.md`** covers OIDC provider setup; **`docs/ARCHITECTURE.md`** the system design. **`CONTRIBUTING.md`** has the full PR checklist.

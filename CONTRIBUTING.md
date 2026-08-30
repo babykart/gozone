@@ -55,7 +55,8 @@ For security vulnerabilities, **do not open a public issue**. Contact the mainta
 **Requirements**:
 
 - Go 1.26+
-- C compiler (gcc/clang) — required for the SQLite CGO driver
+- C compiler (gcc/clang) — required for the SQLite CGO driver (MySQL/PostgreSQL-only builds can set `CGO_ENABLED=0`)
+- Node.js — optional, for the frontend unit tests (`make test-js`)
 - PowerDNS Authoritative Server (optional, for integration testing)
 
 ```bash
@@ -69,9 +70,9 @@ make run    # or: just run
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CGO_ENABLED` | Must be `1` for SQLite driver | `1` |
+| `CGO_ENABLED` | `1` required for the SQLite driver; MySQL/PostgreSQL builds can use `0` | `1` |
 | `GOZONE_ADMIN_PASSWORD` | Initial admin password | `admin` |
-| `GOZONE_SECRET_KEY` | JWT signing key | `change-me-to-a-random-secret` |
+| `GOZONE_SECRET_KEY` | Derives the JWT/CSRF/OIDC keys via HKDF; set it for stable sessions across restarts | random, generated per restart if unset |
 
 ### Quick Reference
 
@@ -82,6 +83,7 @@ make run    # or: just run
 | `make test` | `just test` | Run all tests (bypassing the result cache) |
 | `make test-verbose` | `just test-verbose` | Run tests with verbose output |
 | `make test-race` | `just test-race` | Run tests with the race detector (same flags as CI) |
+| `make test-js` | `just test-js` | Run frontend (app.js) unit tests (`node --test web/jstest/`) |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
 | `make clean` | `just clean` | Remove build artifacts and database |
@@ -109,7 +111,7 @@ make vet     # or: just vet
 make gosec   # or: just gosec
 ```
 
-- **`gosec` is mandatory** — every reported HIGH or MEDIUM severity issue must be fixed.
+- **`gosec` is mandatory** — it fails the build on every reported issue (no `-no-fail`), in CI and locally.
 - Use `// #nosec Gxxx` annotations only for intentional suppressions (e.g., HTTP response writes, timing side-channel mitigation) and document the reason inline.
 - Failures from `just test` or `just gosec` block a PR from being merged.
 
@@ -132,7 +134,7 @@ golangci-lint run ./...
 - Never log or expose secrets, passwords, or API key hashes — models use `json:"-"` to prevent serialization
 - Validate all user input at handler boundaries
 - Use parameterized SQL queries exclusively — never string-concatenate query values
-- The secret key must never be the default `change-me-to-a-random-secret` in production
+- Set `server.secret_key` (or `GOZONE_SECRET_KEY`) explicitly in production: without it a random key is generated per restart, invalidating all sessions and CSRF tokens; the well-known placeholder value is detected and replaced at startup
 
 ## Project Conventions
 
@@ -142,16 +144,17 @@ GoZone follows a layered architecture:
 
 ```
 main.go                   Minimal entry point (calls cmd.Execute())
-cmd/                      CLI tree (Cobra): root, server, unlock
+cmd/                      CLI tree (Cobra): root, server, user (unlock, reset-password), version
 cmd/server.go             HTTP server bootstrap, routing, wiring
-internal/config/          Configuration (YAML + env vars)
-internal/database/        SQLite connection and migrations
+internal/config/          Configuration (YAML + GOZONE_* env vars)
+internal/database/        Multi-dialect SQL layer: SQLite, MySQL, PostgreSQL connections + migrations
 internal/handlers/          HTTP handlers (web UI + REST API)
-internal/middleware/       JWT auth, API key auth, admin guard
+internal/middleware/       JWT auth, API key auth, zone authorization, rate limiting
 internal/models/          Shared data structures
-internal/pdns/            PowerDNS REST API client
+internal/pdns/            PowerDNS REST API client (ZoneService) with read-through cache
 web/templates/            Embedded Go HTML templates
 web/static/               Embedded CSS, JavaScript
+web/jstest/               Frontend unit tests (not embedded in the binary)
 ```
 
 ### Handler Pattern
@@ -160,16 +163,18 @@ All handlers are methods on the `Handler` struct (`internal/handlers/handler.go`
 
 ```go
 type Handler struct {
-    DB   *sql.DB
-    PDNS *pdns.Client
-    Cfg  *config.Config
-    Tmpl *template.Template
+    DB      *database.DB
+    PDNS    pdns.ZoneService   // cached client behind an interface
+    Cfg     *config.Config
+    Tmpl    *template.Template
+    Version version.Info
+    OIDC    SSOService         // nil when single sign-on is unconfigured
 }
 ```
 
-- **Web UI handlers** return rendered HTML via `h.render(w, template, data)`
+- **Web UI handlers** return rendered HTML via `h.render(w, r, template, data)`
 - **API handlers** return JSON via `writeJSON(w, status, data)`
-- **Error pages** use `h.renderError(w, message)`
+- **Error pages** use `h.renderError(w, r, message)` / `h.renderErrorStatus(w, r, status, message)`
 
 ### URL Parameters
 
@@ -177,11 +182,11 @@ Use Go 1.22+ `r.PathValue("name")` to extract URL path parameters — **not** `c
 
 ### Database
 
-- **SQLite only** via `mattn/go-sqlite3` (requires CGO)
-- No ORM — all queries are raw SQL in handler methods
-- Writes are serialized: `SetMaxOpenConns(1)`
-- Migrations are inline in `internal/database/database.go`
-- New migrations should use `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`
+- **Three supported databases**: SQLite (`mattn/go-sqlite3`, requires CGO), MySQL/MariaDB (`go-sql-driver/mysql`) and PostgreSQL (`lib/pq`) — the `Dialect` interface (`internal/database/dialect.go`) abstracts the SQL differences (placeholder rebinding, upserts, migration locking)
+- No ORM — all queries are raw SQL, routed through the `*database.DB` context-aware helpers (`ExecContext`, `QueryContext`, `QueryRowContext`, `BeginTx`)
+- SQLite connections use `SetMaxOpenConns(1)` (serialized writes); MySQL/PostgreSQL do not
+- Migrations are content-hash versioned with per-dialect advisory locking; the statements live in `internal/database/{sqlite,mysql,postgres}_dialect.go`
+- New migrations should use `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` (MySQL uses inline index syntax — follow the existing entries in each dialect file)
 - **Timestamps bound for the database are always UTC** (`time.Now().UTC()`). SQLite serializes `time.Time` with its offset and compares the resulting strings lexicographically; mixing offsets across DST transitions or multi-TZ deployments skews `WHERE expires_at <= ?`-style comparisons. MySQL/PostgreSQL normalize at the driver level but UTC is used uniformly for consistency. Instant-only comparisons in memory (`Before`/`After`/`Sub`) are timezone-agnostic and need no annotation.
 
 ### Auth Patterns
@@ -207,9 +212,12 @@ Tests are co-located with the source. For a file `foo.go`, create `foo_test.go` 
 
 The project currently uses:
 
-- **In-memory SQLite** (`:memory:`) for unit testing the database layer
-- **`httptest.NewServer`** to mock the PowerDNS API
+- **In-memory SQLite** (`testutil.NewTestDB(t)`) for unit and handler tests — under the `dbmatrix` build tag plus `GOZONE_TEST_DB_DRIVER`/`GOZONE_TEST_DB_DSN`, the same helper provisions a per-test database on a live MySQL/PostgreSQL server (CI runs this matrix on `mysql:8` and `postgres:16` service containers)
+- **`httptest.NewServer`** to mock the PowerDNS API (`testutil.NewTestPDNSServer`)
+- **`node --test web/jstest/`** for the frontend logic in `app.js` (pure Node, no npm dependencies)
 - Standard Go `testing` package — no external test framework
+
+When seeding test rows, retrieve ids with `DB.ExecReturnID` (or the `insertReturnID` helper in `internal/handlers/handler_test.go`), never raw `Exec` + `result.LastInsertId()` — lib/pq does not implement `LastInsertId` and those seeds would break the dialect matrix.
 
 ### Writing a New Test
 
@@ -244,8 +252,8 @@ func TestMyFeature(t *testing.T) {
 
 ```go
 func TestMyHandler(t *testing.T) {
-    h, _, cleanup := setupTestHandler(t)
-    defer cleanup()
+    h, srv := newTestHandlerWithPDNS(t, pdnsHandler)
+    defer srv.Close()
     // ... test h.SomeHandler(w, r)
 }
 ```
@@ -304,6 +312,7 @@ refactor(pdns): [gozone] extract zone service interface
 make fmt
 make vet
 make test-race   # same flags as CI
+make test-js
 make gosec
 ```
 
