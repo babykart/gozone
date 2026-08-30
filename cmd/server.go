@@ -711,10 +711,11 @@ func staticAssetVersion() string {
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
-// parseTemplates loads all HTML templates from the embedded filesystem.
-func parseTemplates() (*template.Template, error) {
-	assetVer := staticAssetVersion()
-	funcMap := template.FuncMap{
+// templateFuncMap builds the FuncMap shared by the real templates and the
+// handler-test stub set. assetVer is baked into the assetVersion func; see
+// staticAssetVersion for the cache-busting rationale.
+func templateFuncMap(assetVer string) template.FuncMap {
+	return template.FuncMap{
 		"add":          func(a, b int) int { return a + b },
 		"sub":          func(a, b int) int { return a - b },
 		"urlquery":     url.QueryEscape,
@@ -735,7 +736,12 @@ func parseTemplates() (*template.Template, error) {
 			return dict, nil
 		},
 	}
-	tmpl, err := template.New("base").Funcs(funcMap).ParseFS(web.FS, "templates/*.html")
+}
+
+// parseTemplates loads all HTML templates from the embedded filesystem.
+func parseTemplates() (*template.Template, error) {
+	assetVer := staticAssetVersion()
+	tmpl, err := template.New("base").Funcs(templateFuncMap(assetVer)).ParseFS(web.FS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("load embedded templates: %w", err)
 	}

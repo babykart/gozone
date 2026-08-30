@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -428,6 +431,59 @@ func TestClientIPMiddleware_NoTrustedProxiesUsesRemoteAddr(t *testing.T) {
 	}
 }
 
+// TestTemplateFuncMap_Dict covers the dict template helper's error branches,
+// which template rendering alone cannot reach (a template calling dict with
+// odd arguments or non-string keys fails at parse time, so the runtime error
+// paths are only exercisable by calling the function directly).
+func TestTemplateFuncMap_Dict(t *testing.T) {
+	fm := templateFuncMap("testv")
+	dict, ok := fm["dict"].(func(...interface{}) (map[string]interface{}, error))
+	if !ok {
+		t.Fatal("dict func missing from the FuncMap")
+	}
+
+	got, err := dict("k1", "v1", "k2", 42)
+	if err != nil {
+		t.Fatalf("dict: %v", err)
+	}
+	if got["k1"] != "v1" || got["k2"] != 42 {
+		t.Errorf("dict = %#v, want k1=v1 k2=42", got)
+	}
+
+	if _, err := dict("k1", "v1", "odd"); err == nil {
+		t.Error("odd argument count: expected an error")
+	}
+	if _, err := dict(123, "v1"); err == nil {
+		t.Error("non-string key: expected an error")
+	}
+}
+
+// TestCSRFSecureCookieWriter_WriteAndUnwrap covers the Write path (the plain
+// handler path that writes a body without an explicit WriteHeader) and the
+// Unwrap method that lets http.ResponseController reach the underlying writer.
+func TestCSRFSecureCookieWriter_WriteAndUnwrap(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := &csrfSecureCookieWriter{ResponseWriter: rec, https: true}
+	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "token", Path: "/"})
+
+	if _, err := w.Write([]byte("body")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var secure bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			secure = c.Secure
+		}
+	}
+	if !secure {
+		t.Error("CSRF cookie Secure = false after Write, want true")
+	}
+
+	if uw, ok := w.Unwrap().(*httptest.ResponseRecorder); !ok || uw != rec {
+		t.Error("Unwrap must return the wrapped ResponseWriter")
+	}
+}
+
 // runHTTPSResolver runs the httpsResolverMiddleware against a single synthetic
 // request and reports the IsHTTPS value the downstream handler observes. It is
 // the shared harness for the m40 resolver tests below.
@@ -830,4 +886,161 @@ func lastRetryAfter(stack http.Handler) string {
 	r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
 	stack.ServeHTTP(w, r)
 	return w.Header().Get("Retry-After")
+}
+
+// freePort reserves an ephemeral TCP port on the loopback interface and
+// returns its number. The listener is released before the caller can bind it,
+// which is a (small, test-acceptable) TOCTOU race against other processes.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// waitForHealthy polls the liveness endpoint until it answers 200 or the
+// timeout elapses. runServer binds its listener asynchronously from the test's
+// point of view, so the first requests may hit a closed port.
+func waitForHealthy(t *testing.T, baseURL string) error {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(baseURL + "/health/live") // #nosec G107 -- fixed test-local URL
+		if err == nil {
+			io.Copy(io.Discard, resp.Body) // #nosec G104 -- drain for keep-alive reuse
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("server did not become healthy within the timeout at %s", baseURL)
+}
+
+// TestRunServer_BootAndGracefulShutdown is the end-to-end wiring test: it
+// boots the real `gozone server` stack (config load → DB migrate+seed →
+// template parsing → router with the full middleware chain → HTTP listener),
+// exercises one endpoint per routing branch, then delivers SIGTERM and asserts
+// runServer drains and returns nil. This is the coverage the per-component
+// unit tests cannot give: the middleware ORDER, the route table assembly, the
+// limiter construction and the shutdown sequencing are only exercised by the
+// composed wiring itself.
+func TestRunServer_BootAndGracefulShutdown(t *testing.T) {
+	dir := t.TempDir()
+	port := freePort(t)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgYAML := fmt.Sprintf(`
+server:
+  host: 127.0.0.1
+  port: %d
+  secret_key: integration-test-secret-key-0123456789ab
+database:
+  driver: sqlite3
+  dsn: %s
+powerdns:
+  api_url: http://127.0.0.1:1
+  api_key: test
+logging:
+  level: warn
+`, port, filepath.ToSlash(filepath.Join(dir, "gozone.db")))
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	// runServer blocks until shutdown completes; run it off-thread and
+	// collect its return value.
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		done <- result{err: runServer(cfg)}
+	}()
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	if err := waitForHealthy(t, baseURL); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	// Full middleware chain reaches the login page and the security headers
+	// are applied (clientIP → logger → compress → httpsResolver →
+	// SecurityHeaders → CSRF → LoginPage).
+	resp, err := client.Get(baseURL + "/login") // #nosec G107 -- fixed test-local URL
+	if err != nil {
+		t.Fatalf("GET /login: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /login: expected 200, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Error("security headers missing from the /login response (middleware chain not applied)")
+	}
+	if !strings.Contains(string(body), `name="gorilla.csrf.Token"`) {
+		t.Error("login page missing the CSRF token input (CSRF middleware not applied)")
+	}
+
+	// Unauthenticated web request redirects to /login (auth middleware).
+	resp, err = client.Get(baseURL + "/dashboard") // #nosec G107 -- fixed test-local URL
+	if err != nil {
+		t.Fatalf("GET /dashboard: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) // #nosec G104
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Errorf("unauthenticated /dashboard: expected 303 to /login, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// API branch: API-key auth rejects anonymous callers with 401 (the
+	// pre-auth IP limiter must not interfere at this volume).
+	resp, err = client.Get(baseURL + "/api/v1/zones") // #nosec G107 -- fixed test-local URL
+	if err != nil {
+		t.Fatalf("GET /api/v1/zones: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) // #nosec G104
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous /api/v1/zones: expected 401, got %d", resp.StatusCode)
+	}
+
+	// Static files are served with cache-busting headers.
+	resp, err = client.Get(baseURL + "/static/css/style.css") // #nosec G107 -- fixed test-local URL
+	if err != nil {
+		t.Fatalf("GET /static/css/style.css: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) // #nosec G104
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("static asset: expected 200, got %d", resp.StatusCode)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "public, max-age=86400" {
+		t.Errorf("static asset Cache-Control: got %q", cc)
+	}
+
+	// Graceful shutdown: deliver SIGTERM to ourselves (runServer's signal
+	// watcher catches it, drains the listener, and returns nil).
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("runServer returned error after shutdown: %v", r.err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("runServer did not return within 20s of SIGTERM (shutdown hang)")
+	}
 }
