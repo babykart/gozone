@@ -672,7 +672,12 @@ func (h *Handler) getAllUsers(ctx context.Context, search string) (users []model
 	if where != "" {
 		q += " WHERE " + where
 	}
-	q += " ORDER BY username LIMIT " + strconv.Itoa(maxGroupSelectOptions)
+	// LIMIT goes through a placeholder like every other dynamic value, even
+	// though it is an internal constant: the codebase routes nothing through
+	// string concatenation, so a future edit here has no pattern to copy and
+	// no regression can hide.
+	q += " ORDER BY username LIMIT ?"
+	args = append(args, maxGroupSelectOptions)
 	rows, err := h.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, false, err
