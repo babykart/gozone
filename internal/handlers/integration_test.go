@@ -25,15 +25,10 @@ func seedIntegrationUser(t *testing.T, h *Handler, username, password, role stri
 	if enabled {
 		enabledVal = 1
 	}
-	result, err := h.DB.Exec(
+	return insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
 		username, username+"@test.local", string(hash), role, enabledVal,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, _ := result.LastInsertId()
-	return id
 }
 
 func seedIntegrationAPIKey(t *testing.T, h *Handler, userID int64, keyHash string) {

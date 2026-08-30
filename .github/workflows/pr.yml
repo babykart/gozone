@@ -58,6 +58,71 @@ jobs:
           path: coverage.out
           retention-days: 14
 
+  # Dialect matrix: the full test suite runs against live MySQL and
+  # PostgreSQL servers, not just in-memory SQLite. GOZONE_TEST_DB_DRIVER/
+  # GOZONE_TEST_DB_DSN redirect testutil.NewTestDB to a per-test database on
+  # the service container (requires the `dbmatrix` build tag — see
+  # internal/testutil/dbmatrix_on.go); the legacy GOZONE_TEST_*_DSN variables
+  # additionally activate the database package's dialect integration tests.
+  test-mysql:
+    name: Test (MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: gozone_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -proot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      GOZONE_TEST_DB_DRIVER: mysql
+      GOZONE_TEST_DB_DSN: root:root@tcp(127.0.0.1:3306)/gozone_test
+      GOZONE_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/gozone_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Test (full suite on MySQL)
+        run: go test -race -count=1 -tags dbmatrix ./...
+
+  test-postgres:
+    name: Test (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      GOZONE_TEST_DB_DRIVER: postgres
+      GOZONE_TEST_DB_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      GOZONE_TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Test (full suite on PostgreSQL)
+        run: go test -race -count=1 -tags dbmatrix ./...
+
   gosec:
     name: Security
     runs-on: ubuntu-latest

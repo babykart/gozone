@@ -970,17 +970,17 @@ func newIntegrationDB(t *testing.T, driverName, dsn string) *DB {
 
 // seedIntegrationUser inserts a user (the FK target for revoked_tokens.user_id,
 // REVIEW.md I-9) on a MySQL/PostgreSQL integration DB and returns its id. The
-// "?" placeholders are rebound by ExecContext for the dialect.
+// "?" placeholders are rebound by ExecReturnID for the dialect, which also
+// abstracts id retrieval (lib/pq does not implement LastInsertId).
 func seedIntegrationUser(t *testing.T, db *DB, username string) int64 {
 	t.Helper()
-	res, err := db.ExecContext(context.Background(),
+	id, err := db.ExecReturnID(context.Background(),
 		"INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, '', '', 'user', 1)",
 		username, username+"@test.local", "hash",
 	)
 	if err != nil {
 		t.Fatalf("seed integration user %s: %v", username, err)
 	}
-	id, _ := res.LastInsertId()
 	return id
 }
 

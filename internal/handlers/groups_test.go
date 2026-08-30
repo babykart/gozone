@@ -18,15 +18,10 @@ import (
 
 func seedGroup(t *testing.T, h *Handler, name, description string) int64 {
 	t.Helper()
-	result, err := h.DB.Exec(
+	return insertReturnID(t, h.DB,
 		"INSERT INTO zone_groups (name, description) VALUES (?, ?)",
 		name, description,
 	)
-	if err != nil {
-		t.Fatalf("seed group: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return id
 }
 
 func seedUserWithHash(t *testing.T, h *Handler, username, password, role string) int64 {
@@ -35,15 +30,10 @@ func seedUserWithHash(t *testing.T, h *Handler, username, password, role string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := h.DB.Exec(
+	return insertReturnID(t, h.DB,
 		"INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)",
 		username, username+"@test.local", string(hash), role,
 	)
-	if err != nil {
-		t.Fatalf("seed user: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return id
 }
 
 func withUserContext(r *http.Request, user *models.User) *http.Request {

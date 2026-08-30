@@ -206,9 +206,11 @@ func TestLogin_ExpiredPasswordForcesChange(t *testing.T) {
 	h.Cfg.Password.MaxAgeDays = 90
 	h.Cfg.Password.ExpiryWarnDays = 0
 	uid := testutil.SeedTestUser(t, h.DB, "bob", "Bobpass1!", "user", true)
-	// Backdate the password beyond the 90-day limit.
-	h.DB.Exec("UPDATE users SET password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0 WHERE id = ?", uid)
-	h.DB.Exec("UPDATE users SET password_changed_at = datetime('now', '-100 days') WHERE id = ?", uid)
+	// Backdate the password beyond the 90-day limit. The timestamp is
+	// computed in Go (UTC, per the project convention) instead of SQLite's
+	// datetime('now', …) so the update runs identically on every dialect.
+	old := time.Now().Add(-100 * 24 * time.Hour).UTC()
+	h.DB.Exec("UPDATE users SET password_changed_at = ?, must_change_password = 0 WHERE id = ?", old, uid)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=bob&password=Bobpass1!"))

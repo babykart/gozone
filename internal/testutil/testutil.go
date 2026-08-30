@@ -20,12 +20,20 @@ import (
 	"github.com/babykart/gozone/internal/pdns"
 )
 
-// NewTestDB creates an in-memory SQLite database with the full GoZone
-// schema (users, activity_logs, api_keys, settings) already migrated.
+// NewTestDB creates a test database for the handler/middleware suites.
+//
+// By default it is an in-memory SQLite database with the full GoZone schema
+// already migrated. When the test binary is built with the `dbmatrix` tag
+// and GOZONE_TEST_DB_DRIVER/GOZONE_TEST_DB_DSN are set, it instead provisions
+// a per-test database on the configured live server via NewTestDBDialect
+// (see dbmatrix_on.go).
 //
 // The database is automatically closed when the test finishes via t.Cleanup.
 func NewTestDB(t *testing.T) *database.DB {
 	t.Helper()
+	if driver, dsn, ok := testDBDialectOverride(t); ok {
+		return NewTestDBDialect(t, driver, dsn)
+	}
 	db, err := database.New(&config.DatabaseConfig{
 		Driver: "sqlite3",
 		DSN:    ":memory:",
@@ -79,14 +87,13 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 	if enabled {
 		enabledVal = 1
 	}
-	result, err := db.ExecContext(ctx,
+	id, err := db.ExecReturnID(ctx,
 		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username, username+"@test.local", string(hash), "Test", "User", role, enabledVal,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := result.LastInsertId()
 	return id
 }
 

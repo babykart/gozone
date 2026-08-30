@@ -30,6 +30,8 @@ Write co-located `*_test.go` when adding code. After any change, run `just fmt` 
 
 CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 
+CI additionally runs the full suite against live `mysql:8` and `postgres:16` service containers (jobs `test-mysql` / `test-postgres`) with `go test -race -count=1 -tags dbmatrix ./...`: the `dbmatrix` build tag plus `GOZONE_TEST_DB_DRIVER`/`GOZONE_TEST_DB_DSN` redirects `testutil.NewTestDB` to `NewTestDBDialect`, which provisions a fresh per-test database on the server (the legacy `GOZONE_TEST_MYSQL_DSN`/`GOZONE_TEST_POSTGRES_DSN` also activate the database package's dialect integration tests). Plain local `go test ./...` ignores those variables and stays on in-memory SQLite; to reproduce a dialect job locally, run the same command with the tag and variables set against a reachable server.
+
 Releases are git-cliff driven (`cliff.toml`): `just auto-gen-rel` (or `just gen-rel v0.x.y`) writes `CHANGELOG.md`, commits and signs tag `v0.x.y`; pushing a `v*` tag triggers `.github/workflows/release.yml` (multi-arch Docker image → ghcr.io + GitHub release).
 
 ## Security Analysis
@@ -96,7 +98,8 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 
 ## Test Infrastructure
 
-- **In-memory SQLite**: `testutil.NewTestDB(t)` auto-migrates the schema and auto-closes via `t.Cleanup`.
+- **In-memory SQLite**: `testutil.NewTestDB(t)` auto-migrates the schema and auto-closes via `t.Cleanup`. Under the `dbmatrix` build tag (see CI notes above), the same call can provision a per-test database on a live MySQL/PostgreSQL server via `testutil.NewTestDBDialect` (unique CREATE DATABASE → migrations → DROP on cleanup; PostgreSQL DSNs must be URL-form).
+- **Portable id retrieval**: test seeds must use `DB.ExecReturnID` (or the `insertReturnID` helper in `internal/handlers/handler_test.go`), never raw `Exec` + `result.LastInsertId()` — lib/pq does not implement `LastInsertId`, and those seeds would break the dialect matrix.
 - **Mock PDNS**: `testutil.NewTestPDNSServer(t, handler)` returns an `httptest.Server` + `pdns.Client`. Handler controls responses; pass `nil` for 500 on all requests.
 - **Handler tests**: `newTestHandler(t)` / `newTestHandlerWithPDNS(t, handler)` build a `Handler` with mock PDNS + in-memory DB + **stub templates** (defined inline in `handler_test.go:testTemplateSet()`, NOT the real embedded templates). The stub templates must be updated when handler data shapes change — e.g. when `.Records` changed from `[]RRSet` to `[]ZoneRecordRow`, the stub `zone_view.html` had to switch from `{{range .Records}}{{range .Records}}{{.Content}}` to `{{range .Records}}{{.Record.Content}}`.
 - **FuncMap sync**: the test FuncMap in `testTemplateSet()` is a **subset** of the real one in `cmd/server.go:parseTemplates()`. If a new template func is added to `parseTemplates()`, it must also be added to `testTemplateSet()` or tests that render templates will fail.

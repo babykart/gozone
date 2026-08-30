@@ -134,14 +134,10 @@ func TestLogin_FailedAttemptsRecorded(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, err := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	if err != nil {
-		t.Fatalf("insert user: %v", err)
-	}
-	uid, _ := res.LastInsertId()
 
 	for i := 0; i < 3; i++ {
 		w := httptest.NewRecorder()
@@ -171,11 +167,10 @@ func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Default threshold is 10 — push 10 failures, then verify the next attempt
 	// (even with the correct password) is rejected with the lockout error.
@@ -218,11 +213,10 @@ func TestLogin_SuccessfulLoginResetsCounter(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
@@ -273,11 +267,10 @@ func TestLogin_DisabledLockoutWhenZeroThreshold(t *testing.T) {
 	h.Cfg.LoginLock.MaxFailedAttempts = 0
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// 100 failures — with threshold 0 the counter must not move and the
 	// account must not lock.
@@ -384,11 +377,10 @@ func TestProfilePage(t *testing.T) {
 func TestLogin_LastAdmin_NotLocked(t *testing.T) {
 	h := newTestHandler(t)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"soleadmin", "sole@admin.local", string(hash), "admin",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Trigger the threshold (10 by default) — each call with a wrong password
 	// calls recordFailedAttempt. We do 12 to make sure the counter caps at 9.
@@ -500,11 +492,10 @@ func TestLogin_ErrorMessage_NoEnumeration(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Drive the existing user over the lockout threshold (10 by default).
 	for i := 0; i < 11; i++ {
@@ -583,11 +574,10 @@ func TestLogin_LockedAccountPerformsBcrypt(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), h.Cfg.Auth.BcryptCost)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Lock the account directly instead of grinding 11 failed attempts.
 	if _, err := h.DB.Exec(
@@ -634,11 +624,10 @@ func TestLogin_LockedAccountExtendsLockout(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Lock the account with a SHORT window (1 minute) so we can detect
 	// extension. failed_login_attempts is already at the threshold so
@@ -768,11 +757,10 @@ func TestLogin_ManualLockHonoredWhenAutoLockoutDisabled(t *testing.T) {
 	h.Cfg.LoginLock.MaxFailedAttempts = 0 // disable the automatic lockout feature
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
 		"victim", "victim@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Admin manually locks the account (sets locked_until + manual_lock_until).
 	if err := h.DB.AdminLockUser(context.Background(), uid, time.Hour); err != nil {
@@ -807,11 +795,10 @@ func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
 	h.Cfg.LoginLock.MaxFailedAttempts = 0
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
-	res, _ := h.DB.Exec(
+	uid := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
 		"stale", "stale@example.com", string(hash), "user",
 	)
-	uid, _ := res.LastInsertId()
 
 	// Simulate a stale auto-lock: locked_until set, but no manual_lock_until
 	// (the account was auto-locked while the feature was on, then the operator

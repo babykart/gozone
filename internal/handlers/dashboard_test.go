@@ -144,11 +144,7 @@ func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
 	userID := testutil.SeedTestUser(t, h.DB, "member", "member", "user", true)
 
 	// Create a group and assign the regular user to zone "visible.example.com.".
-	res, err := h.DB.Exec("INSERT INTO zone_groups (name) VALUES ('test-group')")
-	if err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-	groupID, _ := res.LastInsertId()
+	groupID := insertReturnID(t, h.DB, "INSERT INTO zone_groups (name) VALUES ('test-group')")
 	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID); err != nil {
 		t.Fatalf("insert group member: %v", err)
 	}
@@ -190,11 +186,7 @@ func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
 	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	userID := testutil.SeedTestUser(t, h.DB, "member", "member", "user", true)
 
-	res, err := h.DB.Exec("INSERT INTO zone_groups (name) VALUES ('test-group')")
-	if err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-	groupID, _ := res.LastInsertId()
+	groupID := insertReturnID(t, h.DB, "INSERT INTO zone_groups (name) VALUES ('test-group')")
 	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID); err != nil {
 		t.Fatalf("insert group member: %v", err)
 	}

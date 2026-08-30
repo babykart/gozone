@@ -569,14 +569,10 @@ func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 	admin := seedAdminUser(t, h)
 
 	// Insert a second enabled admin.
-	res, err := h.DB.Exec(
+	secondID := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
 		"admin2", "admin2@test.local", "hash", "admin", 1,
 	)
-	if err != nil {
-		t.Fatalf("insert second admin: %v", err)
-	}
-	secondID, _ := res.LastInsertId()
 
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
 
@@ -684,14 +680,10 @@ func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
 	admin := seedAdminUser(t, h)
 
 	// Insert a second enabled admin.
-	res, err := h.DB.Exec(
+	secondAdminID := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
 		"admin2", "admin2@test.local", "hash", "admin", 1,
 	)
-	if err != nil {
-		t.Fatalf("insert second admin: %v", err)
-	}
-	secondAdminID, _ := res.LastInsertId()
 
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
 
@@ -755,14 +747,10 @@ func TestUpdateUser_AuditFailureRollsBack(t *testing.T) {
 	admin := seedAdminUser(t, h)
 
 	// A second enabled admin so the last-admin guard allows the demotion.
-	res, err := h.DB.Exec(
+	secondID := insertReturnID(t, h.DB,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
 		"admin2", "admin2@test.local", "hash", "admin", 1,
 	)
-	if err != nil {
-		t.Fatalf("insert second admin: %v", err)
-	}
-	secondID, _ := res.LastInsertId()
 
 	// Force every activity_logs INSERT to fail.
 	if _, err := h.DB.Exec("DROP TABLE activity_logs"); err != nil {

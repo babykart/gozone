@@ -564,12 +564,8 @@ func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
 	h.Cfg.OIDC.GroupMapping = map[string]string{"dev-team": "developers"}
 	ctx := context.Background()
 	// Pre-create the target zone group.
-	res, err := h.DB.ExecContext(ctx,
+	gid := insertReturnID(t, h.DB,
 		"INSERT INTO zone_groups (name, description) VALUES (?, ?)", "developers", "")
-	if err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-	gid, _ := res.LastInsertId()
 
 	claims := &oidc.Claims{
 		Issuer: "https://idp.example.com", Subject: "sub-grp",

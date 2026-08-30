@@ -143,15 +143,10 @@ func TestListAPIKeys_PaginationAndSearch(t *testing.T) {
 
 func seedAPIKey(t *testing.T, db *database.DB, userID int64, desc, hash string) int64 {
 	t.Helper()
-	res, err := db.Exec(
+	return insertReturnID(t, db,
 		`INSERT INTO api_keys (user_id, description, key_hash, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
 		userID, desc, hash,
 	)
-	if err != nil {
-		t.Fatalf("seed api key: %v", err)
-	}
-	id, _ := res.LastInsertId()
-	return id
 }
 
 func TestBulkDeleteAPIKeys_Success(t *testing.T) {

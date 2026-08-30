@@ -13,28 +13,18 @@ import (
 
 func seedTemplate(t *testing.T, h *Handler, name, description string) int64 {
 	t.Helper()
-	result, err := h.DB.Exec(
+	return insertReturnID(t, h.DB,
 		"INSERT INTO zone_templates (name, description) VALUES (?, ?)",
 		name, description,
 	)
-	if err != nil {
-		t.Fatalf("seed template: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return id
 }
 
 func seedTemplateRecord(t *testing.T, h *Handler, templateID int64, name, rtype, content string, ttl int) int64 {
 	t.Helper()
-	result, err := h.DB.Exec(
+	return insertReturnID(t, h.DB,
 		"INSERT INTO zone_template_records (template_id, name, type, content, ttl) VALUES (?, ?, ?, ?, ?)",
 		templateID, name, rtype, content, ttl,
 	)
-	if err != nil {
-		t.Fatalf("seed template record: %v", err)
-	}
-	id, _ := result.LastInsertId()
-	return id
 }
 
 func TestListTemplates(t *testing.T) {
@@ -310,14 +300,10 @@ func TestDeleteBuiltinTemplate(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
-	result, err := h.DB.Exec(
+	templateID := insertReturnID(t, h.DB,
 		"INSERT INTO zone_templates (name, description, is_builtin) VALUES (?, ?, ?)",
 		"builtin-tmpl", "A built-in template", true,
 	)
-	if err != nil {
-		t.Fatalf("seed builtin template: %v", err)
-	}
-	templateID, _ := result.LastInsertId()
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	w := httptest.NewRecorder()
@@ -759,14 +745,10 @@ func TestBulkDeleteTemplates_Success(t *testing.T) {
 func TestBulkDeleteTemplates_BuiltinRejected(t *testing.T) {
 	h := newTestHandler(t)
 	normal := seedTemplate(t, h, "normal", "")
-	res, err := h.DB.Exec(
+	builtin := insertReturnID(t, h.DB,
 		"INSERT INTO zone_templates (name, description, is_builtin) VALUES (?, ?, ?)",
 		"builtin-tmpl", "A built-in template", true,
 	)
-	if err != nil {
-		t.Fatalf("seed builtin template: %v", err)
-	}
-	builtin, _ := res.LastInsertId()
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	body := "template_id=" + strconv.FormatInt(normal, 10) + "&template_id=" + strconv.FormatInt(builtin, 10)

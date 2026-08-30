@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -17,6 +18,19 @@ import (
 func newTestDB(t *testing.T) *database.DB {
 	t.Helper()
 	return testutil.NewTestDB(t)
+}
+
+// insertReturnID runs an INSERT and returns the new row's id via
+// DB.ExecReturnID, which stays portable across the supported databases
+// (lib/pq does not implement sql.Result.LastInsertId, so raw Exec +
+// LastInsertId would break the dialect test matrix).
+func insertReturnID(t *testing.T, db *database.DB, query string, args ...any) int64 {
+	t.Helper()
+	id, err := db.ExecReturnID(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("insert (%s): %v", query, err)
+	}
+	return id
 }
 
 // testTemplateSet returns a minimal shared template set for unit tests. It
