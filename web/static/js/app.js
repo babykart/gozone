@@ -675,17 +675,37 @@ function closeConfirmDialog(ok) {
 
 // filterOptions narrows the options of the <select> referenced by the filter
 // input's data-target attribute to those whose label contains the typed text
-// (case-insensitive). An empty query restores every option. Purely cosmetic:
-// hidden options keep their value, so form submission is unaffected and the
-// page degrades to the plain native select without JS.
+// (case-insensitive). An empty query restores every option.
+//
+// Submission semantics: hidden options keep their value, so on a multi-select
+// the form still posts every selected option, visible or not (the page
+// degrades to the plain native select without JS). On a single-select,
+// however, the closed control would keep displaying — and the Add button
+// would keep posting — an option the operator can no longer see once it is
+// filtered out. To keep the visible state honest, the selection moves to the
+// first visible option when the selected one becomes hidden, and is cleared
+// entirely when the filter matches nothing (the server then rejects the
+// empty submit instead of silently adding a filtered-out value).
 function filterOptions(input) {
     var select = document.getElementById(input.getAttribute('data-target'));
     if (!select) return;
     var query = (input.value || '').trim().toLowerCase();
     var options = select.options;
+    var firstVisible = -1;
+    var selectedVisible = false;
     for (var i = 0; i < options.length; i++) {
         var label = (options[i].textContent || '').trim().toLowerCase();
-        options[i].hidden = query !== '' && label.indexOf(query) === -1;
+        var hidden = query !== '' && label.indexOf(query) === -1;
+        options[i].hidden = hidden;
+        if (!hidden) {
+            if (firstVisible === -1) firstVisible = i;
+            if (i === select.selectedIndex) selectedVisible = true;
+        }
+    }
+    if (!select.multiple && query !== '' && !selectedVisible) {
+        // firstVisible is -1 when the filter matches nothing, which clears
+        // the selection.
+        select.selectedIndex = firstVisible;
     }
 }
 
