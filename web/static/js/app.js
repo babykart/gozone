@@ -794,6 +794,20 @@ function initDelegatedListeners() {
             filterOptions(actionTarget);
         }
     });
+
+    document.addEventListener('keydown', function(e) {
+        // Enter in a select-filter input would implicitly submit the
+        // enclosing form (group create, add-member, add-zone) with whatever
+        // the paired select currently holds — typically the first option of
+        // the unfiltered list — silently adding a wrong member/zone to a
+        // permissions object. The filter's only role is to narrow the list,
+        // so Enter is swallowed instead of submitting.
+        if (e.key !== 'Enter') return;
+        var actionTarget = e.target.closest('[data-action]');
+        if (actionTarget && actionTarget.getAttribute('data-action') === 'filter-options') {
+            e.preventDefault();
+        }
+    });
 }
 
 if (document.readyState === 'loading') {
