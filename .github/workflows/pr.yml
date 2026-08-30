@@ -59,6 +59,16 @@ jobs:
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
+      - name: Enforce coverage threshold
+        # A floor, not a goal: fails the build when total statement coverage
+        # drops below the threshold, catching wholesale regressions (a
+        # package losing its tests) while leaving room for normal
+        # fluctuation. Raise the floor as the suite grows.
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%$/, "", $3); print $3 }')"
+          echo "Total statement coverage: ${total}%"
+          awk -v t="$total" -v floor=80 'BEGIN { if (t+0 < floor) { printf "coverage %.1f%% is below the %.0f%% floor\n", t+0, floor; exit 1 } }'
+
       - name: Report coverage
         # Publish the total coverage line to the run/PR check summary and keep
         # the profile downloadable as an artifact (REVIEW.md B-2).
