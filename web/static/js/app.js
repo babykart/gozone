@@ -675,17 +675,20 @@ function closeConfirmDialog(ok) {
 
 // filterOptions narrows the options of the <select> referenced by the filter
 // input's data-target attribute to those whose label contains the typed text
-// (case-insensitive). An empty query restores every option.
+// (case-insensitive). An empty query restores every option. Without JS the
+// page degrades to the plain native select.
 //
-// Submission semantics: hidden options keep their value, so on a multi-select
-// the form still posts every selected option, visible or not (the page
-// degrades to the plain native select without JS). On a single-select,
-// however, the closed control would keep displaying — and the Add button
-// would keep posting — an option the operator can no longer see once it is
-// filtered out. To keep the visible state honest, the selection moves to the
-// first visible option when the selected one becomes hidden, and is cleared
-// entirely when the filter matches nothing (the server then rejects the
-// empty submit instead of silently adding a filtered-out value).
+// Submission semantics — hidden options keep their value, so the form still
+// posts every selected option; to keep the visible state honest:
+//   - multi-select: options the operator chose stay visible even when they
+//     fall outside the filter. They are part of the pending submission, so
+//     hiding them would post values nobody can see.
+//   - single-select: the closed control would keep displaying — and the Add
+//     button would keep posting — an option the operator can no longer see
+//     once it is filtered out. The selection therefore moves to the first
+//     visible option, and is cleared entirely when the filter matches
+//     nothing (the server then rejects the empty submit instead of silently
+//     adding a filtered-out value).
 function filterOptions(input) {
     var select = document.getElementById(input.getAttribute('data-target'));
     if (!select) return;
@@ -695,9 +698,12 @@ function filterOptions(input) {
     var selectedVisible = false;
     for (var i = 0; i < options.length; i++) {
         var label = (options[i].textContent || '').trim().toLowerCase();
-        var hidden = query !== '' && label.indexOf(query) === -1;
-        options[i].hidden = hidden;
-        if (!hidden) {
+        var matches = query === '' || label.indexOf(query) !== -1;
+        // Pin chosen options on multi-selects only; on a single-select the
+        // browser auto-selects the first option, so pinning it would defeat
+        // the selection move below.
+        options[i].hidden = !matches && !(select.multiple && options[i].selected);
+        if (!options[i].hidden) {
             if (firstVisible === -1) firstVisible = i;
             if (i === select.selectedIndex) selectedVisible = true;
         }
