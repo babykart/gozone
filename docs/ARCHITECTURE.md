@@ -593,6 +593,18 @@ sessions                                               ← idle/absolute session
 
 GoZone supports SQLite (default for single-node deployments), MySQL, and PostgreSQL. The `database.Dialect` interface abstracts driver-specific behavior: DSN parsing, parameter rebinding (e.g., `?` → `$n` for PostgreSQL), migration locking (`GET_LOCK` for MySQL, `pg_advisory_lock` for PostgreSQL, no-op for SQLite), and dialect-aware `INSERT IGNORE` semantics (`INSERT OR IGNORE` SQLite, `INSERT IGNORE` MySQL, `ON CONFLICT DO NOTHING` PostgreSQL — exposed via `Dialect.InsertIgnore(table, columns, conflictColumns)`). The Postgres dialect requires `conflictColumns` to match an existing UNIQUE constraint or PRIMARY KEY on the target table (the older single-argument signature reused `columns` as the conflict target, masking the invariant and leaving it easy to fall back to the wrong index when columns ≠ unique constraint). SQLite and MySQL ignore `conflictColumns` because `INSERT OR IGNORE` / `INSERT IGNORE` catch any unique violation regardless of column. Migrations are identified by a truncated SHA-256 hash of their SQL content, making reordering safe, and are protected by a dialect-specific lock for multi-instance deployments.
 
+### Forward-Only Migrations (Rollback Policy)
+
+Migrations are **forward-only**: there are no `down` scripts and none are planned. Each migration is written with idempotent DDL (`CREATE TABLE IF NOT EXISTS`, inline index guards), applied inside a transaction together with its recorded content-hash version, and never reversed. Keeping per-dialect rollback scripts would triple the migration surface with code paths that cannot be exercised as reliably as the forward ones.
+
+The official rollback path is therefore **restore from a pre-upgrade backup**:
+
+1. **Back up the database before deploying a new GoZone binary.** Migrations run automatically at startup (before the server accepts traffic), so by the time a problem is noticed the schema has already moved.
+2. **Prefer rehearsing the upgrade on a copy** — a staging database or a restore of the production backup — so the migration set is validated against real data volumes before it touches production.
+3. **After restoring the backup, run the matching pre-upgrade binary.** Rolling the schema back without rolling the binary back is not supported: an older binary starts successfully against a newer schema (all of its known migrations appear applied), but its code has never been tested against the extra tables and columns.
+
+One engine caveat reinforces the backup as the authoritative rollback: SQLite and PostgreSQL roll back a failed multi-statement migration atomically, but MySQL/MariaDB implicitly commit on most DDL, so a migration failing mid-way on MySQL can leave partial schema changes behind that only a restore cleanly undoes.
+
 ### No ORM
 
 All SQL queries are hand-written and inlined in handler/database methods. This avoids ORM complexity, makes queries auditable, and keeps the dependency tree small. The trade-off is more boilerplate and no compile-time query validation.
