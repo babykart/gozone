@@ -6,6 +6,15 @@
     {{template "topbar" .}}
     <main id="main-content" class="main-content" tabindex="-1">
         <div class="container">
+            {{/* Shown only when JavaScript is unavailable: the affected
+                  features (bulk selection, inline record editing, deletion
+                  confirmations) are JS-driven; everything else degrades to
+                  plain forms and dedicated pages. */}}
+            <noscript>
+                <div class="alert alert-warning" role="note">
+                    JavaScript is disabled. Most of the interface still works (lists, forms, record creation and the dedicated record edit pages), but bulk selection and bulk delete, inline record editing and deletion confirmation dialogs require JavaScript.
+                </div>
+            </noscript>
 {{end}}
 
 {{define "app_layout_end"}}

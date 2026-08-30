@@ -99,6 +99,12 @@ func TestSkipLinkAndMainAnchor(t *testing.T) {
 	if !strings.Contains(out, `id="main-content"`) {
 		t.Errorf("main landmark missing id=\"main-content\":\n%s", out)
 	}
+	// No-JS degradation notice: the JS-only features (bulk selection, inline
+	// record editing, confirm dialogs) must be announced to users browsing
+	// without JavaScript.
+	if !strings.Contains(out, "<noscript>") || !strings.Contains(out, "JavaScript is disabled") {
+		t.Errorf("app_layout_start missing the noscript notice:\n%s", out)
+	}
 }
 
 func TestAppJSNoNativeConfirm(t *testing.T) {

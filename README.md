@@ -353,6 +353,15 @@ GoZone is stateless from the application's point of view: every piece of **durab
 
 ## Web UI
 
+### JavaScript Requirements
+
+The interface degrades gracefully without JavaScript: page navigation, all forms, zone/record viewing and the dedicated record creation/edit pages work as plain server-rendered HTML. A `<noscript>` notice on every page names the features that need JavaScript:
+
+- **Bulk selection and bulk delete** — the toolbar buttons are JS-initiated and inert without it; single-row delete buttons still work.
+- **Inline record editing** — the per-row Edit/Save buttons need JS; the dedicated record edit page remains fully functional.
+- **Deletion confirmation dialogs** — without JS, `data-confirm` forms submit directly, without the confirmation prompt.
+- Cosmetic behaviour (theme toggle, sidebar collapse, dropdown filters) is JS-only but harmless to lose.
+
 ### Dashboard
 
 Shows PowerDNS server status (connected/unreachable, version, daemon type), zone and user counts, query statistics, and recent activity logs.
