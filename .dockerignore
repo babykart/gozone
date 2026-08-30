@@ -37,6 +37,7 @@ cliff.toml
 # Test artifacts
 *_test.go
 **/*_test.go
+web/jstest/
 
 # OS / editor cruft
 .DS_Store
