@@ -577,7 +577,7 @@ func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
 
 	// Demote the second admin (admin → user).
-	body := fmt.Sprintf("email=admin2@test.local&first_name=&last_name=&role=user&enabled=1")
+	body := "email=admin2@test.local&first_name=&last_name=&role=user&enabled=1"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/update", secondID), strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")

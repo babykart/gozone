@@ -53,6 +53,10 @@ fmt:
 vet:
     go vet ./...
 
+# run staticcheck static analysis (fails on findings, mirroring CI)
+staticcheck:
+    staticcheck ./...
+
 # run gosec security analysis (fails on findings, mirroring CI)
 gosec:
     gosec -exclude-dir='\.cache|vendor|bin' ./...

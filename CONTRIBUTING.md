@@ -104,27 +104,23 @@ make vet   # go vet ./...
 
 ### Linting
 
-Run `go vet` and `gosec` after every code change. All issues must be resolved before submitting a PR:
+Run `go vet`, `staticcheck` and `gosec` after every code change. All issues must be resolved before submitting a PR:
 
 ```bash
-make vet     # or: just vet
-make gosec   # or: just gosec
+make vet         # or: just vet
+make staticcheck # or: just staticcheck
+make gosec       # or: just gosec
 ```
 
+- **`staticcheck` is mandatory** — it fails the build on every finding, in CI and locally (install with `go install honnef.co/go/tools/cmd/staticcheck@latest`).
 - **`gosec` is mandatory** — it fails the build on every reported issue (no `-no-fail`), in CI and locally.
 - Use `// #nosec Gxxx` annotations only for intentional suppressions (e.g., HTTP response writes, timing side-channel mitigation) and document the reason inline.
-- Failures from `just test` or `just gosec` block a PR from being merged.
+- The formatting gate runs `gofmt -l -s`: `make fmt` must leave no file listed.
+- Failures from `just test`, `just staticcheck` or `just gosec` block a PR from being merged.
 
-Static analysis with `staticcheck` or `golangci-lint` is also encouraged but not required:
+golangci-lint remains optional (it aggregates several linters, including staticcheck):
 
 ```bash
-# Install and run gosec (recommended)
-go install github.com/securego/gosec/v2/cmd/gosec@latest
-gosec ./...
-# or
-make gosec   # or: just gosec
-
-# Install golangci-lint (optional)
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 golangci-lint run ./...
 ```

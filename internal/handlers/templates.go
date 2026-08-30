@@ -609,7 +609,7 @@ func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.Zone
 	if ttlStr != "" {
 		v, err := strconv.Atoi(ttlStr)
 		if err != nil || v <= 0 {
-			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid TTL: must be a positive integer")
+			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid TTL: must be a positive integer")
 		}
 		ttl = v
 	}
@@ -618,14 +618,14 @@ func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.Zone
 	if priorityStr != "" {
 		v, err := strconv.Atoi(priorityStr)
 		if err != nil || v < 0 {
-			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid priority: must be a non-negative integer")
+			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid priority: must be a non-negative integer")
 		}
 		priority = v
 	}
 	disabled := r.FormValue("disabled") == "on"
 
 	if err := validators.ValidateRecordType(rtype); err != nil {
-		return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record type '%s': %w", rtype, err)
+		return models.ZoneTemplateRecord{}, fmt.Errorf("invalid record type '%s': %w", rtype, err)
 	}
 	if err := validators.ValidateRecordPriority(rtype, priority); err != nil {
 		return models.ZoneTemplateRecord{}, err
@@ -635,12 +635,12 @@ func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.Zone
 	// zone-creation time.
 	if !strings.Contains(name, "{{") {
 		if err := validators.ValidateRecordName(name); err != nil {
-			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record name: %w", err)
+			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid record name: %w", err)
 		}
 	}
 	if !strings.Contains(content, "{{") {
 		if err := validators.ValidateRecordContent(rtype, content); err != nil {
-			return models.ZoneTemplateRecord{}, fmt.Errorf("Invalid record content: %w", err)
+			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid record content: %w", err)
 		}
 	}
 

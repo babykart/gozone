@@ -21,16 +21,30 @@ jobs:
 
       - name: Check formatting
         # Exclude vendored third-party code, which we don't reformat (the gosec
-        # step likewise excludes vendor).
-        run: test -z "$(git ls-files '*.go' | grep -v '^vendor/' | xargs -r gofmt -l)"
+        # step likewise excludes vendor). -s also flags files that simplify
+        # under gofmt -s, so the simplifier gate rides the same check.
+        run: test -z "$(git ls-files '*.go' | grep -v '^vendor/' | xargs -r gofmt -l -s)"
 
       - name: Vet
         run: go vet ./...
 
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        # go vet + gosec miss style-level defect classes (capitalized error
+        # strings, deprecated API use, unsimplified code). staticcheck must
+        # pass with zero findings, like gosec.
+        run: staticcheck ./...
+
       - name: Frontend unit tests
         # app.js logic (select filtering, delegated listeners) under
         # web/jstest/ — pure node:test, no browser or npm dependencies.
-        run: node --test web/jstest/
+        # node --check additionally syntax-checks theme.js, which the unit
+        # tests do not load.
+        run: |
+          node --check web/static/js/theme.js
+          node --test web/jstest/
 
   test:
     name: Test

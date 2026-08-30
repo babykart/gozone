@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/lib/pq/pqerror"
 )
 
 func TestPostgresDialect_DriverName(t *testing.T) {
@@ -64,7 +65,7 @@ func TestPostgresDialect_IsAlreadyExistsError(t *testing.T) {
 		{"42601", false}, // syntax_error
 	}
 	for _, c := range codes {
-		err := &pq.Error{Code: pq.ErrorCode(c.code)}
+		err := &pq.Error{Code: pqerror.Code(c.code)}
 		if got := d.IsAlreadyExistsError(err); got != c.want {
 			t.Errorf("IsAlreadyExistsError(SQLSTATE %q) = %v, want %v", c.code, got, c.want)
 		}
@@ -100,7 +101,7 @@ func TestPostgresDialect_IsUniqueViolation(t *testing.T) {
 		{"42601", false}, // syntax_error
 	}
 	for _, c := range codes {
-		err := &pq.Error{Code: pq.ErrorCode(c.code)}
+		err := &pq.Error{Code: pqerror.Code(c.code)}
 		if got := d.IsUniqueViolation(err); got != c.want {
 			t.Errorf("IsUniqueViolation(SQLSTATE %q) = %v, want %v", c.code, got, c.want)
 		}

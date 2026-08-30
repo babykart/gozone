@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/babykart/gozone/cmd.version=$(VERSION) \
            -X github.com/babykart/gozone/cmd.commit=$(COMMIT) \
            -X github.com/babykart/gozone/cmd.buildDate=$(DATE)
 
-.PHONY: default build run test test-verbose test-race test-js clean fmt vet gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
+.PHONY: default build run test test-verbose test-race test-js clean fmt vet staticcheck gosec update docker-build docker-up docker-down auto-gen-rel gen-rel gen-tag help
 
 default: help
 
@@ -49,6 +49,14 @@ fmt:
 # run vet on all packages
 vet:
 	go vet ./...
+
+# run staticcheck static analysis (optional tool, fails on findings like CI)
+staticcheck:
+	@if command -v staticcheck > /dev/null 2>&1; then \
+		staticcheck ./...; \
+	else \
+		echo "staticcheck not installed. Run: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+	fi
 
 # run gosec security analysis (optional tool, fails on findings like CI)
 gosec:
@@ -108,6 +116,7 @@ help:
 	@echo "  clean           Remove build artifacts and database"
 	@echo "  fmt             Format all source files"
 	@echo "  vet             Run vet on all packages"
+	@echo "  staticcheck     Run staticcheck static analysis"
 	@echo "  gosec           Run gosec security analysis"
 	@echo "  update          Update all dependencies"
 	@echo "  docker-build    Build Docker image"

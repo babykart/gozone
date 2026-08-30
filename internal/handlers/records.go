@@ -504,7 +504,7 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 		name = normalizeRecordName(name, zoneID)
 
 		if err := validators.ValidateRecordName(name); err != nil {
-			return nil, nil, nil, fmt.Errorf("Invalid record name '%s': %w", name, err)
+			return nil, nil, nil, fmt.Errorf("invalid record name '%s': %w", name, err)
 		}
 
 		// An empty TTL means "no preference" (0 until the merge resolves it:
@@ -517,7 +517,7 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
 				v, err := strconv.Atoi(ttlStr)
 				if err != nil || v <= 0 {
-					return nil, nil, nil, fmt.Errorf("Invalid TTL: must be a positive integer")
+					return nil, nil, nil, fmt.Errorf("invalid TTL: must be a positive integer")
 				}
 				ttl = v
 			}
@@ -527,7 +527,7 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 			if priorityStr := strings.TrimSpace(priorities[i]); priorityStr != "" {
 				v, err := strconv.Atoi(priorityStr)
 				if err != nil || v < 0 {
-					return nil, nil, nil, fmt.Errorf("Invalid priority: must be a non-negative integer")
+					return nil, nil, nil, fmt.Errorf("invalid priority: must be a non-negative integer")
 				}
 				priority = v
 			}
@@ -543,13 +543,13 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 		}
 
 		if err := validators.ValidateRecordType(recordType); err != nil {
-			return nil, nil, nil, fmt.Errorf("Invalid record type '%s': %w", recordType, err)
+			return nil, nil, nil, fmt.Errorf("invalid record type '%s': %w", recordType, err)
 		}
 		if err := validators.ValidateRecordContent(recordType, content); err != nil {
-			return nil, nil, nil, fmt.Errorf("Invalid record content: %w", err)
+			return nil, nil, nil, fmt.Errorf("invalid record content: %w", err)
 		}
 		if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
-			return nil, nil, nil, fmt.Errorf("Invalid priority '%s': %w", recordType, err)
+			return nil, nil, nil, fmt.Errorf("invalid priority '%s': %w", recordType, err)
 		}
 
 		rrsets = append(rrsets, models.RRSet{
@@ -812,9 +812,7 @@ func buildCommentsPatch(existing []models.Comment, clear bool, newLines ...strin
 		return nil
 	}
 	out := make([]models.Comment, 0, len(existing)+len(cleaned))
-	for _, c := range existing {
-		out = append(out, c)
-	}
+	out = append(out, existing...)
 	for _, line := range cleaned {
 		// Deduplicate against both the preserved existing list and earlier
 		// new lines so replaying the same batch never grows the list.

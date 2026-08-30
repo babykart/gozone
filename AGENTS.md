@@ -19,6 +19,7 @@
 | `make test-js` | `just test-js` | Run frontend (app.js) unit tests via `node --test web/jstest/` |
 | `make fmt` | `just fmt` | Format all Go source files |
 | `make vet` | `just vet` | Run static analysis |
+| `make staticcheck` | `just staticcheck` | Run staticcheck (fails on findings, mirroring CI) |
 | `make clean` | `just clean` | Remove build artifacts and database |
 | `make gosec` | `just gosec` | Run security static analysis |
 | `make update` | `just update` | Update all dependencies + re-vendor |
@@ -29,7 +30,7 @@ Run a single package: `go test -count=1 ./internal/config/`
 
 Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete.
 
-CI (`.github/workflows/pr.yml`) runs: a `gofmt -l` check (excluding `vendor/`), `go vet`, the frontend unit tests (`node --test web/jstest/`), `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
+CI (`.github/workflows/pr.yml`) runs: a `gofmt -l -s` check (excluding `vendor/`), `go vet`, `staticcheck` (zero findings required, like gosec), the frontend unit tests (`node --test web/jstest/` plus a `node --check` syntax pass on theme.js), `go test -race -count=1`, gosec, and govulncheck. `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 
 CI additionally runs the full suite against live `mysql:8` and `postgres:16` service containers (jobs `test-mysql` / `test-postgres`) with `go test -race -count=1 -tags dbmatrix ./...`: the `dbmatrix` build tag plus `GOZONE_TEST_DB_DRIVER`/`GOZONE_TEST_DB_DSN` redirects `testutil.NewTestDB` to `NewTestDBDialect`, which provisions a fresh per-test database on the server (the legacy `GOZONE_TEST_MYSQL_DSN`/`GOZONE_TEST_POSTGRES_DSN` also activate the database package's dialect integration tests). Plain local `go test ./...` ignores those variables and stays on in-memory SQLite; to reproduce a dialect job locally, run the same command with the tag and variables set against a reachable server.
 
