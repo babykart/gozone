@@ -68,6 +68,15 @@ func runServer(cfg *config.Config) error {
 	// Initialize structured logging with configured level
 	logger.Init(cfg.Logging.Level)
 
+	// Validate server.trusted_proxies before anything else starts: a
+	// malformed entry (a bare IP without "/") previously panicked deep inside
+	// netip.MustParsePrefix; a clean, actionable startup error is the right
+	// fail mode for an operator typo.
+	trustedPrefixes, err := parseTrustedProxies(cfg.Server.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("invalid server.trusted_proxies: %w", err)
+	}
+
 	// Ensure .ico files are served with the correct MIME type
 	if err := mime.AddExtensionType(".ico", "image/x-icon"); err != nil {
 		logger.Warn("failed to register favicon MIME type", "error", err)
@@ -218,13 +227,13 @@ func runServer(cfg *config.Config) error {
 	// fix for the REVIEW.md "Rate-limit du login contournable" finding: the
 	// previous chimw.RealIP let a direct-access attacker rotate XFF and obtain
 	// a fresh rate-limit bucket per request.
-	r.Use(clientIPMiddleware(cfg))
+	r.Use(clientIPMiddleware(cfg.Server.TrustedProxies, trustedPrefixes))
 	r.Use(requestLogger)
 	r.Use(chimw.Compress(5))
 	// Resolve the effective HTTPS flag (trusted-proxy-gated) BEFORE
 	// SecurityHeaders so HSTS and the Secure cookie flag read a trusted value
 	// instead of a raw, spoofable X-Forwarded-Proto header (m40/M-SEC4).
-	r.Use(httpsResolverMiddleware(cfg))
+	r.Use(httpsResolverMiddleware(trustedPrefixes))
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.BodyLimit)
 	r.Use(middleware.ErrorHandler)

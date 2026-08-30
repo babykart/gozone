@@ -66,6 +66,40 @@ func TestRun_InvalidFlag(t *testing.T) {
 	}
 }
 
+// TestRun_InvalidTrustedProxies pins the fail mode for a malformed
+// server.trusted_proxies entry (a bare IP without "/"): a clean startup error
+// with actionable guidance, not a netip.MustParsePrefix panic. The
+// validation runs before the database is opened, so nothing half-starts.
+func TestRun_InvalidTrustedProxies(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := `
+server:
+  host: 127.0.0.1
+  port: 8080
+  secret_key: 0123456789abcdef0123456789abcdef
+  trusted_proxies:
+    - 10.0.0.1
+database:
+  driver: sqlite3
+  dsn: ":memory:"
+`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	err := executeServer("--config", cfgPath)
+	if err == nil {
+		t.Fatal("expected error for bare-IP trusted_proxies entry")
+	}
+	if !strings.Contains(err.Error(), "trusted_proxies") || !strings.Contains(err.Error(), "10.0.0.1") {
+		t.Errorf("error should name the setting and the offending entry, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/32") {
+		t.Errorf("error should suggest the /32 form for the operator, got: %v", err)
+	}
+}
+
 func TestStartPeriodicJob(t *testing.T) {
 	var count int32
 	job := func(ctx context.Context) error {
