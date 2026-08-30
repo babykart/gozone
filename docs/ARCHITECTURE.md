@@ -641,6 +641,10 @@ GoZone never stores DNS zones/records locally. All zone data is fetched live fro
 
 All user actions (login, lock/unlock, zone creation, record updates, API key creation) are logged to the `activity_logs` table in the configured database with structured `old_value`/`new_value` JSON snapshots for record mutations. This provides a full audit trail without external infrastructure. The dashboard /activity page exposes search, filters (action, date range, free text on `details`), pagination, and a non-admin visibility scope (`activityLogVisibilityClause`) so users only see their own logs. The periodic `PurgeActivityLogs` job (every 24h, 5min timeout) deletes entries older than `activity.retention_days` in batches of `activity.batch_size` to avoid long-running DELETE statements. Setting `retention_days=0` keeps logs forever and disables the job.
 
+### Process Log Volume and Rotation
+
+Process logs (`log/slog`, key-value text) go to **stderr** and GoZone performs no in-process rotation, by design: file-based rotating would fight the process supervisor and hide the stream from `docker logs` / `kubectl logs`. Size-capping and retention are the supervisor's job (Docker `--log-opt max-size`, journald `SystemMaxUse=`, kubelet `container-log-max-size`). The volume knob the application does own is `logging.level`: the per-request access line emitted by `requestLogger` is `info`-level, so `warn` silences the dominant volume on busy deployments while keeping lifecycle events, warnings and errors. Database-side logs are bounded independently by the retention jobs above (`activity.retention_days`, `login_lock.attempts_retention_hours`).
+
 ### RRSet Comments (PowerDNS `comments` field)
 
 Every RRSet can carry PowerDNS-style comments (`models.Comment`) attached as metadata. GoZone exposes this through the web UI (zone view, dedicated edit page, inline editor), the CSV export/import (with a trailing `comment` column), and the REST API.

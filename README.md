@@ -274,6 +274,18 @@ Like `unlock`, the reset writes a `reset_password_cli` entry to `activity_logs` 
 |-----------|---------------------|---------|
 | `logging.level` | `GOZONE_LOG_LEVEL` | `info` |
 
+GoZone writes structured (`log/slog`) key-value logs to **stderr** — one line per request plus lifecycle and error events. Valid levels are `debug`, `info`, `warn`, `error`.
+
+**Controlling volume.** Access logs (one `request` line per HTTP request) are emitted at `info`; on a busy deployment that is the dominant volume. Setting `logging.level: warn` silences them while keeping warnings, errors and lifecycle events (`error` keeps errors only). `debug` additionally surfaces the OIDC discovery details.
+
+**Rotation.** GoZone deliberately performs no in-process log rotation: writing to files and rotating them would fight the process supervisor and hide logs from `docker logs` / `kubectl logs`. Size-capping and retention belong to whatever runs the process:
+
+- **Docker**: `--log-opt max-size=10m --log-opt max-file=3` (json-file driver), or the equivalent in the daemon/compose `logging:` block.
+- **systemd**: journald owns the stream (`StandardOutput=journal`); cap with `SystemMaxUse=`/`SystemMaxFileSize=` in `journald.conf`.
+- **Kubernetes**: the kubelet rotates container logs (`container-log-max-size`, `container-log-max-files`).
+
+Database-side logs are bounded separately: `activity.retention_days` purges the audit trail and `login_lock.attempts_retention_hours` the login-attempt table (see below).
+
 ### Activity Log Retention
 
 | YAML Path | Environment Variable | Default |
