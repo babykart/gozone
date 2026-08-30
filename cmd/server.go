@@ -265,6 +265,15 @@ func runServer(cfg *config.Config) error {
 	// values win; internal/version falls back to embedded VCS metadata.
 	h.Version = versionpkg.Resolve(version, commit, buildDate)
 
+	// Periodically reconcile zone-group grants with the PowerDNS zone list:
+	// a zone deleted or renamed directly in PowerDNS leaves its grant rows
+	// orphaned otherwise. Skipped when PowerDNS is unreachable (a failed zone
+	// list must never look like "all zones gone").
+	defer startPeriodicJob(context.Background(), "reconcile group zone grants", time.Hour, time.Minute, func(ctx context.Context) error {
+		_, err := h.ReconcileGroupZones(ctx)
+		return err
+	})()
+
 	// Initialize OpenID Connect / OAuth2 single sign-on. Discovery is best-effort
 	// per provider (a temporarily unreachable IdP is skipped, not fatal); the
 	// returned service is disabled when OIDC is not configured or no provider

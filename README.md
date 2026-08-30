@@ -402,6 +402,8 @@ GoZone exposes the PowerDNS API `comments` field for every RRSet. Comments are m
 
 Admin users can create groups, assign zones to groups, and add users as members. Non-admin users only see zones assigned to groups they belong to. The "Groups" link is visible in the sidebar for admin users.
 
+PowerDNS is the source of truth for the zone list, so a zone deleted or renamed directly in PowerDNS leaves its group assignments orphaned. GoZone garbage-collects those grant rows automatically: hourly in the background, and immediately when an admin opens a group's edit page. The reconciliation is skipped whenever the PowerDNS zone list cannot be fetched — an unreachable PowerDNS is never interpreted as "all zones gone".
+
 ### Zone Templates
 
 Admin users can define reusable DNS record templates that pre-populate records when creating new zones or applying to existing zones. Templates support variable substitution (`IP`, `IP6`, `MX_HOST`, `TTL`, `ZONE`, etc.) and include four built-in templates (standard, mail, web, redirect). Accessible under the Templates menu in the sidebar for admin users.

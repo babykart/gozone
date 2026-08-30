@@ -339,8 +339,26 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	userSearch := strings.TrimSpace(r.URL.Query().Get("uq"))
 	zoneSearch := strings.TrimSpace(r.URL.Query().Get("zq"))
 	allUsers, usersTruncated, _ := h.getAllUsers(r.Context(), userSearch)
-	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	zonesAll, zonesErr := h.PDNS.ListZonesWithInfo(r.Context())
 	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, zoneSearch)
+	if zonesErr != nil {
+		// PowerDNS is unreachable: the dropdown renders empty (previous
+		// behaviour) and the grant reconciliation below is skipped — a failed
+		// zone list must never look like "all zones gone".
+		logger.Error("failed to list zones for group edit", "group_id", groupID, "error", zonesErr)
+	} else {
+		// Opportunistic garbage collection: an admin opening the group page
+		// is the natural moment to drop grants for zones that vanished from
+		// PowerDNS (the hourly background job covers deployments where nobody
+		// visits). Best-effort — a failure here must not block the page.
+		if _, err := h.reconcileGroupZones(r.Context(), zonesAll); err != nil {
+			logger.Error("group zone grant reconciliation failed", "group_id", groupID, "error", err)
+		}
+		// The reconciliation above may have removed rows the zones slice
+		// fetched earlier still holds; re-read so the assigned-zones table
+		// matches the database.
+		zones = h.getGroupZones(r.Context(), groupID)
+	}
 
 	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
 
