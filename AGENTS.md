@@ -111,7 +111,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 ## Key Constraints
 
 - **CGO must be enabled** for SQLite builds (`CGO_ENABLED=1`); MySQL/PostgreSQL builds can run with `CGO_ENABLED=0`
-- SQLite connection uses `SetMaxOpenConns(1)` — concurrent writes are serialized; not required for MySQL/PostgreSQL
+- SQLite connection uses `SetMaxOpenConns(1)` — queries serialize through a single connection (a documented design decision with a MySQL/PostgreSQL escape hatch; see ARCHITECTURE.md "SQLite Single-Connection Pool"). The dialect DSN forces `_journal_mode=WAL`, `_foreign_keys=on` and `_busy_timeout=5000` — correctness settings, not tuning knobs
 - No ORM — raw SQL queries throughout
 - All database methods support `context.Context`; legacy methods without context wrap `context.Background()`
 - **DB-bound timestamps are always UTC** (`time.Now().UTC()`): SQLite serializes `time.Time` with its offset and compares the strings lexicographically, so mixed offsets skew `WHERE expires_at <= ?`-style comparisons. In-memory `Before`/`After`/`Sub` calls are timezone-agnostic and need no annotation.

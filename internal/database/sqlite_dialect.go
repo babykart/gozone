@@ -16,9 +16,26 @@ func (s *sqliteDialect) DriverName() string { return "sqlite3" }
 
 func (s *sqliteDialect) TimestampType() string { return "DATETIME" }
 
+// DSN appends the pragmas the GoZone SQLite deployments rely on:
+//
+//   - `_journal_mode=WAL`: readers never block the writer and vice versa.
+//     Within one GoZone process the pool is a single connection anyway (see
+//     MaxOpenConns), but WAL also makes cross-process access sane — the
+//     recovery CLI (`gozone user unlock`, `reset-password`) opens the same
+//     database file while the server may be running.
+//   - `_foreign_keys=on`: enforce referential integrity the way MySQL and
+//     PostgreSQL do by default (SQLite leaves FK enforcement off unless
+//     asked).
+//   - `_busy_timeout=5000`: SQLite's default on lock contention is to fail
+//     immediately with SQLITE_BUSY. With a short wait, transient
+//     writer/writer contention between the server process and a CLI run (or
+//     any second process) resolves itself instead of surfacing as an error.
+//
+// An existing value for any of these keys in the caller's DSN is overwritten:
+// they are correctness settings, not tuning knobs.
 func (s *sqliteDialect) DSN(dsn string) string {
 	if dsn == ":memory:" {
-		return ":memory:?_journal_mode=WAL&_foreign_keys=on"
+		return ":memory:?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000"
 	}
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -27,10 +44,19 @@ func (s *sqliteDialect) DSN(dsn string) string {
 	q := u.Query()
 	q.Set("_journal_mode", "WAL")
 	q.Set("_foreign_keys", "on")
+	q.Set("_busy_timeout", "5000")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
+// MaxOpenConns pins the pool to a single connection. SQLite allows exactly
+// one writer at a time; funnelling everything through one connection makes
+// the database/sql pool that guarantee instead of relying on lock waits, and
+// sidesteps the SQLITE_BUSY-on-lock-upgrade deadlocks that multi-connection
+// pools can hit. The throughput ceiling this creates is a documented design
+// decision — see the "SQLite Single-Connection Pool" section in
+// docs/ARCHITECTURE.md; deployments that outgrow it move to MySQL or
+// PostgreSQL, which use a normal pool.
 func (s *sqliteDialect) MaxOpenConns() int { return constants.MaxOpenConns }
 
 // MaxIdleConns matches MaxOpenConns (1): keeping the single connection warm in

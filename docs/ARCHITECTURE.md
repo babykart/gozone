@@ -605,6 +605,14 @@ The official rollback path is therefore **restore from a pre-upgrade backup**:
 
 One engine caveat reinforces the backup as the authoritative rollback: SQLite and PostgreSQL roll back a failed multi-statement migration atomically, but MySQL/MariaDB implicitly commit on most DDL, so a migration failing mid-way on MySQL can leave partial schema changes behind that only a restore cleanly undoes.
 
+### SQLite Single-Connection Pool
+
+SQLite deployments pin the connection pool to a single connection (`SetMaxOpenConns(1)`, see `sqliteDialect.MaxOpenConns`). SQLite permits exactly one writer at a time, so funnelling every query through one connection turns that engine constraint into a guarantee made by the pool — instead of relying on lock waits, and sidestepping the `SQLITE_BUSY`-on-lock-upgrade deadlocks a multi-connection pool can hit when a transaction upgrades a read lock to a write. It also keeps the migration story simple: migration locking is a no-op because two connections can never race inside the process.
+
+The cost is a **throughput ceiling**: all queries serialize behind the one connection, so read latency under concurrency and write throughput are bounded by a single conn's round-trip on a local file. For an admin interface's traffic profile this is the right trade (correctness first, no lock-timeout tuning), and the WAL journal mode plus a 5-second busy timeout — both forced into the DSN — already keep cross-process access sane (the recovery CLI `gozone user unlock` / `reset-password` opens the same file a running server may be writing to; readers never block the writer, and transient writer contention waits instead of erroring).
+
+**The escape hatch is a supported one**: deployments that outgrow the ceiling switch `database.driver` to `mysql` or `postgres`, which use a normal connection pool (25 connections) with dialect-appropriate migration locks. No data-model change is needed — the schema and queries are dialect-portable by construction.
+
 ### No ORM
 
 All SQL queries are hand-written and inlined in handler/database methods. This avoids ORM complexity, makes queries auditable, and keeps the dependency tree small. The trade-off is more boilerplate and no compile-time query validation.
@@ -732,7 +740,7 @@ Background purges (revoked JWTs, old activity logs, old login attempts) all shar
 
 When using SQLite:
 
-- **Single writer**: `SetMaxOpenConns(1)` serializes all writes. Under heavy write load (>100 writes/second), latency increases linearly.
+- **Single writer**: `SetMaxOpenConns(1)` serializes all queries through one connection. Under heavy write load (>100 writes/second), latency increases linearly. This is a deliberate trade — see the "SQLite Single-Connection Pool" design decision above; the escape hatch is switching to MySQL or PostgreSQL, which use a normal pool.
 - **No replication**: SQLite does not support master-slave or multi-primary replication.
 - **No clustering**: A single SQLite file cannot be shared across multiple application instances. Horizontal scaling is not supported.
 - **File-based**: The database is a single file on disk. Network file systems (NFS, CIFS) should not be used with SQLite.

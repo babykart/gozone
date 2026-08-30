@@ -14,6 +14,47 @@ func TestSQLiteDialect_DriverName(t *testing.T) {
 	}
 }
 
+// TestSQLiteDialect_DSN_Pragmas verifies the DSN carries the three deployment
+// pragmas: WAL (readers never block the writer, also across processes — the
+// recovery CLI opens the same file as a running server), foreign-key
+// enforcement (parity with MySQL/PostgreSQL defaults) and a busy timeout so
+// transient cross-process writer contention waits instead of failing with an
+// immediate SQLITE_BUSY.
+func TestSQLiteDialect_DSN_Pragmas(t *testing.T) {
+	d := &sqliteDialect{}
+
+	mem := d.DSN(":memory:")
+	for _, want := range []string{"_journal_mode=WAL", "_foreign_keys=on", "_busy_timeout=5000"} {
+		if !strings.Contains(mem, want) {
+			t.Errorf(":memory: DSN missing %s: %s", want, mem)
+		}
+	}
+
+	file := d.DSN("file:/var/lib/gozone/gozone.db")
+	for _, want := range []string{"_journal_mode=WAL", "_foreign_keys=on", "_busy_timeout=5000"} {
+		if !strings.Contains(file, want) {
+			t.Errorf("file DSN missing %s: %s", want, file)
+		}
+	}
+	if !strings.Contains(file, "/var/lib/gozone/gozone.db") {
+		t.Errorf("file DSN must preserve the path: %s", file)
+	}
+}
+
+// TestSQLiteDialect_DSN_OverridesCallerPragmas pins that the correctness
+// pragmas are not tuning knobs: a DSN that arrives with different values gets
+// them overwritten rather than honoured.
+func TestSQLiteDialect_DSN_OverridesCallerPragmas(t *testing.T) {
+	d := &sqliteDialect{}
+	got := d.DSN("file:/tmp/gozone.db?_journal_mode=DELETE&_busy_timeout=0")
+	if !strings.Contains(got, "_journal_mode=WAL") || strings.Contains(got, "DELETE") {
+		t.Errorf("journal_mode must be forced to WAL, got %s", got)
+	}
+	if !strings.Contains(got, "_busy_timeout=5000") || strings.Contains(got, "_busy_timeout=0") {
+		t.Errorf("busy_timeout must be forced to 5000, got %s", got)
+	}
+}
+
 func TestSQLiteDialect_MaxOpenConns(t *testing.T) {
 	d := &sqliteDialect{}
 	if got := d.MaxOpenConns(); got <= 0 {

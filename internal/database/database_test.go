@@ -43,6 +43,16 @@ func TestNewInMemory(t *testing.T) {
 		t.Errorf("expected foreign_keys=1, got %d", enabled)
 	}
 
+	// The DSN must carry a busy timeout so transient cross-process writer
+	// contention (e.g. the recovery CLI against a running server) waits
+	// instead of failing immediately with SQLITE_BUSY.
+	var busyTimeout int
+	if err := db.Conn.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Errorf("failed to query busy_timeout: %v", err)
+	} else if busyTimeout != 5000 {
+		t.Errorf("expected busy_timeout=5000, got %d", busyTimeout)
+	}
+
 	// Verify tables exist
 	tables := []string{"users", "settings", "activity_logs", "api_keys", "schema_migrations"}
 	for _, table := range tables {
