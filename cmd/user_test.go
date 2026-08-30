@@ -248,3 +248,15 @@ func TestResetPassword_TooLongGetsByteLimitMessage(t *testing.T) {
 		t.Errorf("expected the byte-limit message, got: %v", err)
 	}
 }
+
+// TestOperatorIdentity verifies that operatorIdentity returns a non-empty
+// "user@host" string suitable for audit logging (m4).
+func TestOperatorIdentity(t *testing.T) {
+	got := operatorIdentity()
+	if !strings.Contains(got, "@") {
+		t.Errorf("operatorIdentity() = %q, expected to contain '@'", got)
+	}
+	if strings.HasPrefix(got, "@") || strings.HasSuffix(got, "@") {
+		t.Errorf("operatorIdentity() = %q, empty user or host", got)
+	}
+}

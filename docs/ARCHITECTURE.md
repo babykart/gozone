@@ -114,7 +114,7 @@ package. True leaf packages (no internal imports at all): `cache`, `errors`,
 
 `handlers` does **not** import the `web` package: it renders through the
 `*template.Template` injected at construction (`handlers.New`). The template
-`FuncMap` is registered in `cmd/server.go` (`parseTemplates`); the OIDC `state`
+`FuncMap` is registered in `cmd/templates.go` (`parseTemplates`); the OIDC `state`
 parameter is AES-256-GCM encrypted in `internal/oidc` (the handler-side SSO
 service interface is `handlers.SSOService`, the concrete impl `*oidc.Service`).
 The `pdns` package wraps `*Client` in a `cachedClient` (`internal/cache`) — both
@@ -262,7 +262,7 @@ GoZone supports three authentication mechanisms (all populate
 chi.Middleware chain on every request
   │
   ▼
-ClientIPFrom* middleware (cmd/server.go:clientIPMiddleware)
+ClientIPFrom* middleware (cmd/middleware.go:clientIPMiddleware)
   │
   ├── TrustedProxies EMPTY
   │     → ClientIPFromRemoteAddr (TCP source only, fail-closed)
@@ -603,7 +603,7 @@ All HTTP handlers are methods on a single `Handler` struct holding shared depend
 
 ### html/template (Embedded with //go:embed)
 
-Templates are embedded in the binary at compile time via `//go:embed` (in `web/embed.go`) and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required. The template FuncMap (registered in `cmd/server.go`) includes `add`, `sub`, `urlquery`, `relativeName`, and `dict`.
+Templates are embedded in the binary at compile time via `//go:embed` (in `web/embed.go`) and loaded via `template.ParseFS`. This simplifies deployment to a single binary with no external template files required. The template FuncMap (registered in `cmd/templates.go`) includes `add`, `sub`, `urlquery`, `relativeName`, and `dict`.
 
 ### JWT for Web Sessions
 
@@ -712,7 +712,7 @@ DNS record names, record content, SOA numeric fields, and zone kinds are validat
 
 ### Periodic Job Orchestration
 
-Background purges (revoked JWTs, old activity logs, old login attempts) all share the `startPeriodicJob(ctx, name, interval, timeout, job)` helper in `cmd/server.go`. Each job runs once at startup, then on the configured interval, with a per-invocation timeout context. The returned `stop` function cancels the goroutine and is called via `defer` on shutdown so jobs do not outlive the process.
+Background purges (revoked JWTs, old activity logs, old login attempts) all share the `startPeriodicJob(ctx, name, interval, timeout, job)` helper in `cmd/server.go`. Each job runs once at startup, then on the configured interval, with a per-invocation timeout context. The returned `stop` function cancels the goroutine and is called via `defer` on shutdown so jobs do not outlive the process. (The rate-limit counter purge and the group-zone reconciliation job use the same helper.)
 
 ## Known Limitations
 
