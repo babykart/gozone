@@ -46,10 +46,10 @@ fmt:
 vet:
 	go vet ./...
 
-# run gosec security analysis (optional tool)
+# run gosec security analysis (optional tool, fails on findings like CI)
 gosec:
 	@if command -v gosec > /dev/null 2>&1; then \
-		gosec -exclude-dir='.cache|vendor|bin' -no-fail ./...; \
+		gosec -exclude-dir='.cache|vendor|bin' ./...; \
 	else \
 		echo "gosec not installed. Run: go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
 	fi

@@ -34,7 +34,7 @@ Releases are git-cliff driven (`cliff.toml`): `just auto-gen-rel` (or `just gen-
 
 ## Security Analysis
 
-gosec runs with `-no-fail` (non-blocking exit code), in CI and locally: read the output and fix all reported issues regardless of the exit code. Use `// #nosec Gxxx` annotations only for intentional suppressions
+gosec fails the build on findings, in CI and locally (no `-no-fail`): fix every reported issue before considering a task complete. Use `// #nosec Gxxx` annotations only for intentional suppressions
 (e.g. HTTP response writes, timing side-channel mitigation) and document the reason inline.
 
 ## Architecture

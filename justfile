@@ -49,9 +49,9 @@ fmt:
 vet:
     go vet ./...
 
-# run gosec security analysis
+# run gosec security analysis (fails on findings, mirroring CI)
 gosec:
-    gosec -exclude-dir='\.cache|vendor|bin' -no-fail ./...
+    gosec -exclude-dir='\.cache|vendor|bin' ./...
 
 # run update
 update:
