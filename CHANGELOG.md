@@ -1,44 +1,16 @@
 
-## [v0.18.0] - 2026-08-30
+## [v0.18.1] - 2026-09-26
 
-### 🚀 Features
+### ⚙️  Build Tasks
 
-- **(groups)** ([2437afa](https://github.com/babykart/gozone/commit/2437afa9e9c45bfa135082c3bf7374ab4eaac9ee)) - [gozone] garbage-collect zone grants orphaned in PowerDNS - ([babykart](https://github.com/babykart))
-- **(security)** ([418ed2f](https://github.com/babykart/gozone/commit/418ed2fe4cc128ea6bce2418403f2153ffaf1427)) - [gozone] make login rate limiting cluster-wide via the DB - ([babykart](https://github.com/babykart))
-
-### 🐛 Bug Fixes
-
-- **(ci)** ([5170b44](https://github.com/babykart/gozone/commit/5170b44a2b397ef27b4f10e7a9c2321c0855669b)) - [gozone] make gosec findings fail the build - ([babykart](https://github.com/babykart))
-- **(frontend)** ([07dd0c9](https://github.com/babykart/gozone/commit/07dd0c97c27d874b006432357236b4bec33d18ed)) - [gozone] guard Enter in group select filters - ([babykart](https://github.com/babykart))
-- **(frontend)** ([b9c12eb](https://github.com/babykart/gozone/commit/b9c12eb05f74dc87c758fbec3d180e0ea841304b)) - [gozone] keep single-select selection visible while filtering - ([babykart](https://github.com/babykart))
-- **(frontend)** ([9f971bb](https://github.com/babykart/gozone/commit/9f971bb622865f5e65b482526ed87178f008b52a)) - [gozone] keep chosen multi-select options visible while filtering - ([babykart](https://github.com/babykart))
-- **(frontend)** ([1ed562b](https://github.com/babykart/gozone/commit/1ed562b1c2bbe3bd77129775850c03baf78d63c7)) - [gozone] collapse .select-filter duplication into form-control rule - ([babykart](https://github.com/babykart))
-- **(frontend)** ([4434c24](https://github.com/babykart/gozone/commit/4434c24edcb124212f6a84f8484de37707965995)) - [gozone] announce JS-only features to no-JavaScript users - ([babykart](https://github.com/babykart))
-- **(server)** ([3b0e598](https://github.com/babykart/gozone/commit/3b0e5984a1875f84f5996bf37381c7305a5d087b)) - [gozone] fail cleanly on malformed trusted_proxies entries - ([babykart](https://github.com/babykart))
-
-### 🚜 Refactor
-
-- **(cmd)** ([e9699eb](https://github.com/babykart/gozone/commit/e9699ebb1430bb52edf1579246091d7cde7c9b69)) - [gozone] split the server god-file by concern - ([babykart](https://github.com/babykart))
-- **(groups)** ([9155295](https://github.com/babykart/gozone/commit/9155295eac11b0210188c6572161295a958b64c0)) - [gozone] bind the getAllUsers LIMIT via a placeholder - ([babykart](https://github.com/babykart))
-- **(handlers)** ([27e015c](https://github.com/babykart/gozone/commit/27e015c9e071af7034fb390955b01d414c18c235)) - [gozone] propagate request context into all DB calls - ([babykart](https://github.com/babykart))
+- **(toolchain)** ([549d3c3](https://github.com/babykart/gozone/commit/549d3c3292c0e4de01c6a2557a3ee1a68a080f72)) - [gozone] bump Go to 1.27 - ([babykart](https://github.com/babykart))
 
 ### 📚 Documentation
 
-- **(architecture)** ([0dae285](https://github.com/babykart/gozone/commit/0dae2855e16ea727c8e0f4e299498a8c39c8b46d)) - [gozone] document the migration rollback policy - ([babykart](https://github.com/babykart))
-- **(contributing)** ([b6a5897](https://github.com/babykart/gozone/commit/b6a5897dc25b50df30663ef9efca7b3c4328ba1e)) - [gozone] sync stale sections with the current code - ([babykart](https://github.com/babykart))
-- **(db)** ([110f624](https://github.com/babykart/gozone/commit/110f624b68386a10425852c1fd7b90735e43cafa)) - [gozone] document the SQLite single-connection design decision - ([babykart](https://github.com/babykart))
-- **(ops)** ([ba889e7](https://github.com/babykart/gozone/commit/ba889e7bab5162e0c181210dae42d5eeceff8d67)) - [gozone] document log volume control and rotation story - ([babykart](https://github.com/babykart))
-
-### 🧪 Testing
-
-- **(cmd)** ([3d6dc58](https://github.com/babykart/gozone/commit/3d6dc58acae9c2dcce4814120756133a2dc6a93b)) - [gozone] cover the server wiring with a boot E2E test - ([babykart](https://github.com/babykart))
-- **(db)** ([53bc55f](https://github.com/babykart/gozone/commit/53bc55f4f6934891d580535a45051fd3f9156607)) - [gozone] run the full suite against live MySQL and PostgreSQL - ([babykart](https://github.com/babykart))
-- **(frontend)** ([bdfb090](https://github.com/babykart/gozone/commit/bdfb090da06efd922581f61ef5974132af3655f4)) - [gozone] add node --test unit layer for app.js logic - ([babykart](https://github.com/babykart))
+- **(ai)** ([ac721b0](https://github.com/babykart/gozone/commit/ac721b0498bf4e25416673febb62bfabb257471e)) - [gozone] update AGENTS.md - ([babykart](https://github.com/babykart))
 
 ### 🌀 Miscellaneous Tasks
 
-- **(docker)** ([e75bb02](https://github.com/babykart/gozone/commit/e75bb023f9980a26513a3896585082f015305a8d)) - [gozone] exclude web/jstest/ from the build context - ([babykart](https://github.com/babykart))
-- **(lint)** ([00cbf21](https://github.com/babykart/gozone/commit/00cbf218ccf5fd2e778cfbfc5809249a4f96a53f)) - [gozone] add staticcheck, gofmt -s and JS syntax gates - ([babykart](https://github.com/babykart))
-- **(test)** ([3f5b4b1](https://github.com/babykart/gozone/commit/3f5b4b156593a1116e01f16dbeb589c8e7305338)) - [gozone] enforce a coverage floor of 80 percent - ([babykart](https://github.com/babykart))
+- **(vendor)** ([c95a961](https://github.com/babykart/gozone/commit/c95a961b641b72eacbdf1db7c75378e49c6b0c08)) - [gozone] update dependencies and re-vendor - ([babykart](https://github.com/babykart))
 
 <!-- generated by git-cliff -->
