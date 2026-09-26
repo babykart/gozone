@@ -2,7 +2,7 @@
 
 ## Language & Framework
 
-- Go 1.26, chi v5 router, `html/template` server-side rendering
+- Go 1.27, chi v5 router, `html/template` server-side rendering
 - Multi-dialect SQL layer: SQLite (mattn/go-sqlite3), MySQL (go-sql-driver/mysql), PostgreSQL (lib/pq)
 - JWT (golang-jwt/jwt v5) + bcrypt for auth
 - **Vendor mode**: dependencies are vendored (`vendor/`); `just update` runs `go mod vendor`. Never `go get` without re-vendoring.

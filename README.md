@@ -467,7 +467,7 @@ GoZone exposes a REST API under `/api/v1` for automation (zone and record CRUD, 
 
 ## Building from Source
 
-Requirements: Go 1.26+. A C compiler (gcc/clang) is required only when building with the SQLite CGO driver; MySQL and PostgreSQL builds can use `CGO_ENABLED=0`.
+Requirements: Go 1.27+. A C compiler (gcc/clang) is required only when building with the SQLite CGO driver; MySQL and PostgreSQL builds can use `CGO_ENABLED=0`.
 
 ```bash
 make build   # or: just build

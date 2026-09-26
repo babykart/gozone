@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Check formatting
         # Exclude vendored third-party code, which we don't reformat (the gosec
@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
@@ -118,7 +118,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Test (full suite on MySQL)
         run: go test -race -count=1 -tags dbmatrix ./...
@@ -147,7 +147,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Test (full suite on PostgreSQL)
         run: go test -race -count=1 -tags dbmatrix ./...
@@ -160,7 +160,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest

@@ -1,6 +1,6 @@
 module github.com/babykart/gozone
 
-go 1.26
+go 1.27
 
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0

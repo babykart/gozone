@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # Version metadata injected via ldflags. .dockerignore excludes .git, so these
 # default to "dev"/"none"/"unknown"; pass --build-arg VERSION=... (e.g. from

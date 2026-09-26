@@ -54,7 +54,7 @@ For security vulnerabilities, **do not open a public issue**. Contact the mainta
 
 **Requirements**:
 
-- Go 1.26+
+- Go 1.27+
 - C compiler (gcc/clang) — required for the SQLite CGO driver (MySQL/PostgreSQL-only builds can set `CGO_ENABLED=0`)
 - Node.js — optional, for the frontend unit tests (`make test-js`)
 - PowerDNS Authoritative Server (optional, for integration testing)
