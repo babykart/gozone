@@ -785,6 +785,45 @@ func TestValidatePassword_MaxLengthBytes(t *testing.T) {
 	}
 }
 
+// TestValidateRecordContent_TXT validates the TXT/SPF content gate: control
+// characters, unbalanced quotes, text outside quoted strings and oversized
+// character-strings must be refused with an actionable message instead of
+// being sent to PowerDNS as a corrupt quoted string.
+func TestValidateRecordContent_TXT(t *testing.T) {
+	long := strings.Repeat("a", 256)
+	cases := []struct {
+		name, rtype, content string
+		wantErr              bool
+	}{
+		{"plain TXT", "TXT", "hello world", false},
+		{"DKIM with semicolons", "TXT", "v=DKIM1; k=rsa; p=MIIBIjANBgkq", false},
+		{"quoted single string", "TXT", `"already quoted"`, false},
+		{"quoted multi-string", "TXT", `"part one" "part two"`, false},
+		{"escaped quote inside string", "TXT", `"say \"hi\""`, false},
+		{"escaped backslash", "TXT", `"path\\to"`, false},
+		{"empty quoted string", "TXT", `""`, false},
+		{"SPF", "SPF", "v=spf1 -all", false},
+		{"newline", "TXT", "line one\nline two", true},
+		{"carriage return", "TXT", "line one\rline two", true},
+		{"tab", "TXT", "a\tb", true},
+		{"other control byte", "TXT", "a\x00b", true},
+		{"unclosed quote", "TXT", `"unclosed`, true},
+		{"unbalanced multi-string", "TXT", `"one" "two`, true},
+		{"text outside quotes", "TXT", `"quoted" bare`, true},
+		{"raw over 255 bytes", "TXT", long, true},
+		{"raw at 255 bytes", "TXT", strings.Repeat("a", 255), false},
+		{"quoted segment over 255", "TXT", `"` + long + `"`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRecordContent(tc.rtype, tc.content)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ValidateRecordContent(%s, %q) error = %v, wantErr %v", tc.rtype, tc.content, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestValidateRecordContent_RootDotTargets pins the "root label as target"
 // contract: the bare "." is a legal MX target (RFC 7505 null MX — "this
 // domain accepts no mail"), SRV target (RFC 2782 — "service decidedly not

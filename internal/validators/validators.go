@@ -117,6 +117,64 @@ func rejectBareTargetLabel(name string) error {
 	return nil
 }
 
+// validateTXTContent checks a TXT/SPF record's content before it reaches the
+// wire codec. Control characters (newlines, tabs, ...) must not be sent:
+// they corrupt the quoted character-string PowerDNS stores — use separate
+// records for multi-line values. A pre-quoted value (leading double quote) is
+// validated as the multi-string wire form; a raw value will be wrapped into
+// ONE character-string by the codec, so its escaped length must fit the
+// 255-octet per-string limit.
+func validateTXTContent(content string) error {
+	for _, r := range content {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("TXT content must not contain control characters (found %q): use separate records for multi-line values", r)
+		}
+	}
+	if strings.HasPrefix(content, `"`) {
+		return validateQuotedTXTStrings(content)
+	}
+	escaped := strings.ReplaceAll(content, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	if len(escaped) > 255 {
+		return fmt.Errorf("TXT content is %d bytes but a character-string holds at most 255: split it into a quoted multi-string value such as \"part one\" \"part two\"", len(escaped))
+	}
+	return nil
+}
+
+// validateQuotedTXTStrings validates the pre-quoted wire form: quotes must be
+// balanced (escape-aware), strings separated by whitespace only, and each
+// string within the 255-octet character-string limit.
+func validateQuotedTXTStrings(content string) error {
+	inQuote := false
+	segStart := -1
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		switch {
+		case c == '\\' && inQuote && i+1 < len(content):
+			i++ // the next byte is escaped, never a delimiter
+		case c == '"':
+			if inQuote {
+				if n := i - segStart - 1; n > 255 {
+					return fmt.Errorf("quoted TXT string exceeds the 255-octet character-string limit (%d bytes)", n)
+				}
+			} else {
+				segStart = i
+			}
+			inQuote = !inQuote
+		case (c == ' ' || c == '\t') && !inQuote:
+			// whitespace separator between strings
+		default:
+			if !inQuote {
+				return fmt.Errorf("text outside quoted strings is not valid TXT content: wrap every part in double quotes, e.g. \"part one\" \"part two\"")
+			}
+		}
+	}
+	if inQuote {
+		return fmt.Errorf("TXT content has an unclosed double quote")
+	}
+	return nil
+}
+
 func ValidateDNSName(name string) error {
 	name = strings.TrimSuffix(name, ".")
 
@@ -612,7 +670,7 @@ func ValidateRecordContent(recordType, content string) error {
 		}
 		return nil
 	case "TXT", "SPF":
-		return nil
+		return validateTXTContent(content)
 	case "RP":
 		// RFC 1183: <rmailbx> <emailbx> — two DNS names.
 		parts := strings.Fields(content)

@@ -452,14 +452,15 @@ func TestParseCSVZone_TXT_Quoting(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled
 txt.example.com.,TXT,v=DMARC1; p=quarantine,3600,0,false
 spf.example.com.,SPF,v=spf1 -all,3600,0,false
-preq.example.com.,TXT,"""already"" quoted",3600,0,false`
+preq.example.com.,TXT,"""already quoted""",3600,0,false
+multi.example.com.,TXT,"""part one"" ""part two""",3600,0,false`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(rrsets) != 3 {
-		t.Fatalf("expected 3 rrsets, got %d", len(rrsets))
+	if len(rrsets) != 4 {
+		t.Fatalf("expected 4 rrsets, got %d (skipped: %+v)", len(rrsets), skipped)
 	}
 
 	// Unquoted TXT content should be wrapped in quotes for PDNS
@@ -471,8 +472,12 @@ preq.example.com.,TXT,"""already"" quoted",3600,0,false`
 		t.Errorf("SPF content = %q, want %q", rrsets[1].Records[0].Content, `"v=spf1 -all"`)
 	}
 	// Already-quoted TXT should pass through without double-quoting
-	if rrsets[2].Records[0].Content != `"already" quoted` {
-		t.Errorf("TXT pre-quoted content = %q, want %q", rrsets[2].Records[0].Content, `"already" quoted`)
+	if rrsets[2].Records[0].Content != `"already quoted"` {
+		t.Errorf("TXT pre-quoted content = %q, want %q", rrsets[2].Records[0].Content, `"already quoted"`)
+	}
+	// A balanced multi-string value passes through verbatim.
+	if rrsets[3].Records[0].Content != `"part one" "part two"` {
+		t.Errorf("TXT multi-string content = %q, want %q", rrsets[3].Records[0].Content, `"part one" "part two"`)
 	}
 }
 
