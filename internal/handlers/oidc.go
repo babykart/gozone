@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -56,9 +57,72 @@ func (h *Handler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
 		return
 	}
+	// Bind the state to this browser (login-CSRF defence, see
+	// setStateBindCookie): the callback refuses any state whose binding
+	// cookie does not match, so an attacker cannot log a victim into the
+	// attacker's account by injecting the attacker's own callback URL.
+	if state := authURLState(authURL); state != "" {
+		setStateBindCookie(w, r, state)
+	}
 	// #nosec G710 -- authURL is built from server-side discovered IdP config
 	// and validated as an absolute http(s) URL immediately above.
 	http.Redirect(w, r, authURL, http.StatusSeeOther)
+}
+
+// oidcStateCookieMaxAge matches the service-side state TTL (10 minutes): the
+// browser binding must live exactly as long as the state it guards.
+const oidcStateCookieMaxAge = 10 * time.Minute
+
+// stateBindValue is the cookie form of a state token: SHA-256 hex. The hash
+// (instead of the state itself) keeps the cookie value useless to anyone who
+// observes it, and the comparison stays constant-time.
+func stateBindValue(state string) string {
+	sum := sha256.Sum256([]byte(state))
+	return hex.EncodeToString(sum[:])
+}
+
+// authURLState extracts the state parameter from an authorization URL. The
+// oauth2 library always places it in the query string; an empty result means
+// the URL carries no state, and the caller skips the binding (the callback
+// then fails its cookie check and the flow aborts).
+func authURLState(authURL string) string {
+	u, err := neturl.Parse(authURL)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("state")
+}
+
+// setStateBindCookie writes the browser-binding cookie for an OIDC state
+// token. HttpOnly + SameSite=Lax (the IdP redirect back is a cross-site
+// top-level GET, which Strict would block), short MaxAge, and a Path scoped
+// to the SSO routes so the cookie travels nowhere else.
+func setStateBindCookie(w http.ResponseWriter, r *http.Request, state string) {
+	// #nosec G124 -- Secure flag set dynamically via isSecure(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.OIDCStateCookieName,
+		Value:    stateBindValue(state),
+		Path:     "/auth/oidc",
+		MaxAge:   int(oidcStateCookieMaxAge.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
+	})
+}
+
+// clearStateBindCookie expires the browser-binding cookie (single-use state:
+// once the callback consumed it, the binding must not linger).
+func clearStateBindCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- clearing cookie, Secure set via isSecure(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     constants.OIDCStateCookieName,
+		Value:    "",
+		Path:     "/auth/oidc",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
+	})
 }
 
 // OIDCCallback completes the authorization-code flow: it verifies the state
@@ -79,6 +143,28 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
 		return
 	}
+
+	// Login-CSRF check: the state must match the browser-binding cookie set
+	// at flow start. The encrypted state on its own only proves that some
+	// flow started — the server can decrypt and verify an attacker-minted
+	// state perfectly well, since the attacker obtained it from a flow they
+	// started themselves. Binding the hash of the state to an HttpOnly
+	// cookie ensures only the browser that began the flow can complete it,
+	// blocking the "log the victim into the attacker's account" attack.
+	// PKCE and the nonce do not help here: the server holds both secrets.
+	// Fail closed on a missing cookie or any mismatch.
+	bind, bindErr := r.Cookie(constants.OIDCStateCookieName)
+	if bindErr != nil || subtle.ConstantTimeCompare([]byte(stateBindValue(state)), []byte(bind.Value)) != 1 {
+		logger.Warn("oidc callback: state/cookie mismatch; possible login CSRF",
+			"provider", provider)
+		clearStateBindCookie(w, r)
+		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
+		return
+	}
+	// The state is single-use (server-side consumed below); drop the binding
+	// so a replayed callback cannot even reach the state verification.
+	clearStateBindCookie(w, r)
+
 	ctx := r.Context()
 	callbackURL := oidcCallbackURL(h.Cfg.Server.ExternalURL, r, provider)
 

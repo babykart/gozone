@@ -6,6 +6,10 @@ const (
 	SessionCookieName    = "gozone_session"
 	NewAPIKeyCookieName  = "gozone_new_api_key"  // #nosec G101 -- cookie name, not a secret
 	NewTSIGKeyCookieName = "gozone_new_tsig_key" // #nosec G101 -- cookie name, not a secret
+	// OIDCStateCookieName carries the SHA-256 of the OIDC state parameter,
+	// binding the authorization flow to the browser that started it (login
+	// CSRF defence). Short-lived, scoped to the SSO routes.
+	OIDCStateCookieName = "gozone_oidc_state" // #nosec G101 -- cookie name, not a secret
 )
 
 const (

@@ -423,6 +423,7 @@ func TestOIDCCallback_FullFlowProvisionsAndRedirects(t *testing.T) {
 		"/auth/oidc/gitea/callback?code=abc&state=xyz", nil)
 	r.SetPathValue("provider", "gitea")
 	r.Host = "gozone.test"
+	r.AddCookie(&http.Cookie{Name: constants.OIDCStateCookieName, Value: stateBindValue("xyz")})
 	h.OIDCCallback(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -482,6 +483,7 @@ func TestOIDCCallback_ManuallyLockedAccountDenied(t *testing.T) {
 		"/auth/oidc/gitea/callback?code=abc&state=xyz", nil)
 	r.SetPathValue("provider", "gitea")
 	r.Host = "gozone.test"
+	r.AddCookie(&http.Cookie{Name: constants.OIDCStateCookieName, Value: stateBindValue("xyz")})
 	h.OIDCCallback(w, r)
 
 	if w.Code != http.StatusSeeOther {
@@ -503,9 +505,103 @@ func TestOIDCCallback_ManuallyLockedAccountDenied(t *testing.T) {
 		"/auth/oidc/gitea/callback?code=abc&state=xyz", nil)
 	r2.SetPathValue("provider", "gitea")
 	r2.Host = "gozone.test"
+	r2.AddCookie(&http.Cookie{Name: constants.OIDCStateCookieName, Value: stateBindValue("xyz")})
 	h.OIDCCallback(w2, r2)
 	if loc := w2.Header().Get("Location"); loc != "/dashboard" {
 		t.Errorf("expected redirect to /dashboard once the lock expired, got %q", loc)
+	}
+}
+
+// TestOIDCLogin_SetsStateBindCookie verifies the browser-binding cookie of
+// the login-CSRF defence: starting the flow must set a short-lived HttpOnly
+// cookie holding SHA-256(state), scoped to the SSO routes.
+func TestOIDCLogin_SetsStateBindCookie(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &fakeSSOService{
+		providers: []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/login", nil)
+	r.SetPathValue("provider", "gitea")
+	r.Host = "gozone.test"
+	h.OIDCLogin(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	var bind *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.OIDCStateCookieName {
+			bind = c
+		}
+	}
+	if bind == nil {
+		t.Fatal("expected the state-binding cookie to be set at flow start")
+	}
+	if bind.Value != stateBindValue("fixed-state") {
+		t.Errorf("cookie value = %q, want SHA-256(state) = %q", bind.Value, stateBindValue("fixed-state"))
+	}
+	if !bind.HttpOnly {
+		t.Error("state-binding cookie must be HttpOnly")
+	}
+	if bind.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax (the IdP redirect back is a cross-site top-level GET)", bind.SameSite)
+	}
+	if bind.Path != "/auth/oidc" {
+		t.Errorf("Path = %q, want it scoped to the SSO routes", bind.Path)
+	}
+	if bind.MaxAge <= 0 || bind.MaxAge > 600 {
+		t.Errorf("MaxAge = %d, want a short-lived value (≤ the 10-minute state TTL)", bind.MaxAge)
+	}
+}
+
+// TestOIDCCallback_StateCookieMismatchDenied is the login-CSRF regression:
+// the encrypted state proves only that SOME flow started — an attacker can
+// mint a perfectly valid state and code themselves and hand the victim their
+// own callback URL, logging the victim into the attacker's account. The
+// browser-binding cookie must fail the injected callback (missing cookie,
+// and mismatched state alike).
+func TestOIDCCallback_StateCookieMismatchDenied(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-flow!")
+	h.Cfg.OIDC.AutoProvision = true
+	h.OIDC = &fakeSSOService{
+		providers: []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+		claims: &oidc.Claims{
+			Issuer: "https://gitea.example.com", Subject: "attacker-sub",
+			Email: "attacker@example.com", EmailVerified: true,
+			PreferredUsername: "attacker",
+		},
+	}
+
+	do := func(cookie *http.Cookie) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet,
+			"/auth/oidc/gitea/callback?code=attacker-code&state=attacker-state", nil)
+		r.SetPathValue("provider", "gitea")
+		r.Host = "gozone.test"
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		h.OIDCCallback(w, r)
+		return w
+	}
+
+	// No binding cookie at all (victim never started a flow).
+	if w := do(nil); w.Header().Get("Location") == "/dashboard" {
+		t.Error("callback without the state-binding cookie must be denied")
+	}
+	// A binding cookie for a DIFFERENT state (victim started their own flow;
+	// the attacker injects theirs).
+	victimCookie := &http.Cookie{Name: constants.OIDCStateCookieName, Value: stateBindValue("victim-state")}
+	if w := do(victimCookie); w.Header().Get("Location") == "/dashboard" {
+		t.Error("callback whose state does not match the binding cookie must be denied")
+	}
+	// Control: matching cookie completes the flow.
+	matchCookie := &http.Cookie{Name: constants.OIDCStateCookieName, Value: stateBindValue("attacker-state")}
+	if w := do(matchCookie); w.Header().Get("Location") != "/dashboard" {
+		t.Errorf("matching state/binding must complete the flow, got %q", w.Header().Get("Location"))
 	}
 }
 
@@ -824,7 +920,9 @@ type fakeSSOService struct {
 func (f *fakeSSOService) Enabled() bool                       { return len(f.providers) > 0 }
 func (f *fakeSSOService) Providers() []*oidc.ProviderInstance { return f.providers }
 func (f *fakeSSOService) AuthCodeURL(provider, _ string) (string, error) {
-	return "https://idp.example.com/auth?provider=" + provider, nil
+	// Carries a state parameter so the handler's browser-binding cookie is
+	// set, mirroring a real authorization URL.
+	return "https://idp.example.com/auth?provider=" + provider + "&state=fixed-state", nil
 }
 func (f *fakeSSOService) HandleCallback(_ context.Context, _, _, _, _ string) (*oidc.Claims, error) {
 	return f.claims, f.err

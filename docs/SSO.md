@@ -47,7 +47,16 @@ prevent brute-forcing of the `state` parameter.
   subsequent redirect to `/dashboard` would not carry a `Strict` cookie, leaving
   the user unauthenticated. `Lax` still blocks cross-site POST, so mutations stay
   protected by CSRF. This is intentional and documented at the cookie-set site
-  (`internal/handlers/oidc.go`, REVIEW.md B-1).
+  (`internal/handlers/oidc.go`).
+- **Browser cookies are required for SSO.** Starting a login sets a
+  short-lived `gozone_oidc_state` cookie (`HttpOnly`, `SameSite=Lax`,
+  10 minutes, scoped to `/auth/oidc`) holding the SHA-256 of the `state`
+  parameter. The callback refuses any state that does not match this cookie —
+  this binds the flow to the browser that started it and blocks login CSRF
+  (an attacker handing a victim their own callback URL to log them into the
+  attacker's account). Browsers that block first-party cookies therefore
+  cannot complete SSO, and starting a second login in another tab invalidates
+  the first in-flight one.
 - **A stable `server.secret_key`.** The OIDC `state` parameter is encrypted
   (AES-256-GCM) with a key derived from the master secret; an auto-generated
   ephemeral key invalidates in-flight SSO attempts on every restart.
