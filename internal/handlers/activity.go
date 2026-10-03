@@ -117,11 +117,23 @@ func activityLogVisibilityClause(user *models.User) (string, []interface{}) {
 	return "((al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?))", []interface{}{user.ID, user.ID}
 }
 
+// activityLogAllCap bounds the "All" (perPage = 0) view of the activity
+// log. Without it any authenticated user could load the entire table —
+// including the old/new JSON snapshots — in one request; a large deployment
+// turns that into a memory DoS. The cap applies to both the global activity
+// view and the per-zone tab; "All" now means "at most 1000 most recent".
+const activityLogAllCap = 1000
+
 // getActivityLogs returns activity logs visible to the given user, after
 // applying text search, action filter, date range, and pagination. Admin users
 // see all logs; non-admin users see zone-scoped logs for zones assigned to
 // their groups together with non-zone logs created by themselves. ctx
 // propagates request cancellation into both queries.
+//
+// perPage = 0 ("All") is capped at activityLogAllCap rows: the snapshots make
+// each row expensive, and an unbounded fetch of the whole table is a memory
+// DoS vector. The total count still reflects the real row count, so the UI
+// keeps showing the true size of the log.
 func (h *Handler) getActivityLogs(ctx context.Context, user *models.User, search, action, fromDate, toDate string, page, perPage int) ([]models.ActivityLog, int) {
 	var total int
 	countQuery, countArgs := h.buildActivityLogQuery(user, search, action, fromDate, toDate)
@@ -146,6 +158,10 @@ func (h *Handler) getActivityLogs(ctx context.Context, user *models.User, search
 	if perPage > 0 {
 		query += " LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
+	} else {
+		// "All" is capped: see activityLogAllCap.
+		query += " LIMIT ?"
+		args = append(args, activityLogAllCap)
 	}
 
 	rows, err := h.DB.QueryContext(ctx, query, args...)
