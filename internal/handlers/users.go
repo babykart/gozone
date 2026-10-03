@@ -139,7 +139,10 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// with a confusing raw-unique error).
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
-	password := strings.TrimSpace(r.FormValue("password"))
+	// Password verbatim: leading/trailing spaces can be intentional, and
+	// Login compares what was typed. Trimming here would silently store a
+	// different password than the one submitted.
+	password := r.FormValue("password")
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
 	lastName := strings.TrimSpace(r.FormValue("last_name"))
 	role := strings.TrimSpace(r.FormValue("role"))
@@ -284,7 +287,11 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	role := strings.TrimSpace(r.FormValue("role"))
 	enabledStr := strings.TrimSpace(r.FormValue("enabled"))
 	enabled := enabledStr == "1" || enabledStr == "on" || enabledStr == "true"
-	newPassword := strings.TrimSpace(r.FormValue("password"))
+	// Password verbatim (no TrimSpace): leading/trailing spaces can be
+	// intentional and Login compares the raw input — trimming here would
+	// silently store a different password than the one submitted. Only the
+	// exact empty string means "no password change".
+	newPassword := r.FormValue("password")
 
 	if err := validators.ValidateRole(role); err != nil {
 		h.renderError(w, r, "Invalid role: "+err.Error())
@@ -339,7 +346,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	// Last enabled admin guard: refuse to demote or disable the only enabled
-	// admin. Checked INSIDE the transaction to prevent TOCTOU (M-BIZ2): two
+	// admin. Checked INSIDE the transaction to prevent TOCTOU: two
 	// concurrent UpdateUser calls demoting the last two admins must not both
 	// observe adminCount==2 and proceed, leaving zero admins.
 	if target.Role == "admin" && target.Enabled && (requestedRole != "admin" || !requestedEnabled) {

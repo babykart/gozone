@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -48,8 +47,12 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentPassword := r.FormValue("current_password")
-	newPassword := strings.TrimSpace(r.FormValue("new_password"))
-	confirm := strings.TrimSpace(r.FormValue("confirm_password"))
+	// Both fields verbatim (no TrimSpace): leading/trailing spaces can be
+	// intentional, and the comparison at login uses the raw input. Trimming
+	// would let "  x" and "x  " confirm-match while storing a password
+	// different from the one typed.
+	newPassword := r.FormValue("new_password")
+	confirm := r.FormValue("confirm_password")
 
 	// Validate the form first (cheap, no DB) so an invalid submission does
 	// not needlessly open a transaction or run bcrypt.

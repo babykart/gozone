@@ -144,7 +144,7 @@ func TestCreateUser_Success(t *testing.T) {
 	}
 }
 
-// TestCreateUser_RejectsInvalidRole is the I-3 regression test: an unsupported
+// TestCreateUser_RejectsInvalidRole is a regression test: an unsupported
 // role must be rejected with 400 instead of being silently downgraded to "user".
 func TestCreateUser_RejectsInvalidRole(t *testing.T) {
 	h := newTestHandler(t)
@@ -180,7 +180,7 @@ func TestCreateUser_RejectsInvalidRole(t *testing.T) {
 	}
 }
 
-// TestCreateUser_DuplicateRejected is the L-7 regression test: creating a user
+// TestCreateUser_DuplicateRejected is a regression test: creating a user
 // with a username or email that already exists must return a friendly 400
 // message instead of a generic 500. Before the fix, the UNIQUE constraint
 // violation surfaced as an undifferentiated internal error.
@@ -199,7 +199,7 @@ func TestCreateUser_DuplicateRejected(t *testing.T) {
 	r = r.WithContext(ctx)
 	h.CreateUser(w, r)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("duplicate username: expected 400, got %d (REVIEW.md L-7)", w.Code)
+		t.Fatalf("duplicate username: expected 400, got %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "already exists") {
 		t.Errorf("expected 'already exists' in error page, got: %s", w.Body.String())
@@ -213,7 +213,7 @@ func TestCreateUser_DuplicateRejected(t *testing.T) {
 	r2 = r2.WithContext(ctx)
 	h.CreateUser(w2, r2)
 	if w2.Code != http.StatusBadRequest {
-		t.Fatalf("duplicate email: expected 400, got %d (REVIEW.md L-7)", w2.Code)
+		t.Fatalf("duplicate email: expected 400, got %d", w2.Code)
 	}
 	if !strings.Contains(w2.Body.String(), "already exists") {
 		t.Errorf("expected 'already exists' in error page, got: %s", w2.Body.String())
@@ -320,7 +320,7 @@ func TestUpdateUser_Success(t *testing.T) {
 	}
 }
 
-// TestUpdateUser_RejectsInvalidRole is the I-3 regression test: an unsupported
+// TestUpdateUser_RejectsInvalidRole is a regression test: an unsupported
 // role must be rejected with 400 instead of being silently downgraded to "user".
 // The existing role must be left untouched.
 func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
@@ -358,7 +358,7 @@ func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
 	}
 }
 
-// TestUpdateUser_RejectsEmptyEmail is the L-6 regression test: UpdateUser must
+// TestUpdateUser_RejectsEmptyEmail is a regression test: UpdateUser must
 // require a non-empty email, consistent with CreateUser. Before the fix, an
 // empty email bypassed ValidateEmail entirely and could overwrite a valid
 // address with "".
@@ -381,7 +381,7 @@ func TestUpdateUser_RejectsEmptyEmail(t *testing.T) {
 	h.UpdateUser(w, r)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for empty email, got %d (REVIEW.md L-6)", w.Code)
+		t.Fatalf("expected 400 for empty email, got %d", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "Invalid email") {
 		t.Errorf("expected 'Invalid email' in error page, got: %s", w.Body.String())
@@ -704,7 +704,8 @@ func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
 	}
 }
 
-// TestDeleteUser_AuditFailureRollsBack guards REVIEW.md B-8 (suppression case):
+// TestDeleteUser_AuditFailureRollsBack guards the audit-rollback property
+// (suppression case):
 // the delete_user audit write runs inside the same transaction as the DELETE,
 // so a failure to write the audit trail must roll the delete back — a user can
 // never be deleted without leaving an audit entry. The audit INSERT is forced
@@ -738,7 +739,8 @@ func TestDeleteUser_AuditFailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestUpdateUser_AuditFailureRollsBack guards REVIEW.md B-8 (admin-demotion
+// TestUpdateUser_AuditFailureRollsBack guards the audit-rollback property
+// (admin-demotion case):
 // case): the update_user audit write runs inside the same transaction as the
 // UPDATE, so a failure to write the audit trail must roll the role change back
 // — an admin can never be demoted without leaving an audit entry.
@@ -1110,6 +1112,63 @@ func TestUpdateUser_PasswordHistoryReuse(t *testing.T) {
 	// A different strong password is accepted.
 	if code := doUpdate("Str0ng!bb"); code != http.StatusSeeOther {
 		t.Errorf("different strong password expected redirect 303, got %d", code)
+	}
+}
+
+// TestCreateUser_PasswordVerbatim and TestUpdateUser_PasswordVerbatim pin that
+// passwords are stored exactly as submitted: leading/trailing spaces can be
+// intentional and Login compares the raw input, so TrimSpace at a set site
+// would silently store a different password than the one typed (and the spaced
+// original would then fail at login).
+func TestCreateUser_PasswordVerbatim(t *testing.T) {
+	h := newTestHandler(t) // relaxed policy: any non-empty password is valid
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := "username=spaces&email=spaces@test.local&password=%20%20Str0ng%21aa%20%20&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateUser(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE username='spaces'").Scan(&hash)
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("  Str0ng!aa  ")); err != nil {
+		t.Errorf("stored hash must match the password VERBATIM (with spaces): %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("Str0ng!aa")); err == nil {
+		t.Error("the trimmed variant must NOT match the stored hash")
+	}
+}
+
+func TestUpdateUser_PasswordVerbatim(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	body := "email=u2@e.com&first_name=&last_name=&role=user&password=%20%20Str0ng%21bb%20%20"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/2/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "2")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id=2").Scan(&hash)
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("  Str0ng!bb  ")); err != nil {
+		t.Errorf("stored hash must match the password VERBATIM (with spaces): %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("Str0ng!bb")); err == nil {
+		t.Error("the trimmed variant must NOT match the stored hash")
 	}
 }
 

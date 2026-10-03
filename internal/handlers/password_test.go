@@ -105,6 +105,44 @@ func TestChangePassword_Success(t *testing.T) {
 	}
 }
 
+// TestChangePassword_PasswordVerbatim pins that the new password and its
+// confirmation are compared and stored verbatim: leading/trailing spaces can
+// be intentional, and Login compares the raw input. TrimSpace here would let
+// "  x" and "x  " confirm-match while storing a password different from the
+// one typed.
+func TestChangePassword_PasswordVerbatim(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash})
+
+	// Leading/trailing spaces are URL-encoded so they survive the form
+	// parsing verbatim; both fields carry the same spaced value.
+	body := "current_password=Oldpass1!&new_password=%20%20Newpass2!%20%20&confirm_password=%20%20Newpass2!%20%20"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var newHash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&newHash)
+	if err := bcrypt.CompareHashAndPassword([]byte(newHash), []byte("  Newpass2!  ")); err != nil {
+		t.Errorf("stored hash must match the password VERBATIM (with spaces): %v", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(newHash), []byte("Newpass2!")); err == nil {
+		t.Error("the trimmed variant must NOT match the stored hash")
+	}
+}
+
 // TestChangePassword_WrongCurrentRejected verifies the current-password check.
 func TestChangePassword_WrongCurrentRejected(t *testing.T) {
 	h := strictPolicyHandler(t)
@@ -133,7 +171,7 @@ func TestChangePassword_WrongCurrentRejected(t *testing.T) {
 	}
 }
 
-// TestChangePassword_WorksWithoutHashInContext is the L-9 regression test:
+// TestChangePassword_WorksWithoutHashInContext is a regression test:
 // loadUser no longer selects password_hash, so the *models.User placed in
 // the request context carries an empty PasswordHash. ChangePassword must
 // refetch the hash inside its transaction rather than reading the context,
