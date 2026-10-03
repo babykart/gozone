@@ -606,6 +606,43 @@ func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_DuplicateContentDeduped pins the API create-path dedup:
+// a payload record whose wire content matches an existing sibling must be
+// collapsed (batch-path parity) instead of producing a duplicate-record PATCH
+// that PowerDNS rejects with an opaque 422.
+func TestAPICreateRecord_DuplicateContentDeduped(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"CNAME","ttl":300,"records":[{"content":"target.example.com."}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		captureRRSets(t, &sent)(w, r)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"CNAME","ttl":300,"records":[{"content":"target.example.com"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 RRSet in the PATCH, got %d", len(sent))
+	}
+	if len(sent[0].Records) != 1 {
+		t.Fatalf("duplicate wire content must be deduplicated, got %d records: %+v", len(sent[0].Records), sent[0].Records)
+	}
+	if sent[0].Records[0].Content != "target.example.com." {
+		t.Errorf("the normalized existing content must survive, got %q", sent[0].Records[0].Content)
+	}
+}
+
 // TestAPICreateRecord_MissingZoneIs404 pins the missing-zone mapping: a
 // record create against a zone PowerDNS does not know must answer 404
 // ZONE_NOT_FOUND ("zone not found"), not a blanket 500.

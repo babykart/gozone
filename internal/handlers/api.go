@@ -407,6 +407,12 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		rrset.Records[i].Content, rrset.Records[i].Priority =
 			prepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
 	}
+	// Deduplicate after normalisation (batch-path parity): a payload record
+	// whose wire content matches an existing sibling of the RRSet would make
+	// the merged PATCH carry a duplicate record, which PowerDNS rejects with
+	// an opaque 422. The first occurrence wins, so existing records keep
+	// their flags.
+	rrset.Records = dedupRecordsByContent(rrset.Records)
 
 	// Resolve an unspecified (zero) TTL exactly like the web CreateRecord:
 	// inherit the existing RRSet's TTL on a merge (PowerDNS applies the

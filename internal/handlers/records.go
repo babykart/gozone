@@ -158,6 +158,13 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		records[i].Content, records[i].Priority =
 			prepareRecordContent(recordType, records[i].Content, records[i].Priority)
 	}
+	// Deduplicate after normalisation (batch-path parity, see
+	// finalizeBatchRRSets): a new record whose wire content matches an
+	// existing sibling of the RRSet — e.g. a CNAME target typed with and
+	// without the trailing dot — would otherwise be rejected by PowerDNS
+	// with an opaque 422. The first occurrence wins, so the existing
+	// record's flags are preserved.
+	records = dedupRecordsByContent(records)
 
 	rrset := models.RRSet{
 		Name:     name,

@@ -1686,6 +1686,70 @@ func TestCreateRecord_MergesWithExistingRRSet(t *testing.T) {
 	}
 }
 
+// TestCreateRecord_DuplicateContentDeduped pins the create-path dedup: a new
+// record whose wire content matches an existing sibling of the RRSet must be
+// collapsed (batch-path parity) instead of producing a duplicate-record PATCH
+// that PowerDNS rejects with an opaque 422. Both an exact re-add and a
+// normalisation collision (trailing dot) are covered.
+func TestCreateRecord_DuplicateContentDeduped(t *testing.T) {
+	var patched []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{{
+					Name: "www.example.com.", Type: "CNAME", TTL: 300,
+					Records: []models.RecordInfo{{Content: "target.example.com."}},
+				}},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patched = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Same target, typed WITHOUT the trailing dot: normalisation makes it
+	// identical wire content to the existing record.
+	body := "name=www&type=CNAME&content=target.example.com&ttl=300&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(patched) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patched))
+	}
+	if len(patched[0].Records) != 1 {
+		t.Fatalf("duplicate wire content must be deduplicated, got %d records: %+v", len(patched[0].Records), patched[0].Records)
+	}
+	if patched[0].Records[0].Content != "target.example.com." {
+		t.Errorf("the normalized existing content must survive, got %q", patched[0].Records[0].Content)
+	}
+}
+
 // TestCreateRecord_LowercaseTypeMergesWithExistingRRSet guards the type
 // canonicalisation on the form path: validation is case-insensitive but the
 // RRSet merge is not, so a lowercase "mx" used to miss the existing MX RRSet
