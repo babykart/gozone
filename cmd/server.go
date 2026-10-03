@@ -223,8 +223,7 @@ func runServer(cfg *config.Config) error {
 	// Resolve the client IP into the request context without ever mutating
 	// r.RemoteAddr. When trusted_proxies is configured the leftmost XFF entry
 	// outside the trusted CIDRs wins; otherwise only the TCP source address is
-	// honoured and XFF headers are ignored entirely (fail-closed). This is the
-	// fix for the REVIEW.md "Rate-limit du login contournable" finding: the
+	// honoured and XFF headers are ignored entirely (fail-closed). The
 	// previous chimw.RealIP let a direct-access attacker rotate XFF and obtain
 	// a fresh rate-limit bucket per request.
 	r.Use(clientIPMiddleware(cfg.Server.TrustedProxies, trustedPrefixes))
@@ -244,7 +243,7 @@ func runServer(cfg *config.Config) error {
 	// csrfSecureCookieWriter (see below) based on middleware.IsHTTPS(r), so the
 	// CSRF and session cookies always agree. The static server.secure_cookies
 	// flag is no longer used for CSRF — deriving Secure from the TLS context is
-	// strictly more correct (REVIEW.md L-2).
+	// strictly more correct.
 	csrfMiddleware := csrf.Protect(
 		cfg.Server.CSRFKey,
 		csrf.Secure(false),
@@ -276,7 +275,7 @@ func runServer(cfg *config.Config) error {
 	// key identity to apply the per-key bucket — it caps authenticated abuse,
 	// not DB-flooding. This ordering asymmetry vs /login is intentional:
 	// /login has no separate auth middleware, so all limiting is pre-handler;
-	// /api splits at the auth boundary (m7).
+	// /api splits at the auth boundary.
 	loginLimiter := middleware.NewRateLimiter(5)   // 5 requests per minute per IP
 	apiLimiter := middleware.NewRateLimiter(100)   // 100 requests per minute per API key (post-auth)
 	apiIPLimiter := middleware.NewRateLimiter(300) // 300 requests per minute per IP (pre-auth gate)
@@ -312,7 +311,7 @@ func runServer(cfg *config.Config) error {
 	// goroutines die with it, but the explicit Close keeps the lifecycle
 	// symmetrical with db.Close / cachedClient.Close /
 	// stopCleanupRevokedTokens and — crucially — stops the leak in tests
-	// that build a server and return without os.Exit (REVIEW.md L-10).
+	// that build a server and return without os.Exit.
 	// LIFO order: these run BEFORE db.Close on shutdown, which is fine — the
 	// limiters hold no DB state.
 	defer loginLimiter.Close()
@@ -354,7 +353,7 @@ func runServer(cfg *config.Config) error {
 				}
 				// Wrap the ResponseWriter so the CSRF cookie's Secure flag
 				// tracks IsHTTPS(r) on every response — mirroring the session
-				// cookie's Secure: IsHTTPS(r) behaviour (REVIEW.md L-2).
+				// cookie's Secure: IsHTTPS(r) behaviour.
 				sw := &csrfSecureCookieWriter{ResponseWriter: w, https: https}
 				next.ServeHTTP(sw, r)
 				// Cover the edge case where the handler returned without
@@ -435,13 +434,11 @@ func runServer(cfg *config.Config) error {
 				r.Post("/zones/{zone_id}/records/delete", h.DeleteRecord)
 				r.Post("/zones/{zone_id}/records/bulk-delete", h.BulkDeleteRecords)
 				r.Post("/zones/{zone_id}/import", h.ImportZone)
-				r.Post("/zones/{zone_id}/cache/clear", h.ClearZoneCache)
 			})
 
 			// Admin-only routes — mounted via mountAdminRoutes so the admin
 			// routing table has a single source of truth that a test can walk
-			// and lock (every admin route must stay inside RequireAdmin —
-			// REVIEW.md B-5).
+			// and lock (every admin route must stay inside RequireAdmin).
 			mountAdminRoutes(r, h, db)
 		})
 	})
@@ -514,7 +511,7 @@ func runServer(cfg *config.Config) error {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		// Explicit bound on the request header bytes (REVIEW.md I-5). Go's
+		// Explicit bound on the request header bytes. Go's
 		// default is http.DefaultMaxHeaderBytes (1 MiB), which is correct for
 		// this app; setting it explicitly documents the limit rather than
 		// relying on an implicit zero → default fallback, and pins it if a
@@ -524,7 +521,7 @@ func runServer(cfg *config.Config) error {
 
 	// Bind the listener BEFORE starting the signal-watcher goroutine so a
 	// port-in-use error returns cleanly without leaking the goroutine and
-	// its signal.Notify registration (m1). ListenAndServe would bind and
+	// its signal.Notify registration. ListenAndServe would bind and
 	// serve in one blocking call, making the leak unavoidable on bind
 	// failure because the goroutine is already running by the time the
 	// error surfaces.

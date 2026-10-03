@@ -12,8 +12,7 @@ import (
 // guarded by middleware.RequireAdmin. It is the single source of truth for the
 // admin routing table so TestAdminRoutesProtectedByRequireAdmin can walk it and
 // lock the property "no admin route escapes RequireAdmin" — a defence-in-depth
-// guard against a routing refactor accidentally exposing an admin handler
-// (REVIEW.md B-5).
+// guard against a routing refactor accidentally exposing an admin handler.
 //
 // Callers MUST already have applied authentication middleware on r: this
 // function adds the admin role check on top of the authenticated user, it does
@@ -32,6 +31,11 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 
 			r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
 			r.Post("/zones/{zone_id}/notify", h.NotifyZone)
+			// Admin-only: the cache flush clears the GLOBAL zone-list caches
+			// (the lists are not per-zone), so a user with access to a single
+			// zone must not be able to trigger it — repeated calls would push
+			// every read of every zone back onto PowerDNS.
+			r.Post("/zones/{zone_id}/cache/clear", h.ClearZoneCache)
 			r.Post("/zones/{zone_id}/metadata/create", h.CreateMetadata)
 			r.Post("/zones/{zone_id}/metadata/delete", h.DeleteMetadata)
 			r.Post("/zones/{zone_id}/cryptokeys/create", h.CreateCryptokey)

@@ -75,7 +75,7 @@ func (h *Handler) ToggleCryptokey(w http.ResponseWriter, r *http.Request) {
 	// Bind the action column as a parameter rather than concatenating it into
 	// the SQL string. Safe today (action is one of two hardcoded literals
 	// derived from the active bool), but binding it removes the footgun if a
-	// future refactor lets user input reach action (REVIEW.md L-2).
+	// future refactor lets user input reach action.
 	actionName := "cryptokey_" + action
 	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: actionName, Details: fmt.Sprintf("%s key %d", action, keyID)}); err != nil {
 		logger.Error("failed to log cryptokey toggle", "zone_id", zoneID, "error", err)
@@ -124,8 +124,10 @@ func GetDNSSECAlgorithms() []models.DNSSECAlgorithm {
 }
 
 // ClearZoneCache invalidates the local cache for a zone so the next read
-// fetches fresh data from PowerDNS. Available to any authenticated user
-// with group access to the zone.
+// fetches fresh data from PowerDNS. Admin-only (route mounted under
+// RequireAdmin): the underlying caches are the global zone lists — the
+// zone-scoped power user expectation does not hold, so the privilege must
+// match the blast radius.
 func (h *Handler) ClearZoneCache(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")

@@ -302,11 +302,11 @@
 <div class="card mt-2">
     <h3>Danger Zone</h3>
     <div class="action-bar">
+        {{if .IsAdmin}}
         <form method="POST" action="/zones/{{.Zone.ID}}/cache/clear" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Clear Cache</button>
         </form>
-        {{if .IsAdmin}}
         <form method="POST" action="/zones/{{.Zone.ID}}/rectify" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Rectify</button>

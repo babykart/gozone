@@ -291,6 +291,11 @@ func (c *cachedClient) invalidateTSIG() {
 
 // InvalidateZoneCache clears the zone list and zone info caches so the next
 // read fetches fresh data from PowerDNS. Does not clear server or TSIG caches.
+//
+// The lists are cached whole (single constant keys), so this flush is GLOBAL:
+// zoneID does not select a per-zone entry, it only documents the zone the
+// caller acted on. The one caller (ClearZoneCache) is admin-gated precisely
+// because of that blast radius.
 func (c *cachedClient) InvalidateZoneCache(ctx context.Context, zoneID string) {
 	c.gen.Add(1)
 	c.zoneList.Clear()
