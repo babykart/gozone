@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,8 +81,7 @@ func TestSplitStatements(t *testing.T) {
 }
 
 // TestApplyMigration_MultiStatementCommitsAndRecords verifies that a valid
-// multi-statement migration is applied in full and recorded atomically
-// (REVIEW.md m17).
+// multi-statement migration is applied in full and recorded atomically.
 func TestApplyMigration_MultiStatementCommitsAndRecords(t *testing.T) {
 	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
 	if err != nil {
@@ -121,7 +121,7 @@ CREATE TABLE mig_multi_b (id INTEGER PRIMARY KEY);`
 }
 
 // TestApplyMigration_AtomicOnPartialFailure is the core regression test for
-// m17: when the second statement of a multi-statement migration fails, the
+// when the second statement of a multi-statement migration fails, the
 // whole migration must roll back — the first statement's effect must NOT
 // persist and the migration must NOT be recorded. (SQLite provides true
 // transactional DDL, so this is fully enforceable here.)
@@ -203,7 +203,7 @@ func TestApplyMigration_RecordsFailureDoesNotApply(t *testing.T) {
 // editedSQLiteDialect wraps sqliteDialect and replaces specific migration
 // texts (map key) with edited versions (map value). This simulates a typo fix
 // in an already-applied migration, which changes its content hash but not its
-// schema effect — the exact scenario of REVIEW.md m22.
+// schema effect — the exact content-edit scenario.
 type editedSQLiteDialect struct {
 	sqliteDialect
 	override map[string]string
@@ -222,7 +222,7 @@ func (e *editedSQLiteDialect) Migrations() []string {
 	return out
 }
 
-// TestMigrate_EditedMigrationDoesNotAbort is the core regression test for m22:
+// TestMigrate_EditedMigrationDoesNotAbort is the core content-edit regression test:
 // editing an already-applied migration (so its content hash changes) must not
 // abort startup when the migration is re-run and hits a non-idempotent
 // statement (ALTER TABLE ADD COLUMN). The runner detects the "already exists"
@@ -254,17 +254,17 @@ func TestMigrate_EditedMigrationDoesNotAbort(t *testing.T) {
 	if original == "" {
 		t.Fatal("test baseline: ALTER activity_logs old_value migration not found")
 	}
-	edited := original + " -- m22 edit"
+	edited := original + " -- content edit"
 	if migrationVersion(original) == migrationVersion(edited) {
 		t.Fatal("test baseline: edited migration must have a different content hash")
 	}
 
-	// 3. Re-run migrate() with the edited dialect. Without the m22 fix this
+	// 3. Re-run migrate() with the edited dialect. Without the fallback this
 	//    fails with "duplicate column name: old_value".
 	editedDialect := &editedSQLiteDialect{override: map[string]string{original: edited}}
 	db2 := &DB{Conn: conn, dialect: editedDialect}
 	if err := db2.migrate(); err != nil {
-		t.Fatalf("migrate after editing an applied migration should not abort (m22): %v", err)
+		t.Fatalf("migrate after editing an applied migration should not abort: %v", err)
 	}
 
 	// 4. The edited migration's new hash is now recorded, so a further run is
@@ -283,4 +283,74 @@ func TestMigrate_EditedMigrationDoesNotAbort(t *testing.T) {
 	if err := db3.migrate(); err != nil {
 		t.Fatalf("third migrate (steady state) should be a no-op: %v", err)
 	}
+}
+
+// TestMigrate_UntrackedPopulatedDatabaseRunsMigrations pins the removal of
+// the "untracked but populated database → mark everything applied"
+// shortcut: a database whose schema_migrations table is empty while the
+// schema exists (tracking wiped, or a very old upgrade) used to be declared
+// fully migrated, so every table and column introduced afterwards was
+// silently never created. Re-opening must instead run the migrations and
+// recreate missing objects, with the already-existing ones tolerated via
+// the already-exists fallback.
+func TestMigrate_UntrackedPopulatedDatabaseRunsMigrations(t *testing.T) {
+	dsn := "file:" + filepath.Join(t.TempDir(), "untracked.db") + "?cache=shared"
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: dsn}
+
+	db1, err := New(cfg)
+	if err != nil {
+		t.Fatalf("initial New: %v", err)
+	}
+	// A populated users table is what used to trigger the shortcut.
+	if _, err := db1.Exec(
+		"INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('legacy', 'legacy@test.local', 'x', 'admin', 1)",
+	); err != nil {
+		t.Fatalf("seed legacy user: %v", err)
+	}
+	// Simulate the untracked state: wipe the tracking table and drop a
+	// late-introduced object.
+	if _, err := db1.Exec("DELETE FROM schema_migrations"); err != nil {
+		t.Fatalf("wipe tracking: %v", err)
+	}
+	if _, err := db1.Exec("DROP TABLE rate_limit_counters"); err != nil {
+		t.Fatalf("drop late table: %v", err)
+	}
+	if err := db1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db2, err := New(cfg) // migrate() runs on open
+	if err != nil {
+		t.Fatalf("reopen New: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+
+	// The dropped table must have been recreated, not skipped.
+	var n int
+	if err := db2.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rate_limit_counters'",
+	).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rate_limit_counters must be recreated on the untracked database (count=%d err=%v)", n, err)
+	}
+	// Tracking must be fully populated afterwards.
+	if err := db2.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&n); err != nil || n != len((&sqliteDialect{}).Migrations()) {
+		t.Errorf("schema_migrations must record every migration, got %d (want %d) err=%v", n, len((&sqliteDialect{}).Migrations()), err)
+	}
+	// Re-opening again is a clean no-op.
+	db3 := &DB{Conn: mustOpenSQLite(t, dsn), dialect: &sqliteDialect{}}
+	defer db3.Conn.Close()
+	if err := db3.migrate(); err != nil {
+		t.Fatalf("steady-state migrate: %v", err)
+	}
+}
+
+// mustOpenSQLite opens a raw sqlite connection for tests driving migrate
+// directly on an existing file.
+func mustOpenSQLite(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", (&sqliteDialect{}).DSN(dsn))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	return conn
 }

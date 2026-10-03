@@ -688,26 +688,15 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("migrate old version identifiers: %w", err)
 	}
 
-	// Detect upgrade from pre-migration-tracking version: if schema_migrations
-	// is empty but tables already exist, mark all current migrations as applied
-	// so they are not re-executed.
-	var recorded int
-	if err := db.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&recorded); err != nil {
-		return fmt.Errorf("check migration count: %w", err)
-	}
-	if recorded == 0 {
-		var exists int
-		if err := db.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&exists); err == nil && exists > 0 {
-			for _, m := range db.dialect.Migrations() {
-				version := migrationVersion(m)
-				if _, err := db.Conn.Exec(db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
-					return fmt.Errorf("record migration %s: %w", version, err)
-				}
-			}
-			logger.Info("existing database detected, marking all migrations as applied")
-			return nil
-		}
-	}
+	// There is deliberately NO "untracked but populated database → mark
+	// everything applied" shortcut here: it declared a database whose
+	// schema_migrations table was empty (wiped, or a very old upgrade)
+	// fully migrated, so every table and column introduced afterwards was
+	// silently never created. Instead, every migration simply runs: the
+	// CREATE statements are IF NOT EXISTS / InsertIgnore-idempotent, and an
+	// ALTER that hits an already-existing object fails with an
+	// already-exists error that the loop below records as applied — re-runs
+	// are safe and missing objects get created.
 
 	for _, m := range db.dialect.Migrations() {
 		version := migrationVersion(m)
