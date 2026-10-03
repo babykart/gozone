@@ -33,8 +33,11 @@ func TestSessionTracker_TouchSeedsAndAllows(t *testing.T) {
 	defer tr.Close()
 
 	ctx := context.Background()
-	iat := time.Unix(1000, 0)
-	t0 := time.Unix(2000, 0)
+	// Anchored near the real clock: the absent-row guard in Touch denies
+	// tokens older than the idle window, so synthetic epoch timestamps would
+	// trip it on the first sighting.
+	iat := time.Now().UTC().Add(-time.Minute)
+	t0 := iat.Add(time.Minute)
 	if !tr.Touch(ctx, "s1", iat, t0) {
 		t.Fatal("first Touch must allow")
 	}
@@ -59,8 +62,8 @@ func TestSessionTracker_TouchIdleExceededDenies(t *testing.T) {
 	defer tr.Close()
 
 	ctx := context.Background()
-	iat := time.Unix(1000, 0)
-	t0 := time.Unix(2000, 0)
+	iat := time.Now().UTC().Add(-time.Minute)
+	t0 := iat.Add(time.Minute)
 	tr.Touch(ctx, "s1", iat, t0)
 	t1 := t0.Add(11 * time.Minute)
 	if tr.Touch(ctx, "s1", iat, t1) {
@@ -147,8 +150,8 @@ func TestSessionTracker_DistinctSessionsIndependent(t *testing.T) {
 	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Minute})
 	defer tr.Close()
 	ctx := context.Background()
-	iat := time.Unix(1000, 0)
-	now := time.Unix(2000, 0)
+	iat := time.Now().UTC().Add(-30 * time.Second)
+	now := iat.Add(30 * time.Second)
 	tr.Touch(ctx, "a", iat, now)
 	if tr.Touch(ctx, "a", iat, now.Add(2*time.Minute)) {
 		t.Error("expected idle denial for a")
@@ -291,5 +294,50 @@ func TestSessionPurgeExpired(t *testing.T) {
 	}
 	if _, found, _ := db.SessionGet(ctx, "live"); !found {
 		t.Error("live row should remain")
+	}
+}
+
+// TestSessionTracker_TouchRefusesReseedBeyondIdle pins the anti-resurrection
+// guard: when the sessions row is gone (cluster-wide idle denial, logout or
+// purge) and the token predates the idle window, Touch must deny instead of
+// re-seeding a fresh row. Re-seeding restarted the idle window — and, because
+// the seed anchor falls back to a refreshed token's iat, the absolute budget
+// too. This is the in-memory second lock behind the jti revocation done by
+// the denial path: it holds even if the revocation write failed.
+func TestSessionTracker_TouchRefusesReseedBeyondIdle(t *testing.T) {
+	db := newTestAuthDB(t)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Minute})
+	defer tr.Close()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	iat := now.Add(-10 * time.Minute) // far beyond the 1-minute idle window
+	if tr.Touch(ctx, "ghost", iat, now) {
+		t.Fatal("Touch must deny when the row is absent and the token predates the idle window")
+	}
+	// The denied Touch must not re-seed the cluster-wide row.
+	if _, found, err := db.SessionGet(ctx, "ghost"); err != nil || found {
+		t.Errorf("denied Touch must not re-seed a sessions row (found=%v err=%v)", found, err)
+	}
+	// Repeated denials stay denied (no cache poisoning either).
+	if tr.Touch(ctx, "ghost", iat, now.Add(time.Second)) {
+		t.Fatal("second Touch on the absent row must still deny")
+	}
+
+	// A genuine first sighting (recent token, no row yet) still seeds and
+	// passes — the guard only targets stale tokens.
+	if !tr.Touch(ctx, "fresh", now.Add(-time.Second), now) {
+		t.Fatal("first sighting with a recent token must be allowed")
+	}
+	if _, found, _ := db.SessionGet(ctx, "fresh"); !found {
+		t.Error("first sighting must seed the sessions row")
+	}
+
+	// With the idle check disabled the guard is inert: absent rows always
+	// re-seed, preserving the pre-existing behaviour for Idle=0 policies.
+	trNoIdle := NewSessionTracker(db, SessionPolicy{})
+	defer trNoIdle.Close()
+	if !trNoIdle.Touch(ctx, "noidle", iat, now) {
+		t.Fatal("Idle=0 policy must keep failing open on an absent row")
 	}
 }

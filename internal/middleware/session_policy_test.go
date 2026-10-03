@@ -64,7 +64,7 @@ func TestAuthWithPolicy_IdleExpiryForcesReauth(t *testing.T) {
 
 	// Seed the shared session row so the tracker sees the session as idle:
 	// lastSeen 2 minutes ago, beyond the 1-minute idle window. Seeding via
-	// SessionInsert (not remember, which is UPDATE-only post M-3) matches how
+	// SessionInsert (not remember, which is UPDATE-only) matches how
 	// another instance would have persisted the activity.
 	now := time.Now()
 	if err := db.SessionInsert(context.Background(), sid, now.Add(-2*time.Minute), now.Add(-2*time.Minute), now.Add(time.Hour)); err != nil {
@@ -94,7 +94,7 @@ func TestAuthWithPolicy_AbsoluteCapForcesReauth(t *testing.T) {
 	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "absuser", Role: "user"}, sid, time.Hour)
 
 	// Session first seen 31 minutes ago → beyond the 30-minute absolute cap.
-	// Seed via SessionInsert (remember is UPDATE-only post M-3).
+	// Seed via SessionInsert (remember is UPDATE-only).
 	now := time.Now()
 	if err := db.SessionInsert(context.Background(), sid, now.Add(-31*time.Minute), now, now.Add(time.Hour)); err != nil {
 		t.Fatalf("seed session: %v", err)
@@ -106,6 +106,89 @@ func TestAuthWithPolicy_AbsoluteCapForcesReauth(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != "/login" {
 		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+}
+
+// TestAuthWithPolicy_IdleDenialRevokesReplayedToken is the replay regression:
+// an idle-timeout denial must revoke the JWT, not just clear the cookie and
+// delete the session row. Replaying the same still-unexpired token used to
+// re-seed a fresh session (lastSeen = now) and pass — a stolen cookie then
+// survived up to the token's exp after a single login redirect.
+func TestAuthWithPolicy_IdleDenialRevokesReplayedToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	uid := seedTestUser(t, db, "replayidle", "user", true)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: 1 * time.Minute})
+	defer tr.Close()
+	sid := "sid-replay-idle"
+	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "replayidle", Role: "user"}, sid, time.Hour)
+
+	// Row idle since 2 minutes (beyond the 1-minute window).
+	now := time.Now()
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-2*time.Minute), now.Add(-2*time.Minute), now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	rec := runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 for idle session, got %d", rec.Code)
+	}
+
+	// The denied token's jti must be recorded in the revocation list…
+	claims, err := ParseToken(tok, testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	revoked, err := db.IsTokenRevoked(context.Background(), claims.ID)
+	if err != nil {
+		t.Fatalf("IsTokenRevoked: %v", err)
+	}
+	if !revoked {
+		t.Fatal("idle denial must revoke the denied token's jti so it cannot be replayed")
+	}
+
+	// …so replaying the same cookie is rejected before any session logic.
+	rec = runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("replayed token after idle denial must be rejected, got %d", rec.Code)
+	}
+}
+
+// TestAuthWithPolicy_AbsoluteDenialRevokesReplayedToken mirrors the idle
+// replay regression for the absolute cap: the denied token must land in the
+// revocation list, so a replay cannot outlive the cap up to its exp.
+func TestAuthWithPolicy_AbsoluteDenialRevokesReplayedToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	uid := seedTestUser(t, db, "replayabs", "user", true)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: 0, Absolute: 30 * time.Minute, AccessTTL: time.Hour})
+	defer tr.Close()
+	sid := "sid-replay-abs"
+	tok := issueTokenWithSID(t, &models.User{ID: uid, Username: "replayabs", Role: "user"}, sid, time.Hour)
+
+	now := time.Now()
+	if err := db.SessionInsert(context.Background(), sid, now.Add(-31*time.Minute), now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	rec := runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 for absolute-capped session, got %d", rec.Code)
+	}
+
+	claims, err := ParseToken(tok, testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	revoked, err := db.IsTokenRevoked(context.Background(), claims.ID)
+	if err != nil {
+		t.Fatalf("IsTokenRevoked: %v", err)
+	}
+	if !revoked {
+		t.Fatal("absolute-cap denial must revoke the denied token's jti so it cannot be replayed")
+	}
+
+	rec = runPolicy(t, db, tr, time.Hour, tok, "/dashboard")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("replayed token after absolute-cap denial must be rejected, got %d", rec.Code)
 	}
 }
 

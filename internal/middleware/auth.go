@@ -311,7 +311,10 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	ctx := r.Context()
 
 	if !tracker.Touch(ctx, sid, claims.IssuedAt.Time, now) {
-		// Idle window exceeded → force re-authentication.
+		// Idle window exceeded (or a replayed denied session) → force
+		// re-authentication. The cookie clear only reaches the honest
+		// browser; revoke the JWT too so the same token cannot be replayed.
+		revokeOnPolicyDenial(ctx, db, claims, user)
 		clearSessionCookie(w, r)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return false
@@ -322,7 +325,9 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	}
 	firstSeen := tracker.FirstSeen(ctx, sid, claims.IssuedAt.Time, now)
 	if now.Sub(firstSeen) >= tracker.policy.Absolute {
-		// Absolute cap reached → force re-authentication.
+		// Absolute cap reached → force re-authentication, revoking the JWT
+		// for the same replay reason as the idle denial above.
+		revokeOnPolicyDenial(ctx, db, claims, user)
 		clearSessionCookie(w, r)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return false
@@ -353,6 +358,28 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	setSessionCookie(w, r, newToken, now.Add(accessTTL))
 	tracker.remember(ctx, sid, firstSeen, now)
 	return true
+}
+
+// revokeOnPolicyDenial best-effort revokes an access token that was just
+// denied by the idle/absolute session policy. Clearing the cookie only
+// affects the honest browser; the JWT itself stays valid until its exp, and
+// replaying it used to resurrect the session (the idle denial deletes the
+// sessions row, whose re-seed restarted the idle window and — via the
+// refreshed token's iat — the absolute budget). Revoking the jti makes the
+// Auth middleware reject any replay outright. A revocation failure is logged
+// and does not reopen the session: the tracker's re-seed refusal still denies
+// the replayed token.
+func revokeOnPolicyDenial(ctx context.Context, db *database.DB, claims *Claims, user *models.User) {
+	// Every issuance path embeds an exp, but a JWT without one parses fine —
+	// guard the dereference and revoke such a token far into the future so
+	// its revocation is never pruned early.
+	expiresAt := time.Now().AddDate(100, 0, 0)
+	if claims.ExpiresAt != nil {
+		expiresAt = claims.ExpiresAt.Time
+	}
+	if err := db.RevokeToken(ctx, claims.ID, user.ID, expiresAt); err != nil {
+		logger.Error("failed to revoke session token on policy denial", "user_id", user.ID, "error", err)
+	}
 }
 
 // clearSessionCookie invalidates the session cookie in the browser, matching

@@ -101,7 +101,9 @@ func NewSessionTracker(db *database.DB, policy SessionPolicy) *SessionTracker {
 // persists a row; on subsequent sightings it updates the in-memory last_seen and
 // writes through to the DB at most once per sessionWriteInterval. Returns false
 // when the session has been idle longer than policy.Idle (a forced
-// re-authentication) — the row is then deleted cluster-wide.
+// re-authentication) — the row is then deleted cluster-wide — or when the row is
+// absent while the token itself predates the idle window (the session was
+// already denied somewhere; re-seeding it would resurrect the session).
 //
 // On a DB error Touch fails open (allows the request): the JWT's own expiry and
 // the revocation list already bound the session, and a transient DB outage must
@@ -115,7 +117,14 @@ func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now t
 
 	e, ok := t.cache[sessionID]
 	if !ok {
-		e = t.loadOrSeedLocked(ctx, sessionID, iat, now)
+		allowed := true
+		e, allowed = t.loadOrSeedLocked(ctx, sessionID, iat, now)
+		if !allowed {
+			// The row is gone cluster-wide and the token is older than the
+			// idle window: this is a replay of an already-denied session,
+			// not a first sighting. Deny instead of resurrecting it.
+			return false
+		}
 		if e == nil {
 			// loadOrSeed failed open and seeded a cache entry; allow.
 			return true
@@ -124,6 +133,9 @@ func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now t
 
 	if t.policy.Idle > 0 && now.Sub(e.lastSeen) > t.policy.Idle {
 		// Idle exceeded: drop cluster-wide so other instances deny too.
+		// The caller (applySessionPolicy) additionally revokes the denied
+		// token's jti, so replaying the same still-unexpired JWT cannot
+		// come back here and hit the re-seed path below.
 		delete(t.cache, sessionID)
 		if err := t.db.SessionDelete(ctx, sessionID); err != nil {
 			logger.Error("session tracker: delete on idle denial failed", "sid", sessionID, "error", err)
@@ -140,7 +152,7 @@ func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now t
 			// The row is gone cluster-wide (deleted by another instance's
 			// idle denial or an explicit logout). Honour that decision: drop
 			// the cache entry and deny so this instance does not keep an
-			// idle-expired session alive (REVIEW.md M-3).
+			// idle-expired session alive.
 			delete(t.cache, sessionID)
 			return false
 		} else {
@@ -152,30 +164,42 @@ func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now t
 
 // loadOrSeedLocked handles a cache miss: it loads the row from the DB (so
 // another instance's activity is visible) and caches it, or seeds+inserts a new
-// row on first sighting. On DB error it seeds the cache from iat and returns nil
-// (signal to the caller to fail open). The caller MUST hold t.mu.
-func (t *SessionTracker) loadOrSeedLocked(ctx context.Context, sessionID string, iat, now time.Time) *cacheEntry {
+// row on first sighting. When the row is absent but the token predates the
+// idle window, it refuses to re-seed (second entry false): the session was
+// already denied cluster-wide — the denial path deletes the row — and
+// re-seeding from a refreshed token's iat would restart both the idle window
+// and the absolute budget. On DB error it seeds the cache from iat and returns
+// a nil entry with allowed=true (signal to the caller to fail open). The
+// caller MUST hold t.mu.
+func (t *SessionTracker) loadOrSeedLocked(ctx context.Context, sessionID string, iat, now time.Time) (e *cacheEntry, allowed bool) {
 	sl, found, err := t.db.SessionGet(ctx, sessionID)
 	if err != nil {
 		logger.Error("session tracker: get failed; failing open", "sid", sessionID, "error", err)
 		first := seedTime(iat, now)
 		t.cache[sessionID] = &cacheEntry{firstSeen: first, lastSeen: now, lastWritten: now}
-		return nil
+		return nil, true
 	}
 	if !found {
 		first := seedTime(iat, now)
+		if t.policy.Idle > 0 && now.Sub(first) > t.policy.Idle {
+			// Missing row + stale token = replay of a denied session (the
+			// row is only removed by a denial, a logout — which also revokes
+			// the jti — or the purge, whose horizon exceeds the idle
+			// window). Deny; do not insert, do not cache.
+			return nil, false
+		}
 		if err := t.db.SessionInsert(ctx, sessionID, first, now, t.expiresAt(now)); err != nil {
 			logger.Error("session tracker: insert failed", "sid", sessionID, "error", err)
 		}
 		e := &cacheEntry{firstSeen: first, lastSeen: now, lastWritten: now}
 		t.cache[sessionID] = e
-		return e
+		return e, true
 	}
 	// Existing row (possibly written by another instance). Seed lastWritten
 	// from the DB last_seen so a stale remote value triggers a prompt write-back.
-	e := &cacheEntry{firstSeen: sl.FirstSeen, lastSeen: sl.LastSeen, lastWritten: sl.LastSeen}
+	e = &cacheEntry{firstSeen: sl.FirstSeen, lastSeen: sl.LastSeen, lastWritten: sl.LastSeen}
 	t.cache[sessionID] = e
-	return e
+	return e, true
 }
 
 // FirstSeen returns the first-sighting time for sessionID (the anchor of the
@@ -206,7 +230,7 @@ func (t *SessionTracker) FirstSeen(ctx context.Context, sessionID string, iat, n
 // The session row is seeded by Touch, which always runs before the refresh
 // that triggers remember (see applySessionPolicy). remember therefore uses
 // UPDATE (SessionTouch) rather than INSERT, so a row deleted by another
-// instance's idle denial is not resurrected here (REVIEW.md M-3).
+// instance's idle denial is not resurrected here.
 func (t *SessionTracker) remember(ctx context.Context, sessionID string, firstSeen, lastSeen time.Time) {
 	if t == nil || t.db == nil || sessionID == "" {
 		return
@@ -267,7 +291,7 @@ func (t *SessionTracker) cleanup() {
 		select {
 		case <-ticker.C:
 			// UTC: cache lastSeen values originate from UTC writes (Touch),
-			// and the purge below is DB-bound (REVIEW.md M-1).
+			// and the purge below is DB-bound.
 			cutoff := time.Now().UTC().Add(-ttl)
 			t.mu.Lock()
 			for sid, e := range t.cache {
@@ -277,7 +301,7 @@ func (t *SessionTracker) cleanup() {
 			}
 			t.mu.Unlock()
 			// UTC cutoff feeds DELETE ... WHERE expires_at <= ?, matching how
-			// expires_at is written by SessionTouch/SessionInsert (REVIEW.md M-1).
+			// expires_at is written by SessionTouch/SessionInsert.
 			if n, err := t.db.SessionPurgeExpired(context.Background(), time.Now().UTC()); err != nil {
 				logger.Error("session tracker: purge expired failed", "error", err)
 			} else if n > 0 {
