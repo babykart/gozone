@@ -139,7 +139,16 @@ func pdnsUserFacingStatus(err error) (int, string) {
 
 // render executes a template and automatically injects the CSRF token,
 // authenticated user, admin flag, and active section into the data map.
+//
+// Every rendered page is dynamic and user-scoped — several embed secrets or
+// security-sensitive state (the plaintext API key on the keys page, CSRF
+// tokens, session-derived content). Shared caches and the browser back/forward
+// cache must therefore never store them, so Cache-Control: no-store is set
+// here, on the single path all HTML responses go through. Static assets are
+// served by the file server (cmd/static.go) and keep their cacheability —
+// they carry a content-hash version query for cache busting.
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, data map[string]interface{}) {
+	w.Header().Set("Cache-Control", "no-store")
 	if data == nil {
 		data = make(map[string]interface{})
 	}

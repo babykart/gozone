@@ -250,6 +250,28 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// TestRender_NoStoreHeader pins that every rendered page is served
+// Cache-Control: no-store. Pages are dynamic, user-scoped and some embed
+// secrets (the plaintext API key page) — a shared cache or the browser
+// back/forward cache must never retain them.
+func TestRender_NoStoreHeader(t *testing.T) {
+	h := newTestHandler(t)
+
+	w := httptest.NewRecorder()
+	h.render(w, httptest.NewRequest(http.MethodGet, "/", nil), "login.html", nil)
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("successful render: Cache-Control = %q, want no-store", cc)
+	}
+
+	// The error path must be covered too: a failed render still answers with
+	// a page, and it went through the same user context.
+	wErr := httptest.NewRecorder()
+	h.render(wErr, httptest.NewRequest(http.MethodGet, "/", nil), "nonexistent.html", nil)
+	if cc := wErr.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("error render: Cache-Control = %q, want no-store", cc)
+	}
+}
+
 func TestRender_MissingTemplate(t *testing.T) {
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
