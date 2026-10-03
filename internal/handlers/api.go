@@ -585,7 +585,16 @@ func (h *Handler) APIStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zones, _ := h.PDNS.ListZones(r.Context())
+	zones, err := h.PDNS.ListZones(r.Context())
+	if err != nil {
+		// A failed zone list must not surface as zone_count: 0 — a caller
+		// would read an empty tenant instead of an outage. The statistics
+		// endpoint and the zone list are independent upstream calls; either
+		// failing makes the composite answer wrong.
+		status, code := pdnsErrorStatus(err, ErrCodeStatsError)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to list zones", err)
+		return
+	}
 	filtered, filterErr := h.filterZonesForUser(r, zones)
 	if filterErr != nil {
 		// Same fail-closed-with-error semantics as APIListZones: a failed

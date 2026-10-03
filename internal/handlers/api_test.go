@@ -1991,6 +1991,42 @@ func TestAPIStats_PDNSError(t *testing.T) {
 	}
 }
 
+// TestAPIStats_ZoneListErrorSurfaces pins that a failed zone list is an
+// error, not a silent zone_count: 0. The statistics call succeeds (the two
+// are independent upstream calls) while the zone list 500s — the endpoint
+// must answer 500 instead of presenting an empty tenant.
+func TestAPIStats_ZoneListErrorSurfaces(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/zones") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"boom"}`)) // #nosec G104 -- test helper
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	h.APIStats(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a failed zone list, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	// A raw upstream 500 is not a typed PowerDNS category: pdnsErrorStatus
+	// falls through to INTERNAL_ERROR. The point under test is that the
+	// failure SURFACES as an error status instead of zone_count: 0.
+	if resp.Code != ErrCodeInternalError {
+		t.Errorf("expected code %s, got %s", ErrCodeInternalError, resp.Code)
+	}
+	if strings.Contains(w.Body.String(), "zone_count") {
+		t.Errorf("no stats body may be returned when the zone list failed: %s", w.Body.String())
+	}
+}
+
 func jsonBody(s string) *strings.Reader {
 	return strings.NewReader(s)
 }
