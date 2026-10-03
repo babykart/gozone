@@ -422,7 +422,11 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 //  2. Authorization header with "Bearer " prefix
 //
 // The incoming key is SHA-256 hashed before comparison against stored hashes.
-// Expired API keys return HTTP 401 with the message "api_key_expired".
+// Expired API keys return HTTP 401 with the message "api_key_expired"; keys
+// whose owner is under a manual admin lock, or that predate the owner's
+// tokens_valid_after credential-rotation cutoff, return 401 as well
+// ("api_key_invalidated" for the latter) — an API key must not outlive the
+// credential event that should have revoked it.
 // The authenticated user is stored in the request context via UserContextKey
 // and the API key's last_used_at timestamp is recorded — coarsened to at most
 // one write per key per minute (see apiKeyLastUsedTracker), since the column
@@ -450,11 +454,11 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			keyHash := hashAPIKey(authHeader)
 
 			var userID int64
-			var expiresAt sql.NullTime
+			var createdAt, expiresAt sql.NullTime
 			err := db.QueryRowContext(r.Context(),
-				"SELECT user_id, expires_at FROM api_keys WHERE key_hash = ?",
+				"SELECT user_id, created_at, expires_at FROM api_keys WHERE key_hash = ?",
 				keyHash,
-			).Scan(&userID, &expiresAt)
+			).Scan(&userID, &createdAt, &expiresAt)
 
 			if err != nil {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
@@ -469,6 +473,28 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			user, err := loadUser(r.Context(), db, userID)
 			if err != nil || !user.Enabled {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+				return
+			}
+
+			// A manual admin lock freezes the account on every
+			// authentication path: like the web Login and the SSO callback,
+			// the API key path must not be a bypass. Fail closed when the
+			// lock status cannot be read.
+			if manualLocked, merr := db.IsManualLock(r.Context(), userID); merr != nil || manualLocked {
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+				return
+			}
+
+			// Credential-rotation cutoff: tokens_valid_after is bumped on
+			// every credential-changing event (password change or reset,
+			// account disable, manual lock). JWTs minted before the cutoff
+			// are already rejected by the Auth middleware; an API key
+			// created before it is now refused too, so a key issued before
+			// an admin reset or lock cannot outlive the rotation.
+			// created_at is second-granularity, so a key created within the
+			// same second as the cutoff stays valid.
+			if createdAt.Valid && createdAt.Time.Before(user.TokensValidAfter) {
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "API_KEY_INVALIDATED", "api_key_invalidated")
 				return
 			}
 

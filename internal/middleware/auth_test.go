@@ -102,7 +102,7 @@ func TestGenerateSessionToken_NoIDTokenHintEmbeddedAndRefreshPreservesSession(t 
 
 func TestParseToken_Revoked(t *testing.T) {
 	db := newTestAuthDB(t)
-	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9), so the user
+	// revoked_tokens.user_id is a FK -> users(id), so the user
 	// must exist before a token can be revoked for them.
 	uid := seedTestUser(t, db, "revoked", "user", true)
 	user := &models.User{ID: uid, Username: "revoked", Role: "user"}
@@ -536,7 +536,7 @@ func TestAPIKeyAuth_DisabledUserDoesNotUpdateLastUsed(t *testing.T) {
 		t.Fatalf("query last_used_at: %v", err)
 	}
 	if lastUsed.Valid {
-		t.Errorf("last_used_at must stay NULL for a disabled-user key (m36), got %v", lastUsed.Time)
+		t.Errorf("last_used_at must stay NULL for a disabled-user key, got %v", lastUsed.Time)
 	}
 }
 
@@ -574,7 +574,7 @@ func TestAPIKeyAuth_OrphanKeyDoesNotUpdateLastUsed(t *testing.T) {
 		t.Fatalf("query last_used_at: %v", err)
 	}
 	if lastUsed.Valid {
-		t.Errorf("last_used_at must stay NULL for an orphan key (m36), got %v", lastUsed.Time)
+		t.Errorf("last_used_at must stay NULL for an orphan key, got %v", lastUsed.Time)
 	}
 }
 
@@ -762,7 +762,7 @@ func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
 	}
 }
 
-// TestAuth_InvalidTokenClearsCookieSecureBehindTrustedProxy guards REVIEW.md M-1:
+// TestAuth_InvalidTokenClearsCookieSecureBehindTrustedProxy guards the Secure-flag contract:
 // the clearing cookie must carry the Secure flag when the request is effectively
 // HTTPS via the trusted-proxy-gated resolver (WithHTTPS), even though r.TLS is
 // nil behind a TLS-terminating reverse proxy. With the previous r.TLS != nil
@@ -988,7 +988,7 @@ func TestLoadUser_RespectsContext(t *testing.T) {
 	cancel() // cancel before the call
 
 	if _, err := loadUser(ctx, db, 1); err == nil {
-		t.Fatal("expected loadUser to fail with a cancelled context (m37)")
+		t.Fatal("expected loadUser to fail with a cancelled context")
 	}
 }
 
@@ -1196,7 +1196,7 @@ func TestAuth_TokensValidAfterRevokesStaleToken(t *testing.T) {
 	handler.ServeHTTP(w, r)
 
 	if reached {
-		t.Error("handler must not be reached for a token predating tokens_valid_after (M1)")
+		t.Error("handler must not be reached for a token predating tokens_valid_after")
 	}
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected 303 redirect, got %d", w.Code)
@@ -1241,7 +1241,7 @@ func TestAuth_TokensValidAfterAllowsFreshToken(t *testing.T) {
 	handler.ServeHTTP(w, r)
 
 	if !reached {
-		t.Error("handler should be reached for a fresh token with epoch tokens_valid_after (M1)")
+		t.Error("handler should be reached for a fresh token with epoch tokens_valid_after")
 	}
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
@@ -1389,5 +1389,101 @@ func assertAPIErrorEnvelope(t *testing.T, w *httptest.ResponseRecorder, wantCode
 	}
 	if body.Error == "" || body.Message == "" {
 		t.Errorf("envelope error/message must be non-empty, got %+v", body)
+	}
+}
+
+// TestAPIKeyAuth_ManuallyLockedOwnerDenied is the lock-bypass regression: an
+// API key of an admin-frozen account used to keep working, because apiKeyAuth
+// only checked `enabled` and the key's own expiry. The manual lock must freeze
+// the account on every authentication path.
+func TestAPIKeyAuth_ManuallyLockedOwnerDenied(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "lockedowner", "user", true)
+	seedTestAPIKey(t, db, userID, "locked-owner-key", nil)
+	if _, err := db.Exec("UPDATE users SET manual_lock_until = ? WHERE id = ?",
+		time.Now().Add(time.Hour).UTC(), userID); err != nil {
+		t.Fatalf("seed manual lock: %v", err)
+	}
+
+	mw := APIKeyAuth(db)
+	reached := false
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	do := func(key string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		r.Header.Set("X-API-Key", key)
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	w := do("locked-owner-key")
+	if reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("key of a manually locked owner must be refused: code=%d reached=%v", w.Code, reached)
+	}
+
+	// Control: once the lock is lifted the same key authenticates again.
+	if _, err := db.Exec("UPDATE users SET manual_lock_until = NULL WHERE id = ?", userID); err != nil {
+		t.Fatalf("clear manual lock: %v", err)
+	}
+	if w := do("locked-owner-key"); w.Code != http.StatusOK {
+		t.Errorf("expected 200 after the lock was lifted, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestAPIKeyAuth_CredentialRotationCutoffDenied is the rotation-survival
+// regression: tokens_valid_after is bumped on every credential-changing event
+// (password change/reset, disable, manual lock) and already kills JWTs minted
+// before the cutoff — an API key created before it must not outlive the
+// rotation either.
+func TestAPIKeyAuth_CredentialRotationCutoffDenied(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "rotated", "user", true)
+	seedTestAPIKey(t, db, userID, "stale-rotation-key", nil)
+	seedTestAPIKey(t, db, userID, "fresh-rotation-key", nil)
+
+	// Backdate the stale key, then bump the cutoff to now (as an admin
+	// password reset or lock would).
+	staleHash := func() string {
+		h := sha256.Sum256([]byte("stale-rotation-key"))
+		return hex.EncodeToString(h[:])
+	}()
+	if _, err := db.Exec("UPDATE api_keys SET created_at = ? WHERE key_hash = ?",
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), staleHash); err != nil {
+		t.Fatalf("backdate key: %v", err)
+	}
+	if _, err := db.Exec("UPDATE users SET tokens_valid_after = ? WHERE id = ?",
+		time.Now().UTC().Truncate(time.Second), userID); err != nil {
+		t.Fatalf("bump cutoff: %v", err)
+	}
+
+	mw := APIKeyAuth(db)
+	reached := false
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	do := func(key string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		r.Header.Set("X-API-Key", key)
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	w := do("stale-rotation-key")
+	if reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("key predating the cutoff must be refused: code=%d reached=%v", w.Code, reached)
+	}
+	if !strings.Contains(w.Body.String(), "api_key_invalidated") {
+		t.Errorf("expected the api_key_invalidated envelope, got %s", w.Body.String())
+	}
+
+	if w := do("fresh-rotation-key"); w.Code != http.StatusOK {
+		t.Errorf("key created after the cutoff must stay valid, got %d (%s)", w.Code, w.Body.String())
 	}
 }
