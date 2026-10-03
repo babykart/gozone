@@ -169,68 +169,111 @@ function saveRecordRow(btn) {
         return resp.json();
     })
     .then(function(data) {
-        if (data.success) {
-            var r = data.record;
-            row.querySelector('.rv-content').textContent = content;
-            row.querySelector('.rv-ttl').textContent = ttl;
-            row.querySelector('.rv-prio').textContent = (prio > 0 ? prio : '-');
-            var statusCell = row.querySelector('.rv-status');
-            if (r.records && r.records[0]) {
-                if (r.records[0].disabled) {
-                    statusCell.innerHTML = '<span class="badge badge-disabled">Disabled</span>';
-                    row.setAttribute('data-disabled', 'true');
-                } else {
-                    statusCell.innerHTML = '<span class="badge badge-active">Active</span>';
-                    row.setAttribute('data-disabled', 'false');
-                }
-            }
-            var rvComments = row.querySelector('.rv-comments');
-            var trimmedComment = comment.replace(/^\s+|\s+$/g, '');
-            if (commentClear) {
-                if (rvComments && rvComments.parentNode) {
-                    rvComments.parentNode.removeChild(rvComments);
-                }
-            } else if (rvComments) {
-                if (trimmedComment) {
-                    if (rvComments.parentNode) {
-                        rvComments.textContent = trimmedComment + '\n';
-                    }
-                } else if (rvComments.parentNode) {
-                    rvComments.parentNode.removeChild(rvComments);
-                }
-            } else if (trimmedComment) {
-                // No read-only comment block exists yet — create one. Since
-                // the dedicated Comment column landed in zone_view.html,
-                // .ev-comments lives in the .col-comment cell, NOT in the
-                // Content cell. Insert the new read-only block into the
-                // comment cell, before the edit textarea, so the
-                // read-only block stays visually paired with the textarea
-                // that created it. (Previously this code inserted into
-                // row.querySelector('.ev-content').parentNode — the
-                // Content cell — which raised DOMException
-                // "Node.insertBefore: Child to insert before is not a
-                // child of this node" because .ev-comments no longer
-                // belongs to that cell after the column split.)
-                var commentCell = row.querySelector('.ev-comments').parentNode;
-                var newRv = document.createElement('div');
-                newRv.className = 'rv rv-comments record-comments';
-                newRv.textContent = trimmedComment + '\n';
-                var editComments = row.querySelector('.ev-comments');
-                commentCell.insertBefore(newRv, editComments);
-            }
-            var clearCb = row.querySelector('.ev-comment-clear-cb');
-            if (clearCb) clearCb.checked = false;
-            row.setAttribute('data-original-content', content);
-            row.setAttribute('data-original-priority', prio);
-            toggleEditMode(row, false);
-            showNotification('Record updated', 'success');
-        } else {
+        if (!data.success) {
             showNotification('Error: ' + (data.error || 'Unknown error'), 'error');
+            return;
         }
+        // Resync the row from the server's view of the record: the typed
+        // content is not the stored content (trailing dots, TXT quoting,
+        // MX/SRV priority split back out). A payload without the saved
+        // record cannot resync anything — reload instead of leaving the
+        // row desynchronised.
+        if (!data.updated || !data.record) {
+            window.location.reload();
+            return;
+        }
+        updateRowComments(row, comment, commentClear);
+        applyRecordUpdate(row, data.updated, data.record.ttl);
+        toggleEditMode(row, false);
+        showNotification('Record updated', 'success');
     })
     .catch(function(err) {
         showNotification('Request failed: ' + err.message, 'error');
     });
+}
+
+// applyRecordUpdate resynchronises an inline-edit row with the record as the
+// server stored it. Every record-identifying attribute must follow the
+// normalised content: data-original-content/priority feed the next inline
+// edit (a stale value makes the merge append a duplicate record instead of
+// replacing) and the Delete form submits content+priority (a stale value
+// makes Delete target a record that no longer exists).
+function applyRecordUpdate(row, rec, ttl) {
+    var content = rec.content;
+    var priority = rec.priority || 0;
+    var disabled = !!rec.disabled;
+
+    row.setAttribute('data-original-content', content);
+    row.setAttribute('data-original-priority', String(priority));
+    row.setAttribute('data-disabled', disabled ? 'true' : 'false');
+
+    var rvContent = row.querySelector('.rv-content');
+    if (rvContent) rvContent.textContent = content;
+    var rvTTL = row.querySelector('.rv-ttl');
+    if (rvTTL) rvTTL.textContent = ttl;
+    var rvPrio = row.querySelector('.rv-prio');
+    if (rvPrio) rvPrio.textContent = priority > 0 ? String(priority) : '-';
+    var statusCell = row.querySelector('.rv-status');
+    if (statusCell) {
+        statusCell.innerHTML = disabled
+            ? '<span class="badge badge-disabled">Disabled</span>'
+            : '<span class="badge badge-active">Active</span>';
+    }
+
+    // Keep the edit widgets aligned with the saved values so re-entering
+    // edit mode (single or bulk) starts from what is actually stored.
+    var evContent = row.querySelector('.ev-content');
+    if (evContent) evContent.value = content;
+    var evTTL = row.querySelector('.ev-ttl');
+    if (evTTL) evTTL.value = ttl;
+    var evPrio = row.querySelector('.ev-prio');
+    if (evPrio) evPrio.value = String(priority);
+    var evDisabled = row.querySelector('.ev-disabled');
+    if (evDisabled) evDisabled.checked = disabled;
+
+    var deleteForm = row.querySelector('form.record-delete');
+    if (deleteForm) {
+        var contentInput = deleteForm.querySelector('input[name=content]');
+        if (contentInput) contentInput.value = content;
+        var prioInput = deleteForm.querySelector('input[name=priority]');
+        if (prioInput) prioInput.value = String(priority);
+    }
+}
+
+// updateRowComments refreshes the read-only comment block of an inline row
+// after a save, from the comment text the user just submitted.
+function updateRowComments(row, comment, commentClear) {
+    var rvComments = row.querySelector('.rv-comments');
+    var trimmedComment = comment.replace(/^\s+|\s+$/g, '');
+    if (commentClear) {
+        if (rvComments && rvComments.parentNode) {
+            rvComments.parentNode.removeChild(rvComments);
+        }
+    } else if (rvComments) {
+        if (trimmedComment) {
+            if (rvComments.parentNode) {
+                rvComments.textContent = trimmedComment + '\n';
+            }
+        } else if (rvComments.parentNode) {
+            rvComments.parentNode.removeChild(rvComments);
+        }
+    } else if (trimmedComment) {
+        // No read-only comment block exists yet — create one. Since
+        // the dedicated Comment column landed in zone_view.html,
+        // .ev-comments lives in the .col-comment cell, NOT in the
+        // Content cell. Insert the new read-only block into the
+        // comment cell, before the edit textarea, so the
+        // read-only block stays visually paired with the textarea
+        // that created it.
+        var commentCell = row.querySelector('.ev-comments').parentNode;
+        var newRv = document.createElement('div');
+        newRv.className = 'rv rv-comments record-comments';
+        newRv.textContent = trimmedComment + '\n';
+        var editComments = row.querySelector('.ev-comments');
+        commentCell.insertBefore(newRv, editComments);
+    }
+    var clearCb = row.querySelector('.ev-comment-clear-cb');
+    if (clearCb) clearCb.checked = false;
 }
 
 // syncCommentClearValue mirrors the state of the unnamed "Clear all
@@ -373,7 +416,7 @@ function initRecordPriority() {
 }
 
 // Surface zone-import feedback carried via the ?import_skipped query param set
-// by ImportZone when BIND lines could not be parsed (m28). Shows a one-shot
+// by ImportZone when BIND lines could not be parsed. Shows a one-shot
 // warning notification, then strips the param so it does not recur on refresh.
 function initImportFeedback() {
     var params = new URLSearchParams(window.location.search);
@@ -888,9 +931,12 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
 // this block is inert in production.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        applyRecordUpdate: applyRecordUpdate,
         bulkFailedSuffix: bulkFailedSuffix,
         filterOptions: filterOptions,
         initDelegatedListeners: initDelegatedListeners,
-        syncCommentClearValue: syncCommentClearValue
+        saveRecordRow: saveRecordRow,
+        syncCommentClearValue: syncCommentClearValue,
+        updateRowComments: updateRowComments
     };
 }

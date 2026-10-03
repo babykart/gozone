@@ -89,7 +89,7 @@
                         <button type="button" class="btn btn-sm btn-primary" data-action="save-record">Save</button>
                         <button type="button" class="btn btn-sm btn-secondary" data-action="cancel-edit">Cancel</button>
                     </span>
-                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" class="inline" data-confirm="Delete record {{.Name}}?">
+                    <form method="POST" action="/zones/{{$zoneID}}/records/delete" class="inline record-delete" data-confirm="Delete record {{.Name}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
                         <input type="hidden" name="name" value="{{.Name}}">
                         <input type="hidden" name="type" value="{{.Type}}">

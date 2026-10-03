@@ -236,7 +236,7 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	// the same zone (see zoneLocks).
 	defer h.zoneLocks.Lock(zoneID)()
 
-	rrset, oldRRSet, err := h.updateRecordFromForm(r)
+	rrset, oldRRSet, _, err := h.updateRecordFromForm(r)
 	if err != nil {
 		switch e := err.(type) {
 		case *recordValidationError:
@@ -275,7 +275,7 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	// the same zone (see zoneLocks).
 	defer h.zoneLocks.Lock(zoneID)()
 
-	rrset, oldRRSet, err := h.updateRecordFromForm(r)
+	rrset, oldRRSet, updatedIdx, err := h.updateRecordFromForm(r)
 	if err != nil {
 		switch e := err.(type) {
 		case *recordValidationError:
@@ -300,9 +300,22 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
 
+	// Echo the saved record in the display form the zone view rows use
+	// (SplitPriority applied), not the wire form that was PATCHed. The inline
+	// editor resyncs its row from this value: data-original-content/priority
+	// and the Delete form must hold the normalised content (trailing dot,
+	// TXT quoting, MX/SRV priority split back out), otherwise the next edit
+	// of the same row appends a duplicate and Delete misses the record.
+	updated := rrset.Records[updatedIdx]
+	if p, c, ok := models.SplitPriority(rrset.Type, updated.Content); ok {
+		updated.Priority = p
+		updated.Content = c
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"record":  rrset,
+		"updated": updated,
 	})
 }
 
@@ -325,9 +338,11 @@ type recordConflictError struct {
 func (e *recordConflictError) Error() string { return e.Message }
 
 // updateRecordFromForm parses and validates a record update request, builds the
-// merged RRSet and returns it along with the original RRSet (if any). It is
-// shared by UpdateRecord and InlineUpdateRecord.
-func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.RRSet, error) {
+// merged RRSet and returns it along with the original RRSet (if any) and the
+// index within rrset.Records of the record the edit replaced (0 for a
+// replacement of the sole record of a single-record RRSet or a brand-new
+// RRSet). It is shared by UpdateRecord and InlineUpdateRecord.
+func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.RRSet, int, error) {
 	zoneID := r.PathValue("zone_id")
 
 	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
@@ -335,10 +350,10 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		// parseRecordForm returns *recordValidationError for bad TTL/priority;
 		// pass it through so the caller renders a 400 rather than wrapping it
 		// into a generic error that would render as a 500.
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if name == "" || recordType == "" || content == "" {
-		return nil, nil, &recordValidationError{Message: "Name, type, and content are required"}
+		return nil, nil, 0, &recordValidationError{Message: "Name, type, and content are required"}
 	}
 
 	originalContent := strings.TrimSpace(r.FormValue("original_content"))
@@ -347,24 +362,24 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	name = normalizeRecordName(name, zoneID)
 
 	if err := validators.ValidateRecordName(name); err != nil {
-		return nil, nil, &recordValidationError{Message: "Invalid record name: " + err.Error()}
+		return nil, nil, 0, &recordValidationError{Message: "Invalid record name: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		return nil, nil, &recordValidationError{Message: "Invalid record type: " + err.Error()}
+		return nil, nil, 0, &recordValidationError{Message: "Invalid record type: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordContent(recordType, content); err != nil {
-		return nil, nil, &recordValidationError{Message: "Invalid record content: " + err.Error()}
+		return nil, nil, 0, &recordValidationError{Message: "Invalid record content: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
-		return nil, nil, &recordValidationError{Message: "Invalid priority: " + err.Error()}
+		return nil, nil, 0, &recordValidationError{Message: "Invalid priority: " + err.Error()}
 	}
 
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	var existingRRSet *models.RRSet
@@ -372,6 +387,21 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		if rr.Name == name && rr.Type == recordType {
 			existingRRSet = &rr
 			break
+		}
+	}
+
+	// Index of the record this edit replaces, so the inline editor can be
+	// told which record of the merged RRSet is "the saved one" (it cannot
+	// re-derive it client-side once the content is normalised). Default 0
+	// covers a new RRSet and the single-record last-write-wins replacement
+	// below; an unmatched original on a multi-record RRSet is refused.
+	updatedIdx := 0
+	if existingRRSet != nil {
+		for i, rec := range existingRRSet.Records {
+			if rec.Content == originalContent && rec.Priority == originalPriority {
+				updatedIdx = i
+				break
+			}
 		}
 	}
 
@@ -395,7 +425,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 				// On a multi-record RRSet, appending would leave the old
 				// record in place next to the edited copy — a silent
 				// duplicate. Refuse and ask the client to reload.
-				return nil, nil, &recordConflictError{
+				return nil, nil, 0, &recordConflictError{
 					Message: "This record was modified by someone else (or its content changed) since the page was loaded. Reload the page and retry your edit.",
 				}
 			}
@@ -415,7 +445,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		TTL:      ttl,
 		Records:  updatedRecords,
 		Comments: buildCommentPatch(r.FormValue("comment"), r.FormValue("comment_clear") == "1"),
-	}, existingRRSet, nil
+	}, existingRRSet, updatedIdx, nil
 }
 
 // BatchCreateRecords creates multiple DNS records in a zone (POST /zones/{zone_id}/records/batch-create).

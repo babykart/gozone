@@ -655,6 +655,88 @@ func TestInlineUpdateRecord_Success(t *testing.T) {
 	}
 }
 
+// TestInlineUpdateRecord_ResponseReturnsNormalizedRecord pins the inline-edit
+// resync contract: the JSON response must carry the saved record in the same
+// display form the zone view rows use (MX/SRV priority split back out of the
+// content, FQDN target dotted), next to the wire-form RRSet that was PATCHed.
+// The inline row resyncs data-original-content/priority and its Delete form
+// from this value; echoing the typed content instead desynchronised the row —
+// the next edit of the same row appended a duplicate record and Delete
+// submitted the pre-edit content.
+func TestInlineUpdateRecord_ResponseReturnsNormalizedRecord(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				// Wire form; the PDNS client read path splits the
+				// priority out (content "mail.example.com.", priority 10).
+				RRSets: []models.RRSet{{Name: "mx.example.com", Type: "MX", TTL: 300, Records: []models.RecordInfo{{Content: "10 mail.example.com."}}}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=mx.example.com&type=MX&content=backup.mx.example.com&ttl=3600&priority=20&disabled=false" +
+		"&original_content=mail.example.com.&original_priority=10"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Record  models.RRSet      `json:"record"`
+		Updated models.RecordInfo `json:"updated"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	// record: the RRSet as PATCHed — priority embedded, target dotted.
+	if len(resp.Record.Records) != 1 {
+		t.Fatalf("expected 1 record in the patched RRSet, got %d", len(resp.Record.Records))
+	}
+	if got, want := resp.Record.Records[0].Content, "20 backup.mx.example.com."; got != want {
+		t.Errorf("patched record content = %q, want %q", got, want)
+	}
+	if resp.Record.Records[0].Priority != 0 {
+		t.Errorf("patched record priority = %d, want 0 (embedded in content)", resp.Record.Records[0].Priority)
+	}
+	if resp.Record.TTL != 3600 {
+		t.Errorf("patched RRSet TTL = %d, want 3600", resp.Record.TTL)
+	}
+	// updated: the display form the row must adopt — priority split back
+	// out, content without the leading "20 ".
+	if got, want := resp.Updated.Content, "backup.mx.example.com."; got != want {
+		t.Errorf("updated.content = %q, want %q", got, want)
+	}
+	if resp.Updated.Priority != 20 {
+		t.Errorf("updated.priority = %d, want 20", resp.Updated.Priority)
+	}
+}
+
 // TestInlineUpdateRecord_StaleOriginalContentReturns409 is the concurrent-
 // modification regression: when the submitted original_content no longer
 // matches any record of a MULTI-record RRSet (the record was edited in
