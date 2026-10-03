@@ -75,8 +75,21 @@ func ValidateDomainName(name string) error {
 // targets (CNAME, MX, SRV, etc.) where underscores are permitted.
 //
 // Per RFC 4592 a wildcard "*" is valid only as the leftmost label and must not
-// appear elsewhere (m48): "*.*.example.com" and "foo.*.example.com" are
+// appear elsewhere: "*.*.example.com" and "foo.*.example.com" are
 // rejected.
+// validateDomainTarget validates a domain-name field that may legally be the
+// root label "." — the standard "no such name / service not provided"
+// marker. RFC 7505 null MX ("MX 0 ."), RFC 2782 SRV targets (".") and
+// RFC 3403 NAPTR replacements (".", when the regexp does all the work) all
+// use it; a plain ValidateDNSName would reject it as empty after the
+// trailing-dot trim.
+func validateDomainTarget(name string) error {
+	if name == "." {
+		return nil
+	}
+	return ValidateDNSName(name)
+}
+
 func ValidateDNSName(name string) error {
 	name = strings.TrimSuffix(name, ".")
 
@@ -431,7 +444,7 @@ func validateRRSIGTime(s, name string) error {
 // All other whitelisted record types (AFSDB, CERT, DNSKEY, DS, HINFO, KEY, LOC,
 // NAPTR, NSEC, NSEC3, NSEC3PARAM, OPENPGPKEY, RP, RRSIG, SSHFP, TLSA, URI) are
 // structurally validated (field count, numeric ranges, DNS-name fields, hex/base64
-// blobs) so no whitelisted type is accepted without a content check (m47). The
+// blobs) so no whitelisted type is accepted without a content check. The
 // default therefore rejects unknown types rather than silently accepting them.
 //
 // Returns nil if valid, an error describing the violation otherwise.
@@ -461,8 +474,10 @@ func ValidateRecordContent(recordType, content string) error {
 		return nil
 	case "MX":
 		// MX content can be "priority target" or just "target"
-		// The priority is handled as a separate field, so content is the FQDN
-		return ValidateDNSName(content)
+		// The priority is handled as a separate field, so content is the FQDN.
+		// The root label "." is the RFC 7505 null MX ("MX 0 ."):
+		// "this domain accepts no mail".
+		return validateDomainTarget(content)
 	case "SOA":
 		parts := strings.Fields(content)
 		if len(parts) != 7 {
@@ -492,7 +507,7 @@ func ValidateRecordContent(recordType, content string) error {
 			// All SOA timers and the serial must be strictly positive. A 0 value
 			// for any of them is a misconfiguration (e.g. expire 0 expires the
 			// zone immediately) — the check is applied uniformly rather than
-			// only to the serial (m50).
+			// only to the serial.
 			if n == 0 {
 				return fmt.Errorf("SOA %s must be greater than 0", f.name)
 			}
@@ -514,7 +529,9 @@ func ValidateRecordContent(recordType, content string) error {
 		if err := validateUintField(parts[len(parts)-2], "SRV port", 16); err != nil {
 			return err
 		}
-		if err := ValidateDNSName(parts[len(parts)-1]); err != nil {
+		// The target may be the root label "." — RFC 2782: "a Target of '.'
+		// means that the service is decidedly not supported at this domain".
+		if err := validateDomainTarget(parts[len(parts)-1]); err != nil {
 			return fmt.Errorf("SRV target: %w", err)
 		}
 		return nil
@@ -588,7 +605,10 @@ func ValidateRecordContent(recordType, content string) error {
 		if err := validateUintField(parts[1], "NAPTR preference", 16); err != nil {
 			return err
 		}
-		if err := ValidateDNSName(parts[5]); err != nil {
+		// The replacement may be the root label "." — the standard ENUM/SIP
+		// form when the regexp field already carries the complete
+		// substitution and no target name is needed.
+		if err := validateDomainTarget(parts[5]); err != nil {
 			return fmt.Errorf("NAPTR replacement: %w", err)
 		}
 		return nil
@@ -808,7 +828,7 @@ func ValidateRecordContent(recordType, content string) error {
 // ValidateRecordPriority checks that a priority value is valid for the given
 // record type. MX and SRV carry a 16-bit priority (0-65535); for those types
 // the value is range-checked. The priority lives in RecordInfo.Priority (not in
-// the content string), so it is validated separately from the content (m49).
+// the content string), so it is validated separately from the content.
 // For all other record types the priority is not applicable and any value is
 // accepted (it is ignored downstream by prepareRecordContent).
 func ValidateRecordPriority(recordType string, priority int) error {

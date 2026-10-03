@@ -275,7 +275,7 @@ func TestValidateRecordContent(t *testing.T) {
 }
 
 // TestValidateRecordContent_StructuredTypes covers the 17 record types that
-// previously fell through to the default-accept case (m47). Each type is
+// previously fell through to the default-accept case. Each type is
 // exercised with at least one valid example and one structurally invalid one.
 func TestValidateRecordContent_StructuredTypes(t *testing.T) {
 	tests := []struct {
@@ -373,7 +373,7 @@ func TestValidateRecordContent_StructuredTypes(t *testing.T) {
 		{"RP too few fields", "RP", "admin.example.com", true},
 		{"RP bad mailbox", "RP", "bad mbox. txt.example.com", true},
 
-		// default now rejects unknown types (m47 closure)
+		// default now rejects unknown types
 		{"unknown type rejected", "NOTAREALTYPE", "anything", true},
 	}
 	for _, tt := range tests {
@@ -390,7 +390,7 @@ func TestValidateRecordContent_StructuredTypes(t *testing.T) {
 // TestValidateRecordContent_SRVNumericFields verifies that SRV weight and port
 // are validated as 16-bit unsigned integers (0-65535), and that both the
 // 3-field (weight port target) and 4-field (priority weight port target)
-// forms are accepted (m49).
+// forms are accepted.
 func TestValidateRecordContent_SRVNumericFields(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -419,7 +419,7 @@ func TestValidateRecordContent_SRVNumericFields(t *testing.T) {
 	}
 }
 
-// TestValidateRecordPriority verifies the MX/SRV priority range check (m49).
+// TestValidateRecordPriority verifies the MX/SRV priority range check.
 // Priority lives in RecordInfo.Priority, separate from the content string, so
 // it is validated by ValidateRecordPriority rather than ValidateRecordContent.
 func TestValidateRecordPriority(t *testing.T) {
@@ -777,5 +777,33 @@ func TestValidatePassword_MaxLengthBytes(t *testing.T) {
 	// MaxLength = 0 disables the check entirely (relaxed-policy semantics).
 	if err := ValidatePassword(strings.Repeat("a", 200), PasswordPolicy{}); err != nil {
 		t.Errorf("MaxLength 0 must disable the byte check, got %v", err)
+	}
+}
+
+// TestValidateRecordContent_RootDotTargets pins the "root label as target"
+// contract: the bare "." is a legal MX target (RFC 7505 null MX — "this
+// domain accepts no mail"), SRV target (RFC 2782 — "service decidedly not
+// provided") and NAPTR replacement (the ENUM/SIP form when the regexp does
+// all the work). A plain DNS-name check rejected it as empty.
+func TestValidateRecordContent_RootDotTargets(t *testing.T) {
+	cases := []struct {
+		name, rtype, content string
+		wantErr              bool
+	}{
+		{"null MX", "MX", ".", false},
+		{"regular MX unaffected", "MX", "mail.example.com.", false},
+		{"SRV root target", "SRV", "0 0 0 .", false},
+		{"SRV regular target unaffected", "SRV", "10 5 5060 sipserver.example.com.", false},
+		{"NAPTR root replacement", "NAPTR", `100 10 "s" "SIP+D2U" "" .`, false},
+		{"NAPTR regular replacement unaffected", "NAPTR", `100 10 "s" "SIP+D2U" "" sipserver.example.com.`, false},
+		{"root dot still rejected for CNAME", "CNAME", ".", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateRecordContent(c.rtype, c.content)
+			if (err != nil) != c.wantErr {
+				t.Errorf("ValidateRecordContent(%s, %q) error = %v, wantErr %v", c.rtype, c.content, err, c.wantErr)
+			}
+		})
 	}
 }
