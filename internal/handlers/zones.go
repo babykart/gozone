@@ -866,7 +866,9 @@ func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, stat
 // error: the request Referer when it points at this site, otherwise the
 // dashboard. Only the path and query of the Referer are reused, so a crafted
 // Referer can never produce an off-site (open-redirect) link. An empty,
-// unparsable, cross-host, or non-rooted Referer falls back to /dashboard.
+// unparsable, cross-host, non-rooted, or protocol-relative Referer path
+// (leading "//" — or "/\", which browsers normalize to "//") falls back to
+// /dashboard.
 func backURL(r *http.Request) string {
 	const fallback = "/dashboard"
 	ref := r.Referer()
@@ -883,6 +885,12 @@ func backURL(r *http.Request) string {
 		return fallback
 	}
 	if !strings.HasPrefix(u.Path, "/") {
+		return fallback
+	}
+	// A same-host Referer can still carry a path like "//evil.com/x" or
+	// "/\evil.com/x" (browsers normalize "\" to "/"). Reused verbatim in the
+	// error page's href it would be a protocol-relative — off-site — link.
+	if strings.HasPrefix(u.Path, "//") || strings.HasPrefix(u.Path, `/\`) {
 		return fallback
 	}
 	back := u.Path

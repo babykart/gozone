@@ -938,7 +938,7 @@ func TestPaginate(t *testing.T) {
 		t.Errorf("page 99 clamps to 2: current=%d len=%d", info.Current, len(paged))
 	}
 
-	// Empty slice — totalPages clamped to 1 (L-11: "page 1 sur 1" not "page 1 sur 0")
+	// Empty slice — totalPages clamped to 1 ("page 1 sur 1" not "page 1 sur 0")
 	paged, info = paginate([]int{}, 1, 10)
 	if len(paged) != 0 || info.TotalPages != 1 || info.Total != 0 {
 		t.Errorf("empty: len=%d pages=%d total=%d", len(paged), info.TotalPages, info.Total)
@@ -998,7 +998,7 @@ func TestPageInfoFromTotal(t *testing.T) {
 		t.Errorf("pageInfoFromTotal(100,5,0) = %+v", info)
 	}
 
-	// Empty set — totalPages clamped to 1 (L-11).
+	// Empty set — totalPages clamped to 1.
 	info = pageInfoFromTotal(0, 1, 10)
 	if info.TotalPages != 1 || info.Current != 1 || info.Total != 0 {
 		t.Errorf("pageInfoFromTotal(0,1,10): expected totalPages=1 current=1 total=0, got %+v", info)
@@ -1567,6 +1567,9 @@ func TestBackURL(t *testing.T) {
 		{"cross-origin host", "https://evil.com/x", "/dashboard"},
 		{"cross-origin host+port", "http://" + host + ":8080/x", "/dashboard"},
 		{"protocol-relative", "//evil.com/x", "/dashboard"},
+		{"same-host protocol-relative path", "http://" + host + "//evil.com/x", "/dashboard"},
+		{"same-host backslash path", "http://" + host + `/` + `\` + "evil.com/x", "/dashboard"},
+		{"deep path with double slash later", "http://" + host + "/zones//42", "/zones//42"},
 		{"invalid escape", "http://" + host + "/%zz", "/dashboard"},
 		{"relative path-only", "/users/1", "/users/1"},
 		{"relative without slash", "users/1", "/dashboard"},
