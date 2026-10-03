@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -242,7 +243,7 @@ func TestCreateGroup_NoSelections(t *testing.T) {
 	}
 }
 
-// TestCreateGroup_NonExistentMember guards REVIEW.md B-4: a numeric but
+// TestCreateGroup_NonExistentMember guards the member-validation contract: a numeric but
 // non-existent user_id must be skipped (not silently inserted/ignored) and the
 // redirect must surface a members_skipped warning so the admin is informed.
 func TestCreateGroup_NonExistentMember(t *testing.T) {
@@ -537,7 +538,7 @@ func TestRemoveMemberFromGroup(t *testing.T) {
 	}
 }
 
-// TestAddMemberToGroup_InvalidUserID guards REVIEW.md M-4: a non-numeric (or
+// TestAddMemberToGroup_InvalidUserID guards the id-validation contract: a non-numeric (or
 // non-positive) user_id must yield HTTP 400 instead of leaking a driver-level
 // error as 500 on Postgres. No row must be inserted.
 func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
@@ -569,7 +570,7 @@ func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
 	}
 }
 
-// TestAddMemberToGroup_NonExistentUser guards REVIEW.md B-4 (single-add path):
+// TestAddMemberToGroup_NonExistentUser guards the existence check (single-add path):
 // a numeric but non-existent user_id must yield a clear 400 and insert nothing,
 // rather than being silently dropped by InsertIgnore (FK violation).
 func TestAddMemberToGroup_NonExistentUser(t *testing.T) {
@@ -1260,5 +1261,91 @@ func TestGetUserAllowedZoneIDs_ContextCancellation(t *testing.T) {
 	cancel()
 	if _, err := h.getUserAllowedZoneIDs(cancelled, userID); err == nil {
 		t.Error("a cancelled context must abort the lookup instead of returning rows")
+	}
+}
+
+// TestGroupMutationsLogged pins the access-control audit trail: every group
+// mutation (create with initial members/zones, member and zone changes,
+// delete) must leave an activity_logs row attributed to the acting admin.
+// Access-control changes used to leave no trace at all.
+func TestGroupMutationsLogged(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	admin := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	member := testutil.SeedTestUser(t, h.DB, "member", "member", "user", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: admin, Username: "admin", Role: "admin"})
+
+	actions := func() map[string]string {
+		rows, err := h.DB.Query("SELECT action, details FROM activity_logs ORDER BY id")
+		if err != nil {
+			t.Fatalf("query activity: %v", err)
+		}
+		defer rows.Close()
+		out := map[string]string{}
+		for rows.Next() {
+			var a, d string
+			if err := rows.Scan(&a, &d); err != nil {
+				t.Fatalf("scan activity: %v", err)
+			}
+			out[a] = d
+		}
+		return out
+	}
+
+	// CreateGroup with one member and one zone selected.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/create",
+		strings.NewReader(fmt.Sprintf("name=ops&description=&user_ids=%d&zone_ids=ops.example.com.", member)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateGroup(w, r.WithContext(ctx))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("create group: expected 303, got %d", w.Code)
+	}
+
+	var gid int64
+	if err := h.DB.QueryRow("SELECT id FROM zone_groups WHERE name = 'ops'").Scan(&gid); err != nil {
+		t.Fatalf("lookup group: %v", err)
+	}
+
+	// Member add, zone remove, then delete.
+	for _, call := range []struct {
+		path string
+		body string
+	}{
+		{fmt.Sprintf("/groups/%d/add-member", gid), fmt.Sprintf("user_id=%d", member)},
+		{fmt.Sprintf("/groups/%d/remove-zone", gid), "zone_id=ops.example.com."},
+	} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, call.path, strings.NewReader(call.body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("group_id", strconv.FormatInt(gid, 10))
+		// add-member and remove-zone are distinct handlers; dispatch by path suffix.
+		if strings.HasSuffix(call.path, "/add-member") {
+			h.AddMemberToGroup(w, r.WithContext(ctx))
+		} else {
+			h.RemoveZoneFromGroup(w, r.WithContext(ctx))
+		}
+	}
+
+	wd := httptest.NewRecorder()
+	rd := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/groups/%d/delete", gid), nil)
+	rd.SetPathValue("group_id", strconv.FormatInt(gid, 10))
+	h.DeleteGroup(wd, rd.WithContext(ctx))
+
+	got := actions()
+	for _, action := range []string{"create_group", "add_group_member", "remove_group_zone", "delete_group"} {
+		if _, ok := got[action]; !ok {
+			t.Errorf("action %q must be logged, got %+v", action, got)
+		}
+	}
+	if d := got["create_group"]; !strings.Contains(d, "1 member(s)") || !strings.Contains(d, "1 zone(s)") {
+		t.Errorf("create_group details must carry the attached counts, got %q", d)
+	}
+	var actor sql.NullInt64
+	h.DB.QueryRow("SELECT user_id FROM activity_logs WHERE action = 'delete_group'").Scan(&actor)
+	if !actor.Valid || actor.Int64 != admin {
+		t.Errorf("delete_group must be attributed to the acting admin (user_id=%d), got %v", admin, actor)
 	}
 }

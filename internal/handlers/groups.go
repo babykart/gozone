@@ -162,8 +162,16 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	skipped := h.attachGroupSelections(r, id)
 
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "create_group",
+		Details: fmt.Sprintf("Created group %s (id: %d) with %d member(s), %d zone(s)", name, id, skipped.members, skipped.zones),
+	}); err != nil {
+		logger.Error("failed to log create_group activity", "group_id", id, "error", err)
+	}
+
 	target := "/groups/" + strconv.FormatInt(id, 10) + "/edit"
-	if skipped > 0 {
+	if skipped.users > 0 {
 		// Some submitted members did not exist (stale form / tampered request)
 		// and were skipped — surface it so the admin is not left with a silent
 		// partial add.
@@ -228,17 +236,27 @@ func (h *Handler) queryExistingUserIDs(ctx context.Context, batch []int64, exist
 	return rows.Err()
 }
 
+// groupSelectionStats summarizes what attachGroupSelections inserted: the
+// member and zone rows actually added, and the member ids skipped because
+// they reference no existing user.
+type groupSelectionStats struct {
+	members int
+	zones   int
+	users   int // skipped non-existent user ids
+}
+
 // attachGroupSelections inserts the multi-select members (user_ids) and zones
 // (zone_ids) carried by the create form into the just-created group. User IDs
 // are validated as positive ints and their existence is checked in one batched
 // query before insertion: a stale or tampered user_id would otherwise be
 // silently dropped by InsertIgnore (FK violation) with no feedback to the
-// admin. Non-existent users are skipped and counted; the count is returned so
-// CreateGroup can surface a warning. Zone IDs are trimmed strings referencing
-// PowerDNS zones (no users-table FK to validate against). Both lists are
-// de-duplicated while preserving order. Each row uses InsertIgnore so a
-// repeated selection is tolerated. Errors are logged, not fatal.
-func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
+// admin. Non-existent users are skipped and counted; the counts are returned
+// so CreateGroup can surface a warning and audit the effective membership.
+// Zone IDs are trimmed strings referencing PowerDNS zones (no users-table FK
+// to validate against). Both lists are de-duplicated while preserving order.
+// Each row uses InsertIgnore so a repeated selection is tolerated. Errors are
+// logged, not fatal.
+func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) groupSelectionStats {
 	var userIDs []int64
 	seenUsers := make(map[int64]struct{})
 	for _, raw := range r.PostForm["user_ids"] {
@@ -266,10 +284,10 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
 		}
 	}
 
-	skipped := 0
+	var stats groupSelectionStats
 	for _, uid := range userIDs {
 		if !existing[uid] {
-			skipped++
+			stats.users++
 			logger.Warn("skipped non-existent user on group create",
 				"group_id", groupID, "user_id", uid)
 			continue
@@ -280,7 +298,9 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
 			groupID, uid); err != nil {
 			logger.Error("failed to add member to group on create",
 				"group_id", groupID, "user_id", uid, "error", err)
+			continue
 		}
+		stats.members++
 	}
 
 	seenZones := make(map[string]struct{})
@@ -299,10 +319,12 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
 			groupID, zoneID); err != nil {
 			logger.Error("failed to add zone to group on create",
 				"group_id", groupID, "zone_id", zoneID, "error", err)
+			continue
 		}
+		stats.zones++
 	}
 
-	return skipped
+	return stats
 }
 
 // EditGroupPage renders the group edit form with members and zones (GET /groups/{group_id}/edit).
@@ -412,6 +434,14 @@ func (h *Handler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "update_group",
+		Details: fmt.Sprintf("Updated group %s (id: %s)", name, groupIDStr),
+	}); err != nil {
+		logger.Error("failed to log update_group activity", "group_id", groupID, "error", err)
+	}
+
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
@@ -439,6 +469,13 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		h.renderErrorStatus(w, r, http.StatusNotFound, "Group not found")
 		return
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "delete_group",
+		Details: fmt.Sprintf("Deleted group id %d", groupID),
+	}); err != nil {
+		logger.Error("failed to log delete_group activity", "group_id", groupID, "error", err)
 	}
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
@@ -491,6 +528,13 @@ func (h *Handler) BulkDeleteGroups(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deleted++
+		if err := logActivity(r.Context(), h.DB, activityEntry{
+			UserID:  activityUserIDOf(r),
+			Action:  "delete_group",
+			Details: fmt.Sprintf("Deleted group id %d (bulk)", gid),
+		}); err != nil {
+			logger.Error("failed to log delete_group activity", "group_id", gid, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -537,6 +581,13 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 		groupID, userID); err != nil {
 		logger.Error("failed to add member to group", "group_id", groupID, "user_id", userID, "error", err)
 	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "add_group_member",
+		Details: fmt.Sprintf("Added user %d to group %d", userID, groupID),
+	}); err != nil {
+		logger.Error("failed to log add_group_member activity", "group_id", groupID, "error", err)
+	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
@@ -562,6 +613,13 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 	); err != nil {
 		logger.Error("failed to remove member from group", "group_id", groupID, "user_id", userID, "error", err)
 	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "remove_group_member",
+		Details: fmt.Sprintf("Removed user %d from group %d", userID, groupID),
+	}); err != nil {
+		logger.Error("failed to log remove_group_member activity", "group_id", groupID, "error", err)
+	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
@@ -582,6 +640,14 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 			groupID, zoneID); err != nil {
 			logger.Error("failed to add zone to group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
 		}
+		if err := logActivity(r.Context(), h.DB, activityEntry{
+			UserID:  activityUserIDOf(r),
+			ZoneID:  zoneID,
+			Action:  "add_group_zone",
+			Details: fmt.Sprintf("Granted group %d access to zone %s", groupID, zoneID),
+		}); err != nil {
+			logger.Error("failed to log add_group_zone activity", "group_id", groupID, "error", err)
+		}
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
@@ -601,6 +667,14 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 		groupID, zoneID,
 	); err != nil {
 		logger.Error("failed to remove zone from group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		ZoneID:  zoneID,
+		Action:  "remove_group_zone",
+		Details: fmt.Sprintf("Revoked group %d access to zone %s", groupID, zoneID),
+	}); err != nil {
+		logger.Error("failed to log remove_group_zone activity", "group_id", groupID, "error", err)
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 func seedTemplate(t *testing.T, h *Handler, name, description string) int64 {
@@ -1134,5 +1136,69 @@ func TestApplyTemplateToZone_InvalidRecordRejected(t *testing.T) {
 	}
 	if strings.Contains(page, "Error: PowerDNS rejected") {
 		t.Error("the opaque PowerDNS failure must no longer be the surfaced message")
+	}
+}
+
+// TestTemplateMutationsLogged pins the audit trail for template management:
+// create, update, record add and delete must each leave an activity_logs row
+// attributed to the acting admin — these mutations previously left no trace.
+func TestTemplateMutationsLogged(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// CreateTemplate.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/create", strings.NewReader("name=web-tpl&description="))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateTemplate(w, r.WithContext(ctx))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("create template: expected 303, got %d", w.Code)
+	}
+	var gid int64
+	h.DB.QueryRow("SELECT id FROM zone_templates WHERE name = 'web-tpl'").Scan(&gid)
+	tid := strconv.FormatInt(gid, 10)
+
+	// UpdateTemplate.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/templates/"+tid+"/update", strings.NewReader("name=web-tpl2&description=renamed"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("template_id", tid)
+	h.UpdateTemplate(w, r.WithContext(ctx))
+
+	// AddTemplateRecord.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/templates/"+tid+"/records/add", strings.NewReader("name=www&type=A&content={{IP}}&ttl=3600"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("template_id", tid)
+	h.AddTemplateRecord(w, r.WithContext(ctx))
+
+	// DeleteTemplate.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/templates/"+tid+"/delete", nil)
+	r.SetPathValue("template_id", tid)
+	h.DeleteTemplate(w, r.WithContext(ctx))
+
+	got := map[string]string{}
+	rows, err := h.DB.Query("SELECT action, details FROM activity_logs")
+	if err != nil {
+		t.Fatalf("query activity: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, d string
+		rows.Scan(&a, &d)
+		got[a] = d
+	}
+	for _, action := range []string{"create_template", "update_template", "add_template_record", "delete_template"} {
+		if _, ok := got[action]; !ok {
+			t.Errorf("action %q must be logged, got %+v", action, got)
+		}
+	}
+	if d := got["add_template_record"]; !strings.Contains(d, "A") || !strings.Contains(d, "www") {
+		t.Errorf("add_template_record details must name the record, got %q", d)
 	}
 }

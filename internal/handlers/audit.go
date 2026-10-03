@@ -3,6 +3,9 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"net/http"
+
+	"github.com/babykart/gozone/internal/middleware"
 )
 
 // auditExecer is the subset of *database.DB / *database.Tx that logActivity
@@ -23,6 +26,16 @@ type activityEntry struct {
 	Details  string
 	OldValue string // optional; recorded for record mutations
 	NewValue string // optional; recorded for record mutations
+}
+
+// activityUserIDOf returns the acting user's id for the activity log, or 0
+// when the request carries no authenticated user (defensive: every mutating
+// route sits behind auth). Shared by the web and API write paths.
+func activityUserIDOf(r *http.Request) int64 {
+	if user := middleware.GetUser(r); user != nil {
+		return user.ID
+	}
+	return 0
 }
 
 // logActivity writes one activity_logs row. It executes via ExecContext so the

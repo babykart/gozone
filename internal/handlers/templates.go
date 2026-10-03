@@ -141,6 +141,13 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to create template", err)
 		return
 	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "create_template",
+		Details: fmt.Sprintf("Created template %s (id: %d)", name, id),
+	}); err != nil {
+		logger.Error("failed to log create_template activity", "template_id", id, "error", err)
+	}
 	http.Redirect(w, r, "/templates/"+strconv.FormatInt(id, 10)+"/edit", http.StatusSeeOther)
 }
 
@@ -205,6 +212,14 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "update_template",
+		Details: fmt.Sprintf("Updated template %s (id: %s)", name, templateIDStr),
+	}); err != nil {
+		logger.Error("failed to log update_template activity", "template_id", templateIDStr, "error", err)
+	}
+
 	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
 }
@@ -227,6 +242,13 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_templates WHERE id = ?", templateIDStr); err != nil {
 		h.renderInternalError(w, r, "Failed to delete template", err)
 		return
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "delete_template",
+		Details: fmt.Sprintf("Deleted template %s (id: %s)", h.templateLabelFor(r.Context(), 0, templateIDStr), templateIDStr),
+	}); err != nil {
+		logger.Error("failed to log delete_template activity", "template_id", templateIDStr, "error", err)
 	}
 	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/templates", http.StatusSeeOther)
@@ -281,6 +303,13 @@ func (h *Handler) BulkDeleteTemplates(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deleted++
+		if err := logActivity(r.Context(), h.DB, activityEntry{
+			UserID:  activityUserIDOf(r),
+			Action:  "delete_template",
+			Details: fmt.Sprintf("Deleted template id %d (bulk)", tid),
+		}); err != nil {
+			logger.Error("failed to log delete_template activity", "template_id", tid, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -306,6 +335,13 @@ func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to add record", err)
 		return
 	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "add_template_record",
+		Details: fmt.Sprintf("Added %s record %s to template %s", rec.Type, rec.Name, h.templateLabelFor(r.Context(), rec.TemplateID, templateIDStr)),
+	}); err != nil {
+		logger.Error("failed to log add_template_record activity", "template_id", templateIDStr, "error", err)
+	}
 	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
 }
@@ -327,6 +363,13 @@ func (h *Handler) UpdateTemplateRecord(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to update record", err)
 		return
 	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "update_template_record",
+		Details: fmt.Sprintf("Updated %s record %s in template %s", rec.Type, rec.Name, h.templateLabelFor(r.Context(), rec.TemplateID, templateIDStr)),
+	}); err != nil {
+		logger.Error("failed to log update_template_record activity", "template_id", templateIDStr, "error", err)
+	}
 	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
 }
@@ -339,6 +382,13 @@ func (h *Handler) DeleteTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.DB.ExecContext(r.Context(), "DELETE FROM zone_template_records WHERE id = ? AND template_id = ?", recordIDStr, templateIDStr); err != nil {
 		h.renderInternalError(w, r, "Failed to delete record", err)
 		return
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  activityUserIDOf(r),
+		Action:  "delete_template_record",
+		Details: fmt.Sprintf("Deleted record %s from template %s", recordIDStr, h.templateLabelFor(r.Context(), 0, templateIDStr)),
+	}); err != nil {
+		logger.Error("failed to log delete_template_record activity", "template_id", templateIDStr, "error", err)
 	}
 	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
