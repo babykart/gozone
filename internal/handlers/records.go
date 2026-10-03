@@ -241,6 +241,8 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 		switch e := err.(type) {
 		case *recordValidationError:
 			h.renderError(w, r, e.Message)
+		case *recordConflictError:
+			h.renderErrorStatus(w, r, http.StatusConflict, e.Message)
 		default:
 			h.renderInternalError(w, r, "Failed to update record", err)
 		}
@@ -278,6 +280,8 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		switch e := err.(type) {
 		case *recordValidationError:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.Message})
+		case *recordConflictError:
+			writeJSON(w, http.StatusConflict, map[string]string{"error": e.Message})
 		default:
 			logger.Error("InlineUpdateRecord: failed to build update", "zone_id", zoneID, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
@@ -309,6 +313,16 @@ type recordValidationError struct {
 }
 
 func (e *recordValidationError) Error() string { return e.Message }
+
+// recordConflictError marks a concurrent-modification conflict — the
+// before-image submitted by the client (original_content/original_priority)
+// no longer matches any record of the stored RRSet — so callers answer 409
+// and the client reloads instead of the edit silently duplicating records.
+type recordConflictError struct {
+	Message string
+}
+
+func (e *recordConflictError) Error() string { return e.Message }
 
 // updateRecordFromForm parses and validates a record update request, builds the
 // merged RRSet and returns it along with the original RRSet (if any). It is
@@ -365,16 +379,26 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	if existingRRSet != nil {
 		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
 			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
-		// If the merge didn't find a match (originalContent no longer matches
-		// any existing record — stale page data, e.g. the SOA serial was
-		// bumped by PowerDNS between page load and save via SOA-EDIT), the
-		// merge appended a new record. For a single-record RRSet this would
-		// produce two records, which PowerDNS rejects for types like SOA or
-		// CNAME ("only one such record allowed"). Replace the sole record
-		// instead, implementing last-write-wins for the edit the user
-		// explicitly submitted.
-		if len(updatedRecords) > len(existingRRSet.Records) && len(existingRRSet.Records) == 1 {
-			updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+		// The merge appended instead of replacing: originalContent no longer
+		// matches any existing record — the page data is stale.
+		if len(updatedRecords) > len(existingRRSet.Records) {
+			if len(existingRRSet.Records) == 1 {
+				// For a single-record RRSet the append would produce two
+				// records, which PowerDNS rejects for types like SOA or
+				// CNAME ("only one such record allowed") — and an SOA edit
+				// is ALWAYS stale this way, because PowerDNS bumps the
+				// serial via SOA-EDIT between page load and save. Replace
+				// the sole record instead: last-write-wins for the edit the
+				// user explicitly submitted.
+				updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+			} else {
+				// On a multi-record RRSet, appending would leave the old
+				// record in place next to the edited copy — a silent
+				// duplicate. Refuse and ask the client to reload.
+				return nil, nil, &recordConflictError{
+					Message: "This record was modified by someone else (or its content changed) since the page was loaded. Reload the page and retry your edit.",
+				}
+			}
 		}
 	} else {
 		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}

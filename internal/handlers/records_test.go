@@ -655,6 +655,117 @@ func TestInlineUpdateRecord_Success(t *testing.T) {
 	}
 }
 
+// TestInlineUpdateRecord_StaleOriginalContentReturns409 is the concurrent-
+// modification regression: when the submitted original_content no longer
+// matches any record of a MULTI-record RRSet (the record was edited in
+// another tab/session), the merge used to append the edited copy next to the
+// unchanged original — a silent duplicate. The handler must refuse with 409
+// and send nothing to PowerDNS.
+func TestInlineUpdateRecord_StaleOriginalContentReturns409(t *testing.T) {
+	var patched []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+					{Content: "10.0.0.1", Disabled: false},
+					{Content: "10.0.0.2", Disabled: false},
+				}}},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patched = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// original_content 9.9.9.9 matches neither stored record: stale page.
+	body := "name=www.example.com&type=A&content=10.0.0.3&ttl=3600&priority=0&disabled=false&original_content=9.9.9.9&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for a stale original_content on a multi-record RRSet, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(patched) != 0 {
+		t.Errorf("a refused edit must not reach PowerDNS, got PATCH %+v", patched)
+	}
+}
+
+// TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces pins
+// the deliberate exception: on a single-record RRSet a stale
+// original_content keeps the last-write-wins replace (an SOA edit is ALWAYS
+// stale this way, because PowerDNS bumps the serial via SOA-EDIT between
+// page load and save — a 409 there would make SOA uneditable).
+func TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces(t *testing.T) {
+	var patched []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}}}},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patched = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.9&ttl=3600&priority=0&disabled=false&original_content=9.9.9.9&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("single-record RRSet with stale original_content must stay last-write-wins, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(patched) != 1 || len(patched[0].Records) != 1 || patched[0].Records[0].Content != "10.0.0.9" {
+		t.Errorf("expected the sole record replaced by the submitted edit, got %+v", patched)
+	}
+}
+
 func TestInlineUpdateRecord_EmptyContent(t *testing.T) {
 	h := newTestHandler(t)
 
