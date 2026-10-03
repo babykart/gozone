@@ -43,17 +43,21 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 		Total:      total,
 	}
 
-	extraParts := []string{}
+	// extra carries the active filters as separate key/value pairs. The
+	// pagination partial re-renders each pair individually: interpolating a
+	// pre-joined "action=login&from=…" string makes html/template escape it
+	// as one opaque query value (action%3dlogin%26…), silently dropping the
+	// filters on page navigation.
+	extra := url.Values{}
 	if action != "" {
-		extraParts = append(extraParts, "action="+url.QueryEscape(action))
+		extra.Set("action", action)
 	}
 	if fromDate != "" {
-		extraParts = append(extraParts, "from="+url.QueryEscape(fromDate))
+		extra.Set("from", fromDate)
 	}
 	if toDate != "" {
-		extraParts = append(extraParts, "to="+url.QueryEscape(toDate))
+		extra.Set("to", toDate)
 	}
-	extra := strings.Join(extraParts, "&")
 
 	data := map[string]interface{}{
 		"Title":      "Activity - " + h.Cfg.Server.AppName,

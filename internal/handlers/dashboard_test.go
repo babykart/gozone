@@ -91,7 +91,8 @@ func TestActivityPage_EscapesDateParams(t *testing.T) {
 	if strings.Contains(body, "action=fake") {
 		t.Errorf("unescaped action parameter leaked into pagination links: %s", body)
 	}
-	if !strings.Contains(body, "from=2024-01-01%26action%3Dfake") {
+	// html/template percent-escapes with lowercase hex digits.
+	if !strings.Contains(body, "from=2024-01-01%26action%3dfake") {
 		t.Errorf("from date not properly escaped in pagination links: %s", body)
 	}
 }

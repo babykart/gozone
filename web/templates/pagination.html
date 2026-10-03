@@ -9,19 +9,26 @@
 {{$opp := .OtherPerPage}}
 {{$extra := .Extra}}
 {{/*
-  REVIEW.md mineur fix: the per-page <select> used to live inside the
-  {{if gt $info.TotalPages 1}} block, so when every result fit on a single
-  page the selector disappeared and the user could no longer change the
-  page size. The selector is now extracted into its own block gated on
-  Total > 0 (no point showing it on an empty result set), while the
-  Previous / Next / page-info text stays inside the original block where
-  it makes sense.
+  The per-page <select> used to live inside the {{if gt $info.TotalPages 1}}
+  block, so when every result fit on a single page the selector disappeared
+  and the user could no longer change the page size. The selector is now
+  extracted into its own block gated on Total > 0 (no point showing it on an
+  empty result set), while the Previous / Next / page-info text stays inside
+  the original block where it makes sense.
+*/}}
+{{/*
+  $extra carries additional filters (activity log: action/from/to) as
+  url.Values. Each key/value pair is rendered separately: interpolating a
+  pre-joined "k=v&k2=v2" string makes html/template escape it as one opaque
+  query value (k%3dv%26k2%3dv2), silently dropping the filters on
+  navigation. html/template contextually escapes each interpolated key and
+  value exactly once.
 */}}
 {{if gt $info.TotalPages 1}}
 <div class="pagination">
-    <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
+    <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
     <span class="page-info">Page {{$info.Current}} / {{$info.TotalPages}} ({{$info.Total}} {{$label}})</span>
-    <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{if $extra}}&{{$extra}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
+    <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
 </div>
 {{end}}
 {{if gt $info.Total 0}}

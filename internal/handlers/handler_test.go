@@ -81,7 +81,7 @@ func testTemplateSet() *template.Template {
 		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
 		{{define "dnssec.html"}}DNSSEC: {{.Zone.Name}} Keys: {{range .Keys}}{{.ID}}:{{.Active}}:{{.KeyType}} {{end}}{{end}}
-		{{define "activity.html"}}Activity: {{range .Logs}}{{.Action}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} PerPage={{.PageInfo.PerPage}} Search={{.Search}}{{end}}{{if .Extra}} Extra={{.Extra}}{{end}}{{end}}
+		{{define "activity.html"}}Activity: {{range .Logs}}{{.Action}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} PerPage={{.PageInfo.PerPage}} Search={{.Search}}{{end}}{{if .Extra}}<a href="?{{range $k, $v := .Extra}}&{{$k}}={{index $v 0}}{{end}}">extra</a>{{end}}{{end}}
 	`))
 }
 
@@ -259,18 +259,17 @@ func TestRender_MissingTemplate(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
 	}
-	// Generic message only — no internal detail (template name/type) leaked
-	// (REVIEW.md L-1).
+	// Generic message only — no internal detail (template name/type) leaked.
 	if body := w.Body.String(); strings.Contains(body, "nonexistent") {
 		t.Errorf("render error leaked internal detail to client: %q", body)
 	}
 }
 
-// TestRender_ErrorNoPartialOutputNoLeak is the L-1 regression: a template that
-// writes some bytes then fails mid-render must NOT stream a half-rendered page
-// to the client, and the error body must be the generic "Internal Server
-// Error" — not the internal template error (paths, type names). render()
-// pre-renders into a buffer and discards it on failure.
+// TestRender_ErrorNoPartialOutputNoLeak is the render-leak regression: a
+// template that writes some bytes then fails mid-render must NOT stream a
+// half-rendered page to the client, and the error body must be the generic
+// "Internal Server Error" — not the internal template error (paths, type
+// names). render() pre-renders into a buffer and discards it on failure.
 func TestRender_ErrorNoPartialOutputNoLeak(t *testing.T) {
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
