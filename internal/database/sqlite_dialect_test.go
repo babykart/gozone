@@ -1,10 +1,13 @@
 package database
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSQLiteDialect_DriverName(t *testing.T) {
@@ -65,7 +68,7 @@ func TestSQLiteDialect_MaxOpenConns(t *testing.T) {
 // TestSQLiteDialect_PoolSettings verifies the SQLite pool is tuned for its
 // single serialized connection: idle matches open (keep the lone conn warm)
 // and the connection lifetime is unlimited (no proxy to drop a local file
-// connection). REVIEW.md m16.
+// connection).
 func TestSQLiteDialect_PoolSettings(t *testing.T) {
 	d := &sqliteDialect{}
 	if got := d.MaxIdleConns(); got != d.MaxOpenConns() {
@@ -124,7 +127,7 @@ func TestSQLiteDialect_Migrations_NoDoubleOnConflict(t *testing.T) {
 
 // TestSQLiteDialect_IsAlreadyExistsError verifies the message-text matching
 // that lets the migration runner tolerate re-running an already-applied
-// migration after a content edit (REVIEW.md m22).
+// migration after a content edit.
 func TestSQLiteDialect_IsAlreadyExistsError(t *testing.T) {
 	d := &sqliteDialect{}
 	cases := []struct {
@@ -150,7 +153,7 @@ func TestSQLiteDialect_IsAlreadyExistsError(t *testing.T) {
 }
 
 // TestSQLiteDialect_IsUniqueViolation verifies the message-text matching used
-// to classify a UNIQUE-constraint violation (REVIEW.md L-7). The go-sqlite3
+// to classify a UNIQUE-constraint violation. The go-sqlite3
 // driver exposes no typed error code, so detection relies on the stable
 // "UNIQUE constraint failed: ..." prefix that every SQLite version emits.
 func TestSQLiteDialect_IsUniqueViolation(t *testing.T) {
@@ -175,5 +178,95 @@ func TestSQLiteDialect_IsUniqueViolation(t *testing.T) {
 				t.Errorf("IsUniqueViolation(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestMigrate_SQLitePopulatedUsersUpgrade verifies the upgrade path from a
+// database created before the password_changed_at column existed. SQLite
+// rejects ADD COLUMN with a non-constant default once the table holds rows
+// ("Cannot add a column with non-constant default"), and users is never empty
+// on an upgraded deployment (the seed admin always exists), so the migration
+// must add the column with a constant epoch default and backfill existing rows
+// with a follow-up UPDATE. The seeded schema stops right before that
+// migration, then migrate() replays the full remaining sequence over the
+// populated table.
+func TestMigrate_SQLitePopulatedUsersUpgrade(t *testing.T) {
+	dialect := &sqliteDialect{}
+	dsn := filepath.Join(t.TempDir(), "gozone.db")
+	conn, err := sql.Open("sqlite3", dialect.DSN(dsn))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+	db := &DB{Conn: conn, dialect: dialect}
+
+	// Bootstrap the tracking table, mirroring migrate()'s own first step.
+	if _, err := conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	// Recreate a pre-column database: apply every migration that precedes
+	// the password_changed_at one (breaking at the target), then populate
+	// users the way a real deployment always is.
+	applied := 0
+	for _, m := range dialect.Migrations() {
+		if strings.Contains(m, "ADD COLUMN password_changed_at") {
+			break
+		}
+		if err := db.applyMigration(m, migrationVersion(m)); err != nil {
+			t.Fatalf("seed pre-column migration %d: %v", applied, err)
+		}
+		applied++
+	}
+	if applied == 0 {
+		t.Fatal("test baseline: no migration applied before password_changed_at")
+	}
+	if _, err := conn.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('admin', 'admin@example.com', 'x', 'admin', 1)`,
+	); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	// A plain "ADD COLUMN ... DEFAULT CURRENT_TIMESTAMP" fails here with
+	// "Cannot add a column with non-constant default"; migrate() must
+	// succeed and backfill the column.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("migrate over populated users table: %v", err)
+	}
+
+	var changedAt time.Time
+	if err := conn.QueryRow(
+		"SELECT password_changed_at FROM users WHERE username = 'admin'",
+	).Scan(&changedAt); err != nil {
+		t.Fatalf("select password_changed_at: %v", err)
+	}
+	if changedAt.Before(time.Now().UTC().Add(-time.Minute)) {
+		t.Errorf("password_changed_at = %v, want ~now (backfilled by the migration)", changedAt)
+	}
+
+	// Rows inserted without the column get the constant epoch filler: this
+	// is the schema contract that production INSERTs must set the column
+	// explicitly instead of relying on a now() default.
+	if _, err := conn.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('later', 'later@example.com', 'x', 'user', 1)`,
+	); err != nil {
+		t.Fatalf("insert without password_changed_at: %v", err)
+	}
+	var epoch time.Time
+	if err := conn.QueryRow(
+		"SELECT password_changed_at FROM users WHERE username = 'later'",
+	).Scan(&epoch); err != nil {
+		t.Fatalf("select filler default: %v", err)
+	}
+	if epoch.Unix() != 0 {
+		t.Errorf("omitted password_changed_at = %v, want the epoch filler default", epoch)
+	}
+
+	// Steady state: a second run is a no-op.
+	if err := db.migrate(); err != nil {
+		t.Fatalf("second migrate should be a no-op: %v", err)
 	}
 }

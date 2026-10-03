@@ -66,7 +66,7 @@ func (s *sqliteDialect) MaxIdleConns() int { return constants.MaxOpenConns }
 
 // ConnMaxLifetime is zero (unlimited) for SQLite: there is a single local
 // connection to a file and no proxy/LB in between that could silently drop it,
-// so recycling would only add needless reconnect cost. See REVIEW.md m16.
+// so recycling would only add needless reconnect cost.
 func (s *sqliteDialect) ConnMaxLifetime() time.Duration { return 0 }
 
 func (s *sqliteDialect) Rebind(query string) string { return query }
@@ -78,8 +78,7 @@ func (s *sqliteDialect) InsertIgnore(table string, columns, _ []string) string {
 // SupportsInsertReturning returns true: the bundled SQLite is 3.53.2, well past
 // the 3.35 release that added RETURNING. This also exercises the RETURNING code
 // path under the in-memory SQLite test suite, giving confidence that the
-// PostgreSQL path (which lacks LastInsertId support) works identically
-// (REVIEW.md H-1).
+// PostgreSQL path (which lacks LastInsertId support) works identically.
 func (s *sqliteDialect) SupportsInsertReturning() bool { return true }
 
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
@@ -92,7 +91,7 @@ func (s *sqliteDialect) LockMigrations(conn *sql.DB) (func(), error) {
 
 // IsAlreadyExistsError matches go-sqlite3's DDL-already-exists messages. The
 // driver exposes no typed error codes for these, so we match on the stable
-// message text. See REVIEW.md m22.
+// message text.
 func (s *sqliteDialect) IsAlreadyExistsError(err error) bool {
 	if err == nil {
 		return false
@@ -105,7 +104,7 @@ func (s *sqliteDialect) IsAlreadyExistsError(err error) bool {
 // IsUniqueViolation matches go-sqlite3's UNIQUE-constraint-failed error. The
 // driver exposes no typed error code for this, so we match on the stable
 // message prefix "UNIQUE constraint failed: ..." that every SQLite version
-// emits (sqlite3.c azType table + sqlite3VdbeMakeReady). See REVIEW.md L-7.
+// emits (sqlite3.c azType table + sqlite3VdbeMakeReady).
 func (s *sqliteDialect) IsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -229,14 +228,23 @@ func (s *sqliteDialect) Migrations() []string {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_password_history_user_created ON password_history(user_id, created_at DESC)`,
-		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+		// SQLite rejects ADD COLUMN with a non-constant default once the
+		// table holds rows ("Cannot add a column with non-constant
+		// default"), and users is never empty on an upgraded database (the
+		// seed admin always exists). Add the column with a constant epoch
+		// default — same convention as tokens_valid_after below — then
+		// backfill existing rows with a follow-up UPDATE in the same
+		// migration. New rows are expected to set password_changed_at
+		// explicitly; the epoch default is only a NOT NULL filler.
+		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00';
+		UPDATE users SET password_changed_at = CURRENT_TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
-		// REVIEW.md M-6: covering index for ListAPIKeys (WHERE user_id = ?
+		// Covering index for ListAPIKeys (WHERE user_id = ?
 		// ORDER BY created_at DESC). Without it the only index on api_keys is
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users.
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
-		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// revoked_tokens.user_id had no FK, so deleting a user
 		// left orphan revocation rows until the expiry cleanup — unlike
 		// password_history / api_keys / group_members which all cascade. SQLite
 		// cannot ALTER TABLE to add a FK, so the table is rebuilt with the FK.
@@ -283,7 +291,7 @@ func (s *sqliteDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
-		// REVIEW.md L-13: case-insensitive email lookup for SSO account
+		// Case-insensitive email lookup for SSO account
 		// linking (FindUserByEmail). A generated lowercased email column + index
 		// lets the lookup use an equality seek (email_lc = LOWER(?)) instead of
 		// wrapping the indexed column in LOWER(), which defeated the UNIQUE

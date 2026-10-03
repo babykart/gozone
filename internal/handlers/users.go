@@ -184,10 +184,15 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// password_changed_at is set explicitly (UTC, per the project convention):
+	// the SQLite schema default is a constant epoch filler, not now, because
+	// SQLite forbids ADD COLUMN with a non-constant default on a populated
+	// table.
+	now := time.Now().UTC()
 	userID, err := tx.ExecReturnID(ctx,
-		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		username, email, string(hash), firstName, lastName, role, mustChangeVal,
+		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, must_change_password, password_changed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		username, email, string(hash), firstName, lastName, role, mustChangeVal, now,
 	)
 	if err != nil {
 		if errors.Is(err, database.ErrUniqueViolation) {

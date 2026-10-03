@@ -88,8 +88,8 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 		enabledVal = 1
 	}
 	id, err := db.ExecReturnID(ctx,
-		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		username, username+"@test.local", string(hash), "Test", "User", role, enabledVal,
+		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		username, username+"@test.local", string(hash), "Test", "User", role, enabledVal, time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)

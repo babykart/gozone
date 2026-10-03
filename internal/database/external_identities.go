@@ -36,7 +36,7 @@ func (db *DB) FindUserByExternalIdentity(ctx context.Context, issuer, subject st
 //
 // The lookup uses the generated email_lc column (LOWER(email)) instead of
 // wrapping the indexed column in LOWER(), so the UNIQUE-indexed value is
-// compared via an equality seek on email_lc = LOWER(?) (REVIEW.md L-13).
+// compared via an equality seek on email_lc = LOWER(?).
 func (db *DB) FindUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	row := db.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name,
@@ -110,10 +110,15 @@ func (db *DB) CreateExternalUser(ctx context.Context, username, email, firstName
 		return nil, fmt.Errorf("generate placeholder hash: %w", err)
 	}
 
+	// password_changed_at is set explicitly (UTC, per the project
+	// convention): the placeholder hash is not a real password, but the age
+	// anchor must still be the provisioning time — and the SQLite schema
+	// default is a constant epoch filler, not now.
+	now := time.Now().UTC()
 	userID, err := tx.ExecReturnID(ctx,
-		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled)
-		 VALUES (?, ?, ?, ?, ?, ?, 1)`,
-		username, email, placeholder, firstName, lastName, role,
+		`INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled, password_changed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+		username, email, placeholder, firstName, lastName, role, now,
 	)
 	if err != nil {
 		return nil, err
@@ -140,9 +145,9 @@ func (db *DB) CreateExternalUser(ctx context.Context, username, email, firstName
 		LastName:          lastName,
 		Role:              role,
 		Enabled:           true,
-		CreatedAt:         time.Now().UTC(),
-		UpdatedAt:         time.Now().UTC(),
-		PasswordChangedAt: time.Now().UTC(),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		PasswordChangedAt: now,
 	}, nil
 }
 
