@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -62,7 +63,7 @@ func NewRateLimiter(n int) *RateLimiter {
 }
 
 // Close stops the background cleanup goroutine. It is safe to call multiple
-// times (m3).
+// times.
 func (rl *RateLimiter) Close() {
 	rl.stopOnce.Do(func() {
 		close(rl.stopCh)
@@ -119,7 +120,7 @@ type KeyFunc func(r *http.Request) string
 // functions that legitimately cannot extract a key (so blocking would be
 // wrong); a key function that wants empty-key requests limited must return a
 // non-empty sentinel — e.g. loginUsernameKey maps an empty username to a shared
-// bucket (m35).
+// bucket.
 func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +164,18 @@ func maskKey(key string) string {
 // It reads the IP set by the chi ClientIPFrom* middleware in cmd/server.go
 // (ClientIPFromRemoteAddr by default, or ClientIPFromXFF when trusted_proxies
 // is configured). When no IP has been resolved (e.g., a test request or a
-// misconfigured middleware stack) it falls back to r.RemoteAddr so the
-// rate-limit key is never empty.
+// misconfigured middleware stack) it falls back to the host part of
+// r.RemoteAddr: the raw address carries the source port, which changes on
+// every connection, so keying on it would give each connection its own
+// rate-limit bucket and effectively neutralize the limiter behind a trusted
+// proxy. Addresses without a port are returned unchanged.
 func ExtractIP(r *http.Request) string {
 	ip := chimw.GetClientIP(r.Context())
 	if ip != "" {
 		return ip
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
 	return r.RemoteAddr
 }

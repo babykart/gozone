@@ -192,11 +192,40 @@ func TestMaskKey(t *testing.T) {
 }
 
 func TestExtractIP(t *testing.T) {
-	t.Run("falls back to RemoteAddr when no context IP", func(t *testing.T) {
+	t.Run("falls back to RemoteAddr host when no context IP", func(t *testing.T) {
+		// The port must be stripped: it changes on every connection, so a
+		// host:port key would give each connection its own bucket and
+		// neutralize the limiter.
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.RemoteAddr = "192.168.1.1:12345"
-		if got := ExtractIP(r); got != "192.168.1.1:12345" {
-			t.Errorf("expected 192.168.1.1:12345, got %s", got)
+		if got := ExtractIP(r); got != "192.168.1.1" {
+			t.Errorf("expected 192.168.1.1, got %s", got)
+		}
+	})
+
+	t.Run("RemoteAddr fallback strips the port from IPv6 too", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = "[2001:db8::1]:54321"
+		if got := ExtractIP(r); got != "2001:db8::1" {
+			t.Errorf("expected 2001:db8::1, got %s", got)
+		}
+	})
+
+	t.Run("RemoteAddr without a port is returned unchanged", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = "192.0.2.10"
+		if got := ExtractIP(r); got != "192.0.2.10" {
+			t.Errorf("expected 192.0.2.10, got %s", got)
+		}
+	})
+
+	t.Run("same client, different ports share one key", func(t *testing.T) {
+		a := httptest.NewRequest(http.MethodGet, "/", nil)
+		a.RemoteAddr = "203.0.113.5:1111"
+		b := httptest.NewRequest(http.MethodGet, "/", nil)
+		b.RemoteAddr = "203.0.113.5:9999"
+		if ExtractIP(a) != ExtractIP(b) {
+			t.Errorf("expected one shared bucket for 203.0.113.5, got %q vs %q", ExtractIP(a), ExtractIP(b))
 		}
 	})
 
