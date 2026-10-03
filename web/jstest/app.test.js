@@ -238,3 +238,43 @@ test('input event drives filterOptions through the delegated listener', () => {
     assert.strictEqual(select.options[0].hidden, false, 'alice matches the typed text');
     assert.strictEqual(select.options[1].hidden, true, 'bob filtered out via the delegated input handler');
 });
+
+// --- Batch "Clear all comments" flag sync -----------------------------------
+//
+// The flag is submitted by a per-row hidden input (exactly one 0/1 value per
+// row); the checkbox carries no name and only mirrors its state. These tests
+// pin the mirror function: a checkbox-named field was sparse (unchecked
+// boxes are not submitted) and its indices drifted against the rows, so
+// checking row 2 cleared row 1's comments.
+
+function stubCommentClearRow(hiddenValue, checked) {
+    const hidden = { name: 'comment_clear', type: 'hidden', value: hiddenValue };
+    const row = {
+        querySelector(sel) {
+            if (sel === 'input[type=hidden][name=comment_clear]') return hidden;
+            return null;
+        }
+    };
+    const checkbox = {
+        checked: checked,
+        closest(sel) { return sel === '.record-row' ? row : null; }
+    };
+    return { hidden: hidden, checkbox: checkbox };
+}
+
+test('syncCommentClearValue writes 1 into the hidden input when checked', () => {
+    const ctx = stubCommentClearRow('0', true);
+    app.syncCommentClearValue(ctx.checkbox);
+    assert.strictEqual(ctx.hidden.value, '1');
+});
+
+test('syncCommentClearValue writes 0 into the hidden input when unchecked', () => {
+    const ctx = stubCommentClearRow('1', false);
+    app.syncCommentClearValue(ctx.checkbox);
+    assert.strictEqual(ctx.hidden.value, '0');
+});
+
+test('syncCommentClearValue is a no-op outside a record row', () => {
+    const orphan = { checked: true, closest() { return null; } };
+    app.syncCommentClearValue(orphan); // must not throw
+});

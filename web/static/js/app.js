@@ -233,12 +233,26 @@ function saveRecordRow(btn) {
     });
 }
 
+// syncCommentClearValue mirrors the state of the unnamed "Clear all
+// comments" checkbox into its row's hidden comment_clear input. The flag is
+// submitted by the hidden input (exactly one value per row): a checkbox-named
+// field would be sparse — unchecked boxes are not submitted — and its indices
+// drifted against the name/type/content rows, so checking row 2 cleared row
+// 1's comments.
+function syncCommentClearValue(checkbox) {
+    var row = checkbox.closest('.record-row');
+    if (!row) return;
+    var hidden = row.querySelector('input[type=hidden][name=comment_clear]');
+    if (!hidden) return;
+    hidden.value = checkbox.checked ? '1' : '0';
+}
+
 function addRecordRow() {
     var container = document.getElementById('record-rows');
     var rows = container.querySelectorAll('.record-row');
     var template = rows[0].cloneNode(true);
     var idx = rows.length;
-    // Re-scope label associations to unique ids for the cloned row (m54):
+    // Re-scope label associations to unique ids for the cloned row:
     // cloneNode would otherwise duplicate the template row's ids, breaking the
     // for/id pairing and producing invalid HTML. Each id/for ends with the
     // template row's index (0); rewrite the trailing "-<n>" to the new index.
@@ -265,6 +279,17 @@ function addRecordRow() {
     var textareas = template.querySelectorAll('textarea');
     for (var j = 0; j < textareas.length; j++) {
         textareas[j].value = '';
+    }
+    // Reset the per-row "Clear all comments" flag: cloneNode copies the
+    // checked state, and a cloned row that silently kept the flag would
+    // purge the comments of the RRSet it lands on.
+    var clearBoxes = template.querySelectorAll('input[type=checkbox][data-action="toggle-comment-clear"]');
+    for (var cb = 0; cb < clearBoxes.length; cb++) {
+        clearBoxes[cb].checked = false;
+    }
+    var clearHidden = template.querySelectorAll('input[type=hidden][name=comment_clear]');
+    for (var ch = 0; ch < clearHidden.length; ch++) {
+        clearHidden[ch].value = '0';
     }
     var select = template.querySelector('select[name=type]');
     if (select) select.value = select.querySelector('option').value;
@@ -593,8 +618,7 @@ function syncAllBulkCounts() {
 //
 // Replaces window.confirm (blocking, unthemeable, and announced inconsistently
 // by screen readers). confirmDialog returns a Promise<boolean> so call sites
-// can `await` it; the dialog is non-blocking, focus-trapped, and Escape cancels
-// (REVIEW.md L-16d).
+// can `await` it; the dialog is non-blocking, focus-trapped, and Escape cancels.
 var confirmDialogEl = null;
 var confirmDialogResolve = null;
 var confirmDialogLastFocus = null;
@@ -773,7 +797,7 @@ function initDelegatedListeners() {
             // show the modal, and submit programmatically only on confirm.
             // HTMLFormElement.submit() bypasses the event dispatch (no re-entry
             // into this click handler) and these simple action forms carry
-            // their target id + CSRF as hidden inputs (REVIEW.md L-16d).
+            // their target id + CSRF as hidden inputs.
             e.preventDefault();
             var message = confirmForm.getAttribute('data-confirm');
             var label = (confirmTrigger.textContent || '').trim() || 'Confirm';
@@ -797,6 +821,10 @@ function initDelegatedListeners() {
             }
             if (action === 'toggle-priority') {
                 togglePriority(actionTarget);
+                return;
+            }
+            if (action === 'toggle-comment-clear') {
+                syncCommentClearValue(actionTarget);
                 return;
             }
             var selectAll = bulkSelectAllByAction[action];
@@ -862,6 +890,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         bulkFailedSuffix: bulkFailedSuffix,
         filterOptions: filterOptions,
-        initDelegatedListeners: initDelegatedListeners
+        initDelegatedListeners: initDelegatedListeners,
+        syncCommentClearValue: syncCommentClearValue
     };
 }

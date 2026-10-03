@@ -3506,3 +3506,84 @@ func TestCreateRecord_RejectsIPv4MappedAAAContent(t *testing.T) {
 		t.Errorf("expected the precise validation message, got: %s", body)
 	}
 }
+
+// TestBatchCreateRecords_ClearFlagAlignedPerRow is the misaligned-clear
+// regression: unchecked checkboxes are not submitted, so a checkbox-named
+// comment_clear produced a sparse array whose indices drifted against the
+// rows — checking the flag on row 2 purged row 1's comments. The flag now
+// arrives as one hidden 0/1 value per row, aligned with name/type/content.
+func TestBatchCreateRecords_ClearFlagAlignedPerRow(t *testing.T) {
+	var rawBody []byte
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "one.example.com.", Type: "A", TTL: 300,
+						Records:  []models.RecordInfo{{Content: "10.0.0.1"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "keep me"}}},
+					},
+					{
+						Name: "two.example.com.", Type: "A", TTL: 300,
+						Records:  []models.RecordInfo{{Content: "10.0.1.1"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{{Content: "purge me"}}},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			rawBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Two rows; only the SECOND carries the clear flag (the hidden-input form
+	// submits one 0/1 per row, in row order).
+	form := "name=one.example.com.&type=A&content=10.0.0.2&ttl=300&comment_clear=0" +
+		"&name=two.example.com.&type=A&content=10.0.1.2&ttl=300&comment_clear=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(form))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body := string(rawBody)
+	if !strings.Contains(body, "one.example.com.") || !strings.Contains(body, "two.example.com.") {
+		t.Fatalf("both RRSets must be in the PATCH, got %s", body)
+	}
+	// Row 1: flag 0 → its existing comment survives (no purge).
+	oneIdx := strings.Index(body, "one.example.com.")
+	twoIdx := strings.Index(body, "two.example.com.")
+	var onePart string
+	if oneIdx < twoIdx {
+		onePart = body[oneIdx:twoIdx]
+	} else {
+		onePart = body[oneIdx:]
+	}
+	if strings.Contains(onePart, `"comments":[]`) {
+		t.Errorf("row without the clear flag must keep its comments, got %s", onePart)
+	}
+	// Row 2: flag 1 → purge.
+	twoPart := body[twoIdx:]
+	if !strings.Contains(twoPart, `"comments":[]`) {
+		t.Errorf("row with the clear flag must purge its comments, got %s", twoPart)
+	}
+}

@@ -42,8 +42,16 @@
             <div class="form-group">
                 <label for="rec-comment-0">Comment <span class="field-hint">(optional, one per line)</span></label>
                 <textarea name="comment" id="rec-comment-0" rows="2" class="form-control" placeholder="e.g. managed by ops-team"></textarea>
+                <!-- The clear flag is carried by the hidden input, exactly one
+                     value per row: an unchecked checkbox is NOT submitted, so a
+                     checkbox-named field produced a sparse array whose indices
+                     drifted against the name/type/content rows (checking row 2
+                     cleared row 1's comments). The checkbox itself carries no
+                     name and only toggles the hidden value via app.js; without
+                     JavaScript the flag stays "0" (comments preserved). -->
+                <input type="hidden" name="comment_clear" value="0">
                 <label class="checkbox-inline mt-0-5 d-block">
-                    <input type="checkbox" name="comment_clear" value="1">
+                    <input type="checkbox" data-action="toggle-comment-clear">
                     Clear all comments <span class="field-hint">(only applies when the RRSet already exists)</span>
                 </label>
             </div>
