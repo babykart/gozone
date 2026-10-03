@@ -3672,6 +3672,143 @@ func TestBatchCreateRecords_ExplicitTTLAppliesOnMerge(t *testing.T) {
 	}
 }
 
+// TestBatchCreateRecords_ConflictingGroupTTLsRejected pins that rows of the
+// same name+type group carrying DIFFERENT explicit TTLs are rejected with an
+// actionable error: PowerDNS applies one TTL per RRSet, and the first row's
+// value used to silently win.
+func TestBatchCreateRecords_ConflictingGroupTTLsRejected(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www&type=A&content=1.1.1.1&ttl=300&name=www&type=A&content=2.2.2.2&ttl=3600"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for conflicting TTLs, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "conflicting TTLs") {
+		t.Errorf("error must name the conflict, got: %s", w.Body.String())
+	}
+	if len(sent) != 0 {
+		t.Errorf("no PATCH may be sent on a rejected batch, got %d", len(sent))
+	}
+}
+
+// TestBatchCreateRecords_LaterRowExplicitTTLAppliesToGroup pins that a group's
+// TTL comes from ANY row with an explicit value, not only the first: a first
+// row with an empty TTL no longer locks the group into the default.
+func TestBatchCreateRecords_LaterRowExplicitTTLAppliesToGroup(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// First row of the www group has NO ttl; the second carries 300.
+	body := "name=www&type=A&content=1.1.1.1&name=www&type=A&content=2.2.2.2&ttl=300"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(sent))
+	}
+	if sent[0].TTL != 300 {
+		t.Errorf("the group TTL must come from the row that carries an explicit value, got %d", sent[0].TTL)
+	}
+	if len(sent[0].Records) != 2 {
+		t.Errorf("both rows must be in the merged RRSet, got %d records", len(sent[0].Records))
+	}
+}
+
+// TestInlineUpdateRecord_EmptyTTLInheritsExisting pins the edit-path TTL
+// resolution: an empty TTL field inherits the existing RRSet's TTL —
+// PowerDNS applies the RRSet-level TTL to every record, so the previous
+// 3600 default silently rewrote the siblings' deliberately short TTL.
+func TestInlineUpdateRecord_EmptyTTLInheritsExisting(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// No ttl field at all: "no preference" must keep the 300 TTL.
+	body := "name=www.example.com&type=A&content=5.6.7.8&priority=0&disabled=false&original_content=1.2.3.4&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(sent))
+	}
+	if sent[0].TTL != 300 {
+		t.Errorf("empty TTL must inherit the existing RRSet TTL 300, got %d", sent[0].TTL)
+	}
+}
+
+// TestCreateRecord_EmptyTTLInheritsExisting is the create-path twin: merging
+// a new record into an existing RRSet without a TTL preference must keep the
+// RRSet's TTL instead of jumping to the 3600 default.
+func TestCreateRecord_EmptyTTLInheritsExisting(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www&type=A&content=5.6.7.8&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(sent))
+	}
+	if sent[0].TTL != 300 {
+		t.Errorf("empty TTL must inherit the existing RRSet TTL 300, got %d", sent[0].TTL)
+	}
+}
+
 // TestCreateRecord_RejectsIPv4MappedAAAContent guards the validation boundary:
 // the IPv4-mapped literal "::ffff:192.0.2.1" has a non-nil To4(), so an A
 // record carrying it used to pass validation and only fail later at

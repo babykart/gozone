@@ -472,7 +472,11 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		}
 		templateReadForm = append(templateReadForm, clone)
 	}
-	merged := mergeBatchRRSets(templateReadForm, existing)
+	merged, err := mergeBatchRRSets(templateReadForm, existing)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 	patch := finalizeBatchRRSets(merged, nil)
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, patch); err != nil {

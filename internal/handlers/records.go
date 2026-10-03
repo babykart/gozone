@@ -482,6 +482,18 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 			prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
 	}
 
+	// Resolve an unspecified (empty) TTL exactly like CreateRecord: inherit
+	// the existing RRSet's TTL — PowerDNS applies the RRSet-level TTL to
+	// every record of the set, so defaulting here would silently rewrite
+	// the siblings' deliberately short TTL — else the 3600 default.
+	if ttl == 0 {
+		if existingRRSet != nil {
+			ttl = existingRRSet.TTL
+		} else {
+			ttl = defaultRecordTTL
+		}
+	}
+
 	return &models.RRSet{
 		Name:     name,
 		Type:     recordType,
@@ -538,7 +550,11 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mergedMap := mergeBatchRRSets(rrsets, existing)
+	mergedMap, err := mergeBatchRRSets(rrsets, existing)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 	merged := finalizeBatchRRSets(mergedMap, pendingComments)
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, merged); err != nil {
@@ -687,42 +703,60 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 // mergeBatchRRSets groups the new one-record RRSets by name+type and merges
 // them into the existing RRSets fetched from PowerDNS, so a batch that adds
 // several records to the same RRSet (or to an existing one) produces a single
-// merged RRSet per name+type. An explicit TTL on the new submission is applied
-// to the merged RRSet; an unspecified (0) TTL keeps the existing RRSet's TTL —
-// PowerDNS applies the RRSet-level TTL to every record, so inheriting the
-// submission default here would silently rewrite the siblings' TTL. Returns
-// the merged RRSets keyed by "name|type".
-func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) map[string]*models.RRSet {
+// merged RRSet per name+type.
+//
+// TTL semantics: PowerDNS applies one TTL per RRSet, so rows of the same
+// group that both carry an EXPLICIT TTL must agree — a conflict is returned
+// as an error instead of the first row's value silently winning. When any row
+// of the group carries an explicit TTL it applies to the merged RRSet; when
+// none does, the existing RRSet's TTL is kept — inheriting the submission
+// default here would silently rewrite the siblings' TTL. Returns the merged
+// RRSets keyed by "name|type".
+func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[string]*models.RRSet, error) {
 	existingMap := make(map[string]*models.RRSet)
 	for i := range existing {
 		existingMap[existing[i].Name+"|"+existing[i].Type] = &existing[i]
 	}
 
 	merged := make(map[string]*models.RRSet)
+	// explicit[key] is the TTL the operator typed on the rows of that group
+	// (0 = no explicit TTL yet). It is tracked separately from the RRSet TTL
+	// because a merged-in existing RRSet carries its own TTL that the rows
+	// never voted on.
+	explicit := make(map[string]int)
 	for _, newRR := range newRRSets {
 		key := newRR.Name + "|" + newRR.Type
+		if _, seen := explicit[key]; seen {
+			// Subsequent row of an already-started group.
+			if newRR.TTL > 0 {
+				if e := explicit[key]; e > 0 && newRR.TTL != e {
+					return nil, fmt.Errorf("conflicting TTLs (%d and %d) for %s record %s: records in one RRSet share a single TTL — use the same value on every row", e, newRR.TTL, newRR.Type, newRR.Name)
+				}
+				explicit[key] = newRR.TTL
+				if m := merged[key]; m != nil {
+					m.TTL = newRR.TTL
+				}
+			}
+			if m := merged[key]; m != nil {
+				m.Records = append(m.Records, newRR.Records...)
+			}
+			continue
+		}
+		explicit[key] = newRR.TTL
 		if ex, ok := existingMap[key]; ok {
-			if m, seen := merged[key]; seen {
-				m.Records = append(m.Records, newRR.Records...)
-			} else {
-				clone := *ex
-				for _, nr := range newRR.Records {
-					clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
-				}
-				if newRR.TTL > 0 {
-					clone.TTL = newRR.TTL
-				}
-				merged[key] = &clone
+			clone := *ex
+			for _, nr := range newRR.Records {
+				clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
 			}
+			if newRR.TTL > 0 {
+				clone.TTL = newRR.TTL
+			}
+			merged[key] = &clone
 		} else {
-			if m, seen := merged[key]; seen {
-				m.Records = append(m.Records, newRR.Records...)
-			} else {
-				merged[key] = &newRR
-			}
+			merged[key] = &newRR
 		}
 	}
-	return merged
+	return merged, nil
 }
 
 // finalizeBatchRRSets prepares each merged RRSet for the PowerDNS write:
@@ -1004,10 +1038,11 @@ func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, pr
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
 	disabled = r.FormValue("disabled") == "on" || r.FormValue("disabled") == "true"
 
-	// Empty TTL defaults to 3600; an explicit non-numeric or non-positive
-	// value is rejected so the activity log records what the user actually
-	// typed, not a silent substitution.
-	ttl = 3600
+	// An empty TTL field means "no preference" (0 until the caller resolves
+	// it: existing RRSet TTL on a merge, the 3600 default otherwise); an
+	// explicit non-numeric or non-positive value is rejected so the activity
+	// log records what the user actually typed, not a silent substitution.
+	ttl = 0
 	if ttlStr != "" {
 		v, parseErr := strconv.Atoi(ttlStr)
 		if parseErr != nil || v <= 0 {
