@@ -16,31 +16,34 @@ import (
 // middleware truncates to the minute); timestamps are stored UTC per project
 // convention.
 //
-// The three statements run in one transaction so the increment and the read
-// are atomic: INSERT OR IGNORE/ON CONFLICT seeds a zero row for the window
-// (dialect-portable via InsertIgnore), the UPDATE increments it, and the
-// SELECT returns this call's own count even when other instances increment
-// concurrently (row locks serialize the updates; each transaction reads its
-// own write).
+// The increment is a single dialect-specific upsert (see
+// Dialect.RateLimitHitUpsert): it takes the row's exclusive lock directly, so
+// concurrent hits serialize on one statement with no insert-then-update lock
+// dance. On PostgreSQL and SQLite the upsert itself RETURNS the resulting
+// count; MySQL has no RETURNING, so a follow-up SELECT in the same
+// transaction reads this call's own write.
 //
 // Key material is a rate-limit bucket key (IP, username or masked API key),
 // never a secret.
 func (db *DB) HitRateLimit(ctx context.Context, key string, windowStart time.Time, limit int) (bool, error) {
+	upsert, returnsCount := db.dialect.RateLimitHitUpsert()
+	if returnsCount {
+		var hits int
+		if err := db.QueryRowContext(ctx, db.dialect.Rebind(upsert),
+			key, windowStart.UTC(),
+		).Scan(&hits); err != nil {
+			return false, err
+		}
+		return hits <= limit, nil
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback() // #nosec G104 -- no-op after Commit
 
-	if _, err := tx.InsertIgnore(ctx, "rate_limit_counters",
-		[]string{"bucket_key", "window_start", "hits"},
-		[]string{"bucket_key", "window_start"},
-		key, windowStart.UTC(), 0,
-	); err != nil {
-		return false, err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE rate_limit_counters SET hits = hits + 1 WHERE bucket_key = ? AND window_start = ?`,
+	if _, err := tx.ExecContext(ctx, db.dialect.Rebind(upsert),
 		key, windowStart.UTC(),
 	); err != nil {
 		return false, err

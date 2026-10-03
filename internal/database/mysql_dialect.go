@@ -72,6 +72,18 @@ func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 // sql.Result.LastInsertId, which go-sql-driver/mysql supports.
 func (m *mysqlDialect) SupportsInsertReturning() bool { return false }
 
+// RateLimitHitUpsert: ON DUPLICATE KEY UPDATE — a single statement that takes
+// the exclusive lock directly. The former INSERT IGNORE (shared lock) +
+// UPDATE (exclusive) pair could interleave with a concurrent writer into a
+// deadlock on MySQL, and the limiter then failed open. MySQL has no
+// RETURNING, so the caller reads the count with a follow-up SELECT in the
+// same transaction.
+func (m *mysqlDialect) RateLimitHitUpsert() (string, bool) {
+	return `INSERT INTO rate_limit_counters (bucket_key, window_start, hits)
+		VALUES (?, ?, 1)
+		ON DUPLICATE KEY UPDATE hits = hits + 1`, false
+}
+
 // LockMigrations acquires a named MySQL lock so only one instance runs
 // migrations at a time. The lock is released by the returned function.
 //

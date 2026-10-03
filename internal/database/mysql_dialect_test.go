@@ -492,3 +492,32 @@ func dropAllTablesMySQL(t *testing.T, conn *sql.DB) {
 		t.Fatalf("enable FK: %v", err)
 	}
 }
+
+// TestMySQLIntegration_HitRateLimit exercises the atomic upsert against a
+// real MySQL: the single-statement ON DUPLICATE KEY UPDATE replaces the
+// former INSERT IGNORE + UPDATE pair whose interleaved shared/exclusive
+// locks could deadlock under load (the limiter then failed open).
+func TestMySQLIntegration_HitRateLimit(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	window := time.Now().UTC().Truncate(time.Minute)
+	key := "itest:mysql:hit"
+	for i := 1; i <= 3; i++ {
+		allowed, err := db.HitRateLimit(ctx, key, window, 3)
+		if err != nil {
+			t.Fatalf("hit %d: %v", i, err)
+		}
+		if !allowed {
+			t.Fatalf("hit %d must be allowed under limit 3", i)
+		}
+	}
+	if allowed, err := db.HitRateLimit(ctx, key, window, 3); err != nil || allowed {
+		t.Errorf("hit 4 must be blocked (err=%v allowed=%v)", err, allowed)
+	}
+	// A different window resets the budget.
+	if allowed, err := db.HitRateLimit(ctx, key, window.Add(time.Minute), 3); err != nil || !allowed {
+		t.Errorf("new window must be allowed (err=%v allowed=%v)", err, allowed)
+	}
+}

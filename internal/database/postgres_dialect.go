@@ -54,6 +54,15 @@ func (p *postgresDialect) Rebind(query string) string { return rebindDollar(quer
 // portable way to obtain the inserted row's id.
 func (p *postgresDialect) SupportsInsertReturning() bool { return true }
 
+// RateLimitHitUpsert: ON CONFLICT ... DO UPDATE ... RETURNING — one
+// statement, one exclusive row lock, count returned in the same round-trip.
+func (p *postgresDialect) RateLimitHitUpsert() (string, bool) {
+	return `INSERT INTO rate_limit_counters (bucket_key, window_start, hits)
+		VALUES (?, ?, 1)
+		ON CONFLICT (bucket_key, window_start) DO UPDATE SET hits = rate_limit_counters.hits + 1
+		RETURNING hits`, true
+}
+
 func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []string) string {
 	// conflictColumns is REQUIRED for PostgreSQL: ON CONFLICT (col1, col2, ...)
 	// must match an existing UNIQUE constraint or PRIMARY KEY on the table.

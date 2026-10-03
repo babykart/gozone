@@ -31,12 +31,12 @@ type Dialect interface {
 	MaxOpenConns() int
 	// MaxIdleConns returns the maximum number of idle connections retained in
 	// the pool. It must be <= MaxOpenConns for the dialect (database/sql clamps
-	// it otherwise). See REVIEW.md m16.
+	// it otherwise).
 	MaxIdleConns() int
 	// ConnMaxLifetime returns the maximum amount of time a connection may be
 	// reused before being closed and replaced. A zero value means connections
 	// are reused forever (appropriate for the single local SQLite connection).
-	// See REVIEW.md m16.
+	// (See the per-dialect pool settings.)
 	ConnMaxLifetime() time.Duration
 	Rebind(query string) string
 	// TimestampType returns the dialect-specific SQL column type for
@@ -60,9 +60,19 @@ type Dialect interface {
 	// INSERT ... RETURNING <col> clause. PostgreSQL requires it (lib/pq does
 	// not implement sql.Result.LastInsertId), SQLite supports it since 3.35,
 	// and MySQL (Oracle) has no RETURNING clause so it keeps using
-	// LastInsertId. DB/Tx.ExecReturnID use this to pick the portable path
-	// (REVIEW.md H-1).
+	// LastInsertId. DB/Tx.ExecReturnID use this to pick the portable path.
 	SupportsInsertReturning() bool
+	// RateLimitHitUpsert returns the atomic upsert for the rate-limit
+	// counter: it seeds hits at 1 on insert and increments it on conflict,
+	// for the (bucket_key, window_start) primary key. A single statement
+	// takes the row's exclusive lock directly — the previous
+	// INSERT IGNORE (shared lock) followed by UPDATE (exclusive) could
+	// interleave into a deadlock on MySQL under load, and the limiter then
+	// failed open. returnsCount reports whether the statement itself returns
+	// the resulting hit count (PostgreSQL and SQLite use RETURNING); when
+	// false the caller reads it with a follow-up SELECT in the same
+	// transaction (MySQL: ON DUPLICATE KEY UPDATE has no RETURNING).
+	RateLimitHitUpsert() (query string, returnsCount bool)
 	// LockMigrations acquires a cluster-wide lock so that only one instance
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.
@@ -72,7 +82,7 @@ type Dialect interface {
 	// exists. The migration runner uses this to tolerate re-running a
 	// previously-applied migration whose content — and therefore content hash —
 	// changed (e.g. a typo fix), so a non-idempotent ALTER TABLE ADD COLUMN no
-	// longer aborts startup. See REVIEW.md m22.
+	// longer aborts startup.
 	IsAlreadyExistsError(err error) bool
 	// IsUniqueViolation reports whether err indicates a DML UNIQUE-constraint
 	// violation (an INSERT/UPDATE collided with a unique index or primary
@@ -81,7 +91,7 @@ type Dialect interface {
 	// "UNIQUE constraint failed: ..." message prefix. Exposed so handlers can
 	// map a duplicate-key failure to a user-friendly 400 via
 	// errors.Is(err, database.ErrUniqueViolation) instead of pattern-matching
-	// driver-specific error strings (REVIEW.md L-7).
+	// driver-specific error strings.
 	IsUniqueViolation(err error) bool
 }
 
@@ -116,7 +126,7 @@ func selectDialect(driver string) (Dialect, error) {
 // rebindDollar rewrites '?' placeholders to PostgreSQL-style '$N' markers. It
 // honours single-quoted string literals (with ” escaping) and "--" line
 // comments so a '?' inside a literal or comment is left untouched, mirroring
-// the state machine of splitStatements (REVIEW.md L-12).
+// the state machine of splitStatements.
 func rebindDollar(query string) string {
 	var (
 		out      strings.Builder

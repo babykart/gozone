@@ -465,3 +465,29 @@ func dropAllTablesPostgres(t *testing.T, conn *sql.DB) {
 		t.Fatalf("create schema: %v", err)
 	}
 }
+
+// TestPostgresIntegration_HitRateLimit exercises the RETURNING upsert
+// against a real PostgreSQL.
+func TestPostgresIntegration_HitRateLimit(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+	ctx := context.Background()
+
+	window := time.Now().UTC().Truncate(time.Minute)
+	key := "itest:pg:hit"
+	for i := 1; i <= 3; i++ {
+		allowed, err := db.HitRateLimit(ctx, key, window, 3)
+		if err != nil {
+			t.Fatalf("hit %d: %v", i, err)
+		}
+		if !allowed {
+			t.Fatalf("hit %d must be allowed under limit 3", i)
+		}
+	}
+	if allowed, err := db.HitRateLimit(ctx, key, window, 3); err != nil || allowed {
+		t.Errorf("hit 4 must be blocked (err=%v allowed=%v)", err, allowed)
+	}
+	if allowed, err := db.HitRateLimit(ctx, key, window.Add(time.Minute), 3); err != nil || !allowed {
+		t.Errorf("new window must be allowed (err=%v allowed=%v)", err, allowed)
+	}
+}

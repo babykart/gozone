@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,5 +100,123 @@ func TestPurgeRateLimitCounters(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected only the fresh window to remain, got %d rows", count)
+	}
+}
+
+// TestRateLimitHitUpsertSQL pins the per-dialect atomic upsert: a single
+// statement (no INSERT-IGNORE-then-UPDATE lock dance that could deadlock on
+// MySQL), with RETURNING exactly on the dialects that support it.
+func TestRateLimitHitUpsertSQL(t *testing.T) {
+	cases := []struct {
+		name         string
+		query        string
+		returnsCount bool
+		wantSub      []string
+		bannedSub    []string
+	}{
+		func() struct {
+			name         string
+			query        string
+			returnsCount bool
+			wantSub      []string
+			bannedSub    []string
+		} {
+			q, rc := (&sqliteDialect{}).RateLimitHitUpsert()
+			return struct {
+				name         string
+				query        string
+				returnsCount bool
+				wantSub      []string
+				bannedSub    []string
+			}{"sqlite", q, rc,
+				[]string{"ON CONFLICT(bucket_key, window_start) DO UPDATE SET hits = hits + 1", "RETURNING hits"}, nil}
+		}(),
+		func() struct {
+			name         string
+			query        string
+			returnsCount bool
+			wantSub      []string
+			bannedSub    []string
+		} {
+			q, rc := (&mysqlDialect{}).RateLimitHitUpsert()
+			return struct {
+				name         string
+				query        string
+				returnsCount bool
+				wantSub      []string
+				bannedSub    []string
+			}{"mysql", q, rc,
+				[]string{"ON DUPLICATE KEY UPDATE hits = hits + 1"}, []string{"RETURNING", "INSERT IGNORE"}}
+		}(),
+		func() struct {
+			name         string
+			query        string
+			returnsCount bool
+			wantSub      []string
+			bannedSub    []string
+		} {
+			q, rc := (&postgresDialect{}).RateLimitHitUpsert()
+			return struct {
+				name         string
+				query        string
+				returnsCount bool
+				wantSub      []string
+				bannedSub    []string
+			}{"postgres", q, rc,
+				[]string{"ON CONFLICT (bucket_key, window_start) DO UPDATE SET hits = rate_limit_counters.hits + 1", "RETURNING hits"}, nil}
+		}(),
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, sub := range c.wantSub {
+				if !strings.Contains(c.query, sub) {
+					t.Errorf("upsert must contain %q, got %s", sub, c.query)
+				}
+			}
+			for _, sub := range c.bannedSub {
+				if strings.Contains(c.query, sub) {
+					t.Errorf("upsert must not contain %q, got %s", sub, c.query)
+				}
+			}
+		})
+	}
+}
+
+// TestHitRateLimit_ConcurrentSameKeySerialized drives the RETURNING path
+// under concurrency: N goroutines hitting the same window must all be
+// accounted (final count == N) with no lost increments.
+func TestHitRateLimit_ConcurrentSameKeySerialized(t *testing.T) {
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	const n = 32
+	window := time.Now().UTC().Truncate(time.Minute)
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := db.HitRateLimit(context.Background(), "ip:192.0.2.1", window, n); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent HitRateLimit: %v", err)
+	}
+	var hits int
+	if err := db.QueryRow(
+		"SELECT hits FROM rate_limit_counters WHERE bucket_key = ? AND window_start = ?", "ip:192.0.2.1", window,
+	).Scan(&hits); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if hits != n {
+		t.Errorf("every hit must be counted under concurrency, got %d want %d", hits, n)
 	}
 }

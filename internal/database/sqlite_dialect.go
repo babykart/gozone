@@ -81,6 +81,17 @@ func (s *sqliteDialect) InsertIgnore(table string, columns, _ []string) string {
 // PostgreSQL path (which lacks LastInsertId support) works identically.
 func (s *sqliteDialect) SupportsInsertReturning() bool { return true }
 
+// RateLimitHitUpsert: ON CONFLICT ... DO UPDATE ... RETURNING — one
+// statement, one exclusive row lock, and the resulting count comes back
+// with the same round-trip (SQLite supports RETURNING since 3.35; the
+// bundled build is well past it).
+func (s *sqliteDialect) RateLimitHitUpsert() (string, bool) {
+	return `INSERT INTO rate_limit_counters (bucket_key, window_start, hits)
+		VALUES (?, ?, 1)
+		ON CONFLICT(bucket_key, window_start) DO UPDATE SET hits = hits + 1
+		RETURNING hits`, true
+}
+
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
 // database-file level and MaxOpenConns is set to 1, so concurrent migration
 // races from a single process are impossible. Cross-process access is handled
