@@ -479,6 +479,11 @@ func (h *Handler) getAllTemplates(ctx context.Context) ([]models.ZoneTemplate, e
 // (TemplateVariables order, then any extra keys sorted) so the outcome never
 // depends on Go's randomised map iteration; the function still accepts
 // variables beyond TemplateVariables.
+//
+// Rows that resolve to the same name+type are merged into a single RRSet:
+// PowerDNS 4.2+ rejects a PATCH body carrying two RRSets with the same name
+// and type, and the built-in templates legitimately hold several rows per
+// RRSet (two @ NS lines, one per nameserver). See groupTemplateRRSets.
 func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, records []models.ZoneTemplateRecord, vars map[string]string) ([]models.RRSet, error) {
 	// Merge defaults under the caller-provided values without mutating vars.
 	merged := make(map[string]string, len(vars)+len(templateVarDefaults))
@@ -544,7 +549,37 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 		return nil, fmt.Errorf("missing template variable(s): %s", strings.Join(names, ", "))
 	}
 
-	return rrsets, nil
+	return groupTemplateRRSets(rrsets), nil
+}
+
+// groupTemplateRRSets merges the one-record-per-row RRSets produced by
+// substitution into one RRSet per name+type. PowerDNS 4.2+ rejects a PATCH
+// body that carries two RRSets with the same name and type, and templates
+// legitimately hold several rows for one RRSet (the built-in definitions have
+// two @ NS lines, one per nameserver) — ungrouped, the whole template was
+// rejected with a 422. Mirrors mergeBatchRRSets / groupBindRecords. The first
+// row's TTL wins (getTemplateRecords returns rows in a deterministic ORDER
+// BY), and records that canonicalise to identical wire content are dropped:
+// PowerDNS also rejects duplicate records inside an RRSet.
+func groupTemplateRRSets(rrsets []models.RRSet) []models.RRSet {
+	if len(rrsets) < 2 {
+		return rrsets
+	}
+	out := make([]models.RRSet, 0, len(rrsets))
+	index := make(map[string]int, len(rrsets))
+	for _, rr := range rrsets {
+		key := rr.Name + "|" + rr.Type
+		if i, ok := index[key]; ok {
+			out[i].Records = append(out[i].Records, rr.Records...)
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, rr)
+	}
+	for i := range out {
+		out[i].Records = dedupRecordsByContent(out[i].Records)
+	}
+	return out
 }
 
 // templateVarReplacer builds a single-pass replacer for the merged variable
@@ -594,7 +629,7 @@ func (h *Handler) collectTemplateVars(r *http.Request) map[string]string {
 // parseTemplateRecordForm extracts and validates a template record from form
 // values. It applies the same validation as the live record paths so an admin
 // cannot store a template with an unknown type or a structurally invalid
-// content that would only fail at zone-creation time (REVIEW.md M-6).
+// content that would only fail at zone-creation time.
 //
 // Template variables ("{{ZONE}}", "{{IP}}", …) make the literal name/content
 // invalid until substitution, so name/content validation is skipped when the

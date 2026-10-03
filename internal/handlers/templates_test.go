@@ -232,11 +232,11 @@ func TestUpdateTemplate_Success(t *testing.T) {
 	}
 }
 
-// TestUpdateTemplate_DuplicateName covers the second site of REVIEW.md L-7
-// (templates.go UpdateTemplate): renaming a template to a name that already
-// exists must surface a 400 with a friendly message via the dialect-aware
-// database.ErrUniqueViolation sentinel instead of driver-specific text
-// matching.
+// TestUpdateTemplate_DuplicateName covers the second site of the unique-name
+// sentinel (templates.go UpdateTemplate): renaming a template to a name that
+// already exists must surface a 400 with a friendly message via the
+// dialect-aware database.ErrUniqueViolation sentinel instead of
+// driver-specific text matching.
 func TestUpdateTemplate_DuplicateName(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
@@ -405,6 +405,53 @@ func TestApplyTemplateToZone(t *testing.T) {
 	}
 }
 
+// TestApplyTemplateToZone_NoDuplicateRRSets is the wire-level regression:
+// the PATCH body sent to PowerDNS must carry at most one RRSet per name+type.
+// PowerDNS 4.2+ answers 422 to duplicates, so a template with two @ NS rows
+// (every built-in definition) previously failed to apply at all — while the
+// permissive test mock accepted the duplicate silently.
+func TestApplyTemplateToZone_NoDuplicateRRSets(t *testing.T) {
+	var sent []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "dup-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "SOA", "ns1.{{ZONE}} hostmaster.{{ZONE}} 1 10800 3600 604800 3600", 3600)
+	seedTemplateRecord(t, h, templateID, "@", "NS", "ns1.{{ZONE}}", 86400)
+	seedTemplateRecord(t, h, templateID, "@", "NS", "ns2.{{ZONE}}", 86400)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	seen := make(map[string]int)
+	for _, rr := range sent {
+		seen[rr.Name+"|"+rr.Type]++
+	}
+	for key, n := range seen {
+		if n > 1 {
+			t.Errorf("PATCH carries %d RRSets for %s; PowerDNS 4.2+ rejects duplicates with a 422", n, key)
+		}
+	}
+	if got := seen["example.com.|NS"]; got != 1 {
+		t.Errorf("expected exactly 1 NS RRSet in the PATCH, got %d", got)
+	}
+	for _, rr := range sent {
+		if rr.Name == "example.com." && rr.Type == "NS" && len(rr.Records) != 2 {
+			t.Errorf("NS RRSet must carry both nameservers, got %d records", len(rr.Records))
+		}
+	}
+}
+
 func TestApplyTemplateToZone_ActivityLogged(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -519,6 +566,58 @@ func TestSubstituteTemplateRecords(t *testing.T) {
 	// DMARC (TXT) - content is quoted for the PDNS API, like the UI write path.
 	if rrsets[3].Name != "_dmarc.example.com." || rrsets[3].Records[0].Content != `"v=DMARC1; p=none"` {
 		t.Errorf("DMARC record: got name=%q content=%q", rrsets[3].Name, rrsets[3].Records[0].Content)
+	}
+}
+
+// TestSubstituteTemplateRecords_GroupsSameNameType verifies that template
+// rows resolving to the same name+type merge into a single RRSet: PowerDNS
+// 4.2+ rejects a PATCH carrying duplicate RRSets, and every built-in template
+// legitimately holds two @ NS lines. Duplicate rows that canonicalise to the
+// same wire content must collapse (PowerDNS also rejects duplicate records
+// inside an RRSet).
+func TestSubstituteTemplateRecords_GroupsSameNameType(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "@", Type: "SOA", Content: "ns1.{{ZONE}} hostmaster.{{ZONE}} 1 10800 3600 604800 3600", TTL: 3600},
+		{Name: "@", Type: "NS", Content: "ns1.{{ZONE}}", TTL: 86400},
+		{Name: "@", Type: "NS", Content: "ns2.{{ZONE}}", TTL: 86400},
+		{Name: "www", Type: "CNAME", Content: "{{ZONE}}", TTL: 3600},
+		{Name: "www", Type: "CNAME", Content: "{{ZONE}}", TTL: 3600}, // duplicate row
+	}
+	rrsets, err := h.substituteTemplateRecords("example.com.", "test", records, map[string]string{"ZONE": "example.com."})
+	if err != nil {
+		t.Fatalf("substituteTemplateRecords: %v", err)
+	}
+
+	if len(rrsets) != 3 {
+		t.Fatalf("expected 3 RRSets (SOA, NS, CNAME) after grouping, got %d: %+v", len(rrsets), rrsets)
+	}
+
+	seen := make(map[string]int)
+	for _, rr := range rrsets {
+		seen[rr.Name+"|"+rr.Type]++
+		if rr.Name == "example.com." && rr.Type == "NS" {
+			if len(rr.Records) != 2 {
+				t.Errorf("NS RRSet must carry both nameservers, got %d records", len(rr.Records))
+			}
+			for _, rec := range rr.Records {
+				if rec.Content != "ns1.example.com." && rec.Content != "ns2.example.com." {
+					t.Errorf("unexpected NS record content %q", rec.Content)
+				}
+			}
+			if rr.TTL != 86400 {
+				t.Errorf("grouped NS RRSet must keep the first row's TTL 86400, got %d", rr.TTL)
+			}
+		}
+		if rr.Name == "www.example.com." && rr.Type == "CNAME" && len(rr.Records) != 1 {
+			t.Errorf("duplicate CNAME row must collapse to one record, got %d", len(rr.Records))
+		}
+	}
+	for key, n := range seen {
+		if n > 1 {
+			t.Errorf("RRSet %s emitted %d times after grouping", key, n)
+		}
 	}
 }
 
@@ -638,12 +737,13 @@ func TestParseTemplateRecordForm(t *testing.T) {
 	}
 }
 
-// TestParseTemplateRecordForm_RejectsInvalid is the M-6 regression: the
-// template record form used to accept any type/content and silently substitute
-// a bad TTL, so an admin could store a template (e.g. type "FOO" or an A record
-// with "not-an-ip") that only PowerDNS would reject at apply time. It now
-// validates like the live record paths; template variables ("{{…}}") bypass
-// name/content validation since they are invalid until substitution.
+// TestParseTemplateRecordForm_RejectsInvalid is a stored-input validation
+// regression: the template record form used to accept any type/content and
+// silently substitute a bad TTL, so an admin could store a template (e.g.
+// type "FOO" or an A record with "not-an-ip") that only PowerDNS would reject
+// at apply time. It now validates like the live record paths; template
+// variables ("{{…}}") bypass name/content validation since they are invalid
+// until substitution.
 func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
 	cases := []struct {
 		name string
@@ -669,7 +769,7 @@ func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
 
 // TestParseTemplateRecordForm_AcceptsVariables confirms template variables in
 // name/content bypass validation so legitimate variable-laden templates are
-// preserved (REVIEW.md M-6).
+// preserved.
 func TestParseTemplateRecordForm_AcceptsVariables(t *testing.T) {
 	// A record whose content is the {{IP}} variable — invalid as a literal IP,
 	// valid as a template placeholder.
