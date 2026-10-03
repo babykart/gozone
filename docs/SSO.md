@@ -380,10 +380,15 @@ oidc:
 When a session was established via SSO and the provider advertises an
 `end_session_endpoint` (visible in its discovery document), GoZone's
 `POST /logout` first clears the local session and revokes the JWT, then
-redirects the browser to the IdP's end-session URL with
+answers with a minimal interstitial page whose meta refresh sends the browser
+(top-level GET) to the IdP's end-session URL with
 `post_logout_redirect_uri=https://<host>/login` and
 `id_token_hint=<the ID token issued at login>` so the IdP's SSO cookie is
-cleared too. The `<host>` part is derived from the request unless
+cleared too. The interstitial step matters: the strict CSP pins
+`form-action` to `'self'`, and Chromium applies that directive to the
+redirects that follow a form POST — a direct 303 from `POST /logout` to the
+cross-origin IdP endpoint was silently blocked, leaving the IdP session
+alive. The `<host>` part is derived from the request unless
 `server.external_url` is configured — when set, the redirect URI is built
 from that canonical base instead of the client-controlled `Host` header
 (the same defense-in-depth as the login `redirect_uri`). The

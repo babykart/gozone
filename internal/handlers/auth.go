@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -502,9 +503,15 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 					"provider", authProvider)
 			}
 			if isAbsoluteHTTPURLAuth(target) {
-				// #nosec G710 -- target is the server-side discovered
-				// end_session_endpoint, validated as absolute http(s) here.
-				http.Redirect(w, r, target, http.StatusSeeOther)
+				// Chromium applies the CSP form-action directive to the
+				// redirects that follow a form POST: a direct 303 to the
+				// cross-origin end_session_endpoint was blocked and the IdP
+				// session stayed alive. Answer with a minimal interstitial
+				// whose meta refresh navigates the browser with a fresh
+				// top-level GET instead — form-action does not govern that
+				// navigation path, and the strict CSP stays intact for every
+				// other page.
+				rpLogoutRedirect(w, target)
 				return
 			}
 			logger.Warn("oidc logout: end_session_endpoint is not absolute; skipping RP logout",
@@ -513,6 +520,34 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// rpLogoutRedirect writes the minimal interstitial that hands the browser to
+// the IdP end-session endpoint. Chromium enforces the CSP form-action
+// directive on the redirects that follow a form POST, so answering the logout
+// POST with a 303 to the cross-origin endpoint silently left the IdP session
+// alive. The interstitial's meta refresh performs a fresh top-level GET
+// navigation, which form-action does not govern; the plain link is the
+// fallback for user agents that ignore meta refresh. No inline style or
+// script: the strict CSP (script-src/style-src 'self') applies to this page
+// too, and the target is HTML-escaped into both attribute contexts.
+func rpLogoutRedirect(w http.ResponseWriter, target string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	escaped := html.EscapeString(target)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Signing out…</title>
+<meta http-equiv="refresh" content="0; url=%s">
+</head>
+<body>
+<p>Signing out of your identity provider…</p>
+<p><a href="%s">Continue</a></p>
+</body>
+</html>
+`, escaped, escaped) // #nosec G203 -- target is the server-discovered end_session_endpoint, HTML-escaped above and validated as absolute http(s) by the caller
 }
 
 // oidcPostLogoutURL builds the fully-qualified /login URL to hand the IdP as

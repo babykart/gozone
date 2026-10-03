@@ -808,20 +808,24 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 	r = r.WithContext(context.WithValue(r.Context(), middleware.UserContextKey, user))
 	h.Logout(w, r)
 
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("expected 303, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (interstitial), got %d", w.Code)
 	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://idp.example.com/logout") {
-		t.Errorf("expected redirect to IdP end_session, got %q", loc)
+	body := w.Body.String()
+	// The interstitial's meta refresh must carry the full end-session URL:
+	// a direct 303 from the logout POST would be blocked by the CSP
+	// form-action directive in Chromium.
+	if !strings.Contains(body, `http-equiv="refresh" content="0; url=https://idp.example.com/logout`) {
+		t.Errorf("expected a meta refresh to the IdP end_session endpoint, got %s", body)
 	}
-	if !strings.Contains(loc, "post_logout_redirect_uri=") {
-		t.Errorf("expected post_logout_redirect_uri param, got %q", loc)
+	if !strings.Contains(body, "post_logout_redirect_uri=") {
+		t.Errorf("expected post_logout_redirect_uri param, got %s", body)
 	}
 	// id_token_hint MUST be forwarded so Keycloak-like providers can identify
-	// the session to end (the value is URL-escaped by appendQuery).
-	if !strings.Contains(loc, "id_token_hint="+url.QueryEscape(idTokenHint)) {
-		t.Errorf("expected id_token_hint param, got %q", loc)
+	// the session to end (the value is URL-escaped by appendQuery; the JWT
+	// segments need no further HTML escaping).
+	if !strings.Contains(body, "id_token_hint="+url.QueryEscape(idTokenHint)) {
+		t.Errorf("expected id_token_hint param, got %s", body)
 	}
 	// The consumed server-side hint must be deleted.
 	if stored, err := h.DB.FindSSOIDToken(ctx, sessionClaims.SessionID); err != nil || stored != "" {
@@ -873,12 +877,35 @@ func TestLogout_RPInitiated_LegacyHintInClaim(t *testing.T) {
 	r.Host = "gozone.test"
 	h.Logout(w, r)
 
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("expected 303, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (interstitial), got %d", w.Code)
 	}
-	loc := w.Header().Get("Location")
-	if !strings.Contains(loc, "id_token_hint="+url.QueryEscape(legacyHint)) {
-		t.Errorf("legacy claim-carried hint must be forwarded, got %q", loc)
+	if body := w.Body.String(); !strings.Contains(body, "id_token_hint="+url.QueryEscape(legacyHint)) {
+		t.Errorf("legacy claim-carried hint must be forwarded, got %s", body)
+	}
+}
+
+// TestRPLogoutRedirect_EscapesTarget pins the interstitial contract: the
+// end-session URL must be HTML-escaped into both attribute contexts, and the
+// page carries no inline style or script (the strict CSP applies to it).
+func TestRPLogoutRedirect_EscapesTarget(t *testing.T) {
+	w := httptest.NewRecorder()
+	rpLogoutRedirect(w, `https://idp.example.com/logout?a=1&b=<x>"y"`)
+
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `content="0; url=https://idp.example.com/logout?a=1&amp;b=&lt;x&gt;&#34;y&#34;"`) {
+		t.Errorf("meta refresh must carry the HTML-escaped target, got %s", body)
+	}
+	if strings.Count(body, "https://idp.example.com/logout?a=1&amp;") != 2 {
+		t.Errorf("target must appear escaped in both the meta refresh and the link, got %s", body)
+	}
+	for _, bad := range []string{"<script", "style=", "onclick"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("interstitial must stay CSP-strict, found %q", bad)
+		}
 	}
 }
 
