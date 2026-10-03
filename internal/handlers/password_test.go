@@ -340,7 +340,7 @@ func TestChangePassword_RevokesOtherSessions(t *testing.T) {
 	var tvaAfter time.Time
 	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tvaAfter)
 	if !tvaAfter.After(tvaBefore) {
-		t.Error("expected tokens_valid_after to be bumped after self-service password change (M1)")
+		t.Error("expected tokens_valid_after to be bumped after self-service password change")
 	}
 
 	// A fresh session cookie must be issued so the user is not logged out on
@@ -352,7 +352,75 @@ func TestChangePassword_RevokesOtherSessions(t *testing.T) {
 		}
 	}
 	if sessionValue == "" {
-		t.Error("expected a fresh session cookie after password change (M1); user must stay logged in")
+		t.Error("expected a fresh session cookie after password change; user must stay logged in")
+	}
+}
+
+// TestChangePassword_ReissuedCookiePassesAuthCutoff guards the cutoff
+// round-trip after a self-service password change: the re-issued session
+// token must clear the Auth middleware's tokens_valid_after check. The
+// cutoff is written from Go (UTC, truncated to the second) because JWT iat
+// claims are second-granularity — a SQL-side CURRENT_TIMESTAMP with
+// sub-second precision (PostgreSQL TIMESTAMP) or a non-UTC session offset
+// (MySQL/PostgreSQL) would log the user out on the very next request.
+// Beyond the in-memory SQLite run here, the dbmatrix jobs replay this
+// against live MySQL and PostgreSQL servers.
+func TestChangePassword_ReissuedCookiePassesAuthCutoff(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target4", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target4", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var sessionValue string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionValue = c.Value
+		}
+	}
+	if sessionValue == "" {
+		t.Fatal("expected a fresh session cookie after password change")
+	}
+
+	// The stored cutoff must be second-aligned: a JWT iat claim cannot
+	// express anything finer, so any sub-second remainder would place the
+	// cutoff after the re-issued token's iat and force a re-login.
+	var tva time.Time
+	if err := h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", uid).Scan(&tva); err != nil {
+		t.Fatalf("select tokens_valid_after: %v", err)
+	}
+	if tva.Nanosecond() != 0 {
+		t.Errorf("tokens_valid_after = %v, want second-granularity (no sub-second remainder)", tva)
+	}
+
+	// The re-issued cookie must pass the Auth middleware instead of being
+	// treated as a pre-rotation token.
+	reached := false
+	handler := middleware.Auth(h.DB, h.Cfg.Server.JWTKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: sessionValue})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !reached {
+		t.Fatalf("re-issued session must pass Auth after password change: status=%d reached=%v", rec.Code, reached)
 	}
 }
 
@@ -381,7 +449,7 @@ func TestUpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 	var tvaAfter time.Time
 	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
 	if !tvaAfter.After(tvaBefore) {
-		t.Error("expected tokens_valid_after to be bumped after admin password reset (M1)")
+		t.Error("expected tokens_valid_after to be bumped after admin password reset")
 	}
 }
 
@@ -411,7 +479,7 @@ func TestUpdateUser_DisableRevokesSessions(t *testing.T) {
 	var tvaAfter time.Time
 	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
 	if !tvaAfter.After(tvaBefore) {
-		t.Error("expected tokens_valid_after to be bumped when disabling a user (M1)")
+		t.Error("expected tokens_valid_after to be bumped when disabling a user")
 	}
 }
 
@@ -440,6 +508,6 @@ func TestUpdateUser_ProfileEditDoesNotRevokeSessions(t *testing.T) {
 	var tvaAfter time.Time
 	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id=2").Scan(&tvaAfter)
 	if !tvaAfter.Equal(tvaBefore) {
-		t.Errorf("tokens_valid_after must not change on a profile-only edit (M1): before=%v after=%v", tvaBefore, tvaAfter)
+		t.Errorf("tokens_valid_after must not change on a profile-only edit: before=%v after=%v", tvaBefore, tvaAfter)
 	}
 }

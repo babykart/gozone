@@ -54,7 +54,10 @@ func TestSSOIDTokensCRUD(t *testing.T) {
 func TestSSOIDTokensPurgeExpired(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
-	now := time.Now()
+	// UTC, matching the production caller and the stored (normalized) wall
+	// time: a local-zone cutoff compares against UTC walls lexicographically
+	// and purges live rows.
+	now := time.Now().UTC()
 
 	if err := db.UpsertSSOIDToken(ctx, "stale", "tok-old", now.Add(-time.Minute)); err != nil {
 		t.Fatalf("upsert stale: %v", err)
@@ -75,5 +78,33 @@ func TestSSOIDTokensPurgeExpired(t *testing.T) {
 	}
 	if got, _ := db.FindSSOIDToken(ctx, "fresh"); got != "tok-new" {
 		t.Error("unexpired hint must survive the purge")
+	}
+}
+
+// TestUpsertSSOIDToken_NormalizesExpiryToUTC pins the UTC normalization of
+// expires_at: a local-zone wall time in the naive column would skew the
+// purge cutoff by the zone offset and drop a still-live logout hint.
+func TestUpsertSSOIDToken_NormalizesExpiryToUTC(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	zone := time.FixedZone("local-offset", 2*60*60) // UTC+2
+	local := time.Date(2026, 10, 3, 12, 0, 0, 0, zone)
+	if err := db.UpsertSSOIDToken(ctx, "utc", "tok", local); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	var stored time.Time
+	if err := db.QueryRowContext(ctx,
+		"SELECT expires_at FROM sso_id_tokens WHERE session_id = 'utc'",
+	).Scan(&stored); err != nil {
+		t.Fatalf("select expires_at: %v", err)
+	}
+	want := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	if !stored.Equal(want) {
+		t.Errorf("stored expires_at = %v, want the UTC instant %v", stored, want)
+	}
+	if stored.Location() != time.UTC {
+		t.Errorf("stored expires_at location = %v, want UTC (naive columns must hold UTC wall time)", stored.Location())
 	}
 }

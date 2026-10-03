@@ -18,8 +18,8 @@ func newRevokedTokensTestDB(t *testing.T) *DB {
 	return db
 }
 
-// seedUser inserts a user (the FK target for revoked_tokens.user_id, REVIEW.md
-// I-9) and returns its id. revoked_tokens now references users(id) ON DELETE
+// seedUser inserts a user (the FK target for revoked_tokens.user_id) and
+// returns its id. revoked_tokens now references users(id) ON DELETE
 // CASCADE, so a valid user must exist before a token can be revoked for them.
 func seedUser(t *testing.T, db *DB, username string) int64 {
 	t.Helper()
@@ -126,7 +126,7 @@ func TestRevokedTokens_CascadeOnUserDelete(t *testing.T) {
 		t.Fatal("token should be revoked before user delete")
 	}
 
-	// Deleting the user must cascade to their revoked tokens (REVIEW.md I-9).
+	// Deleting the user must cascade to their revoked tokens.
 	if _, err := db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", uid); err != nil {
 		t.Fatalf("delete user: %v", err)
 	}
@@ -140,5 +140,37 @@ func TestRevokedTokens_CascadeOnUserDelete(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("expected 0 revoked_tokens rows after cascade, got %d", n)
+	}
+}
+
+// TestRevokeToken_NormalizesExpiryToUTC pins the UTC normalization inside
+// RevokeToken: JWT exp claims are built from time.Unix and carry the host's
+// local zone. Storing that wall time in the naive DATETIME column shifts the
+// purge cutoff by the zone offset — on a negative offset the revocation row
+// is deleted before the token actually expires, resurrecting a logged-out
+// JWT.
+func TestRevokeToken_NormalizesExpiryToUTC(t *testing.T) {
+	db := newRevokedTokensTestDB(t)
+	ctx := context.Background()
+	uid := seedUser(t, db, "utc")
+
+	zone := time.FixedZone("local-offset", 2*60*60) // UTC+2
+	local := time.Date(2026, 10, 3, 12, 0, 0, 0, zone)
+	if err := db.RevokeToken(ctx, "jti-utc", uid, local); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	var stored time.Time
+	if err := db.QueryRowContext(ctx,
+		"SELECT expires_at FROM revoked_tokens WHERE jti = 'jti-utc'",
+	).Scan(&stored); err != nil {
+		t.Fatalf("select expires_at: %v", err)
+	}
+	want := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	if !stored.Equal(want) {
+		t.Errorf("stored expires_at = %v, want the UTC instant %v", stored, want)
+	}
+	if stored.Location() != time.UTC {
+		t.Errorf("stored expires_at location = %v, want UTC (naive columns must hold UTC wall time, not a local offset)", stored.Location())
 	}
 }

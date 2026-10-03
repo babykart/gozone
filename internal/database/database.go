@@ -39,7 +39,7 @@ type DB struct {
 // violations arise). Handlers can detect it idiomatically with
 // errors.Is(err, database.ErrUniqueViolation) instead of pattern-matching
 // driver-specific error text ("UNIQUE constraint failed", "Duplicate entry",
-// "duplicate key value violates unique constraint"). See REVIEW.md L-7.
+// "duplicate key value violates unique constraint").
 //
 // The wrapping uses fmt.Errorf("%w: %w", ErrUniqueViolation, err) so that
 // errors.As against the underlying typed driver error (e.g. *mysql.MySQLError,
@@ -52,7 +52,7 @@ var ErrUniqueViolation = errors.New("unique constraint violation")
 // a UNIQUE-constraint violation. Returns nil for a nil err and returns err
 // unchanged when the dialect does not match — so non-unique errors
 // (constraint-check, deadlock, connection-lost, ...) keep their original
-// identity. Used by the DB / Tx ExecContext wrappers (REVIEW.md L-7).
+// identity. Used by the DB / Tx ExecContext wrappers.
 func wrapUniqueViolation(d Dialect, err error) error {
 	if err == nil {
 		return nil
@@ -65,8 +65,7 @@ func wrapUniqueViolation(d Dialect, err error) error {
 
 // isNoRows reports whether err is (or wraps) sql.ErrNoRows. Using errors.Is
 // instead of a direct == comparison keeps the check correct when a driver or
-// an intermediate wrapper layers an error around sql.ErrNoRows (REVIEW.md
-// m18).
+// an intermediate wrapper layers an error around sql.ErrNoRows.
 func isNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
@@ -76,8 +75,7 @@ func isNoRows(err error) bool {
 // helper for callers that hold a *DB and prefer a boolean check; equivalent
 // to errors.Is(err, database.ErrUniqueViolation) for errors returned by
 // DB.Exec / DB.ExecContext / Tx equivalents, but also classifies raw driver
-// errors that have not been wrapped (e.g. obtained via *sql.Row.Scan)
-// (REVIEW.md L-7).
+// errors that have not been wrapped (e.g. obtained via *sql.Row.Scan).
 func (db *DB) IsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -145,7 +143,7 @@ func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
 // ExecContext executes a query with automatic placeholder rebinding and
 // supports cancellation through the provided context. A driver-level
 // UNIQUE-constraint violation is wrapped so callers can detect it with
-// errors.Is(err, database.ErrUniqueViolation) (REVIEW.md L-7).
+// errors.Is(err, database.ErrUniqueViolation).
 func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	res, err := db.Conn.ExecContext(ctx, db.dialect.Rebind(query), args...)
 	return res, wrapUniqueViolation(db.dialect, err)
@@ -185,8 +183,7 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 // SQLite and MySQL the value is ignored because INSERT OR IGNORE / INSERT
 // IGNORE catch any unique violation. Passing the columns and the conflict
 // target separately removes the implicit "all columns form the unique
-// constraint" assumption that the older signature relied on (REVIEW.md
-// mineur "InsertIgnore Postgres réutilise toutes les colonnes comme cible").
+// constraint" assumption that the older signature relied on.
 func (db *DB) InsertIgnore(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
 	query := db.dialect.InsertIgnore(table, columns, conflictColumns)
 	return db.ExecContext(ctx, query, values...)
@@ -194,7 +191,7 @@ func (db *DB) InsertIgnore(ctx context.Context, table string, columns, conflictC
 
 // ExecReturnID executes an INSERT statement and returns the auto-generated
 // primary key of the inserted row. It abstracts the dialect difference that
-// made raw result.LastInsertId() non-portable (REVIEW.md H-1):
+// made raw result.LastInsertId() non-portable:
 //
 //   - On dialects supporting INSERT ... RETURNING (PostgreSQL, SQLite) the
 //     clause " RETURNING id" is appended and the id is read back via
@@ -244,11 +241,16 @@ func (db *DB) Close() error {
 // Uses InsertIgnore for dialect-portable conflict handling (SQLite: INSERT
 // OR IGNORE, MySQL: INSERT IGNORE, PostgreSQL: ON CONFLICT DO NOTHING).
 func (db *DB) RevokeToken(ctx context.Context, jti string, userID int64, expiresAt time.Time) error {
+	// Normalize to UTC at this choke point: callers routinely pass JWT exp
+	// claims built from time.Unix (local zone). A non-UTC wall time stored in
+	// a naive DATETIME/TIMESTAMP column shifts the purge cutoff by the zone
+	// offset, which on a negative offset deletes the revocation before the
+	// token actually expires and resurrects a logged-out JWT.
 	_, err := db.InsertIgnore(ctx,
 		"revoked_tokens",
 		[]string{"jti", "user_id", "expires_at"},
 		[]string{"jti"},
-		jti, userID, expiresAt,
+		jti, userID, expiresAt.UTC(),
 	)
 	return err
 }
@@ -268,9 +270,9 @@ func (db *DB) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
 
 // CleanupRevokedTokens removes revocation entries that have already expired,
 // preventing the table from growing indefinitely. The cutoff uses UTC to match
-// how expiries are written (JWT `exp` claims — the only production caller of
-// RevokeToken — are UTC), avoiding a TZ skew that would retain already-expired
-// rows until the local clock catches up (REVIEW.md L-16e).
+// how expiries are written (RevokeToken normalizes every expires_at to UTC),
+// avoiding a TZ skew that would retain already-expired rows until the local
+// clock catches up.
 func (db *DB) CleanupRevokedTokens(ctx context.Context) error {
 	_, err := db.ExecContext(ctx,
 		"DELETE FROM revoked_tokens WHERE expires_at <= ?",
@@ -366,7 +368,7 @@ func (db *DB) PurgeLoginAttempts(ctx context.Context, retentionHours int) (int64
 // transaction, under the row lock held by that UPDATE, so it always sees the
 // value this call wrote — removing the read-modify-write race where two
 // concurrent failures could each observe a stale count and disagree on whether
-// the lockout threshold was reached (REVIEW.md m19).
+// the lockout threshold was reached.
 //
 // Returns the new failed_login_attempts count and whether a lockout was
 // applied (count reached threshold). A caller that needs to override the
@@ -447,10 +449,17 @@ func (db *DB) AdminLockUser(ctx context.Context, userID int64, lockFor time.Dura
 	if lockFor <= 0 {
 		return fmt.Errorf("lockFor must be positive, got %v", lockFor)
 	}
-	lockedUntil := time.Now().UTC().Add(lockFor)
+	now := time.Now().UTC()
+	lockedUntil := now.Add(lockFor)
+	// tokens_valid_after is written from the Go clock (UTC, truncated to the
+	// second) instead of the SQL CURRENT_TIMESTAMP: the Auth middleware
+	// compares it against JWT iat claims, which are second-granularity. A
+	// SQL-side value can carry sub-second precision (PostgreSQL TIMESTAMP
+	// keeps microseconds) or a non-UTC session offset (MySQL/PostgreSQL),
+	// either of which breaks the cutoff comparison.
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET locked_until = ?, manual_lock_until = ?, failed_login_attempts = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
-		lockedUntil, lockedUntil, userID,
+		"UPDATE users SET locked_until = ?, manual_lock_until = ?, failed_login_attempts = 0, tokens_valid_after = ? WHERE id = ?",
+		lockedUntil, lockedUntil, now.Truncate(time.Second), userID,
 	)
 	return err
 }
@@ -520,8 +529,7 @@ func (tx *Tx) CountEnabledAdmins(ctx context.Context) (int, error) {
 // BulkDeleteUsers, which all call CountEnabledAdmins before touching their
 // target row. Acquiring the target row first and the admin set second (the
 // previous order) inverted this and could deadlock against a concurrent
-// UpdateUser/DeleteUser when each held one lock and waited on the other
-// (REVIEW.md M-2).
+// UpdateUser/DeleteUser when each held one lock and waited on the other.
 func (tx *Tx) IsLastEnabledAdmin(ctx context.Context, userID int64) (bool, error) {
 	count, err := tx.CountEnabledAdmins(ctx)
 	if err != nil {
@@ -571,7 +579,7 @@ func (tx *Tx) Exec(query string, args ...any) (sql.Result, error) {
 // ExecContext executes a query within the transaction with automatic placeholder
 // rebinding and supports cancellation through the provided context. A
 // driver-level UNIQUE-constraint violation is wrapped so callers can detect it
-// with errors.Is(err, database.ErrUniqueViolation) (REVIEW.md L-7).
+// with errors.Is(err, database.ErrUniqueViolation).
 func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	res, err := tx.Tx.ExecContext(ctx, tx.dialect.Rebind(query), args...)
 	return res, wrapUniqueViolation(tx.dialect, err)
@@ -615,7 +623,7 @@ func (tx *Tx) InsertIgnore(ctx context.Context, table string, columns, conflictC
 // ExecReturnID runs an INSERT inside the transaction and returns the new row's
 // auto-generated "id" primary key. It is the transaction-scoped counterpart of
 // DB.ExecReturnID and abstracts the same lib/pq vs. LastInsertId portability
-// issue (REVIEW.md H-1). See DB.ExecReturnID for the dialect strategy and the
+// issue. See DB.ExecReturnID for the dialect strategy and the
 // query contract (INSERT without RETURNING; integer PK named "id").
 func (tx *Tx) ExecReturnID(ctx context.Context, query string, args ...any) (int64, error) {
 	if tx.dialect.SupportsInsertReturning() {
@@ -714,7 +722,7 @@ func (db *DB) migrate() error {
 
 		// Apply the migration and record it inside a single transaction so a
 		// failure midway never leaves the schema changed but unrecorded (or
-		// vice-versa). See applyMigration / REVIEW.md m17.
+		// vice-versa). See applyMigration.
 		if err := db.applyMigration(m, version); err != nil {
 			// m22: a migration whose content hash changed (e.g. a typo fix in
 			// an old, already-applied migration) re-runs here and fails on
@@ -743,7 +751,7 @@ func (db *DB) migrate() error {
 // recordMigrationVersion marks a migration as applied in schema_migrations
 // without running it. It is the fallback path for migrations that are already
 // present in the schema (detected via IsAlreadyExistsError) but whose content
-// hash changed, so they don't re-run on every startup. See REVIEW.md m22.
+// hash changed, so they don't re-run on every startup.
 func (db *DB) recordMigrationVersion(ctx context.Context, version string) error {
 	if _, err := db.Conn.ExecContext(ctx, db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
 		return fmt.Errorf("record migration %s: %w", version, err)
@@ -757,7 +765,7 @@ func (db *DB) recordMigrationVersion(ctx context.Context, version string) error 
 // split into individual statements because the MySQL driver runs with
 // MultiStatements disabled for defense-in-depth; executing each statement
 // separately also lets every dialect apply a multi-step migration atomically
-// inside the transaction (REVIEW.md m17).
+// inside the transaction.
 //
 // Note: MySQL/MariaDB implicitly commit on most DDL statements, so on those
 // dialects a multi-statement migration is not fully rollback-able. This is a
@@ -789,7 +797,7 @@ func (db *DB) applyMigration(sqlText, version string) error {
 // splitStatements splits a possibly multi-statement SQL string into individual
 // statements. It is needed so a migration can carry several statements and
 // still be applied uniformly across dialects within one transaction, given the
-// MySQL driver has MultiStatements disabled (REVIEW.md m17).
+// MySQL driver has MultiStatements disabled.
 //
 // The splitter honours single-quoted string literals (with ” escaping) and
 // "--" line comments, so a ';' inside a literal or comment does not start a

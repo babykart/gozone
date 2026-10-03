@@ -9,7 +9,7 @@
 // engine compares those strings lexicographically; mixing offsets across DST
 // transitions or multi-TZ deployments would skew the comparisons. Instant-only
 // comparisons in memory (time.Time.Before/After/Sub) are unaffected and are not
-// annotated (REVIEW.md M-1).
+// annotated.
 package middleware
 
 import (
@@ -245,10 +245,13 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 			// re-authenticate — this is what makes a stolen JWT useless once the
 			// password changes, without enumerating active jtis. The guard skips
 			// tokens without an iat (e.g. none — API keys use a separate path and
-			// their own revocation lifecycle); CURRENT_TIMESTAMP writes are UTC so
-			// the instant comparison is sound (see package timestamp convention).
+			// their own revocation lifecycle). The cutoff is truncated to the
+			// second before comparing: JWT iat claims are second-granularity, so
+			// a cutoff stored with sub-second precision (e.g. a PostgreSQL
+			// CURRENT_TIMESTAMP row from an older version) would reject the
+			// very token minted right after the rotation.
 			if claims.IssuedAt != nil && !claims.IssuedAt.Time.IsZero() &&
-				claims.IssuedAt.Time.Before(user.TokensValidAfter) {
+				claims.IssuedAt.Time.Before(user.TokensValidAfter.Truncate(time.Second)) {
 				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
@@ -303,7 +306,7 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 		sid = claims.ID
 	}
 	// UTC: now flows into sessions table writes (SessionTouch/SessionInsert)
-	// whose expires_at is compared lexicographically by SQLite (REVIEW.md M-1).
+	// whose expires_at is compared lexicographically by SQLite.
 	now := time.Now().UTC()
 	ctx := r.Context()
 
@@ -353,11 +356,11 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 }
 
 // clearSessionCookie invalidates the session cookie in the browser, matching
-// the Secure flag the issue site used (trusted-proxy-gated, m40/M-SEC4) so a
+// the Secure flag the issue site used (trusted-proxy-gated) so a
 // TLS-terminating proxy does not leave a non-Secure clearing cookie that the
-// browser refuses to drop (REVIEW.md M-1).
+// browser refuses to drop.
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r) (m40/M-SEC4).
+	// #nosec G124 -- clearing cookie, Secure set via IsHTTPS(r).
 	http.SetCookie(w, &http.Cookie{
 		Name:     constants.SessionCookieName,
 		Value:    "",
@@ -509,7 +512,7 @@ func GetUser(r *http.Request) *models.User {
 // loadUser fetches the user record needed by request-time middleware
 // (Auth / APIKeyAuth). It deliberately does NOT select password_hash: the
 // hash is only required at the ChangePassword site, which refetches it inside
-// its own transaction (REVIEW.md L-9). Carrying the hash in the per-request
+// its own transaction. Carrying the hash in the per-request
 // *models.User stored in the context exposed it for the whole request
 // lifetime on every authenticated call — including API requests that never
 // need it — for no benefit (json:"-" already excluded it from responses, but

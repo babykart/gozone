@@ -26,6 +26,44 @@ func TestMySQLDialect_DSN_AppendsParseTime(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_DSN_ForcesUTC verifies the correctness settings of the
+// rewritten DSN: the session time_zone is pinned to '+00:00' (so SQL-side
+// CURRENT_TIMESTAMP writes UTC wall time into the naive DATETIME columns) and
+// the driver location is pinned to UTC (so scanned DATETIME values round-trip
+// in the same zone as the Go-side time.Time parameters).
+func TestMySQLDialect_DSN_ForcesUTC(t *testing.T) {
+	d := &mysqlDialect{}
+	got := d.DSN("user:pass@tcp(localhost:3306)/gozone")
+
+	cfg, err := mysql.ParseDSN(got)
+	if err != nil {
+		t.Fatalf("re-parse rewritten DSN %q: %v", got, err)
+	}
+	if !cfg.ParseTime {
+		t.Error("ParseTime must be true")
+	}
+	if cfg.Loc != time.UTC {
+		t.Errorf("Loc = %v, want UTC", cfg.Loc)
+	}
+	if tz := cfg.Params["time_zone"]; tz != "'+00:00'" {
+		t.Errorf("session time_zone = %q, want '+00:00'", tz)
+	}
+
+	// A caller-provided loc is a tuning knob and must be overridden, like
+	// the SQLite pragmas.
+	got = d.DSN("user:pass@tcp(localhost:3306)/gozone?loc=Local")
+	cfg, err = mysql.ParseDSN(got)
+	if err != nil {
+		t.Fatalf("re-parse overridden DSN %q: %v", got, err)
+	}
+	if cfg.Loc != time.UTC {
+		t.Errorf("Loc = %v after rewrite, want UTC (caller loc must not be honoured)", cfg.Loc)
+	}
+	if tz := cfg.Params["time_zone"]; tz != "'+00:00'" {
+		t.Errorf("session time_zone = %q after rewrite, want '+00:00'", tz)
+	}
+}
+
 func TestMySQLDialect_DSN_PreservesExistingParams(t *testing.T) {
 	d := &mysqlDialect{}
 	got := d.DSN("user:pass@tcp(localhost:3306)/gozone?charset=utf8mb4&loc=Local")
@@ -39,8 +77,8 @@ func TestMySQLDialect_DSN_PreservesExistingParams(t *testing.T) {
 	if !strings.Contains(got, "charset=utf8mb4") {
 		t.Errorf("existing charset param must be preserved, got %s", got)
 	}
-	if !strings.Contains(got, "loc=Local") {
-		t.Errorf("existing loc param must be preserved, got %s", got)
+	if strings.Contains(got, "loc=Local") {
+		t.Errorf("loc=Local must be overridden to UTC (correctness, not tuning), got %s", got)
 	}
 	if strings.Contains(got, "multiStatements") {
 		t.Errorf("multiStatements must not be set, got %s", got)
@@ -74,7 +112,7 @@ func TestMySQLDialect_MaxOpenConns(t *testing.T) {
 }
 
 // TestMySQLDialect_PoolSettings verifies the MySQL pool is fully tuned
-// (REVIEW.md m16): a warm idle pool matching the open limit, and a finite
+// — a warm idle pool matching the open limit, and a finite
 // connection lifetime that recycles connections before wait_timeout / an
 // intermediary LB drops them.
 func TestMySQLDialect_PoolSettings(t *testing.T) {
@@ -143,7 +181,7 @@ func TestMySQLDialect_Migrations_ZoneCreatedIndexDesc(t *testing.T) {
 
 // TestMySQLDialect_IsAlreadyExistsError verifies the typed-error matching that
 // lets the migration runner tolerate re-running an already-applied migration
-// after a content edit (REVIEW.md m22).
+// after a content edit.
 func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
 	d := &mysqlDialect{}
 	codes := []struct {
@@ -177,7 +215,7 @@ func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
 }
 
 // TestMySQLDialect_IsUniqueViolation verifies the typed-error matching used
-// to classify a UNIQUE-constraint violation (REVIEW.md L-7). MySQL surfaces
+// to classify a UNIQUE-constraint violation. MySQL surfaces
 // these as ER_DUP_ENTRY (1062).
 func TestMySQLDialect_IsUniqueViolation(t *testing.T) {
 	d := &mysqlDialect{}
@@ -241,7 +279,7 @@ func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 // TestMySQLGetLockResult covers the GET_LOCK return-value classifier that
 // LockMigrations relies on. Previously only ExecContext's error was inspected,
 // so a NULL (internal error) or 0 (timeout) result silently let migrations run
-// without the lock (REVIEW.md M-1).
+// without the lock.
 func TestMySQLGetLockResult(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -302,7 +340,7 @@ func TestMySQLIntegration_RevokeToken(t *testing.T) {
 	db := newIntegrationDB(t, "mysql", dsn)
 	ctx := context.Background()
 
-	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9).
+	// revoked_tokens.user_id is a FK -> users(id).
 	uid := seedIntegrationUser(t, db, "revokemysql")
 	jti := "test-jti-mysql"
 	expires := time.Now().Add(1 * time.Hour)

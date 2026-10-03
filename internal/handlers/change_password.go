@@ -37,8 +37,8 @@ func (h *Handler) ChangePasswordPage(w http.ResponseWriter, r *http.Request) {
 // force-change gate reopens. The whole operation runs in a transaction.
 //
 // The current password hash is refetched inside the transaction rather than
-// read from the request context: loadUser no longer selects password_hash
-// (REVIEW.md L-9), and reading it under the tx closes the TOCTOU window
+// read from the request context: loadUser no longer selects password_hash,
+// and reading it under the tx closes the TOCTOU window
 // between the verify and the UPDATE — the hash we compare is the same one we
 // will overwrite a few statements down.
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +75,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	// Refetch the current hash inside the tx so the verify-and-replace
-	// sequence is atomic (REVIEW.md L-9): loadUser no longer carries the
+	// sequence is atomic: loadUser no longer carries the
 	// hash in the request context, and reading it under the transaction
 	// means the hash we bcrypt-compare is the same row we UPDATE below.
 	var currentHash string
@@ -111,9 +111,16 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// tokens_valid_after is written from the Go clock (UTC, truncated to
+	// the second) instead of the SQL CURRENT_TIMESTAMP: the Auth middleware
+	// compares it against the JWT iat claim, which is second-granularity. A
+	// SQL-side value can carry sub-second precision (PostgreSQL TIMESTAMP
+	// keeps microseconds) or a non-UTC session offset (MySQL/PostgreSQL),
+	// either of which cuts off the token re-issued just below.
+	tva := time.Now().UTC().Truncate(time.Second)
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
-		string(hash), user.ID,
+		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0, tokens_valid_after = ? WHERE id = ?",
+		string(hash), tva, user.ID,
 	); err != nil {
 		h.renderInternalError(w, r, "Failed to update password", err)
 		return

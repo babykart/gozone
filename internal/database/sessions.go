@@ -33,10 +33,14 @@ func (db *DB) SessionGet(ctx context.Context, sessionID string) (SessionLifetime
 // session_id primary key (InsertIgnore): an existing row is left untouched so
 // the earliest first_seen is preserved across instances.
 func (db *DB) SessionInsert(ctx context.Context, sessionID string, firstSeen, lastSeen, expiresAt time.Time) error {
+	// UTC normalization: callers track session windows on the local clock
+	// (time.Now), and the naive timestamp columns must never hold a
+	// non-UTC wall time — SQLite compares those strings lexicographically
+	// and the purge cutoffs are UTC instants.
 	_, err := db.InsertIgnore(ctx, "sessions",
 		[]string{"session_id", "first_seen", "last_seen", "expires_at"},
 		[]string{"session_id"},
-		sessionID, firstSeen, lastSeen, expiresAt,
+		sessionID, firstSeen.UTC(), lastSeen.UTC(), expiresAt.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
@@ -49,11 +53,11 @@ func (db *DB) SessionInsert(ctx context.Context, sessionID string, firstSeen, la
 // The returned bool reports whether a row matched: false means the row no
 // longer exists (e.g. it was deleted by another instance's idle denial or by
 // an explicit logout), so callers must not treat the touch as a resurrection
-// signal (REVIEW.md M-3).
+// signal. Timestamps are normalized to UTC like SessionInsert.
 func (db *DB) SessionTouch(ctx context.Context, sessionID string, lastSeen, expiresAt time.Time) (bool, error) {
 	res, err := db.ExecContext(ctx,
 		"UPDATE sessions SET last_seen = ?, expires_at = ? WHERE session_id = ?",
-		lastSeen, expiresAt, sessionID,
+		lastSeen.UTC(), expiresAt.UTC(), sessionID,
 	)
 	if err != nil {
 		return false, fmt.Errorf("touch session: %w", err)

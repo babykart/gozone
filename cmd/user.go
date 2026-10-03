@@ -238,9 +238,15 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 		return fmt.Errorf("hash password: %w", err)
 	}
 
+	// tokens_valid_after is written from the Go clock (UTC, truncated to
+	// the second) instead of the SQL CURRENT_TIMESTAMP: the Auth middleware
+	// compares it against the JWT iat claim, which is second-granularity,
+	// while a SQL-side value can carry sub-second precision (PostgreSQL) or
+	// a non-UTC session offset (MySQL/PostgreSQL).
+	tva := time.Now().UTC().Truncate(time.Second)
 	res, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?",
-		string(hash), userID,
+		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ? WHERE id = ?",
+		string(hash), tva, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)

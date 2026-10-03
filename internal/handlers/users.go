@@ -354,14 +354,23 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// session on every device immediately. Profile-only edits and re-enable
 	// transitions leave the cutoff untouched so legitimate sessions survive.
 	disableRevokesSessions := target.Enabled && !requestedEnabled
+	// tokens_valid_after is written from the Go clock (UTC, truncated to the
+	// second) instead of the SQL CURRENT_TIMESTAMP: the Auth middleware
+	// compares it against the JWT iat claim, which is second-granularity,
+	// while a SQL-side value can carry sub-second precision (PostgreSQL) or
+	// a non-UTC session offset (MySQL/PostgreSQL).
+	tva := time.Now().UTC().Truncate(time.Second)
 	updateQuery := `UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP`
 	if disableRevokesSessions {
-		updateQuery += ", tokens_valid_after = CURRENT_TIMESTAMP"
+		updateQuery += ", tokens_valid_after = ?"
 	}
 	updateQuery += " WHERE id = ?"
-	_, err = tx.ExecContext(ctx, updateQuery,
-		email, firstName, lastName, requestedRole, enabledVal, userID,
-	)
+	updateArgs := []any{email, firstName, lastName, requestedRole, enabledVal}
+	if disableRevokesSessions {
+		updateArgs = append(updateArgs, tva)
+	}
+	updateArgs = append(updateArgs, userID)
+	_, err = tx.ExecContext(ctx, updateQuery, updateArgs...)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to update user", err)
 		return
@@ -387,7 +396,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, passwordHashErrorMessage(err))
 			return
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = CURRENT_TIMESTAMP WHERE id = ?", string(hash), userID)
+		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ? WHERE id = ?", string(hash), tva, userID)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return

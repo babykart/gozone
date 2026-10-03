@@ -23,28 +23,42 @@ func (m *mysqlDialect) DSN(dsn string) string {
 	// ParseDSN preserves existing query parameters, avoids the double '?' bug
 	// when the DSN already contains options, and lets us set ParseTime cleanly.
 	// MultiStatements is intentionally left disabled for defense-in-depth.
-	cfg, err := mysql.ParseDSN(dsn)
-	if err == nil {
+	//
+	// The session time zone is forced to UTC and Loc pinned to time.UTC: both
+	// are correctness settings, not tuning knobs, and override any caller
+	// value. Without them, CURRENT_TIMESTAMP / NOW() write the server's local
+	// wall time into the naive DATETIME columns while Go reads them back as
+	// UTC — every cutoff comparison (tokens_valid_after, expires_at purges)
+	// would skew by the zone offset. With them, SQL-side CURRENT_TIMESTAMP
+	// writes and Go-side time.Time round-trip identically as UTC.
+	if cfg, err := mysql.ParseDSN(dsn); err == nil {
 		cfg.ParseTime = true
+		cfg.Loc = time.UTC
+		if cfg.Params == nil {
+			cfg.Params = make(map[string]string)
+		}
+		cfg.Params["time_zone"] = "'+00:00'"
 		return cfg.FormatDSN()
 	}
 
-	// Fallback for unparseable DSNs: append parseTime without producing '??'.
+	// Fallback for unparseable DSNs: append parseTime and the UTC session
+	// time zone without producing '??' (the driver percent-decodes param
+	// values, hence the encoded quoting of '+00:00').
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"
 	}
-	return dsn + sep + "parseTime=true"
+	return dsn + sep + "parseTime=true&time_zone=%27%2B00%3A00%27"
 }
 
 func (m *mysqlDialect) MaxOpenConns() int { return 25 }
 
 // MaxIdleConns keeps the pool warm at the open limit so bursts don't pay the
-// connect/auth cost. See REVIEW.md m16.
+// connect/auth cost.
 func (m *mysqlDialect) MaxIdleConns() int { return defaultMaxIdleConns }
 
 // ConnMaxLifetime recycles connections before MySQL's wait_timeout or an
-// intermediary LB/proxy silently drops them. See REVIEW.md m16.
+// intermediary LB/proxy silently drops them.
 func (m *mysqlDialect) ConnMaxLifetime() time.Duration { return defaultConnMaxLifetime }
 
 func (m *mysqlDialect) Rebind(query string) string { return query }
@@ -55,7 +69,7 @@ func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 
 // SupportsInsertReturning returns false: Oracle MySQL has no RETURNING clause
 // (only MariaDB 10.5+ does), so DB/Tx.ExecReturnID falls back to
-// sql.Result.LastInsertId, which go-sql-driver/mysql supports (REVIEW.md H-1).
+// sql.Result.LastInsertId, which go-sql-driver/mysql supports.
 func (m *mysqlDialect) SupportsInsertReturning() bool { return false }
 
 // LockMigrations acquires a named MySQL lock so only one instance runs
@@ -77,7 +91,7 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	// error (out of memory, thread killed, or the connection/thread limit
 	// being reached). Neither 0 nor NULL is a driver error, so the result row
 	// must be scanned — ExecContext + error inspection alone would silently
-	// proceed without holding the lock (REVIEW.md M-1).
+	// proceed without holding the lock.
 	//
 	// The timeout is finite rather than -1 (infinite). An infinite timeout
 	// pins a MySQL thread for as long as the lock is held elsewhere, and under
@@ -132,7 +146,7 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 // error (e.g. out of memory or the thread limit was reached). It returns a
 // non-nil error for any value other than 1, so LockMigrations never proceeds
 // without holding the lock. Extracted as a pure function so the classification
-// is unit-testable without a live MySQL (REVIEW.md M-1).
+// is unit-testable without a live MySQL.
 func mysqlGetLockResult(got sql.NullInt64) error {
 	switch {
 	case !got.Valid:
@@ -148,7 +162,7 @@ func mysqlGetLockResult(got sql.NullInt64) error {
 // mysqlAlreadyExistsCodes are MySQL error numbers that indicate a DDL operation
 // tried to create an object that is already present. Used by
 // IsAlreadyExistsError so the migration runner can tolerate re-running a
-// previously-applied migration whose content hash changed. See REVIEW.md m22.
+// previously-applied migration whose content hash changed.
 var mysqlAlreadyExistsCodes = map[uint16]bool{
 	1050: true, // ER_TABLE_EXISTS_ERROR  - Table already exists
 	1060: true, // ER_DUP_FIELDNAME       - Duplicate column name
@@ -157,7 +171,7 @@ var mysqlAlreadyExistsCodes = map[uint16]bool{
 }
 
 // IsAlreadyExistsError reports whether err is a MySQL "object already exists"
-// DDL error (duplicate table/column/index/key). See REVIEW.md m22.
+// DDL error (duplicate table/column/index/key).
 func (m *mysqlDialect) IsAlreadyExistsError(err error) bool {
 	var myErr *mysql.MySQLError
 	if errors.As(err, &myErr) {
@@ -168,12 +182,12 @@ func (m *mysqlDialect) IsAlreadyExistsError(err error) bool {
 
 // mysqlUniqueViolationNumber is the MySQL error number for a unique-key
 // violation: ER_DUP_ENTRY (1062) — "Duplicate entry '...' for key ...".
-// Used by IsUniqueViolation (REVIEW.md L-7).
+// Used by IsUniqueViolation.
 const mysqlUniqueViolationNumber = 1062
 
 // IsUniqueViolation reports whether err is a MySQL ER_DUP_ENTRY (1062),
 // detected via the typed *mysql.MySQLError so the check is independent of
-// the driver message wording (REVIEW.md L-7).
+// the driver message wording.
 func (m *mysqlDialect) IsUniqueViolation(err error) bool {
 	var myErr *mysql.MySQLError
 	if errors.As(err, &myErr) {
@@ -295,7 +309,7 @@ func (m *mysqlDialect) Migrations() []string {
 		// index with DESC so zone-scoped activity queries (ORDER BY
 		// created_at DESC) are served in index order. This is a NEW migration
 		// rather than an edit of the original CREATE TABLE: migrations are
-		// content-hashed (REVIEW.md m22), so editing the original would just
+		// content-hashed, so editing the original would just
 		// re-run a no-op "CREATE TABLE IF NOT EXISTS" on existing databases
 		// and leave the index unchanged; a new ALTER migration fixes both
 		// fresh and existing databases. (MySQL < 8.0 parses DESC but ignores
@@ -311,14 +325,14 @@ func (m *mysqlDialect) Migrations() []string {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`ALTER TABLE users ADD COLUMN password_changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN must_change_password TINYINT NOT NULL DEFAULT 0`,
-		// REVIEW.md M-6: covering index for ListAPIKeys (WHERE user_id = ?
+		// Covering index for ListAPIKeys (WHERE user_id = ?
 		// ORDER BY created_at DESC). Without it the only index on api_keys is
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users. MySQL < 8.0
 		// parses DESC but ignores it; MySQL 8.0+ / modern MariaDB build a real
 		// descending index (see m21 note above).
 		`CREATE INDEX idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
-		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// revoked_tokens.user_id had no FK, so deleting a user
 		// left orphan revocation rows until the expiry cleanup — unlike
 		// password_history / api_keys / group_members which all cascade. Add a
 		// real FK with ON DELETE CASCADE, matching the other user_id tables.
@@ -346,7 +360,7 @@ func (m *mysqlDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL,
 			KEY idx_sessions_expires_at (expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		// REVIEW.md L-13: lowercased email column + index for case-insensitive
+		// Lowercased email column + index for case-insensitive
 		// SSO account-linking lookup (FindUserByEmail). A generated column is
 		// used instead of a functional index because the project supports
 		// MySQL < 8.0.13 / MariaDB where functional indexes are unavailable

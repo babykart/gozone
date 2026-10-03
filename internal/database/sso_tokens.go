@@ -11,7 +11,8 @@ import (
 // back to forward id_token_hint at the IdP end_session_endpoint — required by
 // providers like Keycloak, whose ID tokens (many realm roles/groups) can exceed
 // what fits in the ~4 KiB session cookie. expiresAt bounds retention (aligned
-// with the session's maximum possible lifetime) and drives the periodic purge.
+// with the session's maximum possible lifetime) and drives the periodic purge;
+// it is normalized to UTC so the purge cutoff compares the same instant.
 // A DELETE+INSERT pair inside one transaction replaces any stale row for the
 // same sid portably across dialects (no dialect-specific upsert SQL needed).
 func (db *DB) UpsertSSOIDToken(ctx context.Context, sessionID, idToken string, expiresAt time.Time) error {
@@ -30,7 +31,7 @@ func (db *DB) UpsertSSOIDToken(ctx context.Context, sessionID, idToken string, e
 	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?)",
-		sessionID, idToken, expiresAt,
+		sessionID, idToken, expiresAt.UTC(),
 	); err != nil {
 		return fmt.Errorf("insert sso id token: %w", err)
 	}

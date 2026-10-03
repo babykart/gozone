@@ -19,23 +19,39 @@ func (p *postgresDialect) DriverName() string { return "postgres" }
 
 func (p *postgresDialect) TimestampType() string { return "TIMESTAMP" }
 
-func (p *postgresDialect) DSN(dsn string) string { return dsn }
+// DSN appends TimeZone=UTC to the connection string: lib/pq sends unrecognized
+// keys to the server as runtime parameters, so the session (and therefore
+// CURRENT_TIMESTAMP) runs on UTC, and the driver parses the naive `timestamp
+// without time zone` columns in the zone the server reports — UTC as well.
+// Like the SQLite pragmas, this is a correctness setting, not a tuning knob:
+// an existing value is overridden by the appended one (the server keeps the
+// last occurrence).
+func (p *postgresDialect) DSN(dsn string) string {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		return dsn + sep + "TimeZone=UTC"
+	}
+	return dsn + " TimeZone=UTC"
+}
 
 func (p *postgresDialect) MaxOpenConns() int { return 25 }
 
 // MaxIdleConns keeps the pool warm at the open limit so bursts don't pay the
-// connect/auth cost. See REVIEW.md m16.
+// connect/auth cost.
 func (p *postgresDialect) MaxIdleConns() int { return defaultMaxIdleConns }
 
 // ConnMaxLifetime recycles connections before PgBouncer/cloud proxies or the
-// server drop them. See REVIEW.md m16.
+// server drop them.
 func (p *postgresDialect) ConnMaxLifetime() time.Duration { return defaultConnMaxLifetime }
 
 func (p *postgresDialect) Rebind(query string) string { return rebindDollar(query) }
 
 // SupportsInsertReturning returns true: PostgreSQL supports RETURNING and
 // lib/pq does NOT implement sql.Result.LastInsertId, so RETURNING is the only
-// portable way to obtain the inserted row's id (REVIEW.md H-1).
+// portable way to obtain the inserted row's id.
 func (p *postgresDialect) SupportsInsertReturning() bool { return true }
 
 func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []string) string {
@@ -43,8 +59,7 @@ func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []
 	// must match an existing UNIQUE constraint or PRIMARY KEY on the table.
 	// Reject the call early so a silent fallback to the wrong index can never
 	// happen — the older helper that reused `columns` here masked a real
-	// invariant the caller was responsible for maintaining (REVIEW.md
-	// mineur "InsertIgnore Postgres réutilise toutes les colonnes comme cible").
+	// invariant the caller was responsible for maintaining.
 	if len(conflictColumns) == 0 {
 		return "-- ERROR: postgresDialect.InsertIgnore requires non-empty conflictColumns matching a UNIQUE constraint or PRIMARY KEY"
 	}
@@ -90,7 +105,7 @@ func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 // postgresAlreadyExistsSQLSTATEs are PostgreSQL SQLSTATE codes indicating a
 // DDL operation tried to create an object that is already present. Used by
 // IsAlreadyExistsError so the migration runner tolerates re-running a
-// previously-applied migration whose content hash changed. See REVIEW.md m22.
+// previously-applied migration whose content hash changed.
 var postgresAlreadyExistsSQLSTATEs = map[string]bool{
 	"42701": true, // duplicate_column
 	"42P07": true, // duplicate_table
@@ -99,7 +114,7 @@ var postgresAlreadyExistsSQLSTATEs = map[string]bool{
 }
 
 // IsAlreadyExistsError reports whether err is a PostgreSQL "object already
-// exists" DDL error, via its SQLSTATE code. See REVIEW.md m22.
+// exists" DDL error, via its SQLSTATE code.
 func (p *postgresDialect) IsAlreadyExistsError(err error) bool {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
@@ -110,12 +125,12 @@ func (p *postgresDialect) IsAlreadyExistsError(err error) bool {
 
 // postgresUniqueViolationSQLSTATE is the PostgreSQL SQLSTATE code for a
 // unique-constraint violation: unique_violation (23505). Used by
-// IsUniqueViolation (REVIEW.md L-7).
+// IsUniqueViolation.
 const postgresUniqueViolationSQLSTATE = "23505"
 
 // IsUniqueViolation reports whether err is a PostgreSQL unique_violation
 // (SQLSTATE 23505), detected via the typed *pq.Error so the check is
-// independent of the driver message wording (REVIEW.md L-7).
+// independent of the driver message wording.
 func (p *postgresDialect) IsUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
@@ -241,12 +256,12 @@ func (p *postgresDialect) Migrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_password_history_user_created ON password_history(user_id, created_at DESC)`,
 		`ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE users ADD COLUMN must_change_password SMALLINT NOT NULL DEFAULT 0`,
-		// REVIEW.md M-6: covering index for ListAPIKeys (WHERE user_id = ?
+		// Covering index for ListAPIKeys (WHERE user_id = ?
 		// ORDER BY created_at DESC). Without it the only index on api_keys is
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users.
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
-		// REVIEW.md I-9: revoked_tokens.user_id had no FK, so deleting a user
+		// revoked_tokens.user_id had no FK, so deleting a user
 		// left orphan revocation rows until the expiry cleanup — unlike
 		// password_history / api_keys / group_members which all cascade. Add a
 		// real FK with ON DELETE CASCADE, matching the other user_id tables.
@@ -274,7 +289,7 @@ func (p *postgresDialect) Migrations() []string {
 			expires_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
-		// REVIEW.md L-13: lowercased email column + index for case-insensitive
+		// Lowercased email column + index for case-insensitive
 		// SSO account-linking lookup (FindUserByEmail). PostgreSQL only supports
 		// STORED generated columns (since 12); the index turns the lookup into
 		// an equality seek instead of wrapping the UNIQUE-indexed column in

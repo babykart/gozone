@@ -20,11 +20,26 @@ func TestPostgresDialect_DriverName(t *testing.T) {
 	}
 }
 
-func TestPostgresDialect_DSN_PassesThrough(t *testing.T) {
+// TestPostgresDialect_DSN_ForcesUTC verifies the appended TimeZone=UTC runtime
+// parameter: the session (and therefore CURRENT_TIMESTAMP) must run on UTC so
+// SQL-side timestamp writes match the UTC instants Go reads back. Both the
+// keyword/value form and the URL form must carry it.
+func TestPostgresDialect_DSN_ForcesUTC(t *testing.T) {
 	d := &postgresDialect{}
-	input := "host=localhost port=5432 user=gozone password=secret dbname=gozone sslmode=disable"
-	if got := d.DSN(input); got != input {
-		t.Errorf("expected DSN to pass through unchanged\nwant: %s\ngot:  %s", input, got)
+
+	kv := "host=localhost port=5432 user=gozone password=secret dbname=gozone sslmode=disable"
+	if got := d.DSN(kv); got != kv+" TimeZone=UTC" {
+		t.Errorf("keyword DSN must gain a trailing TimeZone=UTC\nwant: %s TimeZone=UTC\ngot:  %s", kv, got)
+	}
+
+	url := "postgres://gozone:secret@localhost:5432/gozone?sslmode=disable"
+	if got := d.DSN(url); got != url+"&TimeZone=UTC" {
+		t.Errorf("URL DSN must gain &TimeZone=UTC\nwant: %s&TimeZone=UTC\ngot:  %s", url, got)
+	}
+
+	bare := "postgres://gozone:secret@localhost:5432/gozone"
+	if got := d.DSN(bare); got != bare+"?TimeZone=UTC" {
+		t.Errorf("bare URL DSN must gain ?TimeZone=UTC\nwant: %s?TimeZone=UTC\ngot:  %s", bare, got)
 	}
 }
 
@@ -36,7 +51,7 @@ func TestPostgresDialect_MaxOpenConns(t *testing.T) {
 }
 
 // TestPostgresDialect_PoolSettings verifies the PostgreSQL pool is fully tuned
-// (REVIEW.md m16): a warm idle pool matching the open limit, and a finite
+// — a warm idle pool matching the open limit, and a finite
 // connection lifetime that recycles connections before PgBouncer / a cloud
 // proxy or the server drops them.
 func TestPostgresDialect_PoolSettings(t *testing.T) {
@@ -51,7 +66,7 @@ func TestPostgresDialect_PoolSettings(t *testing.T) {
 
 // TestPostgresDialect_IsAlreadyExistsError verifies the SQLSTATE matching that
 // lets the migration runner tolerate re-running an already-applied migration
-// after a content edit (REVIEW.md m22).
+// after a content edit.
 func TestPostgresDialect_IsAlreadyExistsError(t *testing.T) {
 	d := &postgresDialect{}
 	codes := []struct {
@@ -84,7 +99,7 @@ func TestPostgresDialect_IsAlreadyExistsError(t *testing.T) {
 }
 
 // TestPostgresDialect_IsUniqueViolation verifies the SQLSTATE matching used
-// to classify a UNIQUE-constraint violation (REVIEW.md L-7). PostgreSQL
+// to classify a UNIQUE-constraint violation. PostgreSQL
 // surfaces these as unique_violation (23505).
 func TestPostgresDialect_IsUniqueViolation(t *testing.T) {
 	d := &postgresDialect{}
@@ -223,7 +238,7 @@ func TestPostgresDialect_LockMigrations(t *testing.T) {
 }
 
 func TestPostgresDialect_InsertIgnore_UsesConflictColumns(t *testing.T) {
-	// REVIEW.md mineur fix: the conflict target must come from an explicit
+	// The conflict target must come from an explicit
 	// conflictColumns argument so the caller can never accidentally target the
 	// wrong unique index when columns != constraint.
 	d := &postgresDialect{}
@@ -322,7 +337,7 @@ func TestPostgresIntegration_RevokeToken(t *testing.T) {
 	db := newIntegrationDB(t, "postgres", dsn)
 	ctx := context.Background()
 
-	// revoked_tokens.user_id is a FK -> users(id) (REVIEW.md I-9).
+	// revoked_tokens.user_id is a FK -> users(id).
 	uid := seedIntegrationUser(t, db, "revokepg")
 	jti := "test-jti-pg"
 	expires := time.Now().Add(1 * time.Hour)

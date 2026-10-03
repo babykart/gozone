@@ -108,7 +108,7 @@ func TestSessionTracker_RememberPreservesFirstSeen(t *testing.T) {
 	last := time.Unix(2000, 0)
 	// Touch seeds the session row — in production remember always runs after a
 	// successful Touch (see applySessionPolicy), and remember is UPDATE-only so
-	// it no longer creates the row itself (REVIEW.md M-3).
+	// it no longer creates the row itself.
 	if !tr.Touch(ctx, "s1", first, first) {
 		t.Fatal("seed Touch must allow")
 	}
@@ -191,7 +191,7 @@ func TestSessionTracker_SharesStateAcrossInstances(t *testing.T) {
 }
 
 // TestSessionTracker_TouchDeniesWhenRowDeletedByOtherInstance covers the
-// hot-path propagation fixed in REVIEW.md M-3: when another instance denies a
+// hot-path propagation: when another instance denies a
 // session (deleting its row), this instance's periodic write-through must
 // observe 0 rows affected and deny, instead of silently keeping the cached
 // session alive.
@@ -220,7 +220,7 @@ func TestSessionTracker_TouchDeniesWhenRowDeletedByOtherInstance(t *testing.T) {
 }
 
 // TestSessionTracker_RememberDoesNotResurrectDeletedRow covers the refresh-path
-// resurrection fixed in REVIEW.md M-3: after another instance deletes the
+// no-resurrection guarantee: after another instance deletes the
 // session row, remember (triggered by a transparent token refresh) must not
 // re-create it.
 func TestSessionTracker_RememberDoesNotResurrectDeletedRow(t *testing.T) {
@@ -268,7 +268,10 @@ func TestSessionTracker_FirstSeenSurvivesRestart(t *testing.T) {
 func TestSessionPurgeExpired(t *testing.T) {
 	db := newTestAuthDB(t)
 	ctx := context.Background()
-	now := time.Now()
+	// UTC, matching the production callers and the stored (normalized) wall
+	// time: a local-zone cutoff compares against UTC walls lexicographically
+	// and purges live rows.
+	now := time.Now().UTC()
 	// One expired row, one live row.
 	if err := db.SessionInsert(ctx, "old", now.Add(-2*time.Hour), now.Add(-2*time.Hour), now.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
