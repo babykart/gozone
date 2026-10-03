@@ -337,6 +337,11 @@ func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 // embedded into the content for PowerDNS. Returns HTTP 201 on success.
 func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
+
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone (see zoneLocks) — the REST twin of the web CreateRecord.
+	defer h.zoneLocks.Lock(zoneID)()
+
 	var rrset models.RRSet
 	if err := json.NewDecoder(r.Body).Decode(&rrset); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeInvalidJSON, "invalid JSON body")

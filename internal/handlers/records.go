@@ -51,6 +51,10 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
+
 	name := strings.TrimSpace(r.FormValue("name"))
 	recordType := canonicalRecordType(r.FormValue("type"))
 	content := strings.TrimSpace(r.FormValue("content"))
@@ -228,6 +232,10 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
+
 	rrset, oldRRSet, err := h.updateRecordFromForm(r)
 	if err != nil {
 		switch e := err.(type) {
@@ -260,6 +268,10 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 // to preserve any sibling records.
 func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
+
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
 
 	rrset, oldRRSet, err := h.updateRecordFromForm(r)
 	if err != nil {
@@ -392,6 +404,10 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
+
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
 
 	if err := r.ParseForm(); err != nil {
 		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
@@ -923,6 +939,10 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
+	// Serialize the fetch→patch sequence against concurrent writers on the
+	// same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
+
 	recordName := strings.TrimSpace(r.FormValue("name"))
 	recordType := canonicalRecordType(r.FormValue("type"))
 
@@ -1070,6 +1090,10 @@ func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordI
 func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
+
+	// Serialize the fetch→patch sequence against concurrent writers on the
+	// same zone (see zoneLocks).
+	defer h.zoneLocks.Lock(zoneID)()
 
 	if err := r.ParseForm(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})

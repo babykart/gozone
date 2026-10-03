@@ -35,6 +35,11 @@ type Handler struct {
 	// Declared as an interface so tests can substitute a fake without spinning
 	// up a live identity provider.
 	OIDC SSOService
+	// zoneLocks serializes read-modify-write record mutations per zone
+	// within this process (see zonelock.go). Every Handler method that
+	// fetches a zone's records, merges locally and PATCHes the result back
+	// must hold the zone lock across the whole sequence.
+	zoneLocks zoneLocks
 }
 
 // SSOService is the subset of the OIDC service used by the handlers. The
@@ -109,8 +114,8 @@ func (h *Handler) renderInternalError(w http.ResponseWriter, r *http.Request, ms
 // pdnsUserFacingStatus returns the HTTP status and a user-facing message for a
 // PowerDNS client error. It never includes the raw upstream error text — only
 // category-level, fixed strings — so a backend error surfacing SQL fragments or
-// internal paths through PDNS's {"error":...} body cannot reach the user
-// (REVIEW.md M-3). The detailed cause is logged server-side by the caller
+// internal paths through PDNS's {"error":...} body cannot reach the user.
+// The detailed cause is logged server-side by the caller
 // (renderInternalError).
 //
 // Returns (0, "") for any non-PowerDNS error (e.g. a DB failure), in which case
@@ -159,8 +164,7 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 	// half-written page to the client (which would also make the subsequent
 	// 500 status a no-op, since headers are committed on the first Write).
 	// The full error is logged server-side; the client gets a generic message
-	// so internal details (template paths, field/type names) are not leaked
-	// (REVIEW.md L-1).
+	// so internal details (template paths, field/type names) are not leaked.
 	var buf bytes.Buffer
 	if err := h.Tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		logger.Error("template render failed", "template", name, "error", err)
