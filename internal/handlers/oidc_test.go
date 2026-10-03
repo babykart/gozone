@@ -16,6 +16,7 @@ import (
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/oidc"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 func TestOIDCLogin_DisabledRedirectsToLogin(t *testing.T) {
@@ -447,6 +448,64 @@ func TestOIDCCallback_FullFlowProvisionsAndRedirects(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("expected provisioned user flowuser, got count %d", n)
+	}
+}
+
+// TestOIDCCallback_ManuallyLockedAccountDenied is the SSO lock bypass
+// regression: an admin-frozen account used to reconnect in one click, because
+// the callback only checked `enabled` — and the freshly minted token carried
+// an iat newer than tokens_valid_after, so the bulk-session revocation done by
+// the lock was moot. The manual lock must now be enforced (fail closed) like
+// the local Login path.
+func TestOIDCCallback_ManuallyLockedAccountDenied(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-flow!")
+	h.Cfg.OIDC.AutoProvision = false
+	h.OIDC = &fakeSSOService{
+		providers: []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+		claims: &oidc.Claims{
+			Issuer: "https://gitea.example.com", Subject: "gitea-locked-sub",
+			// Matches the seeded account's email so resolution links to it
+			// (email-link path) rather than provisioning a fresh user.
+			Email: "lockeduser@test.local", EmailVerified: true,
+			PreferredUsername: "lockeduser",
+		},
+	}
+
+	// Pre-link a local account that is enabled but manually locked.
+	uid := testutil.SeedTestUser(t, h.DB, "lockeduser", "Irrelevant1!", "user", true)
+	h.DB.Exec("UPDATE users SET manual_lock_until = ? WHERE id = ?",
+		time.Now().Add(time.Hour).UTC(), uid)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet,
+		"/auth/oidc/gitea/callback?code=abc&state=xyz", nil)
+	r.SetPathValue("provider", "gitea")
+	r.Host = "gozone.test"
+	h.OIDCCallback(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc == "/dashboard" {
+		t.Error("a manually locked account must not reach /dashboard via SSO")
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName && c.Value != "" {
+			t.Error("no session cookie must be issued for a manually locked account")
+		}
+	}
+
+	// Control: once the lock expires, the same flow logs in again.
+	h.DB.Exec("UPDATE users SET manual_lock_until = NULL WHERE id = ?", uid)
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet,
+		"/auth/oidc/gitea/callback?code=abc&state=xyz", nil)
+	r2.SetPathValue("provider", "gitea")
+	r2.Host = "gozone.test"
+	h.OIDCCallback(w2, r2)
+	if loc := w2.Header().Get("Location"); loc != "/dashboard" {
+		t.Errorf("expected redirect to /dashboard once the lock expired, got %q", loc)
 	}
 }
 

@@ -103,6 +103,24 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A manual admin lock is enforced here too, mirroring the local Login
+	// path: an account an admin froze must stay frozen, and SSO must not be
+	// a one-click bypass — the token minted below would carry an iat newer
+	// than tokens_valid_after, so the bulk-session revocation the lock
+	// performed would be moot. Fail closed when the lock status cannot be
+	// read, like Login.
+	if manualLocked, merr := h.DB.IsManualLock(ctx, user.ID); merr != nil {
+		logger.Error("oidc callback: failed to check manual lock status; denying (fail-closed)",
+			"provider", provider, "user_id", user.ID, "error", merr)
+		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
+		return
+	} else if manualLocked {
+		logger.Warn("oidc callback: login attempt on manually locked account",
+			"provider", provider, "user_id", user.ID)
+		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
+		return
+	}
+
 	if err := h.issueSSOSession(w, r, user, provider, claims.IDToken); err != nil {
 		http.Redirect(w, r, loginErrorRedirect(ssoError), http.StatusSeeOther)
 		return
@@ -397,7 +415,7 @@ func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *
 	// Strict cookie would NOT be carried on it and the Auth middleware would
 	// bounce the user back to /login. Lax allows the cookie on the top-level
 	// GET landing while still blocking cross-site POST, so state-changing
-	// requests remain protected by gorilla/csrf (REVIEW.md B-1).
+	// requests remain protected by gorilla/csrf.
 	// #nosec G124 -- Secure flag set dynamically via isSecure(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     constants.SessionCookieName,
