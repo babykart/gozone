@@ -202,6 +202,10 @@ func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 	}
 
+	// Same immediate grant purge as the web delete: no lingering group
+	// access until the hourly reconciliation.
+	h.purgeZoneGroupGrants(r.Context(), zoneID)
+
 	writeJSON(w, http.StatusOK, map[string]string{"message": "zone deleted"})
 }
 

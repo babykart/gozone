@@ -398,11 +398,27 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.purgeZoneGroupGrants(r.Context(), zoneID)
+
 	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
 		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 	}
 
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)
+}
+
+// purgeZoneGroupGrants removes every group's access grant to the zone.
+// PowerDNS is the source of truth and deleting the zone there already
+// revoked the data, but a lingering grant must not survive until the hourly
+// reconciliation: a zone recreated under the same name within that window
+// would silently restore the old groups' access to the NEW zone. The zone ID
+// is canonicalised (lowercase + trailing dot) because the grants table keys
+// on the canonical form while a form value may arrive without the dot.
+func (h *Handler) purgeZoneGroupGrants(ctx context.Context, zoneID string) {
+	zoneID = normalizeZoneName(zoneID)
+	if _, err := h.DB.ExecContext(ctx, "DELETE FROM zone_group_zones WHERE zone_id = ?", zoneID); err != nil {
+		logger.Error("failed to purge zone group grants", "zone_id", zoneID, "error", err)
+	}
 }
 
 // BulkDeleteZones deletes several zones by zone_id (POST /zones/bulk-delete).
@@ -450,6 +466,7 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, zoneID)
 			continue
 		}
+		h.purgeZoneGroupGrants(r.Context(), zoneID)
 		deleted++
 		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
 			logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)

@@ -221,6 +221,102 @@ func TestDeleteZone_Success(t *testing.T) {
 	}
 }
 
+// TestDeleteZone_PurgesGroupGrants is the stale-grant regression: deleting a
+// zone used to leave its zone_group_zones rows until the hourly
+// reconciliation, so a zone recreated under the same name within that window
+// silently restored the old groups' access to the NEW zone. Every delete
+// path (web single, web bulk, REST API) must purge the grants immediately.
+func TestDeleteZone_PurgesGroupGrants(t *testing.T) {
+	seedGrant := func(t *testing.T, h *Handler, zone string) {
+		t.Helper()
+		gid := insertReturnID(t, h.DB, "INSERT INTO zone_groups (name, description) VALUES ('grp-"+zone+"', '')")
+		h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", gid, zone)
+		var n int
+		h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE zone_id = ?", zone).Scan(&n)
+		if n != 1 {
+			t.Fatalf("seed grant for %s: got %d rows", zone, n)
+		}
+	}
+	countGrants := func(t *testing.T, h *Handler, zone string) int {
+		t.Helper()
+		var n int
+		h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE zone_id = ?", zone).Scan(&n)
+		return n
+	}
+
+	pdnsMock := func(t *testing.T) testutil.PDNSHandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+
+	t.Run("web single delete", func(t *testing.T) {
+		h, srv := newTestHandlerWithPDNS(t, pdnsMock(t))
+		defer srv.Close()
+		seedGrant(t, h, "gone.example.com.")
+
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/zones/delete", strings.NewReader("zone_id=gone.example.com"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.DeleteZone(w, r.WithContext(ctx))
+
+		if w.Code != http.StatusSeeOther {
+			t.Fatalf("expected 303, got %d", w.Code)
+		}
+		if n := countGrants(t, h, "gone.example.com."); n != 0 {
+			t.Errorf("group grants must be purged at delete time, %d rows linger", n)
+		}
+	})
+
+	t.Run("web bulk delete", func(t *testing.T) {
+		h, srv := newTestHandlerWithPDNS(t, pdnsMock(t))
+		defer srv.Close()
+		seedGrant(t, h, "bulk1.example.com.")
+		seedGrant(t, h, "bulk2.example.com.")
+
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader("zone_id=bulk1.example.com&zone_id=bulk2.example.com"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.BulkDeleteZones(w, r.WithContext(ctx))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		for _, zone := range []string{"bulk1.example.com.", "bulk2.example.com."} {
+			if n := countGrants(t, h, zone); n != 0 {
+				t.Errorf("group grants for %s must be purged at delete time, %d rows linger", zone, n)
+			}
+		}
+	})
+
+	t.Run("rest api delete", func(t *testing.T) {
+		h, srv := newTestHandlerWithPDNS(t, pdnsMock(t))
+		defer srv.Close()
+		seedGrant(t, h, "api.example.com.")
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/api.example.com", nil)
+		r.SetPathValue("zone_id", "api.example.com")
+		h.APIDeleteZone(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if n := countGrants(t, h, "api.example.com."); n != 0 {
+			t.Errorf("group grants must be purged at delete time, %d rows linger", n)
+		}
+	})
+}
+
 func TestDeleteZone_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 
