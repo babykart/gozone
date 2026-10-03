@@ -163,8 +163,12 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 			if models.TypeHasPriority(rr.Type) {
 				priority = rec.Priority
 			}
-			// Strip the PDNS TXT/SPF quotes so encoding/csv.Writer can apply
-			// proper CSV quoting itself.
+			// Strip the PDNS TXT/SPF quotes of a single-string value so
+			// encoding/csv.Writer can apply proper CSV quoting itself.
+			// Multi-string values ("part1" "part2") are exported in wire
+			// form: their outer quotes are string delimiters, and stripping
+			// them would corrupt the round trip (the re-imported content
+			// would collapse into one string with literal quotes).
 			content := models.UnquoteContent(rr.Type, rec.Content)
 			// #nosec G104 — csv.Writer.Write errors in HTTP handler context; Flush reports cumulative errors
 			_ = writer.Write([]string{

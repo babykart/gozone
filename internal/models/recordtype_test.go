@@ -84,10 +84,10 @@ func TestJoinPriority(t *testing.T) {
 		{"MX priority zero", "MX", 0, "mail.example.com.", "0 mail.example.com."},
 		{"MX strips embedded priority", "MX", 20, "10 mail.example.com.", "20 mail.example.com."},
 		{"MX strips max priority (65535)", "MX", 20, "65535 mail.example.com.", "20 mail.example.com."},
-		// m52: a negative or out-of-range leading token is NOT a valid priority
+		// A negative or out-of-range leading token is NOT a valid priority
 		// and must not be stripped — it is preserved as content.
-		{"MX keeps negative prefix (m52)", "MX", 20, "-5 mail.example.com.", "20 -5 mail.example.com."},
-		{"MX keeps out-of-range prefix (m52)", "MX", 20, "99999 mail.example.com.", "20 99999 mail.example.com."},
+		{"MX keeps negative prefix", "MX", 20, "-5 mail.example.com.", "20 -5 mail.example.com."},
+		{"MX keeps out-of-range prefix", "MX", 20, "99999 mail.example.com.", "20 99999 mail.example.com."},
 		{"SRV from form content (3 fields)", "SRV", 10, "5 5060 srv.example.com.", "10 5 5060 srv.example.com."},
 		{"SRV strips embedded priority (4 fields)", "SRV", 20, "10 5 5060 srv.example.com.", "20 5 5060 srv.example.com."},
 		{"non-priority type unchanged", "A", 0, "192.0.2.1", "192.0.2.1"},
@@ -131,11 +131,11 @@ func TestQuoteContent(t *testing.T) {
 	}{
 		{"TXT unquoted", "TXT", "v=spf1 mx ~all", `"v=spf1 mx ~all"`},
 		{"TXT already double-quoted", "TXT", `"already"`, `"already"`},
-		// m51: a single quote has no DNS wire meaning — content starting with '
+		// A single quote has no DNS wire meaning — content starting with '
 		// is treated as literal text and double-quote-wrapped, not passed through.
-		{"TXT single-quoted wrapped (m51)", "TXT", `'already'`, `"'already'"`},
-		{"TXT single-quoted with spaces wrapped (m51)", "TXT", `'hello world'`, `"'hello world'"`},
-		{"TXT leading single quote only wrapped (m51)", "TXT", `'foo`, `"'foo"`},
+		{"TXT single-quoted wrapped", "TXT", `'already'`, `"'already'"`},
+		{"TXT single-quoted with spaces wrapped", "TXT", `'hello world'`, `"'hello world'"`},
+		{"TXT leading single quote only wrapped", "TXT", `'foo`, `"'foo"`},
 		{"SPF unquoted", "SPF", "v=spf1 -all", `"v=spf1 -all"`},
 		{"TXT empty content", "TXT", "", ""},
 		{"non-quoted type unchanged", "A", "192.0.2.1", "192.0.2.1"},
@@ -172,6 +172,13 @@ func TestUnquoteContent(t *testing.T) {
 		{"TXT unescapes backslash then quote", "TXT", `"a\\\"b"`, `a\"b`},
 		{"TXT unescapes multiple backslashes", "TXT", `"\\\\"`, `\\`},
 		{"TXT escaped backslash not treated as quote escape", "TXT", `"\\"`, `\`},
+		// Multi-string values keep their wire form: the outer quotes are
+		// string delimiters, not wrappers.
+		{"TXT two strings kept wire", "TXT", `"part1" "part2"`, `"part1" "part2"`},
+		{"SPF two strings kept wire", "SPF", `"v=DMARC1;" "p=none"`, `"v=DMARC1;" "p=none"`},
+		{"TXT three strings kept wire", "TXT", `"a" "b" "c"`, `"a" "b" "c"`},
+		{"TXT string then empty string kept wire", "TXT", `"a" ""`, `"a" ""`},
+		{"TXT escaped inner quote is still single", "TXT", `"a\" b"`, `a" b`},
 	}
 
 	for _, tt := range tests {
@@ -195,12 +202,28 @@ func TestQuoteRoundTrip(t *testing.T) {
 			`backslash\and"quote`,
 			`\\double`,
 			`trailing\`,
-			`'single quoted'`, // m51: single quotes are literal, must round-trip
+			`'single quoted'`, // single quotes are literal, must round-trip
 		} {
 			if got := UnquoteContent(rtype, QuoteContent(rtype, original)); got != original {
 				t.Errorf("round trip %q %q: got %q, want %q", rtype, original, got, original)
 			}
 		}
+	}
+}
+
+// TestUnquoteContent_MultiStringWireRoundTrip pins the export/import contract
+// for multi-string TXT/SPF values: the export must emit them in wire form
+// (unchanged by UnquoteContent), and QuoteContent must pass a value that
+// already starts with a quote through untouched — so the exported CSV cell
+// re-imports as the exact same wire content instead of collapsing into one
+// escaped string (which silently broke DKIM keys).
+func TestUnquoteContent_MultiStringWireRoundTrip(t *testing.T) {
+	wire := `"k=rsa; p=MIIBIjANBg" "qwHQaXCLB"`
+	if got := UnquoteContent("TXT", wire); got != wire {
+		t.Errorf("export of a multi-string TXT must keep the wire form, got %q", got)
+	}
+	if got := QuoteContent("TXT", wire); got != wire {
+		t.Errorf("import of a wire-form TXT must pass through unchanged, got %q", got)
 	}
 }
 

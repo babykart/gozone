@@ -159,7 +159,7 @@ func JoinPriority(recordType string, priority int, content string) string {
 	if len(tokens) >= spec.wireFields {
 		// Only strip an already-embedded priority when the leading token is a
 		// valid 16-bit unsigned integer (0-65535). strconv.Atoi would also
-		// accept negative or out-of-range values like "-5" (m52), stripping a
+		// accept negative or out-of-range values like "-5", stripping a
 		// token that was never a real priority.
 		if _, err := strconv.ParseUint(tokens[0], 10, 16); err == nil {
 			content = strings.Join(tokens[1:], " ")
@@ -173,7 +173,7 @@ func JoinPriority(recordType string, priority int, content string) string {
 // are escaped so the resulting string is well-formed for PowerDNS wire format.
 // Non-quoted types and empty content pass through. Only a leading double quote
 // counts as "already quoted" — a single quote (') has no meaning in DNS wire
-// format and is treated as a literal character (m51).
+// format and is treated as a literal character.
 func QuoteContent(recordType, content string) string {
 	if !TypeIsQuoted(recordType) || content == "" {
 		return content
@@ -188,17 +188,45 @@ func QuoteContent(recordType, content string) string {
 	return `"` + escaped + `"`
 }
 
-// UnquoteContent removes one pair of surrounding double quotes from quoted types
-// (TXT, SPF) and unescapes escaped internal quotes and backslashes, leaving
-// other types and unquoted content unchanged.
+// UnquoteContent removes the surrounding double quotes from quoted types
+// (TXT, SPF) — unescaping the internal escaped quotes and backslashes — only
+// when the content is exactly ONE complete quoted string. A multi-string
+// value such as "part1" "part2" is returned unchanged: stripping its outer
+// characters would corrupt it (the CSV export would emit part1" "part2,
+// which re-imports as a single string with literal quote characters,
+// silently breaking e.g. DKIM keys). Unquoted content and other types pass
+// through untouched.
 func UnquoteContent(recordType, content string) string {
 	if !TypeIsQuoted(recordType) {
 		return content
 	}
-	if len(content) >= 2 && strings.HasPrefix(content, `"`) && strings.HasSuffix(content, `"`) {
-		return unescapeQuotedContent(content[1 : len(content)-1])
+	if !isSingleQuotedString(content) {
+		return content
 	}
-	return content
+	return unescapeQuotedContent(content[1 : len(content)-1])
+}
+
+// isSingleQuotedString reports whether content is exactly one complete
+// character-string: it opens with a quote, carries no unescaped quote, and
+// ends with the matching closing quote. Anything else — a multi-string
+// sequence ("a" "b"), a stray or unterminated quote — is not a single
+// string, and its outer quotes are structural (string delimiters), not
+// wrappers to strip.
+func isSingleQuotedString(content string) bool {
+	if len(content) < 2 || content[0] != '"' || content[len(content)-1] != '"' {
+		return false
+	}
+	for i := 1; i < len(content)-1; i++ {
+		switch content[i] {
+		case '\\':
+			i++ // skip the escaped character
+		case '"':
+			// An unescaped inner quote: the first string ends here, so the
+			// value holds (at least) two strings.
+			return false
+		}
+	}
+	return true
 }
 
 // unescapeQuotedContent reverses the escaping applied by QuoteContent:

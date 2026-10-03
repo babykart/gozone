@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/csv"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,6 +130,104 @@ func TestExportZone_CSV(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if !strings.Contains(ct, "text/csv") {
 		t.Errorf("expected text/csv Content-Type, got: %s", ct)
+	}
+}
+
+// TestExportZone_CSV_TXTStrings pins the CSV export shape of quoted types: a
+// single-string TXT is exported bare (its one pair of quotes is a removable
+// wrapper), while a multi-string TXT keeps its wire form (the quotes are
+// per-string delimiters — stripping the outer pair corrupts the value).
+func TestExportZone_CSV_TXTStrings(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.RawQuery, "rrsets") {
+			w.Write([]byte(`[{"name":"example.com.","id":"example.com.","kind":"Native"}]`)) // #nosec G104 -- test helper
+			return
+		}
+		w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","rrsets":[
+			{"name":"example.com.","type":"SOA","ttl":3600,"records":[{"content":"ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600"}]},
+			{"name":"single.example.com.","type":"TXT","ttl":3600,"records":[{"content":"\"v=spf1 mx ~all\""}]},
+			{"name":"multi.example.com.","type":"TXT","ttl":3600,"records":[{"content":"\"k=rsa; p=MIIBIjANBg\" \"hqHzaTBj2w\""}]}
+		]}`)) // #nosec G104 -- test helper
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=csv", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	rows, err := csv.NewReader(w.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("parse exported CSV: %v", err)
+	}
+	cells := map[string]string{}
+	for _, row := range rows {
+		if len(row) >= 3 {
+			cells[row[0]] = row[2]
+		}
+	}
+	if got := cells["single.example.com."]; got != "v=spf1 mx ~all" {
+		t.Errorf("single-string TXT exported as %q, want the bare value", got)
+	}
+	if got := cells["multi.example.com."]; got != `"k=rsa; p=MIIBIjANBg" "hqHzaTBj2w"` {
+		t.Errorf("multi-string TXT exported as %q, want the wire form", got)
+	}
+}
+
+// TestExportZone_CSV_TXTMultiStringRoundTrip is the export→import round-trip
+// contract for quoted types: the CSV cells produced by the export must parse
+// back into the exact original wire contents. A multi-string TXT previously
+// exported as a quote-mangled cell that re-imported as one string with
+// literal quote characters — silently breaking e.g. DKIM keys.
+func TestExportZone_CSV_TXTMultiStringRoundTrip(t *testing.T) {
+	wireSingle := "v=spf1 mx ~all"
+	wireMulti := `"k=rsa; p=MIIBIjANBg" "hqHzaTBj2w"`
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.RawQuery, "rrsets") {
+			w.Write([]byte(`[{"name":"example.com.","id":"example.com.","kind":"Native"}]`)) // #nosec G104 -- test helper
+			return
+		}
+		w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","rrsets":[
+			{"name":"example.com.","type":"SOA","ttl":3600,"records":[{"content":"ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600"}]},
+			{"name":"single.example.com.","type":"TXT","ttl":3600,"records":[{"content":"\"v=spf1 mx ~all\""}]},
+			{"name":"multi.example.com.","type":"TXT","ttl":3600,"records":[{"content":"\"k=rsa; p=MIIBIjANBg\" \"hqHzaTBj2w\""}]}
+		]}`)) // #nosec G104 -- test helper
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=csv", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export: expected 200, got %d", w.Code)
+	}
+
+	rrsets, _, err := parseCSVZone(csv.NewReader(w.Body))
+	if err != nil {
+		t.Fatalf("re-import exported CSV: %v", err)
+	}
+	contents := map[string]string{}
+	for _, rr := range rrsets {
+		if rr.Type == "TXT" {
+			contents[rr.Name] = rr.Records[0].Content
+		}
+	}
+	// The single-string export is bare, so the import re-adds the wrapper.
+	if got := contents["single.example.com."]; got != `"`+wireSingle+`"` {
+		t.Errorf("single-string TXT round trip = %q, want %q", got, `"`+wireSingle+`"`)
+	}
+	// The multi-string export is wire-form, so the import must pass it through.
+	if got := contents["multi.example.com."]; got != wireMulti {
+		t.Errorf("multi-string TXT round trip = %q, want the original wire form %q", got, wireMulti)
 	}
 }
 
@@ -347,7 +446,7 @@ func TestFormatRecordContent(t *testing.T) {
 	}
 }
 
-// TestExportZone_GetZoneError_Returns500 is the m23 regression test: a PDNS
+// TestExportZone_GetZoneError_Returns500 is a PDNS-error regression: a
 // failure on GetZone must surface as HTTP 500 via renderErrorStatus, not be
 // silently downgraded to 400 by a double WriteHeader before renderError.
 func TestExportZone_GetZoneError_Returns500(t *testing.T) {
