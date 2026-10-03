@@ -80,7 +80,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	// upstream error text (which may quote SQL fragments or internal paths on a
 	// backend failure) never reaches the user; pdnsUserFacingStatus maps each
 	// sentinel to a fixed, category-level message and the cause is logged
-	// server-side (REVIEW.md M-3).
+	// server-side.
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
 		h.renderInternalError(w, r, "Failed to create records", err)
 		return
@@ -90,7 +90,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "skipped", len(skipped), "user", user.Username)
 
 	// Report lines that could not be parsed instead of silently dropping them
-	// (m28): server-side log for operators, plus a user-facing summary.
+	// plus a server-side log for operators alongside the user-facing summary.
 	for _, s := range skipped {
 		logger.Warn("Zone import skipped invalid line", "zone", zoneID, "line", s.Line, "reason", s.Reason)
 	}
@@ -149,7 +149,7 @@ type skippedLine struct {
 // caller must SplitPriority first for MX/SRV). It lets the BIND and CSV
 // importers reject invalid records before they reach PowerDNS, producing a
 // specific reason per line instead of a generic "failed to create records"
-// (REVIEW.md M-6).
+// the validation-before-normalisation contract).
 func validateParsedRecord(rtype, name, contentBare string, priority int) error {
 	if err := validators.ValidateRecordType(rtype); err != nil {
 		return err
@@ -219,7 +219,7 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 		}
 		// Validate the parsed record before accepting it. BIND data is wire
 		// format (priority embedded for MX/SRV), so split the priority out
-		// first and validate the bare content (REVIEW.md M-6).
+		// first and validate the bare content.
 		prio, rest, _ := models.SplitPriority(rec.rtype, rec.data)
 		if verr := validateParsedRecord(rec.rtype, rec.name, rest, prio); verr != nil {
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: verr.Error()})
@@ -243,8 +243,16 @@ func normalizeBindLines(input string) []bindLine {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	lines := strings.Split(input, "\n")
 
-	result := make([]bindLine, 0)
-	inParen := false
+	result := make([]bindLine, 0, len(lines))
+	// parenDepth is the open-structural-parenthesis depth of the logical
+	// line being accumulated. Parens inside quoted strings are literal data
+	// and never counted, and an open+close pair on the same line must leave
+	// the logical line closed: the previous boolean flip (open on '(' then
+	// close only when closes > opens) stayed stuck on a same-line pair like
+	// "( 1 2 3 4 5 )" and swallowed every following line into one giant
+	// record, and a quoted TXT paren opened a logical line that never
+	// closed.
+	parenDepth := 0
 	current := ""
 	currentInherits := false
 
@@ -253,47 +261,50 @@ func normalizeBindLines(input string) []bindLine {
 		leadingBlank := raw != "" && (raw[0] == ' ' || raw[0] == '\t')
 		line := strings.TrimSpace(raw)
 
-		commentIdx := -1
+		// Strip comments and structural parentheses in one quote-aware
+		// scan. Quote handling matches the rest of the parser (no backslash
+		// escapes): a '"' always toggles the in-quote state.
+		var cleaned strings.Builder
 		inQuote := false
+		depthDelta := 0
 		for i := 0; i < len(line); i++ {
-			if line[i] == '"' {
+			c := line[i]
+			switch {
+			case c == '"':
 				inQuote = !inQuote
-			}
-			if line[i] == ';' && !inQuote {
-				commentIdx = i
-				break
+				cleaned.WriteByte(c)
+			case c == ';' && !inQuote:
+				// Comment: drop the rest of the physical line.
+				i = len(line)
+			case c == '(' && !inQuote:
+				depthDelta++
+			case c == ')' && !inQuote:
+				depthDelta--
+			default:
+				cleaned.WriteByte(c)
 			}
 		}
-		if commentIdx >= 0 {
-			line = line[:commentIdx]
-		}
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(cleaned.String())
 
-		if line == "" {
+		if line == "" && parenDepth == 0 {
 			continue
 		}
 
-		if !inParen {
+		if parenDepth == 0 {
 			current = line
 			currentInherits = leadingBlank
 		} else {
 			current += " " + line
 		}
 
-		opens := strings.Count(line, "(")
-		closes := strings.Count(line, ")")
-
-		if opens > 0 && !inParen {
-			inParen = true
-			current = strings.Replace(current, "(", "", 1)
+		parenDepth += depthDelta
+		if parenDepth < 0 {
+			// Stray ')' with no opener: tolerate (treat as data-less noise)
+			// rather than desynchronizing every later line.
+			parenDepth = 0
 		}
 
-		if closes > opens && inParen {
-			inParen = false
-			current = strings.Replace(current, ")", "", 1)
-		}
-
-		if !inParen {
+		if parenDepth == 0 {
 			current = strings.TrimSpace(current)
 			if current != "" {
 				result = append(result, bindLine{text: current, inheritsOwner: currentInherits})
@@ -303,9 +314,11 @@ func normalizeBindLines(input string) []bindLine {
 		}
 	}
 
-	if inParen && strings.TrimSpace(current) != "" {
-		current = strings.ReplaceAll(current, ")", "")
-		result = append(result, bindLine{text: strings.TrimSpace(current), inheritsOwner: currentInherits})
+	// Unterminated parenthesis at EOF: flush what was accumulated.
+	if parenDepth > 0 {
+		if current = strings.TrimSpace(current); current != "" {
+			result = append(result, bindLine{text: current, inheritsOwner: currentInherits})
+		}
 	}
 
 	return result
@@ -441,7 +454,7 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 			// BIND data is already in wire format (priority embedded, TXT
 			// quoted). Extract the embedded priority first so
 			// prepareRecordContent re-embeds it correctly and applies
-			// FQDN-target / multi-FQDN-field trailing-dot normalization (M-BIZ1).
+			// FQDN-target / multi-FQDN-field trailing-dot normalization.
 			prio, rest, _ := models.SplitPriority(r.rtype, r.data)
 			normalized, _ := prepareRecordContent(r.rtype, rest, prio)
 			records = append(records, models.RecordInfo{
@@ -463,7 +476,7 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 
 // parseCSVZone parses CSV zone data and returns RRSets plus any rows that
 // failed validation (so the caller can surface feedback instead of silently
-// dropping them, matching the BIND path — REVIEW.md M-6).
+// dropping them, matching the BIND path).
 func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
 	rows, err := reader.ReadAll()
 	if err != nil {
@@ -511,8 +524,8 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
 		}
 
 		// Validate before normalizing so an invalid row is reported with a
-		// specific reason rather than a generic PowerDNS failure (REVIEW.md
-		// M-6). CSV content is bare (priority is a separate column). The name
+		// specific reason rather than a generic PowerDNS failure.
+		// CSV content is bare (priority is a separate column). The name
 		// is validated in its raw form (before the trailing-dot append below)
 		// so the apex shorthand "@" is accepted by ValidateRecordName.
 		if verr := validateParsedRecord(rtype, name, content, priority); verr != nil {
@@ -526,7 +539,7 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
 
 		// Route through the same normalization pipeline as the web/API paths
 		// so FQDN-target (CNAME/NS/PTR/…) and multi-FQDN-field (SOA/RP/…)
-		// types get trailing dots, not just priority/quoted handling (M-BIZ1).
+		// types get trailing dots, not just priority/quoted handling.
 		csvContent, csvPriority := prepareRecordContent(rtype, content, priority)
 
 		k := key{name, rtype}

@@ -138,7 +138,7 @@ func TestImportZone_PDNSError_NoLogs(t *testing.T) {
 	}
 }
 
-// TestImportZone_PDNSError_NoRawErrorLeak guards REVIEW.md M-3: when PowerDNS
+// TestImportZone_PDNSError_NoRawErrorLeak guards the error-leak contract: when PowerDNS
 // returns a backend error whose body carries internal detail (e.g. a SQL
 // fragment), that detail must NOT be surfaced to the user. The cause is logged
 // server-side; the response body carries only a generic message.
@@ -239,7 +239,7 @@ func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 	}
 }
 
-// TestImportZone_BIND_SkippedLinesReported is the m28 regression test at the
+// TestImportZone_BIND_SkippedLinesReported is the handler-level skipped-lines test at the
 // handler level: a BIND file containing a malformed line must redirect with an
 // ?import_skipped=N query param so the frontend can surface feedback.
 func TestImportZone_BIND_SkippedLinesReported(t *testing.T) {
@@ -411,7 +411,7 @@ www 300
 	}
 }
 
-// TestParseBindZone_ReportsSkippedLines is the m28 regression test: lines that
+// TestParseBindZone_ReportsSkippedLines is a skipped-lines regression: lines that
 // cannot be parsed into records are returned as skipped feedback instead of
 // being silently dropped.
 func TestParseBindZone_ReportsSkippedLines(t *testing.T) {
@@ -501,7 +501,7 @@ func TestParseCSVZone_NoData(t *testing.T) {
 	}
 }
 
-// TestParseCSVZone_SkipsInvalidRecords is the M-6 regression: invalid record
+// TestParseCSVZone_SkipsInvalidRecords is a stored-input validation regression: invalid record
 // types/contents are now validated and skipped (with a reason) instead of being
 // forwarded to PowerDNS, which would surface a generic "failed to create
 // records". A valid A row alongside is still imported.
@@ -524,7 +524,7 @@ mail.example.com.,A,192.0.2.5,3600,0,false`
 
 // TestParseBindZone_SkipsInvalidRecords is the BIND counterpart: an invalid A
 // content and an unknown type are skipped with a reason rather than sent to
-// PowerDNS (REVIEW.md M-6).
+// PowerDNS.
 func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
 	input := strings.Join([]string{
 		"www.example.com. 300 IN A not-an-ip",
@@ -687,7 +687,7 @@ func TestAppendIfMissing(t *testing.T) {
 	}
 }
 
-// TestParseCSVZone_FQDNTargetNormalization is the M-BIZ1 regression test:
+// TestParseCSVZone_FQDNTargetNormalization is a normalization regression test:
 // CSV import must route through prepareRecordContent so FQDN-target types
 // (CNAME/NS/PTR) get trailing dots, not just priority/quoted handling.
 func TestParseCSVZone_FQDNTargetNormalization(t *testing.T) {
@@ -742,9 +742,82 @@ func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
 	}
 }
 
-// TestParseBindZone_FQDNTargetNormalization is the M-BIZ1 regression test for
+// TestParseBindZone_FQDNTargetNormalization is a normalization regression test for
 // the BIND parser: a CNAME target without a trailing dot must get one, and MX
 // priority must be preserved through normalization.
+// TestParseBindZone_SameLineParentheses is the regression test for a SOA
+// written on a single physical line: "( 2024010101 3600 900 1209600 300 )".
+// The parser used to flip into paren-continuation mode on '(' and only left
+// it when closes > opens, so the balanced pair left it stuck and every
+// following line was merged into one giant record that got rejected. The
+// depth counter now closes the logical line when the parens balance.
+func TestParseBindZone_SameLineParentheses(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. ( 2024010101 3600 900 1209600 300 )
+@ IN NS ns1.example.com.
+www IN A 192.0.2.1`)
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("no line should be skipped, got %+v", skipped)
+	}
+
+	contents := map[string]string{}
+	for _, rr := range rrsets {
+		contents[rr.Type] = rr.Records[0].Content
+	}
+	if got := contents["SOA"]; got != "ns1.example.com. hostmaster.example.com. 2024010101 3600 900 1209600 300" {
+		t.Errorf("SOA content = %q, want the paren-free single-line form", got)
+	}
+	if _, ok := contents["NS"]; !ok {
+		t.Error("NS record after a same-line paren pair must still parse")
+	}
+	if _, ok := contents["A"]; !ok {
+		t.Error("A record after a same-line paren pair must still parse")
+	}
+}
+
+// TestParseBindZone_ParensInsideQuotes is the regression test for literal
+// parentheses inside a quoted TXT payload: they are data, not continuation
+// markers. The parser used to count them, opening a logical line that never
+// closed and swallowing the rest of the zone.
+func TestParseBindZone_ParensInsideQuotes(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 1209600 300
+txt1 IN TXT "value (parenthetical) inside"
+@ IN NS ns1.example.com.`)
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("no line should be skipped, got %+v", skipped)
+	}
+
+	var txtContent string
+	sawNS := false
+	for _, rr := range rrsets {
+		switch {
+		case rr.Type == "TXT" && rr.Name == "txt1.example.com.":
+			txtContent = rr.Records[0].Content
+		case rr.Type == "NS":
+			sawNS = true
+		}
+	}
+	if txtContent != `"value (parenthetical) inside"` {
+		t.Errorf("TXT content = %q, want the literal parens preserved inside the quotes", txtContent)
+	}
+	if !sawNS {
+		t.Error("records following a TXT with quoted parens must still parse")
+	}
+}
+
 func TestParseBindZone_FQDNTargetNormalization(t *testing.T) {
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
