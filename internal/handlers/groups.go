@@ -166,7 +166,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	if skipped > 0 {
 		// Some submitted members did not exist (stale form / tampered request)
 		// and were skipped — surface it so the admin is not left with a silent
-		// partial add (REVIEW.md B-4).
+		// partial add.
 		target += "?flash=members_skipped"
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
@@ -176,7 +176,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 // emits for /groups/{id}/edit (CreateGroup -> members_skipped). EditGroupPage
 // validates the incoming query param against this set so a crafted link cannot
 // inject arbitrary text into the page — the handler is the trust boundary,
-// mirroring apiKeyValidFlashCodes (REVIEW.md B-4 / L-1).
+// mirroring apiKeyValidFlashCodes.
 var groupValidFlashCodes = map[string]struct{}{
 	"members_skipped": {},
 }
@@ -237,8 +237,7 @@ func (h *Handler) queryExistingUserIDs(ctx context.Context, batch []int64, exist
 // CreateGroup can surface a warning. Zone IDs are trimmed strings referencing
 // PowerDNS zones (no users-table FK to validate against). Both lists are
 // de-duplicated while preserving order. Each row uses InsertIgnore so a
-// repeated selection is tolerated. Errors are logged, not fatal (REVIEW.md
-// B-4).
+// repeated selection is tolerated. Errors are logged, not fatal.
 func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) int {
 	var userIDs []int64
 	seenUsers := make(map[int64]struct{})
@@ -350,8 +349,11 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		// Opportunistic garbage collection: an admin opening the group page
 		// is the natural moment to drop grants for zones that vanished from
 		// PowerDNS (the hourly background job covers deployments where nobody
-		// visits). Best-effort — a failure here must not block the page.
-		if _, err := h.reconcileGroupZones(r.Context(), zonesAll); err != nil {
+		// visits). The reconciliation reads the zone list cache-bypassed (see
+		// ReconcileGroupZones), so it does not reuse the cached zonesAll
+		// fetched for the dropdown. Best-effort — a failure here must not
+		// block the page.
+		if _, err := h.ReconcileGroupZones(r.Context()); err != nil {
 			logger.Error("group zone grant reconciliation failed", "group_id", groupID, "error", err)
 		}
 		// The reconciliation above may have removed rows the zones slice
@@ -508,7 +510,7 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate user_id as a positive int — the column is typed INTEGER, so an
 	// unvalidated string yields a 500 on Postgres (and a confusing partial
-	// insert on MySQL/SQLite). Mirrors attachGroupSelections (REVIEW.md M-4).
+	// insert on MySQL/SQLite). Mirrors attachGroupSelections.
 	userIDStr := strings.TrimSpace(r.FormValue("user_id"))
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {
@@ -518,7 +520,7 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 
 	// Validate existence before inserting: InsertIgnore would otherwise drop a
 	// non-existent user_id silently (FK violation) with no feedback — the same
-	// gap as attachGroupSelections (REVIEW.md B-4).
+	// gap as attachGroupSelections.
 	existing, err := h.existingUserIDs(r.Context(), []int64{userID})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to validate user", err)
@@ -546,7 +548,7 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 		h.renderError(w, r, "Invalid group ID")
 		return
 	}
-	// Validate user_id as a positive int (REVIEW.md M-4).
+	// Validate user_id as a positive int.
 	userIDStr := strings.TrimSpace(r.FormValue("user_id"))
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {

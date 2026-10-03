@@ -23,6 +23,13 @@ type ZoneService interface {
 	CreateZone(ctx context.Context, req models.ZoneCreateRequest) (*models.Zone, error)
 	DeleteZone(ctx context.Context, zoneID string) error
 	ListZonesWithInfo(ctx context.Context) ([]models.ZoneWithInfo, error)
+	// ListZonesWithInfoFresh returns the authoritative zone list straight
+	// from PowerDNS, bypassing any read-through cache. Callers that diff
+	// the result against persisted state (the group-grant reconciliation)
+	// must not act on a cached list: another instance may have created a
+	// zone seconds ago, and deleting its grant from a stale list would
+	// revoke a permission that was just granted.
+	ListZonesWithInfoFresh(ctx context.Context) ([]models.ZoneWithInfo, error)
 
 	// Records
 	ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error)

@@ -587,7 +587,7 @@ func TestCachedZoneMutations_InvalidateZonesAndStats(t *testing.T) {
 	}
 }
 
-// TestCachedRead_SingleFlightCoalescesConcurrentMisses verifies m44: N
+// TestCachedRead_SingleFlightCoalescesConcurrentMisses verifies the single-flight contract: N
 // concurrent reads of a cold cache key produce a single PowerDNS call rather
 // than N. The leader's fetch is held open until all followers have piled up
 // behind the single-flight, then released — without single-flight they would
@@ -629,11 +629,11 @@ func TestCachedRead_SingleFlightCoalescesConcurrentMisses(t *testing.T) {
 	wg.Wait()
 
 	if got := calls.Load(); got != 1 {
-		t.Errorf("expected exactly 1 PDNS call for %d concurrent misses (single-flight m44), got %d", N, got)
+		t.Errorf("expected exactly 1 PDNS call for %d concurrent misses (single-flight), got %d", N, got)
 	}
 }
 
-// TestCachedRead_NoStaleRepopulationAfterInvalidation verifies m45: a read
+// TestCachedRead_NoStaleRepopulationAfterInvalidation verifies the generation guard: a read
 // whose fetch is still in flight when an invalidation lands must NOT write its
 // (now stale) result back to the cache. Without the generation guard the slow
 // reader would repopulate the cache with stale data.
@@ -689,10 +689,10 @@ func TestCachedRead_NoStaleRepopulationAfterInvalidation(t *testing.T) {
 		t.Fatalf("ListZones B: %v", err)
 	}
 	if len(zones) == 0 || zones[0].ID != "fresh." {
-		t.Fatalf("reader B should see fresh data (stale was not cached — m45), got %v", zones)
+		t.Fatalf("reader B should see fresh data (stale was not cached), got %v", zones)
 	}
 	if got := listCalls.Load(); got != 2 {
-		t.Errorf("expected 2 list calls (stale fetch + fresh fetch), got %d — if 1, stale data poisoned the cache (m45)", got)
+		t.Errorf("expected 2 list calls (stale fetch + fresh fetch), got %d — if 1, stale data poisoned the cache", got)
 	}
 
 	// Reader C: cache hit, still fresh, no new call.
@@ -705,5 +705,41 @@ func TestCachedRead_NoStaleRepopulationAfterInvalidation(t *testing.T) {
 	}
 	if got := listCalls.Load(); got != 2 {
 		t.Errorf("reader C should hit cache (no new call), got %d", got)
+	}
+}
+
+// TestCachedListZonesWithInfoFresh_BypassesCache pins the cache-bypass
+// contract: the fresh read always hits PowerDNS, even when the read-through
+// cache holds a list that is still within its TTL — the grant
+// reconciliation must not act on a list that can predate a zone another
+// instance created moments ago.
+func TestCachedListZonesWithInfoFresh_BypassesCache(t *testing.T) {
+	var zones atomic.Value // served zone list, swappable mid-test
+	zones.Store(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`)
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(zones.Load().(string)))
+	})
+
+	ctx := context.Background()
+	// Prime the read-through cache with the one-zone list.
+	if got, err := cached.ListZonesWithInfo(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("prime: got %d zones, err %v", len(got), err)
+	}
+	// The upstream grows (another instance created a zone) — still inside
+	// the cache TTL.
+	zones.Store(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0},{"id":"z2.","name":"z2.","kind":"Native","serial":0}]`)
+
+	// Cached read: still the stale one-zone list.
+	if got, err := cached.ListZonesWithInfo(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("cached read: got %d zones, err %v", len(got), err)
+	}
+	// Fresh read: the authoritative two-zone list.
+	got, err := cached.ListZonesWithInfoFresh(ctx)
+	if err != nil {
+		t.Fatalf("fresh read: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("fresh read must bypass the cache and see the new zone, got %d zones", len(got))
 	}
 }

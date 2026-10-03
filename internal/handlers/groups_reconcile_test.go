@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -98,6 +99,59 @@ func TestReconcileGroupZones_PDNSUnreachableKeepsGrants(t *testing.T) {
 	}
 	if n := groupZoneGrantCount(t, h, "example.com."); n != 1 {
 		t.Errorf("grants must be untouched when PowerDNS is unreachable, got %d rows", n)
+	}
+}
+
+// TestReconcileGroupZones_EmptyZoneListKeepsGrants is the broken-backend
+// guard: a PowerDNS answering 200 with an empty zone list while grants exist
+// used to revoke every grant irreversibly. The pass must be skipped.
+func TestReconcileGroupZones_EmptyZoneListKeepsGrants(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler()) // 200 []
+	defer srv.Close()
+
+	gid := seedGroup(t, h, "ops", "")
+	seedGroupZoneGrant(t, h, gid, "example.com.")
+	seedGroupZoneGrant(t, h, gid, "other.example.")
+
+	deleted, err := h.ReconcileGroupZones(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileGroupZones: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("an empty zone list must not delete grants, got %d", deleted)
+	}
+	if n := groupZoneGrantCount(t, h, "example.com."); n != 1 {
+		t.Errorf("grants must survive an empty zone list, got %d rows", n)
+	}
+}
+
+// TestReconcileGroupZones_MassOrphanRatioAborts is the circuit-breaker
+// regression: a pass that would drop more than half of a sizeable grant set
+// (a truncated zone list behind an outage) is aborted instead of mass-
+// revoking. Small sets are always processed.
+func TestReconcileGroupZones_MassOrphanRatioAborts(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("keep.example."))
+	defer srv.Close()
+
+	gid := seedGroup(t, h, "ops", "")
+	seedGroupZoneGrant(t, h, gid, "keep.example.")
+	for i := 0; i < reconcileOrphanSmallSetBound+1; i++ {
+		seedGroupZoneGrant(t, h, gid, fmt.Sprintf("gone%d.example.", i))
+	}
+
+	deleted, err := h.ReconcileGroupZones(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileGroupZones: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("a pass dropping %d of %d grants must be aborted, got %d deletions",
+			reconcileOrphanSmallSetBound+1, reconcileOrphanSmallSetBound+2, deleted)
+	}
+	if n := groupZoneGrantCount(t, h, "gone0.example."); n != 1 {
+		t.Errorf("circuit-breaker pass must keep every grant, got %d rows for gone0", n)
+	}
+	if n := groupZoneGrantCount(t, h, "keep.example."); n != 1 {
+		t.Errorf("existing grant must survive, got %d rows", n)
 	}
 }
 

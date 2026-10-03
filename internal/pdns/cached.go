@@ -23,7 +23,7 @@ const (
 // caches (bumping gen and clearing entries) before delegating to the
 // underlying client.
 //
-// Concurrency properties (m44/m45):
+// Concurrency properties:
 //   - Concurrent misses of the same cache key are single-flighted: only the
 //     leader calls PowerDNS; followers share its result.
 //   - A read whose fetch is still in flight when an invalidation lands must not
@@ -39,8 +39,8 @@ type cachedClient struct {
 	stats    *cache.Cache[[]models.StatisticItem]
 	tsigKeys *cache.Cache[[]models.TSIGKey]
 
-	flight singleFlight // coalesces concurrent cache misses (m44)
-	gen    atomic.Int64 // bumped on every invalidation (m45)
+	flight singleFlight // coalesces concurrent cache misses
+	gen    atomic.Int64 // bumped on every invalidation
 }
 
 // NewCachedClient wraps a PowerDNS Client with read-through caching.
@@ -68,11 +68,11 @@ func (c *cachedClient) ServerID() string { return c.client.ServerID() }
 // shared by every cached read.
 //
 // On a cache hit it returns immediately. On a miss it deduplicates concurrent
-// misses via single-flight (m44): the single-flight key embeds the generation
+// misses via single-flight: the single-flight key embeds the generation
 // captured at miss time, so an invalidation mid-flight causes later readers to
 // form a new flight and fetch fresh data rather than wait on a stale one. The
 // leader's result is written back to the cache ONLY if the generation is
-// unchanged since the fetch started (m45) — preventing a slow reader from
+// unchanged since the fetch started — preventing a slow reader from
 // repopulating the cache with data rendered stale by an invalidation that
 // landed during its fetch.
 //
@@ -96,7 +96,7 @@ func readThrough[V any](
 		if ferr != nil {
 			return nil, ferr
 		}
-		// m45: only repopulate if no invalidation occurred during the fetch.
+		// only repopulate if no invalidation occurred during the fetch.
 		if c.gen.Load() == gen {
 			ch.Set(key, v)
 		}
@@ -132,6 +132,14 @@ func (c *cachedClient) ListZones(ctx context.Context) ([]models.Zone, error) {
 
 func (c *cachedClient) ListZonesWithInfo(ctx context.Context) ([]models.ZoneWithInfo, error) {
 	return readThrough(c, c.zoneInfo, cacheKeyZoneInfo, ctx, c.client.ListZonesWithInfo)
+}
+
+// ListZonesWithInfoFresh bypasses the read-through cache entirely: the
+// caller needs the authoritative list (grant reconciliation), where acting
+// on a cached list up to the TTL old could delete a grant for a zone
+// another instance created moments ago.
+func (c *cachedClient) ListZonesWithInfoFresh(ctx context.Context) ([]models.ZoneWithInfo, error) {
+	return c.client.ListZonesWithInfo(ctx)
 }
 
 func (c *cachedClient) GetZone(ctx context.Context, zoneID string) (*models.Zone, error) {
@@ -266,7 +274,7 @@ func (c *cachedClient) DeleteTSIGKey(ctx context.Context, id string) error {
 
 // invalidateZones clears zone and statistics caches after a zone-level mutation.
 // gen is bumped BEFORE the clears so an in-flight fetch that completes during
-// the invalidation fails its generation check and does not repopulate (m45).
+// the invalidation fails its generation check and does not repopulate.
 func (c *cachedClient) invalidateZones() {
 	c.gen.Add(1)
 	c.zoneList.Clear()
@@ -275,7 +283,7 @@ func (c *cachedClient) invalidateZones() {
 }
 
 // invalidateTSIG clears the TSIG key cache after a TSIG mutation. gen is bumped
-// first for the same reason as invalidateZones (m45).
+// first for the same reason as invalidateZones.
 func (c *cachedClient) invalidateTSIG() {
 	c.gen.Add(1)
 	c.tsigKeys.Clear()

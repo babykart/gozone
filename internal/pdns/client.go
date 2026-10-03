@@ -244,6 +244,13 @@ func (c *Client) ListZonesWithInfo(ctx context.Context) ([]models.ZoneWithInfo, 
 	return info, nil
 }
 
+// ListZonesWithInfoFresh satisfies the ZoneService contract for callers that
+// must bypass any read-through cache: the bare Client is uncached, so it is
+// identical to ListZonesWithInfo.
+func (c *Client) ListZonesWithInfoFresh(ctx context.Context) ([]models.ZoneWithInfo, error) {
+	return c.ListZonesWithInfo(ctx)
+}
+
 // GetZone returns a specific zone.
 func (c *Client) GetZone(ctx context.Context, zoneID string) (*models.Zone, error) {
 	zone, err := doUnmarshal[models.Zone](c, ctx, "GET", c.zonePath(zoneID), nil, "zone")
