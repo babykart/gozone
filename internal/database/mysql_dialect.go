@@ -391,5 +391,14 @@ func (m *mysqlDialect) Migrations() []string {
 			hits INT NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_key, window_start)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		// Case-insensitive uniqueness for username and email. The plain
+		// UNIQUE constraints are collation-dependent (utf8mb4_0900_ai_ci is
+		// case-insensitive, but an operator may set a binary collation), and
+		// the generated-column + UNIQUE index form keeps parity with the
+		// other dialects. Replaces the non-unique email_lc index. On a
+		// database with pre-existing case-duplicates this fails loudly at
+		// startup; dedupe first (see sqlite_dialect.go).
+		`ALTER TABLE users ADD COLUMN username_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(username)) STORED, ADD UNIQUE INDEX idx_users_username_lc (username_lc)`,
+		`ALTER TABLE users DROP INDEX idx_users_email_lc, ADD UNIQUE INDEX idx_users_email_lc (email_lc)`,
 	}
 }

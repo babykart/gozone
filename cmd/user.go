@@ -130,13 +130,15 @@ func resolveUser(ctx context.Context, q rowQuerier, ident string) (int64, string
 		return id, username, nil
 	}
 	// Username lookup — case-insensitive; the Login handler does the same.
+	// Seeks the lowercased generated column (UNIQUE-indexed) rather than
+	// wrapping the indexed column in LOWER(), which would force a full scan.
 	var (
 		userID   int64
 		username string
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT id, username FROM users WHERE lower(username) = lower(?)`,
-		ident,
+		`SELECT id, username FROM users WHERE username_lc = ?`,
+		strings.ToLower(strings.TrimSpace(ident)),
 	).Scan(&userID, &username)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/babykart/gozone/internal/models"
@@ -102,6 +103,13 @@ func (db *DB) CreateExternalUser(ctx context.Context, username, email, firstName
 			_ = tx.Rollback()
 		}
 	}()
+
+	// Usernames and emails are stored lowercase (the schema's lowercased
+	// generated columns carry UNIQUE indexes; see the migrations). Fold the
+	// case here so an IdP asserting "Alice" cannot collide with an existing
+	// "alice" account on the folded index.
+	username = strings.ToLower(username)
+	email = strings.ToLower(email)
 
 	// Random placeholder hash: not a valid bcrypt hash, so local login always
 	// fails. 32 bytes hex (64 chars) keeps it within the password_hash column.

@@ -319,5 +319,15 @@ func (p *postgresDialect) Migrations() []string {
 			hits INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_key, window_start)
 		)`,
+		// Case-insensitive uniqueness for username and email: PostgreSQL's
+		// UNIQUE constraints are binary while the lookups fold the case, so
+		// "Alice" and "alice" could coexist. UNIQUE indexes on the generated
+		// lowercased columns enforce the folded uniqueness and serve the
+		// equality lookups. On a database with pre-existing case-duplicates
+		// this fails loudly at startup; dedupe first (see sqlite_dialect.go).
+		`ALTER TABLE users ADD COLUMN username_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(username)) STORED`,
+		`DROP INDEX IF EXISTS idx_users_email_lc`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lc ON users(username_lc)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
 	}
 }

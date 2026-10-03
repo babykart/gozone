@@ -340,5 +340,19 @@ func (s *sqliteDialect) Migrations() []string {
 			hits INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_key, window_start)
 		)`,
+		// Case-insensitive uniqueness for username and email. The plain
+		// UNIQUE constraints are binary (case-sensitive) on SQLite, so
+		// "Alice" and "alice" could coexist while Login looked them up via
+		// the lowercased form — the lookup then picked a row at random and
+		// failed attempts locked the wrong account. Generated lowercased
+		// columns carry UNIQUE indexes, which both enforce the folded
+		// uniqueness and let the equality lookups seek. On a database that
+		// already holds case-duplicates the index creation fails loudly at
+		// startup: dedupe first with e.g.
+		//   SELECT LOWER(username), COUNT(*) FROM users GROUP BY LOWER(username) HAVING COUNT(*) > 1;
+		`ALTER TABLE users ADD COLUMN username_lc TEXT GENERATED ALWAYS AS (LOWER(username)) VIRTUAL`,
+		`DROP INDEX IF EXISTS idx_users_email_lc`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lc ON users(username_lc)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
 	}
 }

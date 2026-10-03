@@ -81,7 +81,7 @@ func ensureDummyHash(cost int) {
 			// CompareHashAndPassword calls on the unknown-user and locked-
 			// account login paths return immediately, reopening the
 			// username-enumeration timing channel the dummy compare exists
-			// to close (REVIEW.md L-3).
+			// to close.
 			logger.Fatal("failed to generate constant-time dummy bcrypt hash", "cost", cost, "error", err)
 		}
 		dummyHash = h
@@ -134,7 +134,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// uses LOWER(username) = ? so the match is case-insensitive — without this,
 	// Postgres (case-sensitive =) resolves "Admin" and "admin" to different
 	// rows while the rate limiter treats them as one bucket, and a user who
-	// registered as "Admin" could not log in as "admin" (REVIEW.md L-5).
+	// registered as "Admin" could not log in as "admin".
 	// Lowercasing the input also keeps login_attempts.username aligned with the
 	// rate-limit bucket for forensics.
 	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
@@ -153,7 +153,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	ensureDummyHash(h.Cfg.Auth.BcryptCost)
 	err := h.DB.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
-		 FROM users WHERE LOWER(username) = ? AND enabled = 1`, username,
+		 FROM users WHERE username_lc = ? AND enabled = 1`, username,
 	).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
@@ -207,7 +207,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// Automatic brute-force lockout. This whole block (status check +
 	// enforcement + sliding-window extension) is gated on MaxFailedAttempts >
-	// 0 by design (REVIEW.md I-2): when an operator sets max_failed_attempts =
+	// 0 by design: when an operator sets max_failed_attempts =
 	// 0 the automatic lockout feature is considered off, so a stale auto-lock
 	// (locked while the setting was > 0) is not honoured and the account can
 	// log in again without clearing it. Manual admin locks are NOT affected —

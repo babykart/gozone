@@ -283,6 +283,50 @@ func TestCreateUser_NoForcePasswordChange(t *testing.T) {
 
 // TestUpdateUser_SetsMustChangePassword verifies that an admin password reset
 // flags the target user must_change_password.
+// TestCreateUser_NormalizesCaseAndRejectsFoldedDuplicates verifies the write
+// side of the case-insensitive uniqueness: usernames and emails are stored
+// lowercase, and creating a case-variant of an existing account surfaces the
+// friendly "already exists" error instead of a raw constraint violation.
+func TestCreateUser_NormalizesCaseAndRejectsFoldedDuplicates(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	create := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/users/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.CreateUser(w, r.WithContext(ctx))
+		return w
+	}
+
+	if w := create("username=MixedCase&email=Mixed@Example.com&password=Str0ng!pw&role=user"); w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 for the first create, got %d (%s)", w.Code, w.Body.String())
+	}
+	var username, email string
+	h.DB.QueryRow("SELECT username, email FROM users WHERE username = 'mixedcase'").Scan(&username, &email)
+	if username != "mixedcase" {
+		t.Errorf("username stored as %q, want the lowercased form", username)
+	}
+	if email != "mixed@example.com" {
+		t.Errorf("email stored as %q, want the lowercased form", email)
+	}
+
+	// A case-variant of either identity is a duplicate under the folded
+	// uniqueness and must surface the friendly message.
+	w := create("username=MIXEDCASE&email=other@example.com&password=Str0ng!pw&role=user")
+	if w.Code == http.StatusSeeOther {
+		t.Error("a case-variant username must be rejected as a duplicate")
+	}
+	if !strings.Contains(w.Body.String(), "already exists") {
+		t.Errorf("expected the friendly duplicate message, got %s", w.Body.String())
+	}
+	w = create("username=newuser&email=Mixed@Example.com&password=Str0ng!pw&role=user")
+	if w.Code == http.StatusSeeOther {
+		t.Error("a case-variant email must be rejected as a duplicate")
+	}
+}
+
 func TestUpdateUser_SetsMustChangePassword(t *testing.T) {
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)

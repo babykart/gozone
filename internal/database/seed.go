@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -23,7 +24,7 @@ import (
 // expensive bcrypt hash on an already-populated database, and the actual
 // insert uses InsertIgnore so two instances starting concurrently on a fresh
 // database no longer race — the loser's insert becomes a silent no-op instead
-// of aborting startup with ErrUniqueViolation (REVIEW.md L-15b).
+// of aborting startup with ErrUniqueViolation.
 //
 // The seed password hash is recorded in password_history unconditionally
 // (not gated on password.history_size): history may be disabled at bootstrap
@@ -32,7 +33,7 @@ import (
 // records without the HistorySize > 0 gate, justified by the one-time
 // bootstrap nature; the row is harmless while history is disabled and is
 // pruned to history_size on the next password change once enabled
-// (REVIEW.md L-15a).
+// separately justified: see the password-history note below).
 //
 // password_changed_at is set explicitly to the seed time (UTC, per the
 // project-wide DB timestamp convention) so the bootstrap password has an age
@@ -45,6 +46,13 @@ import (
 //
 // Returns an error if the database query or user insertion fails.
 func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
+	// Usernames and emails are stored lowercase (the schema's lowercased
+	// generated columns carry UNIQUE indexes). Fold the configured bootstrap
+	// values the same way so the seed insert and the username lookups below
+	// agree regardless of the config's casing.
+	adminUsername := strings.ToLower(strings.TrimSpace(cfg.Admin.Username))
+	adminEmail := strings.ToLower(strings.TrimSpace(cfg.Admin.Email))
+
 	var count int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return fmt.Errorf("seed admin: count users: %w", err)
@@ -74,11 +82,11 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	// both pass the COUNT==0 fast-path above. A plain INSERT would abort the
 	// loser with ErrUniqueViolation; InsertIgnore turns that into a silent
 	// no-op (RowsAffected == 0). The conflict target is the UNIQUE(username)
-	// constraint — the race always seeds the same admin (REVIEW.md L-15b).
+	// constraint — the race always seeds the same admin.
 	res, err := tx.InsertIgnore(ctx, "users",
 		[]string{"username", "email", "password_hash", "first_name", "last_name", "role", "password_changed_at"},
 		[]string{"username"},
-		cfg.Admin.Username, cfg.Admin.Email, string(hash),
+		adminUsername, adminEmail, string(hash),
 		cfg.Admin.FirstName, cfg.Admin.LastName, "admin", time.Now().UTC(),
 	)
 	if err != nil {
@@ -99,12 +107,12 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	}
 
 	// Look up the new admin id portably: InsertIgnore cannot return the id on
-	// the skip path (and LastInsertId is unsupported by lib/pq — REVIEW.md
-	// H-1), so a targeted SELECT by the UNIQUE username is the portable
+	// the skip path (and LastInsertId is unsupported by lib/pq), so a
+	// targeted SELECT by the UNIQUE username is the portable
 	// choice on the insert path.
 	var adminID int64
 	if err := tx.QueryRowContext(ctx,
-		"SELECT id FROM users WHERE username = ?", cfg.Admin.Username,
+		"SELECT id FROM users WHERE username = ?", adminUsername,
 	).Scan(&adminID); err != nil {
 		return fmt.Errorf("seed admin: read new admin id: %w", err)
 	}
@@ -117,7 +125,7 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 	}
 	committed = true
 
-	logger.Info("seeded admin user", "username", cfg.Admin.Username)
+	logger.Info("seeded admin user", "username", adminUsername)
 	// Only warn when the admin was seeded with the built-in default password;
 	// a custom password set via config.yaml or GOZONE_ADMIN_PASSWORD is fine.
 	if cfg.Admin.Password == config.DefaultAdminPassword {

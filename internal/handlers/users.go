@@ -132,8 +132,13 @@ func (h *Handler) CreateUserPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
 
-	username := strings.TrimSpace(r.FormValue("username"))
-	email := strings.TrimSpace(r.FormValue("email"))
+	// Usernames and emails are stored lowercase: the schema enforces
+	// case-insensitive uniqueness via the lowercased generated columns, and
+	// normalizing at every write site keeps the stored values canonical
+	// (otherwise "Alice@x" and "alice@x" would collide on the unique index
+	// with a confusing raw-unique error).
+	username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	password := strings.TrimSpace(r.FormValue("password"))
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
 	lastName := strings.TrimSpace(r.FormValue("last_name"))
@@ -273,7 +278,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	userIDStr := r.PathValue("user_id")
 	userID, _ := strconv.ParseInt(userIDStr, 10, 64)
 
-	email := strings.TrimSpace(r.FormValue("email"))
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
 	lastName := strings.TrimSpace(r.FormValue("last_name"))
 	role := strings.TrimSpace(r.FormValue("role"))
