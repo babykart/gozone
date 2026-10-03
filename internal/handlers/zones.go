@@ -152,6 +152,29 @@ func parseLogPaginationParams(r *http.Request, defaultPerPage int) (page, perPag
 	return page, perPage
 }
 
+// clampPageToTotal bounds page to the page count implied by total and
+// perPage: below 1 becomes 1, above the last page becomes the last page, and
+// a disabled pagination (perPage <= 0) is always the single page 1. Clamping
+// BEFORE the offset math keeps (page-1)*perPage within total — an unclamped
+// page from the query string could overflow the multiplication and produce a
+// nonsense (possibly negative) SQL OFFSET.
+func clampPageToTotal(page, perPage, total int) int {
+	if perPage <= 0 {
+		return 1
+	}
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		return 1
+	}
+	if page > totalPages {
+		return totalPages
+	}
+	return page
+}
+
 // pageInfoFromTotal computes the PageInfo for an already-filtered result set of
 // the given total size. It mirrors the normalization and page clamping done
 // by paginate without holding the full slice in memory.
@@ -162,22 +185,12 @@ func pageInfoFromTotal(total, page, perPage int) PageInfo {
 	} else {
 		perPage = 0
 		totalPages = 1
-		// when pagination is disabled the whole result set is a single
-		// page, so a requested page > 1 is reset to 1 rather than relying on
-		// the generic clamp below (which would otherwise show "page 2 sur 1").
-		page = 1
 	}
 	if totalPages < 1 {
 		totalPages = 1 // "page 1 sur 1" instead of "page 1 sur 0"
 	}
-	if page < 1 {
-		page = 1
-	}
-	if page > totalPages && totalPages > 0 {
-		page = totalPages
-	}
 	return PageInfo{
-		Current:    page,
+		Current:    clampPageToTotal(page, perPage, total),
 		PerPage:    perPage,
 		TotalPages: totalPages,
 		Total:      total,
@@ -619,18 +632,9 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 
 	logPage, logPerPage := parseLogPaginationParams(r, 10)
 	logs, logTotal := h.getZoneActivityLogs(r.Context(), zoneID, logPage, logPerPage)
-	logTotalPages := 0
-	if logPerPage > 0 {
-		logTotalPages = (logTotal + logPerPage - 1) / logPerPage
-	} else {
-		logTotalPages = 1
-	}
-	logPageInfo := PageInfo{
-		Current:    logPage,
-		PerPage:    logPerPage,
-		TotalPages: logTotalPages,
-		Total:      logTotal,
-	}
+	// Same clamp as getActivityLogs: the zone tab's log pagination shows the
+	// page that was fetched, never "page 1000 / 3".
+	logPageInfo := pageInfoFromTotal(logTotal, logPage, logPerPage)
 
 	templates, _ := h.getAllTemplates(r.Context())
 
@@ -788,9 +792,10 @@ func (h *Handler) getZoneActivityLogs(ctx context.Context, zoneID string, page, 
 	offset := 0
 	limit := perPage
 	if perPage > 0 {
-		if page < 1 {
-			page = 1
-		}
+		// Clamp before the offset math — same rationale as getActivityLogs:
+		// an unclamped page can overflow (page-1)*perPage and the UI would
+		// render "page 1000 / 3".
+		page = clampPageToTotal(page, perPage, total)
 		offset = (page - 1) * perPage
 		limit = perPage
 	}

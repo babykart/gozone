@@ -30,18 +30,11 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logs, total := h.getActivityLogs(r.Context(), user, search, action, fromDate, toDate, page, perPage)
-	totalPages := 0
-	if perPage > 0 {
-		totalPages = (total + perPage - 1) / perPage
-	} else {
-		totalPages = 1
-	}
-	pageInfo := PageInfo{
-		Current:    page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
-		Total:      total,
-	}
+	// pageInfoFromTotal clamps Current to the last page, matching the clamp
+	// getActivityLogs applies to the SQL OFFSET — the displayed page is
+	// always the page that was actually fetched ("page 3 / 3", never
+	// "page 1000 / 3").
+	pageInfo := pageInfoFromTotal(total, page, perPage)
 
 	// extra carries the active filters as separate key/value pairs. The
 	// pagination partial re-renders each pair individually: interpolating a
@@ -149,6 +142,11 @@ func (h *Handler) getActivityLogs(ctx context.Context, user *models.User, search
 	if page < 1 {
 		page = 1
 	}
+	// Clamp to the last page BEFORE the offset math: an oversized page from
+	// the query string would otherwise overflow (page-1)*perPage into a
+	// nonsense (possibly negative) OFFSET, and the UI would show
+	// "page 1000 / 3".
+	page = clampPageToTotal(page, perPage, total)
 	offset := 0
 	limit := perPage
 	if perPage > 0 {

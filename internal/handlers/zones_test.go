@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1553,6 +1554,70 @@ func newBackReq(t *testing.T, host, referer string) *http.Request {
 // TestBackURL locks the same-origin Referer → back-link behaviour of backURL,
 // including the open-redirect mitigations: only a same-host Referer's path
 // (plus query) is reused, and everything else falls back to /dashboard.
+// TestClampPageToTotal pins the log-pagination clamp: oversized pages fall
+// back to the last page (never "page 1000 / 3"), and the clamp runs BEFORE
+// the SQL offset math so (page-1)*perPage cannot overflow.
+func TestClampPageToTotal(t *testing.T) {
+	tests := []struct {
+		name                 string
+		page, perPage, total int
+		want                 int
+	}{
+		{"in range", 2, 10, 35, 2},
+		{"beyond last page clamps", 1000, 10, 35, 4},
+		{"max int page cannot overflow", math.MaxInt, 10, 35, 4},
+		{"below one floors", 0, 10, 35, 1},
+		{"negative floors", -5, 10, 35, 1},
+		{"disabled pagination is page 1", 7, 0, 35, 1},
+		{"empty result is page 1", 9, 10, 0, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clampPageToTotal(tc.page, tc.perPage, tc.total); got != tc.want {
+				t.Errorf("clampPageToTotal(%d, %d, %d) = %d, want %d", tc.page, tc.perPage, tc.total, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetActivityLogs_PageClampedToLast is the SQL-side regression: a huge
+// requested page must fetch the LAST page's rows (same as page=totalPages),
+// not an offset past the end computed from an overflowing (page-1)*perPage.
+func TestGetActivityLogs_PageClampedToLast(t *testing.T) {
+	h := newTestHandler(t)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	for i := 0; i < 15; i++ {
+		h.DB.Exec("INSERT INTO activity_logs (zone_id, action, details) VALUES (?, 'create_zone', ?)", "z.", fmt.Sprintf("row-%02d", i))
+	}
+
+	logs, total := h.getActivityLogs(context.Background(), user, "", "", "", "", math.MaxInt, 10)
+	if total != 15 {
+		t.Fatalf("expected total 15, got %d", total)
+	}
+	// 15 rows / 10 per page → last page is page 2 with the remaining 5 rows.
+	if len(logs) != 5 {
+		t.Fatalf("an oversized page must serve the last page (5 rows), got %d", len(logs))
+	}
+}
+
+// TestGetZoneActivityLogs_PageClampedToLast is the zone-tab twin of the
+// global activity-log clamp test.
+func TestGetZoneActivityLogs_PageClampedToLast(t *testing.T) {
+	h := newTestHandler(t)
+	for i := 0; i < 12; i++ {
+		h.DB.Exec("INSERT INTO activity_logs (zone_id, action, details) VALUES (?, 'update_record', ?)", "z.", fmt.Sprintf("zrow-%02d", i))
+	}
+
+	logs, total := h.getZoneActivityLogs(context.Background(), "z.", math.MaxInt, 5)
+	if total != 12 {
+		t.Fatalf("expected total 12, got %d", total)
+	}
+	// 12 rows / 5 per page → last page is page 3 with the remaining 2 rows.
+	if len(logs) != 2 {
+		t.Fatalf("an oversized page must serve the last page (2 rows), got %d", len(logs))
+	}
+}
+
 func TestBackURL(t *testing.T) {
 	const host = "gozone.test"
 	tests := []struct {
