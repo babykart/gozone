@@ -210,6 +210,183 @@ func TestAPIDeleteZone(t *testing.T) {
 	}
 }
 
+// apiAuditRow loads the single activity_logs row for an action (user_id,
+// details, old_value, new_value), failing when the row count differs.
+func apiAuditRow(t *testing.T, h *Handler, action string) (userID sql.NullInt64, details, oldValue, newValue string) {
+	t.Helper()
+	var count int
+	h.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE action = ?`, action).Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected exactly 1 %s activity log row, got %d", action, count)
+	}
+	h.DB.QueryRow(`SELECT user_id, details, old_value, new_value FROM activity_logs WHERE action = ?`, action).
+		Scan(&userID, &details, &oldValue, &newValue)
+	return userID, details, oldValue, newValue
+}
+
+// TestAPICreateZone_LogsActivity pins the audit trail for API-driven zone
+// creation: an API key holder must not be able to create zones without a
+// trace, mirroring the web CreateZone handler.
+func TestAPICreateZone_LogsActivity(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		var req models.ZoneCreateRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(models.Zone{ID: req.Name, Name: req.Name, Kind: req.Kind})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", jsonBody(`{"name":"newzone.com","kind":"Native"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(ctx)
+	h.APICreateZone(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	userID, details, _, _ := apiAuditRow(t, h, "create_zone")
+	if !userID.Valid || userID.Int64 != 1 {
+		t.Errorf("expected create_zone attributed to user_id=1, got %v", userID)
+	}
+	if !strings.Contains(details, "via API") {
+		t.Errorf("expected details to mention 'via API', got %q", details)
+	}
+}
+
+// TestAPICreateRecord_LogsActivity pins the audit trail for API-driven record
+// creation: before/after snapshots like the web CreateRecord handler (old is
+// empty on a brand-new RRSet, carries the merged-away state on an append).
+func TestAPICreateRecord_LogsActivity(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		captureRRSets(t, &sent)(w, r)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records",
+		jsonBody(`{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"5.6.7.8"}]}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	userID, details, oldValue, newValue := apiAuditRow(t, h, "create_record")
+	if !userID.Valid || userID.Int64 != 1 {
+		t.Errorf("expected create_record attributed to user_id=1, got %v", userID)
+	}
+	if !strings.Contains(details, "via API") {
+		t.Errorf("expected details to mention 'via API', got %q", details)
+	}
+	if !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("old_value must snapshot the pre-existing record, got %q", oldValue)
+	}
+	if !strings.Contains(newValue, "5.6.7.8") {
+		t.Errorf("new_value must snapshot the merged RRSet, got %q", newValue)
+	}
+}
+
+// TestAPIUpdateRecord_LogsActivity pins the audit trail for the API REPLACE:
+// old_value snapshots the replaced RRSet, new_value the submitted one.
+func TestAPIUpdateRecord_LogsActivity(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records",
+		jsonBody(`{"name":"www.example.com.","type":"A","ttl":600,"records":[{"content":"5.6.7.8"}]}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	userID, details, oldValue, newValue := apiAuditRow(t, h, "update_record")
+	if !userID.Valid || userID.Int64 != 1 {
+		t.Errorf("expected update_record attributed to user_id=1, got %v", userID)
+	}
+	if !strings.Contains(details, "via API") {
+		t.Errorf("expected details to mention 'via API', got %q", details)
+	}
+	if !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("old_value must snapshot the replaced record, got %q", oldValue)
+	}
+	if !strings.Contains(newValue, "5.6.7.8") {
+		t.Errorf("new_value must snapshot the submitted RRSet, got %q", newValue)
+	}
+}
+
+// TestAPIDeleteRecord_LogsActivity pins the audit trail for API-driven record
+// deletion: old_value snapshots the RRSet right before it disappears.
+func TestAPIDeleteRecord_LogsActivity(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/example.com./records",
+		jsonBody(`{"name":"www.example.com.","type":"A"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.APIDeleteRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	userID, details, oldValue, _ := apiAuditRow(t, h, "delete_record")
+	if !userID.Valid || userID.Int64 != 1 {
+		t.Errorf("expected delete_record attributed to user_id=1, got %v", userID)
+	}
+	if !strings.Contains(details, "via API") {
+		t.Errorf("expected details to mention 'via API', got %q", details)
+	}
+	if !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("old_value must snapshot the deleted record, got %q", oldValue)
+	}
+}
+
 func TestAPIListRecords(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -505,6 +682,12 @@ func TestAPICreateRecord_LowercaseMXAndTXTWireFormat(t *testing.T) {
 
 func TestAPIUpdateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// Audit before-snapshot fetch (empty zone: brand-new RRSet).
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method != http.MethodPatch {
 			t.Errorf("expected PATCH, got %s", r.Method)
 		}
@@ -977,6 +1160,12 @@ func TestAPIListRecords_NoName_NoNormalization(t *testing.T) {
 
 func TestAPIDeleteRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// Audit before-snapshot fetch (empty zone).
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method != http.MethodPatch {
 			t.Errorf("expected PATCH, got %s", r.Method)
 		}

@@ -84,6 +84,18 @@ func apiUserID(r *http.Request) string {
 	return "unknown"
 }
 
+// apiActivityUserID returns the acting user's id for the activity log. The
+// API key middleware sets the key owner in the request context; the zero
+// fallback keeps the audit insert usable if a route is ever exposed
+// unauthenticated (matching the web handlers, which also write user_id 0 in
+// that never-hit case).
+func apiActivityUserID(r *http.Request) int64 {
+	if user := middleware.GetUser(r); user != nil {
+		return user.ID
+	}
+	return 0
+}
+
 // -- Zone API ---
 
 // APIListZones returns all PowerDNS zones as a JSON array (GET /api/v1/zones).
@@ -160,6 +172,18 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create zone", err)
 		return
 	}
+
+	// Audit trail: mirror the web CreateZone handler so API-driven creates
+	// show up in the activity log (user_id is the API key owner).
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:  apiActivityUserID(r),
+		ZoneID:  zone.ID,
+		Action:  "create_zone",
+		Details: fmt.Sprintf("Created zone %s (kind: %s) via API", zone.Name, zone.Kind),
+	}); err != nil {
+		logger.Error("failed to log create_zone activity", "zone_id", zone.ID, "error", err)
+	}
+
 	writeJSON(w, http.StatusCreated, zone)
 }
 
@@ -173,14 +197,8 @@ func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit trail: mirror the web DeleteZone handler so API-driven deletes show
-	// up in the activity log. user_id is the API key owner (set by APIKeyAuth);
-	// the guard keeps this panic-free if the route is ever exposed unauthenticated.
-	user := middleware.GetUser(r)
-	var userID int64
-	if user != nil {
-		userID = user.ID
-	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: userID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s via API", zoneID)}); err != nil {
+	// up in the activity log. user_id is the API key owner (set by APIKeyAuth).
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: apiActivityUserID(r), ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s via API", zoneID)}); err != nil {
 		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
 	}
 
@@ -341,8 +359,12 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to fetch existing records", err)
 		return
 	}
+	var existingRRSet models.RRSet
+	foundExisting := false
 	for _, rr := range allRecords {
 		if rr.Name == rrset.Name && rr.Type == rrset.Type {
+			existingRRSet = rr
+			foundExisting = true
 			rrset.Records = append(append([]models.RecordInfo{}, rr.Records...), rrset.Records...)
 			break
 		}
@@ -357,6 +379,24 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
 		return
 	}
+
+	// Audit trail: mirror the web CreateRecord handler (before/after
+	// snapshots; old is empty when the RRSet is brand new).
+	var oldSnapshot *models.RRSet
+	if foundExisting {
+		oldSnapshot = &existingRRSet
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:   apiActivityUserID(r),
+		ZoneID:   zoneID,
+		Action:   "create_record",
+		Details:  fmt.Sprintf("Created %s record %s -> %s via API", rrset.Type, rrset.Name, rrset.Records[len(rrset.Records)-1].Content),
+		OldValue: rrsetSnapshot(oldSnapshot),
+		NewValue: rrsetSnapshot(&rrset),
+	}); err != nil {
+		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]string{"message": "record created"})
 }
 
@@ -388,11 +428,34 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Best-effort snapshot of the RRSet being replaced, for the audit trail.
+	// A fetch failure (or a brand-new RRSet) leaves old_value empty — the
+	// REPLACE itself must not fail because the audit's before-image is
+	// unavailable.
+	var oldRRSet *models.RRSet
+	if existing, err := h.PDNS.ListRecord(r.Context(), zoneID, req.RRSet.Name, req.RRSet.Type); err == nil && len(existing) > 0 {
+		oldRRSet = &existing[0]
+	}
+
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, req.RRSet); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to update record", err)
 		return
 	}
+
+	// Audit trail: mirror the web UpdateRecord handler (before/after
+	// snapshots).
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:   apiActivityUserID(r),
+		ZoneID:   zoneID,
+		Action:   "update_record",
+		Details:  fmt.Sprintf("Updated %s record %s via API", req.RRSet.Type, req.RRSet.Name),
+		OldValue: rrsetSnapshot(oldRRSet),
+		NewValue: rrsetSnapshot(&req.RRSet),
+	}); err != nil {
+		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record updated"})
 }
 
@@ -432,11 +495,29 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = normalizeRecordName(req.Name, zoneID)
 
+	// Best-effort snapshot of the RRSet before deletion, for the audit trail.
+	var oldRRSet *models.RRSet
+	if existing, err := h.PDNS.ListRecord(r.Context(), zoneID, req.Name, req.Type); err == nil && len(existing) > 0 {
+		oldRRSet = &existing[0]
+	}
+
 	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, req.Name, req.Type); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete record", err)
 		return
 	}
+
+	// Audit trail: mirror the web DeleteRecord handler (before snapshot).
+	if err := logActivity(r.Context(), h.DB, activityEntry{
+		UserID:   apiActivityUserID(r),
+		ZoneID:   zoneID,
+		Action:   "delete_record",
+		Details:  fmt.Sprintf("Deleted %s record %s via API", req.Type, req.Name),
+		OldValue: rrsetSnapshot(oldRRSet),
+	}); err != nil {
+		logger.Error("failed to log delete_record activity", "zone_id", zoneID, "error", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record deleted"})
 }
 
