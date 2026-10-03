@@ -270,3 +270,62 @@ func TestMigrate_SQLitePopulatedUsersUpgrade(t *testing.T) {
 		t.Fatalf("second migrate should be a no-op: %v", err)
 	}
 }
+
+// TestSQLiteDialect_DSN_PreservesPathVerbatim pins the no-re-encoding
+// contract: the file path stays byte-identical to the caller's input. The
+// former url.Parse().String() rewrite percent-encoded spaces (and the driver
+// does not decode paths), so "./data/my db.db" silently opened the empty
+// file "my%20db.db" — and a '#' truncated the path as a URL fragment.
+func TestSQLiteDialect_DSN_PreservesPathVerbatim(t *testing.T) {
+	d := &sqliteDialect{}
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"space in path", "./data/my db.db"},
+		{"space in file name", "/var/lib/gozone/my db.db"},
+		{"hash in path", "./data/db#1.db"},
+		{"unicode", "/tmp/base‑données.sqlite"},
+		{"percent already present", "/tmp/100%db.sqlite"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := d.DSN(c.in)
+			if !strings.HasPrefix(got, c.in+"?") {
+				t.Errorf("DSN must keep the path byte-identical and append the pragmas:\n in: %s\ngot: %s", c.in, got)
+			}
+			for _, pragma := range []string{"_journal_mode=WAL", "_foreign_keys=on", "_busy_timeout=5000"} {
+				if !strings.Contains(got, pragma) {
+					t.Errorf("DSN missing %s: %s", pragma, got)
+				}
+			}
+		})
+	}
+}
+
+// TestSQLiteDialect_DSN_KeepsOtherParamsVerbatim verifies that an existing
+// parameter list survives untouched (same order, same encoding) except for
+// the pragma keys, which are overridden.
+func TestSQLiteDialect_DSN_KeepsOtherParamsVerbatim(t *testing.T) {
+	d := &sqliteDialect{}
+	got := d.DSN("file:/tmp/gozone.db?_busy_timeout=0&cache=shared&_journal_mode=DELETE")
+	if !strings.HasPrefix(got, "file:/tmp/gozone.db?") {
+		t.Fatalf("path must be preserved, got %s", got)
+	}
+	if strings.Count(got, "?") != 1 {
+		t.Errorf("exactly one '?' expected, got %s", got)
+	}
+	if !strings.Contains(got, "cache=shared") {
+		t.Errorf("foreign parameter must be kept verbatim, got %s", got)
+	}
+	if strings.Contains(got, "_busy_timeout=0") || strings.Contains(got, "_journal_mode=DELETE") {
+		t.Errorf("pragma overrides must win, got %s", got)
+	}
+	if strings.Count(got, "_busy_timeout=") != 1 || strings.Count(got, "_journal_mode=") != 1 {
+		t.Errorf("each pragma must appear exactly once, got %s", got)
+	}
+	// Order: kept params first, pragmas appended.
+	if !strings.HasPrefix(strings.SplitN(got, "?", 2)[1], "cache=shared&") {
+		t.Errorf("kept parameters must stay in place, got %s", got)
+	}
+}

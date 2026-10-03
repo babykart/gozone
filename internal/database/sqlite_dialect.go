@@ -3,7 +3,6 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -33,20 +32,45 @@ func (s *sqliteDialect) TimestampType() string { return "DATETIME" }
 //
 // An existing value for any of these keys in the caller's DSN is overwritten:
 // they are correctness settings, not tuning knobs.
+//
+// The pragmas are appended by string concatenation, never by re-encoding the
+// DSN through net/url: u.String() percent-encodes the path, and the SQLite
+// driver does NOT percent-decode file paths — "./data/my db.db" used to open
+// the different, empty file "my%20db.db" (silently re-seeding the admin), and
+// a '#' in the filename truncated the path as a URL fragment. Only the first
+// '?' splits the path from the parameter list; everything before it stays
+// byte-identical to the caller's input.
 func (s *sqliteDialect) DSN(dsn string) string {
+	const pragmas = "_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000"
 	if dsn == ":memory:" {
-		return ":memory:?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000"
+		return ":memory:?" + pragmas
 	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return dsn
+	path, query, hasQuery := strings.Cut(dsn, "?")
+	if !hasQuery {
+		return dsn + "?" + pragmas
 	}
-	q := u.Query()
-	q.Set("_journal_mode", "WAL")
-	q.Set("_foreign_keys", "on")
-	q.Set("_busy_timeout", "5000")
-	u.RawQuery = q.Encode()
-	return u.String()
+	// Drop caller-provided values for the pragma keys so the appended ones
+	// win, keeping every other parameter verbatim (no re-encoding).
+	var kept []string
+	for _, param := range strings.Split(query, "&") {
+		if key, _, _ := strings.Cut(param, "="); sqlitePragmaKeys[key] {
+			continue
+		}
+		if param != "" {
+			kept = append(kept, param)
+		}
+	}
+	if len(kept) == 0 {
+		return path + "?" + pragmas
+	}
+	return path + "?" + strings.Join(kept, "&") + "&" + pragmas
+}
+
+// sqlitePragmaKeys are the correctness pragmas DSN always overwrites.
+var sqlitePragmaKeys = map[string]bool{
+	"_journal_mode": true,
+	"_foreign_keys": true,
+	"_busy_timeout": true,
 }
 
 // MaxOpenConns pins the pool to a single connection. SQLite allows exactly
