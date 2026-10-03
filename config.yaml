@@ -154,6 +154,12 @@ oidc:
   enabled: false
   # Keep the local username/password form alongside SSO buttons.
   allow_local_login: true
+  # Restrict which e-mail domains may establish a NEW SSO association (e-mail
+  # link to an existing account — admins included — and auto-provisioning).
+  # Empty accepts every domain; entries are lowercased, a leading "@" is OK.
+  # Existing (issuer, subject) links are unaffected.
+  # allowed_email_domains:
+  #   - corp.example.com
   # Auto-create a local user on first successful SSO login.
   auto_provision: false
   # Role assigned to auto-provisioned users (admin|user).

@@ -310,6 +310,123 @@ func TestResolveSSOUser_UnverifiedEmailNoAutoProvision(t *testing.T) {
 	}
 }
 
+// The oidc.allowed_email_domains filter gates every path that establishes a
+// NEW SSO association: e-mail linking (to any existing account, admins
+// included) and auto-provisioning. Existing (issuer, subject) links are
+// deliberately exempt — they were established under an earlier policy.
+func TestResolveSSOUser_EmailLinkBlockedByDomainFilter(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false
+	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
+	ctx := context.Background()
+	// Local admin whose e-mail also exists at a public IdP: without the
+	// filter, any verified match there would link straight into the account.
+	_, err := h.DB.ExecContext(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"adminvictim", "root@gmail.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "admin")
+	if err != nil {
+		t.Fatalf("insert local admin: %v", err)
+	}
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-attacker",
+		Email: "root@gmail.com", EmailVerified: true,
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Fatal("expected error: gmail.com is not in allowed_email_domains, the e-mail link must be refused")
+	}
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if err != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", err)
+	}
+	if linked != nil {
+		t.Errorf("refused domain must not create an identity link, got %+v", linked)
+	}
+}
+
+func TestResolveSSOUser_EmailLinkAllowedDomain(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false
+	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
+	ctx := context.Background()
+	_, err := h.DB.ExecContext(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"corpuser", "victim@corp.example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "user")
+	if err != nil {
+		t.Fatalf("insert local user: %v", err)
+	}
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-corp",
+		Email: "victim@corp.example.com", EmailVerified: true,
+	}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser with allowed domain: %v", err)
+	}
+	if got.Username != "corpuser" {
+		t.Errorf("expected the e-mail-linked corpuser, got %+v", got)
+	}
+}
+
+func TestResolveSSOUser_ProvisionBlockedByDomainFilter(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-random-gmail",
+		Email: "random.person@gmail.com", EmailVerified: true,
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Fatal("expected error: provisioning from a non-allowed domain must be refused")
+	}
+	var count int
+	h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
+	if count != 0 {
+		t.Errorf("no user must be provisioned, found %d", count)
+	}
+}
+
+func TestResolveSSOUser_ProvisionWithoutEmailBlockedByFilter(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
+	ctx := context.Background()
+	// No e-mail claim: without the filter a synthesized sso+...@gozone.local
+	// account would be created; under a filter there is no domain to match,
+	// so provisioning is refused.
+	claims := &oidc.Claims{Issuer: "https://idp.example.com", Subject: "sub-noemail"}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Fatal("expected error: provisioning without an e-mail claim must be refused under a domain filter")
+	}
+	var count int
+	h.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
+	if count != 0 {
+		t.Errorf("no user must be provisioned, found %d", count)
+	}
+}
+
+func TestResolveSSOUser_ExistingLinkUnaffectedByDomainFilter(t *testing.T) {
+	h := newTestHandler(t)
+	// The link predates the filter (or was created by an admin): its e-mail
+	// domain is now outside the allowed list, but an (issuer, subject) link
+	// is an explicit association and must keep working.
+	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
+	ctx := context.Background()
+	user, err := h.DB.CreateExternalUser(ctx, "legacy", "legacy@gmail.com", "", "", "user",
+		"https://idp.example.com", "sub-legacy")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	claims := &oidc.Claims{Issuer: "https://idp.example.com", Subject: "sub-legacy"}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser via existing link under a domain filter: %v", err)
+	}
+	if got.ID != user.ID {
+		t.Errorf("expected existing linked user %d, got %d", user.ID, got.ID)
+	}
+}
+
 // TestResolveSSOUser_UnverifiedEmailLinksWhenRequireVerifiedEmailFalse verifies
 // that with oidc.require_verified_email=false, an existing local account is
 // linked by email even when the IdP does not assert email_verified — the

@@ -214,14 +214,48 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
+// ssoEmailAllowed reports whether an IdP e-mail claim may establish a NEW SSO
+// association (email link or auto-provisioning) under the configured domain
+// filter (oidc.allowed_email_domains). An empty filter accepts everything —
+// the default, backward-compatible behaviour. A missing or domainless address
+// is refused when a filter is set: there is nothing to match against, and
+// with public provider presets (Google, GitHub) accepting it would let any
+// IdP account become a user.
+func (h *Handler) ssoEmailAllowed(email string) bool {
+	domains := h.Cfg.OIDC.AllowedEmailDomains
+	if len(domains) == 0 {
+		return true
+	}
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return false
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, d := range domains {
+		if domain == d {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveSSOUser maps OIDC claims to a local GoZone user. Resolution order:
-//  1. existing external-identity link (issuer, subject) → user;
+//  1. existing external-identity link (issuer, subject) → user. Unaffected by
+//     the e-mail domain filter: the link was established deliberately (by an
+//     earlier filtered login or an admin), and retroactively breaking its
+//     logins would be a footgun;
 //  2. an existing local account with a matching email is linked to the identity
 //     and used — regardless of auto_provision, since linking an existing account
 //     is not provisioning. By default the email must be verified
 //     (oidc.require_verified_email, default true); setting that to false links
-//     on the email alone for trusted IdPs that do not assert email_verified;
-//  3. otherwise, when auto_provision is on, a new user is provisioned and
+//     on the email alone for trusted IdPs that do not assert email_verified.
+//     When oidc.allowed_email_domains is set, the claim's e-mail domain must
+//     be listed — otherwise any account at a public IdP preset (Google,
+//     GitHub) whose e-mail matches a local account (admins included) would
+//     link to it;
+//  3. otherwise, when auto_provision is on AND the e-mail domain is allowed
+//     (a set filter also requires a real e-mail claim — the synthesized
+//     sso+...@gozone.local address is refused), a new user is provisioned and
 //     linked atomically.
 //
 // Returns an error (causing an sso_error redirect) when no account can be
@@ -249,8 +283,16 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 	// oidc.require_verified_email=false to link on the email alone. This links
 	// an existing account and creates nothing, so it runs regardless of
 	// auto_provision — the flag below gates only the creation of NEW accounts.
+	// The domain filter (oidc.allowed_email_domains) applies here too: without
+	// it, any account at a public IdP whose verified email matches a local
+	// account would link to it, admins included.
 	allowUnverifiedEmail := !h.Cfg.OIDC.RequireVerifiedEmail
-	if claims.Email != "" && (claims.EmailVerified || allowUnverifiedEmail) {
+	emailAllowed := h.ssoEmailAllowed(claims.Email)
+	if !emailAllowed {
+		logger.Warn("oidc: e-mail domain not allowed for linking; skipping e-mail link",
+			"issuer", claims.Issuer, "subject", claims.Subject)
+	}
+	if claims.Email != "" && emailAllowed && (claims.EmailVerified || allowUnverifiedEmail) {
 		if existing, err := h.DB.FindUserByEmail(ctx, claims.Email); err != nil {
 			return nil, fmt.Errorf("lookup user by email: %w", err)
 		} else if existing != nil {
@@ -266,6 +308,17 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 
 	if !h.Cfg.OIDC.AutoProvision {
 		return nil, errors.New("no linked local account and auto_provision is disabled")
+	}
+
+	// With a domain filter set, provisioning additionally requires a real
+	// e-mail claim in an allowed domain. claims.Email == "" fails
+	// ssoEmailAllowed, so the synthesized sso+...@gozone.local address can
+	// never be created under a filter — there is no verified e-mail anchoring
+	// the identity to an operator-sanctioned domain.
+	if !h.ssoEmailAllowed(claims.Email) {
+		logger.Warn("oidc: e-mail domain not allowed for provisioning; refusing",
+			"issuer", claims.Issuer, "subject", claims.Subject)
+		return nil, errors.New("sso e-mail domain not allowed for auto-provisioning")
 	}
 
 	first, last := splitName(claims.Name)

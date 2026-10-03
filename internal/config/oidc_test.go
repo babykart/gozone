@@ -173,6 +173,41 @@ func TestOIDCValidateDisabledSkipped(t *testing.T) {
 	}
 }
 
+// TestOIDCAllowedEmailDomainsNormalization pins the load-time normalization of
+// the SSO e-mail domain filter: trim, lowercase, strip one leading "@"
+// (a copy-pasted "@corp.example.com" means the domain), drop empty entries.
+func TestOIDCAllowedEmailDomainsNormalization(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.Providers = []OIDCProviderConfig{{Name: "gitea", IssuerURL: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec"}}
+	cfg.OIDC.AllowedEmailDomains = []string{"  Corp.Example.COM  ", "@gitea.example.com", "", "corp.example.com"}
+	if err := cfg.validateOIDC(); err != nil {
+		t.Fatalf("validateOIDC: %v", err)
+	}
+	want := []string{"corp.example.com", "gitea.example.com", "corp.example.com"}
+	if len(cfg.OIDC.AllowedEmailDomains) != len(want) {
+		t.Fatalf("got %v, want %v", cfg.OIDC.AllowedEmailDomains, want)
+	}
+	for i := range want {
+		if cfg.OIDC.AllowedEmailDomains[i] != want[i] {
+			t.Errorf("entry %d = %q, want %q", i, cfg.OIDC.AllowedEmailDomains[i], want[i])
+		}
+	}
+}
+
+// TestOIDCAllowedEmailDomainsInvalidEntry: an entry that still carries an "@"
+// (an e-mail address pasted instead of a bare domain) or whitespace must fail
+// config load — it could never match and would silently narrow the filter.
+func TestOIDCAllowedEmailDomainsInvalidEntry(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.Providers = []OIDCProviderConfig{{Name: "gitea", IssuerURL: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec"}}
+	cfg.OIDC.AllowedEmailDomains = []string{"user@corp.example.com"}
+	if err := cfg.validateOIDC(); err == nil {
+		t.Fatal("expected an error for an entry that is an e-mail address, not a bare domain")
+	}
+}
+
 func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	t.Setenv("GOZONE_SECRET_KEY", testSecret)
 	t.Setenv("GOZONE_OIDC_ENABLED", "true")
@@ -181,6 +216,7 @@ func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	t.Setenv("GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL", "false")
 	t.Setenv("GOZONE_OIDC_DEFAULT_ROLE", "user")
 	t.Setenv("GOZONE_OIDC_SCOPES", "openid,profile,email,groups")
+	t.Setenv("GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS", "Corp.Example.COM, @gitea.example.com")
 	t.Setenv("GOZONE_OIDC_PROVIDER_NAME", "gitea")
 	t.Setenv("GOZONE_OIDC_ISSUER_URL", "https://gitea.example.com")
 	t.Setenv("GOZONE_OIDC_CLIENT_ID", "cid")
@@ -204,6 +240,11 @@ func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	}
 	if len(cfg.OIDC.Scopes) != 4 || cfg.OIDC.Scopes[3] != "groups" {
 		t.Errorf("unexpected scopes: %v", cfg.OIDC.Scopes)
+	}
+	if len(cfg.OIDC.AllowedEmailDomains) != 2 ||
+		cfg.OIDC.AllowedEmailDomains[0] != "corp.example.com" ||
+		cfg.OIDC.AllowedEmailDomains[1] != "gitea.example.com" {
+		t.Errorf("AllowedEmailDomains not normalized: %v", cfg.OIDC.AllowedEmailDomains)
 	}
 	if len(cfg.OIDC.Providers) != 1 {
 		t.Fatalf("expected 1 provider, got %d", len(cfg.OIDC.Providers))

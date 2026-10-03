@@ -224,6 +224,18 @@ type OIDCConfig struct {
 	// every mapped group that exists; groups that do not exist are skipped with
 	// a warning. Memberships are never auto-removed — revoke manually.
 	GroupMapping map[string]string `yaml:"group_mapping"`
+	// AllowedEmailDomains restricts which e-mail domains may establish a NEW
+	// SSO association with a local account. When set, both the email-link path
+	// (linking an existing local account whose email matches the IdP claim)
+	// and auto-provisioning require the claim's e-mail domain to be listed —
+	// with public provider presets (Google, GitHub) an unrestricted config
+	// lets any IdP account link to an existing account (admins included) or
+	// become a provisioned user. Matching is exact on the lowercased domain;
+	// entries are normalized (trimmed, lowercased, one leading "@" stripped)
+	// at load time. Existing (issuer, subject) links are unaffected: they
+	// were established deliberately and keep working. Empty (default) accepts
+	// every domain.
+	AllowedEmailDomains []string `yaml:"allowed_email_domains"`
 	// JWKSCacheTTLMinutes is how long a provider's signing keys are cached
 	// before a proactive background refresh, in minutes. A background goroutine
 	// re-fetches the JWKS on this cadence so key rotation is picked up without
@@ -437,7 +449,7 @@ func DefaultConfig() *Config {
 //	            GOZONE_OIDC_AUTO_PROVISION, GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL,
 //	            GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
 //	            GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
-//	            GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES
+//	            GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS, GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES
 //	oidc single-provider block: GOZONE_OIDC_PROVIDER_NAME, GOZONE_OIDC_ISSUER_URL,
 //	            GOZONE_OIDC_CLIENT_ID, GOZONE_OIDC_CLIENT_SECRET
 //
@@ -776,6 +788,25 @@ func (cfg *Config) validateOIDC() error {
 	if cfg.OIDC.GroupClaim != "" && len(cfg.OIDC.GroupMapping) == 0 {
 		return fmt.Errorf("oidc.group_claim %q is set but group_mapping is empty", cfg.OIDC.GroupClaim)
 	}
+
+	// Normalize the SSO e-mail domain filter in place: trim, lowercase, strip
+	// one leading "@" (a copy-pasted "@corp.example.com" means the domain),
+	// drop empties. Anything that still carries an "@" or whitespace is an
+	// operator error — accepting it silently would create a filter entry that
+	// can never match.
+	normalized := make([]string, 0, len(cfg.OIDC.AllowedEmailDomains))
+	for _, d := range cfg.OIDC.AllowedEmailDomains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		d = strings.TrimPrefix(d, "@")
+		if d == "" {
+			continue
+		}
+		if strings.ContainsAny(d, "@ \t") {
+			return fmt.Errorf("invalid oidc.allowed_email_domains entry %q: expected a bare domain such as \"corp.example.com\"", d)
+		}
+		normalized = append(normalized, d)
+	}
+	cfg.OIDC.AllowedEmailDomains = normalized
 	if cfg.OIDC.JWKSCacheTTLMinutes < 0 {
 		return fmt.Errorf("invalid oidc.jwks_cache_ttl_minutes %d: must be non-negative", cfg.OIDC.JWKSCacheTTLMinutes)
 	}
@@ -910,6 +941,7 @@ var envOverrides = []envOverride{
 	sliceOverride{"GOZONE_OIDC_SCOPES", func(c *Config, v []string) { c.OIDC.Scopes = v }},
 	strOverride{"GOZONE_OIDC_ROLE_CLAIM", func(c *Config, v string) { c.OIDC.RoleClaim = v }},
 	sliceOverride{"GOZONE_OIDC_ADMIN_ROLE_VALUES", func(c *Config, v []string) { c.OIDC.AdminRoleValues = v }},
+	sliceOverride{"GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS", func(c *Config, v []string) { c.OIDC.AllowedEmailDomains = v }},
 	strOverride{"GOZONE_OIDC_GROUP_CLAIM", func(c *Config, v string) { c.OIDC.GroupClaim = v }},
 	intOverride{"GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", func(c *Config, n int) { c.OIDC.JWKSCacheTTLMinutes = n }},
 }
