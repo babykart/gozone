@@ -3,8 +3,10 @@
 
 app_name := "gozone"
 bin_dir := "./bin"
-git_bin := require("git")
-git_cliff_bin := require("git-cliff")
+# git and git-cliff are needed only by the release recipes; their require()
+# calls live inside those recipes so a missing tool cannot break unrelated
+# commands like build, test or fmt (the version/commit backticks below
+# already degrade to "dev" when git is absent).
 
 version := `git describe --tags --always --dirty 2>/dev/null || echo dev`
 commit  := `git rev-parse --short HEAD 2>/dev/null`
@@ -82,17 +84,17 @@ docker-down:
 # Auto generate the next release
 auto-gen-rel:
     #!/usr/bin/env sh
-    _TAG=v$({{ git_cliff_bin }} --bumped-version)
-    {{ git_cliff_bin }} --unreleased --tag ${_TAG} -o
-    {{ git_bin }} commit -a -s -S -m "chore(release): prepare for ${_TAG}"
-    {{ git_bin }} tag -s ${_TAG} -m "${_TAG}"
+    _TAG=v$({{ require("git-cliff") }} --bumped-version)
+    {{ require("git-cliff") }} --unreleased --tag ${_TAG} -o
+    {{ require("git") }} commit -a -s -S -m "chore(release): prepare for ${_TAG}"
+    {{ require("git") }} tag -s ${_TAG} -m "${_TAG}"
 
 # Generate release
 gen-rel tag:
-    {{ git_cliff_bin }} --unreleased --tag {{ tag }} -o
-    {{ git_bin }} commit -a -s -S -m "chore(release): prepare for {{ tag }}"
-    {{ git_bin }} tag -s {{ tag }} -m "{{ tag }}"
+    {{ require("git-cliff") }} --unreleased --tag {{ tag }} -o
+    {{ require("git") }} commit -a -s -S -m "chore(release): prepare for {{ tag }}"
+    {{ require("git") }} tag -s {{ tag }} -m "{{ tag }}"
 
 # Generate tag
 gen-tag:
-    @{{ git_cliff_bin }} --bumped-version
+    @{{ require("git-cliff") }} --bumped-version
