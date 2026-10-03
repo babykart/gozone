@@ -864,6 +864,38 @@ func TestDeleteMetadata_EmptyKind(t *testing.T) {
 	}
 }
 
+// TestDeleteMetadata_InvalidKind pins that the delete path validates the kind
+// against the same whitelist as the create path: the kind goes straight into
+// the PowerDNS path and a delete must not accept input a create would refuse.
+func TestDeleteMetadata_InvalidKind(t *testing.T) {
+	var pdnsCalls atomic.Int64
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsCalls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/metadata/delete", strings.NewReader("kind=../zones/other"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteMetadata(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a non-whitelisted kind, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Invalid metadata kind") {
+		t.Errorf("expected 'Invalid metadata kind' in error page, got: %s", w.Body.String())
+	}
+	if pdnsCalls.Load() != 0 {
+		t.Errorf("no PowerDNS call may be made for an invalid kind, got %d", pdnsCalls.Load())
+	}
+}
+
 func TestDeleteMetadata_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 

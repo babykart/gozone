@@ -765,6 +765,13 @@ func (h *Handler) DeleteMetadata(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Metadata kind is required")
 		return
 	}
+	// Same whitelist as CreateMetadata: the kind goes straight into the
+	// PowerDNS path, and a delete must not accept input a create would
+	// refuse.
+	if err := validators.ValidateMetadataKind(kind); err != nil {
+		h.renderError(w, r, "Invalid metadata kind: "+err.Error())
+		return
+	}
 
 	if err := h.PDNS.DeleteMetadata(r.Context(), zoneID, kind); err != nil {
 		h.renderInternalError(w, r, "Failed to delete metadata", err)
