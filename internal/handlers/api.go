@@ -133,7 +133,13 @@ func (h *Handler) APIGetZone(w http.ResponseWriter, r *http.Request) {
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
-		h.writeAPIErrorWithCause(w, r, status, code, "zone not found", err)
+		// The label must follow the status: a 500 that answers "zone not
+		// found" tells the client to delete/recreate a zone that exists.
+		label := "failed to load zone"
+		if status == http.StatusNotFound {
+			label = "zone not found"
+		}
+		h.writeAPIErrorWithCause(w, r, status, code, label, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, zone)
@@ -377,7 +383,14 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	// new records before the merge would lose their priority).
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeRecordError, "failed to fetch existing records", err)
+		// A missing zone surfaces as 404, not a blanket 500: the fetch fails
+		// before anything was created, and the caller can act on the zone.
+		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
+		label := "failed to fetch existing records"
+		if status == http.StatusNotFound {
+			label = "zone not found"
+		}
+		h.writeAPIErrorWithCause(w, r, status, code, label, err)
 		return
 	}
 	var existingRRSet models.RRSet

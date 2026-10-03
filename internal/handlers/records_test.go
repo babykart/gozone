@@ -848,6 +848,59 @@ func TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces(t *tes
 	}
 }
 
+func TestInlineUpdateRecord_PDNSErrorNotBlind500(t *testing.T) {
+	// The zone vanishes between page load and save: the PDNS fetch inside
+	// updateRecordFromForm fails with ErrNotFound and the inline endpoint
+	// must answer 404, not a blanket 500.
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.2&ttl=3600&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing zone, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "not found") {
+		t.Errorf("expected a not-found message, got: %s", w.Body.String())
+	}
+}
+
+func TestBulkDeleteRecords_PDNSErrorNotBlind500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BulkDeleteRecords(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing zone, got %d", w.Code)
+	}
+}
+
 func TestInlineUpdateRecord_EmptyContent(t *testing.T) {
 	h := newTestHandler(t)
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/pdns"
 	"github.com/babykart/gozone/internal/validators"
 )
 
@@ -283,6 +285,13 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		case *recordConflictError:
 			writeJSON(w, http.StatusConflict, map[string]string{"error": e.Message})
 		default:
+			// A PowerDNS category error (e.g. the zone vanished mid-edit)
+			// carries its own status instead of a blanket 500.
+			if status, msg, ok := pdnsPlainStatus(err); ok {
+				logger.Error("InlineUpdateRecord: PowerDNS error", "zone_id", zoneID, "error", err)
+				writeJSON(w, status, map[string]string{"error": msg})
+				return
+			}
 			logger.Error("InlineUpdateRecord: failed to build update", "zone_id", zoneID, "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 		}
@@ -291,6 +300,10 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
 		logger.Error("InlineUpdateRecord: UpdateRecord failed", "zone_id", zoneID, "name", rrset.Name, "type", rrset.Type, "error", err)
+		if status, msg, ok := pdnsPlainStatus(err); ok {
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 		return
 	}
@@ -336,6 +349,29 @@ type recordConflictError struct {
 }
 
 func (e *recordConflictError) Error() string { return e.Message }
+
+// pdnsPlainStatus maps a PowerDNS failure to a non-500 status and a plain
+// user-facing message for the {"error": ...} JSON endpoints (inline edit,
+// bulk delete — bodies consumed by app.js, not the REST error envelope). It
+// mirrors pdnsErrorStatus but carries a message instead of an error code.
+// ok=false means the error is not a recognized PowerDNS category: the caller
+// answers its own 500.
+func pdnsPlainStatus(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, pdns.ErrNotFound):
+		return http.StatusNotFound, "Zone or record not found", true
+	case errors.Is(err, pdns.ErrValidation):
+		return http.StatusBadRequest, "PowerDNS rejected one or more records as invalid.", true
+	case errors.Is(err, pdns.ErrConflict):
+		return http.StatusConflict, "PowerDNS reported a conflict for the requested change.", true
+	case errors.Is(err, pdns.ErrUnauthorized):
+		return http.StatusBadGateway, "PowerDNS rejected the operation: its API credentials configured on this server are invalid.", true
+	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
+		return http.StatusBadRequest, "LUA record updates are disabled on the PowerDNS server.", true
+	default:
+		return 0, "", false
+	}
+}
 
 // updateRecordFromForm parses and validates a record update request, builds the
 // merged RRSet and returns it along with the original RRSet (if any) and the
@@ -1216,6 +1252,10 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		logger.Error("BulkDeleteRecords: failed to list records", "zone_id", zoneID, "error", err)
+		if status, msg, ok := pdnsPlainStatus(err); ok {
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to fetch records"})
 		return
 	}
@@ -1225,6 +1265,10 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	if len(patch) > 0 {
 		if err := h.PDNS.PatchRecords(r.Context(), zoneID, patch); err != nil {
 			logger.Error("BulkDeleteRecords: PatchRecords failed", "zone_id", zoneID, "error", err)
+			if status, msg, ok := pdnsPlainStatus(err); ok {
+				writeJSON(w, status, map[string]string{"error": msg})
+				return
+			}
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to delete records"})
 			return
 		}

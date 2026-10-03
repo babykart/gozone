@@ -606,6 +606,36 @@ func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_MissingZoneIs404 pins the missing-zone mapping: a
+// record create against a zone PowerDNS does not know must answer 404
+// ZONE_NOT_FOUND ("zone not found"), not a blanket 500.
+func TestAPICreateRecord_MissingZoneIs404(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing zone, got %d", w.Code)
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeZoneNotFound {
+		t.Errorf("expected code %s, got %s", ErrCodeZoneNotFound, resp.Code)
+	}
+	if resp.Message != "zone not found" {
+		t.Errorf("expected 'zone not found' label, got %q", resp.Message)
+	}
+}
+
 // TestAPICreateRecord_LowercaseTypeCanonicalized guards the type
 // canonicalisation at the API entry: validation is case-insensitive but the
 // RRSet merge is not. A lowercase "a" used to miss the existing A RRSet, so
