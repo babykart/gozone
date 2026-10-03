@@ -380,6 +380,11 @@ func TestDeleteTemplateRecord(t *testing.T) {
 func TestApplyTemplateToZone(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			// Empty zone: the merge fetch reads no existing records.
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method == http.MethodPatch {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -452,9 +457,91 @@ func TestApplyTemplateToZone_NoDuplicateRRSets(t *testing.T) {
 	}
 }
 
+// TestApplyTemplateToZone_MergesWithExistingRecords is the silent-replacement
+// regression: applying a template to a live zone used to REPLACE every RRSet
+// it touched, wiping existing records (apex TXT verification values, live MX
+// targets). The handler must merge like BatchCreateRecords — existing
+// records preserved, template records appended, exact duplicates collapsed —
+// with MX priorities correctly re-embedded once.
+func TestApplyTemplateToZone_MergesWithExistingRecords(t *testing.T) {
+	var sent []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"rrsets":[
+				{"name":"example.com.","type":"TXT","ttl":3600,"records":[{"content":"\"v=spf1 mx ~all\""}]},
+				{"name":"example.com.","type":"MX","ttl":3600,"records":[{"content":"mail1.example.com.","priority":10}]}
+			]}`)) // #nosec G104 -- test helper
+			return
+		}
+		captureRRSets(t, &sent)(w, r)
+	})
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "merge-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "TXT", "v=spf1 mx ~all", 3600)
+	seedTemplateRecord(t, h, templateID, "@", "MX", "{{MX_HOST}}", 3600)
+	seedTemplateRecord(t, h, templateID, "@", "A", "{{IP}}", 3600)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10) + "&var_MX_HOST=mail2.example.com.&var_IP=192.0.2.1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	byType := map[string]models.RRSet{}
+	for _, rr := range sent {
+		byType[rr.Type] = rr
+	}
+	// TXT: the template's identical record collapses into the existing one —
+	// not wiped, not duplicated.
+	txt, ok := byType["TXT"]
+	if !ok || len(txt.Records) != 1 || txt.Records[0].Content != `"v=spf1 mx ~all"` {
+		t.Errorf("TXT must stay the single existing record, got %+v", txt)
+	}
+	// MX: the existing target survives with its priority 10, and the
+	// template's mail2 is appended with its own priority.
+	mx, ok := byType["MX"]
+	if !ok {
+		t.Fatal("MX RRSet missing from the patch")
+	}
+	mxContents := map[string]bool{}
+	for _, rec := range mx.Records {
+		mxContents[rec.Content] = true
+	}
+	if !mxContents["10 mail1.example.com."] {
+		t.Errorf("existing MX 10 mail1 must be preserved, got %+v", mx.Records)
+	}
+	if !mxContents["20 mail2.example.com."] && !mxContents["0 mail2.example.com."] {
+		// The template row carries priority 0 unless a priority column was
+		// seeded; either way both targets must coexist.
+		if !mxContents["mail1.example.com."] {
+			t.Errorf("template MX must be appended, got %+v", mx.Records)
+		}
+	}
+	if len(mx.Records) != 2 {
+		t.Errorf("MX must carry exactly the existing + template records, got %+v", mx.Records)
+	}
+	// A: brand-new RRSet from the template.
+	if a, ok := byType["A"]; !ok || len(a.Records) != 1 || a.Records[0].Content != "192.0.2.1" {
+		t.Errorf("template A record must be created, got %+v", a)
+	}
+}
+
 func TestApplyTemplateToZone_ActivityLogged(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method == http.MethodPatch {
 			w.WriteHeader(http.StatusNoContent)
 			return

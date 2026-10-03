@@ -396,7 +396,36 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
+	// Merge into the zone's existing records instead of REPLACing them: a
+	// template applied to a live zone used to silently wipe every record of
+	// the RRSets it touches (apex TXT verification records, existing MX
+	// targets…). Same flow as BatchCreateRecords — fetch, merge preserving
+	// siblings, one final wire-format pass with dedup — so the template
+	// only ADDS records that are not already there. The template RRSets are
+	// in wire form (priority embedded); detach the priority back to the
+	// read-path form first, because the final pass re-embeds it and is not
+	// idempotent for MX/SRV.
+	defer h.zoneLocks.Lock(zoneID)()
+	existing, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch existing records", err)
+		return
+	}
+	templateReadForm := make([]models.RRSet, 0, len(rrsets))
+	for _, rr := range rrsets {
+		clone := rr
+		for i := range clone.Records {
+			if p, c, ok := models.SplitPriority(clone.Type, clone.Records[i].Content); ok {
+				clone.Records[i].Priority = p
+				clone.Records[i].Content = c
+			}
+		}
+		templateReadForm = append(templateReadForm, clone)
+	}
+	merged := mergeBatchRRSets(templateReadForm, existing)
+	patch := finalizeBatchRRSets(merged, nil)
+
+	if err := h.PDNS.CreateRecords(r.Context(), zoneID, patch); err != nil {
 		h.renderInternalError(w, r, "Failed to create records from template", err)
 		return
 	}
