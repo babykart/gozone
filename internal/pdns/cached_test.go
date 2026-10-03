@@ -713,6 +713,110 @@ func TestCachedRead_NoStaleRepopulationAfterInvalidation(t *testing.T) {
 // cache holds a list that is still within its TTL — the grant
 // reconciliation must not act on a list that can predate a zone another
 // instance created moments ago.
+// TestStoreIfUnchanged_TOCTOURegression pins the store/invalidation
+// serialization: an invalidation that lands while a store is between its
+// generation check and its write must not leave the stale entry behind. The
+// test deterministically reproduces the old race window by holding storeMu
+// across the bump+clear, so the store's check only runs after the
+// invalidation completed.
+func TestStoreIfUnchanged_TOCTOURegression(t *testing.T) {
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`)) // #nosec G104 -- test helper
+	})
+	c := cached.(*cachedClient)
+
+	gen := c.gen.Load()
+	stale := []models.Zone{{ID: "stale.", Name: "stale.", Kind: "Native"}}
+
+	// Hold the store lock, mimicking an invalidation in progress: the store
+	// below blocks on storeMu before its generation check.
+	c.storeMu.Lock()
+	stored := make(chan struct{})
+	go func() {
+		defer close(stored)
+		storeIfUnchanged(c, c.zoneList, cacheKeyZoneList, gen, stale)
+	}()
+	// Let the goroutine reach the lock (it cannot proceed).
+	runtime.Gosched()
+	// Invalidation completes while the store is still blocked: bump+clear.
+	c.gen.Add(1)
+	c.zoneList.Clear()
+	c.storeMu.Unlock()
+	<-stored
+
+	if _, ok := c.zoneList.Get(cacheKeyZoneList); ok {
+		t.Fatal("stale entry must not be stored when the generation changed before the store's check")
+	}
+
+	// Control: with an unchanged generation the store lands.
+	fresh := []models.Zone{{ID: "fresh.", Name: "fresh.", Kind: "Native"}}
+	storeIfUnchanged(c, c.zoneList, cacheKeyZoneList, c.gen.Load(), fresh)
+	got, ok := c.zoneList.Get(cacheKeyZoneList)
+	if !ok || len(got) != 1 || got[0].ID != "fresh." {
+		t.Fatalf("unchanged generation must store the value, got %+v (ok=%v)", got, ok)
+	}
+}
+
+// TestCachedRead_LeaderCancellationDoesNotFailFollowers pins the detached
+// fetch context: the single-flight leader's request being cancelled mid-fetch
+// (client navigated away) must not abort the shared fetch — followers with
+// live requests still receive the result instead of a context error.
+func TestCachedRead_LeaderCancellationDoesNotFailFollowers(t *testing.T) {
+	var calls atomic.Int64
+	fetchStarted := make(chan struct{})
+	release := make(chan struct{})
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones") {
+			if calls.Add(1) == 1 {
+				close(fetchStarted)
+				<-release
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":"z.","name":"z.","kind":"Native","serial":0}]`)) // #nosec G104 -- test helper
+	})
+
+	// Leader starts the fetch on a cancellable request context.
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := cached.ListZones(leaderCtx)
+		leaderDone <- err
+	}()
+	<-fetchStarted // the fetch is in flight
+
+	// Followers pile onto the same flight with live contexts.
+	const followers = 5
+	followerErrs := make(chan error, followers)
+	var wg sync.WaitGroup
+	for i := 0; i < followers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := cached.ListZones(context.Background())
+			followerErrs <- err
+		}()
+	}
+	// Give the followers time to join the flight, then the leader walks away.
+	time.Sleep(10 * time.Millisecond)
+	cancelLeader()
+	close(release)
+
+	if err := <-leaderDone; err != nil {
+		t.Errorf("leader result must survive its own cancellation (shared fetch completed): %v", err)
+	}
+	for i := 0; i < followers; i++ {
+		if err := <-followerErrs; err != nil {
+			t.Errorf("follower must not inherit the leader's cancellation: %v", err)
+		}
+	}
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 PDNS call, got %d", got)
+	}
+}
+
 func TestCachedListZonesWithInfoFresh_BypassesCache(t *testing.T) {
 	var zones atomic.Value // served zone list, swappable mid-test
 	zones.Store(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`)

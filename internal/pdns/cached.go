@@ -3,6 +3,7 @@ package pdns
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,12 @@ const (
 	cacheKeyServer   = "server"
 	cacheKeyStats    = "stats"
 	cacheKeyTSIG     = "tsigkeys"
+
+	// fetchTimeout bounds a cache-miss fetch that has been detached from the
+	// leader's request context (see readThrough). It mirrors the HTTP
+	// client's own 30s cap so a detached fetch can never outlive a normal
+	// request.
+	fetchTimeout = 30 * time.Second
 )
 
 // cachedClient wraps a Client with an in-memory TTL cache for frequently
@@ -38,6 +45,12 @@ type cachedClient struct {
 	server   *cache.Cache[*models.ServerInfo]
 	stats    *cache.Cache[[]models.StatisticItem]
 	tsigKeys *cache.Cache[[]models.TSIGKey]
+
+	// storeMu serializes cache stores against invalidations: a store's
+	// generation check and its Set must be atomic relative to an
+	// invalidation's generation bump and Clear, or an invalidation landing
+	// between the two leaves a stale entry that survives until the TTL.
+	storeMu sync.Mutex
 
 	flight singleFlight // coalesces concurrent cache misses
 	gen    atomic.Int64 // bumped on every invalidation
@@ -72,13 +85,14 @@ func (c *cachedClient) ServerID() string { return c.client.ServerID() }
 // captured at miss time, so an invalidation mid-flight causes later readers to
 // form a new flight and fetch fresh data rather than wait on a stale one. The
 // leader's result is written back to the cache ONLY if the generation is
-// unchanged since the fetch started — preventing a slow reader from
-// repopulating the cache with data rendered stale by an invalidation that
-// landed during its fetch.
+// unchanged since the fetch started — and the check-plus-write is serialized
+// against invalidations via storeMu (storeIfUnchanged), so an invalidation
+// cannot land between the two and leave a stale entry behind.
 //
-// Context note: the leader's context drives fetch and followers share the
-// leader's outcome. This is the standard single-flight tradeoff and is
-// acceptable here (PDNS reads are short and request contexts share lifetimes).
+// Context note: the leader's fetch runs on a context DETACHED from its request
+// (WithoutCancel, bounded by fetchTimeout). Followers share the leader's
+// outcome, so the leader's client navigating away mid-fetch (request context
+// cancelled) must not abort the shared fetch and fail every follower with it.
 func readThrough[V any](
 	c *cachedClient,
 	ch *cache.Cache[V],
@@ -92,14 +106,13 @@ func readThrough[V any](
 	gen := c.gen.Load()
 	sfKey := key + ":" + strconv.FormatInt(gen, 10)
 	val, err := c.flight.Do(sfKey, func() (any, error) {
-		v, ferr := fetch(ctx)
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		v, ferr := fetch(fctx)
 		if ferr != nil {
 			return nil, ferr
 		}
-		// only repopulate if no invalidation occurred during the fetch.
-		if c.gen.Load() == gen {
-			ch.Set(key, v)
-		}
+		storeIfUnchanged(c, ch, key, gen, v)
 		return v, nil
 	})
 	if err != nil {
@@ -107,6 +120,19 @@ func readThrough[V any](
 		return zero, err
 	}
 	return val.(V), nil
+}
+
+// storeIfUnchanged writes v under key only when the generation is still gen.
+// The generation check and the write run under storeMu, the same lock every
+// invalidation takes around its bump+Clear: without that serialization an
+// invalidation could land between the check and the Set, with the Clear
+// missing the freshly written entry — stale data then survived until the TTL.
+func storeIfUnchanged[V any](c *cachedClient, ch *cache.Cache[V], key string, gen int64, v V) {
+	c.storeMu.Lock()
+	defer c.storeMu.Unlock()
+	if c.gen.Load() == gen {
+		ch.Set(key, v)
+	}
 }
 
 // --- Read operations (cached) ---
@@ -274,8 +300,12 @@ func (c *cachedClient) DeleteTSIGKey(ctx context.Context, id string) error {
 
 // invalidateZones clears zone and statistics caches after a zone-level mutation.
 // gen is bumped BEFORE the clears so an in-flight fetch that completes during
-// the invalidation fails its generation check and does not repopulate.
+// the invalidation fails its generation check and does not repopulate. The
+// bump+clear pair runs under storeMu so a concurrent storeIfUnchanged cannot
+// slip its (stale) entry between the check and its write.
 func (c *cachedClient) invalidateZones() {
+	c.storeMu.Lock()
+	defer c.storeMu.Unlock()
 	c.gen.Add(1)
 	c.zoneList.Clear()
 	c.zoneInfo.Clear()
@@ -283,8 +313,10 @@ func (c *cachedClient) invalidateZones() {
 }
 
 // invalidateTSIG clears the TSIG key cache after a TSIG mutation. gen is bumped
-// first for the same reason as invalidateZones.
+// first under storeMu for the same reason as invalidateZones.
 func (c *cachedClient) invalidateTSIG() {
+	c.storeMu.Lock()
+	defer c.storeMu.Unlock()
 	c.gen.Add(1)
 	c.tsigKeys.Clear()
 }
@@ -297,6 +329,8 @@ func (c *cachedClient) invalidateTSIG() {
 // caller acted on. The one caller (ClearZoneCache) is admin-gated precisely
 // because of that blast radius.
 func (c *cachedClient) InvalidateZoneCache(ctx context.Context, zoneID string) {
+	c.storeMu.Lock()
+	defer c.storeMu.Unlock()
 	c.gen.Add(1)
 	c.zoneList.Clear()
 	c.zoneInfo.Clear()
