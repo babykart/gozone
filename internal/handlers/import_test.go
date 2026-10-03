@@ -453,7 +453,7 @@ txt.example.com.,TXT,v=DMARC1; p=quarantine,3600,0,false
 spf.example.com.,SPF,v=spf1 -all,3600,0,false
 preq.example.com.,TXT,"""already"" quoted",3600,0,false`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestParseCSVZone(t *testing.T) {
 example.com.,NS,ns1.example.com.,3600,0,false
 www.example.com.,A,192.0.2.1,3600,0,false`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -492,7 +492,7 @@ www.example.com.,A,192.0.2.1,3600,0,false`
 
 func TestParseCSVZone_NoData(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled`
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestParseCSVZone_SkipsInvalidRecords(t *testing.T) {
 www.example.com.,A,not-an-ip,3600,0,false
 www.example.com.,FOO,whatever,3600,0,false
 mail.example.com.,A,192.0.2.5,3600,0,false`
-	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -595,7 +595,7 @@ mail.example.com.,A,192.0.2.11,3600,0,false,line
 api.example.com.,A,192.0.2.20,3600,0,false,
 txt.example.com.,TXT,"v=DMARC1; p=none",3600,0,false,"quoted, comment"`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
 	input := "name,type,content,ttl,priority,disabled,comment\n" +
 		"www.example.com.,A,192.0.2.1,3600,0,false,\"first line\nsecond line\nthird line\""
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -690,13 +690,55 @@ func TestAppendIfMissing(t *testing.T) {
 // TestParseCSVZone_FQDNTargetNormalization is a normalization regression test:
 // CSV import must route through prepareRecordContent so FQDN-target types
 // (CNAME/NS/PTR) get trailing dots, not just priority/quoted handling.
+// TestParseCSVZone_RelativeAndApexNames is the zone-relative name regression:
+// "www" used to become the TLD "www." and "@" became "@." (bare trailing-dot
+// append), which PowerDNS rejects — failing the whole PATCH. Names must
+// resolve against the zone like the BIND path and the web/API write paths.
+func TestParseCSVZone_RelativeAndApexNames(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+@,A,192.0.2.1,3600,0,false
+www,A,192.0.2.2,3600,0,false
+www.example.com,A,192.0.2.3,3600,0,false
+www.example.com.,A,192.0.2.4,3600,0,false
+,NS,ns1.example.com.,3600,0,false`
+
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+	if err != nil {
+		t.Fatalf("parseCSVZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("no row should be skipped, got %+v", skipped)
+	}
+
+	// All four rows collapse into the same apex/www RRSets under the
+	// canonical names; the empty-name NS row is skipped as before.
+	byName := map[string]int{}
+	for _, rr := range rrsets {
+		byName[rr.Name]++
+		if rr.Name != "example.com." && rr.Name != "www.example.com." {
+			t.Errorf("record name %q is not canonical for the zone", rr.Name)
+		}
+	}
+	if _, ok := byName["www.example.com."]; !ok {
+		t.Error("relative name www must resolve to www.example.com.")
+	}
+	if _, ok := byName["example.com."]; !ok {
+		t.Error("apex shorthand @ must resolve to example.com.")
+	}
+	for _, rr := range rrsets {
+		if rr.Name == "www.example.com." && len(rr.Records) != 3 {
+			t.Errorf("www rows (relative, dotless FQDN, absolute FQDN) must merge into one RRSet with 3 records, got %d", len(rr.Records))
+		}
+	}
+}
+
 func TestParseCSVZone_FQDNTargetNormalization(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled
 www.example.com.,CNAME,target.example.com,3600,0,false
 example.com.,NS,ns1.example.com,3600,0,false
 mail.example.com.,MX,mail.example.com,3600,10,false`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -728,7 +770,7 @@ func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
 	input := `name,type,content,ttl,priority,disabled
 @,SOA,"ns1.example.com hostmaster.example.com 2024010100 3600 900 1209600 3600",3600,0,false`
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)))
+	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -62,7 +62,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		rrsets, skipped, err = parseBindZone(data, zoneID)
 	case "csv":
 		cr := csv.NewReader(file)
-		rrsets, skipped, err = parseCSVZone(cr)
+		rrsets, skipped, err = parseCSVZone(cr, zoneID)
 	}
 
 	if err != nil {
@@ -476,8 +476,11 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 
 // parseCSVZone parses CSV zone data and returns RRSets plus any rows that
 // failed validation (so the caller can surface feedback instead of silently
-// dropping them, matching the BIND path).
-func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
+// dropping them, matching the BIND path). zoneID resolves the record names:
+// relative names and the "@" apex shorthand are canonicalised against the
+// zone, exactly like the BIND path (resolveBindName) and the web/API write
+// paths (normalizeRecordName).
+func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedLine, error) {
 	rows, err := reader.ReadAll()
 	if err != nil {
 		return nil, nil, err
@@ -526,16 +529,19 @@ func parseCSVZone(reader *csv.Reader) ([]models.RRSet, []skippedLine, error) {
 		// Validate before normalizing so an invalid row is reported with a
 		// specific reason rather than a generic PowerDNS failure.
 		// CSV content is bare (priority is a separate column). The name
-		// is validated in its raw form (before the trailing-dot append below)
-		// so the apex shorthand "@" is accepted by ValidateRecordName.
+		// is validated in its raw form (before the zone-relative resolution
+		// below) so the apex shorthand "@" is accepted by ValidateRecordName.
 		if verr := validateParsedRecord(rtype, name, content, priority); verr != nil {
 			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: verr.Error()})
 			continue
 		}
 
-		if !strings.HasSuffix(name, ".") {
-			name += "."
-		}
+		// Resolve the name against the zone like every other write path:
+		// "www" → "www.<zone>.", "@" → "<zone>.", an already-absolute name
+		// (trailing dot) is kept. The previous bare trailing-dot append
+		// turned "www" into the TLD "www." and "@" into "@.", which
+		// PowerDNS rejects — failing the whole PATCH.
+		name = normalizeRecordName(name, zoneID)
 
 		// Route through the same normalization pipeline as the web/API paths
 		// so FQDN-target (CNAME/NS/PTR/…) and multi-FQDN-field (SOA/RP/…)

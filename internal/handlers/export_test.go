@@ -211,7 +211,7 @@ func TestExportZone_CSV_TXTMultiStringRoundTrip(t *testing.T) {
 		t.Fatalf("export: expected 200, got %d", w.Code)
 	}
 
-	rrsets, _, err := parseCSVZone(csv.NewReader(w.Body))
+	rrsets, _, err := parseCSVZone(csv.NewReader(w.Body), "example.com.")
 	if err != nil {
 		t.Fatalf("re-import exported CSV: %v", err)
 	}
