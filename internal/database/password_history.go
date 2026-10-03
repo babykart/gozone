@@ -17,7 +17,7 @@ import (
 // recorded via RecordPassword, the current password is part of the history —
 // so reusing the current password is rejected too.
 //
-// I-4: every loaded hash is compared — the loop does NOT short-circuit on the
+// Every loaded hash is compared — the loop does NOT short-circuit on the
 // first match. The number of bcrypt comparisons therefore depends only on the
 // number of history rows (capped at limit), never on the position of a reuse.
 // Returning at the first match would let an authenticated user infer "how
@@ -37,7 +37,7 @@ func (tx *Tx) PasswordHistoryReused(ctx context.Context, userID int64, newPasswo
 	}
 	defer rows.Close()
 	// OR the result of every comparison so timing reveals only the row count,
-	// not the rank of a reuse (I-4).
+	// not the rank of a reuse.
 	reused := false
 	for rows.Next() {
 		var hash string
@@ -76,10 +76,16 @@ func (tx *Tx) PrunePasswordHistory(ctx context.Context, userID int64, limit int)
 	}
 	// Delete every row that is NOT among the newest `limit` for this user.
 	// The subquery selects the ids to keep; the outer DELETE removes the rest.
-	// This is portable across SQLite/MySQL/PostgreSQL (no LIMIT in a DELETE,
-	// which MySQL/SQLite support but PostgreSQL does not).
+	// The keep-set is wrapped in a derived table for MySQL, which rejects a
+	// bare LIMIT inside an IN-subquery (error 1235) and a DELETE whose
+	// subquery reads the target table directly (error 1093): materializing
+	// the derived table satisfies both, and the statement stays valid
+	// SQLite/PostgreSQL SQL. No LIMIT on the DELETE itself — PostgreSQL
+	// does not support it.
 	query := `DELETE FROM password_history WHERE user_id = ? AND id NOT IN (
-		SELECT id FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT ?
+		SELECT id FROM (
+			SELECT id FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT ?
+		) AS _keep
 	)`
 	if _, err := tx.ExecContext(ctx, query, userID, userID, limit); err != nil {
 		return fmt.Errorf("prune password history: %w", err)

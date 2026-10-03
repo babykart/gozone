@@ -162,20 +162,20 @@ func TestMySQLDialect_Migrations_ContainInlineIndexes(t *testing.T) {
 }
 
 // TestMySQLDialect_Migrations_ZoneCreatedIndexDesc is the regression test for
-// m21: idx_activity_logs_zone_created must be defined with DESC on
+// idx_activity_logs_zone_created must be defined with DESC on
 // created_at, matching the SQLite and PostgreSQL dialects. MySQL originally
 // created it inline as (zone_id, created_at) without DESC; a dedicated ALTER
 // migration now rebuilds it with DESC. We assert against the full joined
 // migration text rather than the original CREATE TABLE because the fix is
 // delivered as a new migration (editing the original would not fix existing
 // databases — CREATE TABLE IF NOT EXISTS is a no-op there — and would churn
-// the content-hash, see m22).
+// the content-hash).
 func TestMySQLDialect_Migrations_ZoneCreatedIndexDesc(t *testing.T) {
 	d := &mysqlDialect{}
 	all := strings.Join(d.Migrations(), "\n")
 	needle := "idx_activity_logs_zone_created (zone_id, created_at DESC)"
 	if !strings.Contains(all, needle) {
-		t.Errorf("MySQL migrations must define idx_activity_logs_zone_created with DESC on created_at (m21); missing %q", needle)
+		t.Errorf("MySQL migrations must define idx_activity_logs_zone_created with DESC on created_at; missing %q", needle)
 	}
 }
 
@@ -332,7 +332,7 @@ func TestMySQLIntegration_Migrations(t *testing.T) {
 	}
 }
 
-// TestMySQLIntegration_RevokeToken is the regression test for M-DB1:
+// TestMySQLIntegration_RevokeToken is a regression test:
 // RevokeToken previously used "ON CONFLICT(jti) DO NOTHING" which MySQL
 // rejects. The fix routes through InsertIgnore.
 func TestMySQLIntegration_RevokeToken(t *testing.T) {
@@ -360,7 +360,7 @@ func TestMySQLIntegration_RevokeToken(t *testing.T) {
 	}
 }
 
-// TestMySQLIntegration_LockMigrations is the regression test for M-DB3:
+// TestMySQLIntegration_LockMigrations is a regression test:
 // LockMigrations previously borrowed a different pooled connection for
 // RELEASE_LOCK than GET_LOCK, making the release a silent no-op.
 func TestMySQLIntegration_LockMigrations(t *testing.T) {
@@ -378,6 +378,44 @@ func TestMySQLIntegration_LockMigrations(t *testing.T) {
 		t.Fatalf("second LockMigrations after release: %v (release was a no-op?)", err)
 	}
 	release2()
+}
+
+// TestMySQLIntegration_PrunePasswordHistory is a regression test:
+// PrunePasswordHistory previously used a bare LIMIT inside the IN-subquery,
+// which MySQL rejects twice over — error 1235 ("LIMIT & IN/ALL/ANY/SOME
+// subquery") and error 1093 (DELETE whose subquery reads the target table) —
+// so every password change failed with a 500 once history_size > 0. The
+// derived-table wrapper materializes the keep-set and runs on all dialects.
+func TestMySQLIntegration_PrunePasswordHistory(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	uid := seedIntegrationUser(t, db, "prunemysql")
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104 -- read-only assertions, nothing to commit
+
+	for i := 0; i < 5; i++ {
+		if err := tx.RecordPassword(ctx, uid, fmt.Sprintf("hash-%d", i)); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	if err := tx.PrunePasswordHistory(ctx, uid, 3); err != nil {
+		t.Fatalf("PrunePasswordHistory failed: %v", err)
+	}
+	if n, err := tx.PasswordHistoryCount(ctx, uid); err != nil || n != 3 {
+		t.Errorf("expected 3 rows after prune to 3, got %d err=%v", n, err)
+	}
+	if err := tx.PrunePasswordHistory(ctx, uid, 10); err != nil {
+		t.Fatalf("PrunePasswordHistory with limit above row count: %v", err)
+	}
+	if n, err := tx.PasswordHistoryCount(ctx, uid); err != nil || n != 3 {
+		t.Errorf("prune above the row count must not delete anything, got %d err=%v", n, err)
+	}
 }
 
 // TestMySQLIntegration_InsertIgnore verifies InsertIgnore silently skips

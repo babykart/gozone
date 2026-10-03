@@ -301,8 +301,8 @@ func TestPostgresDialect_InsertIgnore_RequiresConflictColumns(t *testing.T) {
 // Integration tests (require GOZONE_TEST_POSTGRES_DSN)
 // ---------------------------------------------------------------------------
 
-// TestPostgresIntegration_Migrations is the direct regression test for
-// M-DB2: schema_migrations must use TIMESTAMP, not DATETIME, or the CREATE
+// TestPostgresIntegration_Migrations is a direct regression test:
+// schema_migrations must use TIMESTAMP, not DATETIME, or the CREATE
 // TABLE fails before any migration runs.
 func TestPostgresIntegration_Migrations(t *testing.T) {
 	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
@@ -317,7 +317,7 @@ func TestPostgresIntegration_Migrations(t *testing.T) {
 		t.Errorf("expected %d migrations, got %d", expected, count)
 	}
 
-	// Verify schema_migrations.applied_at uses TIMESTAMP (M-DB2 regression).
+	// Verify schema_migrations.applied_at uses TIMESTAMP (regression guard).
 	var dataType string
 	err := db.Conn.QueryRow(
 		"SELECT data_type FROM information_schema.columns WHERE table_name = 'schema_migrations' AND column_name = 'applied_at'",
@@ -357,7 +357,43 @@ func TestPostgresIntegration_RevokeToken(t *testing.T) {
 	}
 }
 
-// TestPostgresIntegration_LockMigrations is the regression test for M-DB3:
+// TestPostgresIntegration_PrunePasswordHistory keeps the prune query honest
+// on PostgreSQL: the derived-table wrapper added for MySQL must stay valid
+// here too (PostgreSQL requires the alias, accepts the inner LIMIT, and has
+// no same-table restriction).
+func TestPostgresIntegration_PrunePasswordHistory(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+	ctx := context.Background()
+
+	uid := seedIntegrationUser(t, db, "prunepg")
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104 -- read-only assertions, nothing to commit
+
+	for i := 0; i < 5; i++ {
+		if err := tx.RecordPassword(ctx, uid, fmt.Sprintf("hash-%d", i)); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	if err := tx.PrunePasswordHistory(ctx, uid, 3); err != nil {
+		t.Fatalf("PrunePasswordHistory failed: %v", err)
+	}
+	if n, err := tx.PasswordHistoryCount(ctx, uid); err != nil || n != 3 {
+		t.Errorf("expected 3 rows after prune to 3, got %d err=%v", n, err)
+	}
+	if err := tx.PrunePasswordHistory(ctx, uid, 10); err != nil {
+		t.Fatalf("PrunePasswordHistory with limit above row count: %v", err)
+	}
+	if n, err := tx.PasswordHistoryCount(ctx, uid); err != nil || n != 3 {
+		t.Errorf("prune above the row count must not delete anything, got %d err=%v", n, err)
+	}
+}
+
+// TestPostgresIntegration_LockMigrations is a regression test:
 // LockMigrations previously borrowed a different pooled connection for
 // pg_advisory_unlock than pg_advisory_lock, making the release a no-op.
 func TestPostgresIntegration_LockMigrations(t *testing.T) {
