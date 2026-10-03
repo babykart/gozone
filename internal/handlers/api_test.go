@@ -680,6 +680,117 @@ func TestAPICreateRecord_LowercaseMXAndTXTWireFormat(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_TTLResolution pins the API TTL contract: an absent or
+// zero TTL inherits the existing RRSet's TTL on a merge (PowerDNS applies the
+// RRSet-level TTL to every record, so submitting 0 silently zeroed the whole
+// set) and falls back to the default on a brand-new RRSet; a negative value
+// is rejected with a 400 before reaching PowerDNS.
+func TestAPICreateRecord_TTLResolution(t *testing.T) {
+	post := func(body string) (*httptest.ResponseRecorder, []models.RRSet) {
+		var sent []models.RRSet
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+				return
+			}
+			captureRRSets(t, &sent)(w, r)
+		})
+		defer pdnsSrv.Close()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetPathValue("zone_id", "example.com.")
+		h.APICreateRecord(w, req)
+		return w, sent
+	}
+
+	// Merge into the existing RRSet (ttl omitted → JSON decodes 0).
+	w, sent := post(`{"name":"www.example.com.","type":"A","records":[{"content":"5.6.7.8"}]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 300 {
+		t.Errorf("absent ttl must inherit the existing RRSet's 300, got %+v", sent)
+	}
+
+	// Explicit zero behaves like absent.
+	w, sent = post(`{"name":"www.example.com.","type":"A","ttl":0,"records":[{"content":"5.6.7.8"}]}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for explicit ttl 0, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 300 {
+		t.Errorf("explicit ttl 0 must inherit the existing RRSet's 300, got %+v", sent)
+	}
+
+	// Negative TTL is a validation error.
+	w, _ = post(`{"name":"www.example.com.","type":"A","ttl":-1,"records":[{"content":"5.6.7.8"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("negative ttl must be rejected with 400, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestAPICreateRecord_TTLDefaultsOnNewRRSet verifies the fresh-RRSet branch:
+// no existing RRSet to inherit from → the 3600 default applies.
+func TestAPICreateRecord_TTLDefaultsOnNewRRSet(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"brand.example.com.","type":"A","records":[{"content":"192.0.2.7"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != defaultRecordTTL {
+		t.Errorf("new RRSet without ttl must get the %d default, got %+v", defaultRecordTTL, sent)
+	}
+}
+
+// TestAPIUpdateRecord_TTLResolution covers the REPLACE path: an absent or
+// zero TTL inherits the TTL of the RRSet being replaced instead of zeroing
+// the set; a negative value is rejected.
+func TestAPIUpdateRecord_TTLResolution(t *testing.T) {
+	put := func(body string) (*httptest.ResponseRecorder, []models.RRSet) {
+		var sent []models.RRSet
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+				return
+			}
+			captureRRSets(t, &sent)(w, r)
+		})
+		defer pdnsSrv.Close()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetPathValue("zone_id", "example.com.")
+		h.APIUpdateRecord(w, req)
+		return w, sent
+	}
+
+	w, sent := put(`{"name":"www.example.com.","type":"A","records":[{"content":"5.6.7.8"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || sent[0].TTL != 300 {
+		t.Errorf("absent ttl on REPLACE must inherit the replaced RRSet's 300, got %+v", sent)
+	}
+
+	w, _ = put(`{"name":"www.example.com.","type":"A","ttl":-5,"records":[{"content":"5.6.7.8"}]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("negative ttl on REPLACE must be rejected with 400, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
 func TestAPIUpdateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

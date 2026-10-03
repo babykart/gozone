@@ -278,6 +278,9 @@ func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		return err
 	}
+	if rrset.TTL < 0 {
+		return fmt.Errorf("ttl must be a non-negative integer")
+	}
 	if err := validators.ValidateRecordName(rrset.Name); err != nil {
 		return err
 	}
@@ -312,6 +315,9 @@ func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 	rrset.Type = canonicalRecordType(rrset.Type)
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		return err
+	}
+	if rrset.TTL < 0 {
+		return fmt.Errorf("ttl must be a non-negative integer")
 	}
 	if err := validators.ValidateRecordName(rrset.Name); err != nil {
 		return err
@@ -379,6 +385,18 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 			prepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
 	}
 
+	// Resolve an unspecified (zero) TTL exactly like the web CreateRecord:
+	// inherit the existing RRSet's TTL on a merge (PowerDNS applies the
+	// RRSet-level TTL to every record of the set, so submitting 0 would
+	// silently zero the TTL of the pre-existing sibling records), else the
+	// 3600 default. Negative values were rejected at validation.
+	if rrset.TTL <= 0 {
+		rrset.TTL = defaultRecordTTL
+		if foundExisting && existingRRSet.TTL > 0 {
+			rrset.TTL = existingRRSet.TTL
+		}
+	}
+
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
@@ -440,6 +458,16 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	var oldRRSet *models.RRSet
 	if existing, err := h.PDNS.ListRecord(r.Context(), zoneID, req.RRSet.Name, req.RRSet.Type); err == nil && len(existing) > 0 {
 		oldRRSet = &existing[0]
+	}
+
+	// Resolve an unspecified (zero) TTL like the create path: inherit the TTL
+	// of the RRSet being replaced, else the 3600 default. A REPLACE carrying
+	// ttl 0 would zero the whole set.
+	if req.RRSet.TTL <= 0 {
+		req.RRSet.TTL = defaultRecordTTL
+		if oldRRSet != nil && oldRRSet.TTL > 0 {
+			req.RRSet.TTL = oldRRSet.TTL
+		}
 	}
 
 	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, req.RRSet); err != nil {

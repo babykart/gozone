@@ -249,7 +249,7 @@ curl -X POST \
 |-------|------|----------|-------|
 | `name` | string | **yes** | Relative (`www`), absolute (`www.example.com.`), or `@` for apex |
 | `type` | string | **yes** | Any valid DNS record type |
-| `ttl` | int | **yes** | Time-to-live in seconds |
+| `ttl` | int | no | Time-to-live in seconds. `0` or omitted: inherit the TTL of the existing (POST: merged; PUT: replaced) RRSet, else the 3600 default — never sent as 0, which would zero the whole set. Negative values are rejected with a 400. |
 | `records` | array | **yes** | Array of record objects |
 | `records[].content` | string | **yes** | Record content. FQDN targets (CNAME, DNAME, NS, PTR, ALIAS, AFSDB, NAPTR, MX, SRV) get a trailing dot appended automatically if missing. For multi-field types where the FQDN is not the last field (SOA mname/rname, RP mbox/txtname, MINFO rmailbx/emailbx, NSEC next_domain), per-field normalisation is applied. TXT/SPF content is auto-quoted. |
 | `records[].priority` | int | no | For MX and SRV types |
