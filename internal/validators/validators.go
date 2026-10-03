@@ -82,12 +82,39 @@ func ValidateDomainName(name string) error {
 // marker. RFC 7505 null MX ("MX 0 ."), RFC 2782 SRV targets (".") and
 // RFC 3403 NAPTR replacements (".", when the regexp does all the work) all
 // use it; a plain ValidateDNSName would reject it as empty after the
-// trailing-dot trim.
+// trailing-dot trim. It also refuses a bare single label such as "mail": on
+// the wire it would be dotted into the top-level domain "mail." — almost
+// certainly a truncated target, not an intentional TLD. Writing the label
+// with its explicit trailing dot ("ni.") opts in.
 func validateDomainTarget(name string) error {
 	if name == "." {
 		return nil
 	}
-	return ValidateDNSName(name)
+	if err := ValidateDNSName(name); err != nil {
+		return err
+	}
+	return rejectBareTargetLabel(name)
+}
+
+// validateQualifiedTarget is validateDomainTarget minus the root-label
+// allowance: CNAME/NS/PTR and friends may not target "." (a CNAME into the
+// root zone is meaningless), but they share the bare-single-label refusal.
+func validateQualifiedTarget(name string) error {
+	if err := ValidateDNSName(name); err != nil {
+		return err
+	}
+	return rejectBareTargetLabel(name)
+}
+
+// rejectBareTargetLabel refuses a target that contains no dot at all: the
+// wire normalisation (EnsureTrailingDot) would turn "mail" into the
+// top-level domain "mail.", silently breaking the record. An explicit
+// trailing dot keeps the single label a deliberate, fully-qualified choice.
+func rejectBareTargetLabel(name string) error {
+	if !strings.Contains(name, ".") {
+		return fmt.Errorf("target %q is a single label: it would be stored as the top-level domain %q — use a fully qualified name such as \"mail.example.com.\" (or add the trailing dot explicitly to opt in)", name, name+".")
+	}
+	return nil
 }
 
 func ValidateDNSName(name string) error {
@@ -459,16 +486,16 @@ func ValidateRecordContent(recordType, content string) error {
 	case "AAAA":
 		return ValidateIPv6(content)
 	case "CNAME", "ALIAS", "NS", "PTR", "DNAME":
-		return ValidateDNSName(content)
+		return validateQualifiedTarget(content)
 	case "MINFO":
 		parts := strings.Fields(content)
 		if len(parts) != 2 {
 			return fmt.Errorf("MINFO content must have exactly 2 fields: rmailbx emailbx")
 		}
-		if err := ValidateDNSName(parts[0]); err != nil {
+		if err := validateQualifiedTarget(parts[0]); err != nil {
 			return fmt.Errorf("MINFO rmailbx: %w", err)
 		}
-		if err := ValidateDNSName(parts[1]); err != nil {
+		if err := validateQualifiedTarget(parts[1]); err != nil {
 			return fmt.Errorf("MINFO emailbx: %w", err)
 		}
 		return nil
@@ -483,10 +510,10 @@ func ValidateRecordContent(recordType, content string) error {
 		if len(parts) != 7 {
 			return fmt.Errorf("SOA content requires exactly 7 fields: mname rname serial refresh retry expire minimum")
 		}
-		if err := ValidateDNSName(strings.TrimSuffix(parts[0], ".")); err != nil {
+		if err := validateQualifiedTarget(parts[0]); err != nil {
 			return fmt.Errorf("SOA mname: %w", err)
 		}
-		if err := ValidateDNSName(strings.TrimSuffix(parts[1], ".")); err != nil {
+		if err := validateQualifiedTarget(parts[1]); err != nil {
 			return fmt.Errorf("SOA rname: %w", err)
 		}
 		soaFields := []struct {
@@ -592,10 +619,10 @@ func ValidateRecordContent(recordType, content string) error {
 		if len(parts) != 2 {
 			return fmt.Errorf("RP content must have exactly 2 fields: rmailbx emailbx")
 		}
-		if err := ValidateDNSName(parts[0]); err != nil {
+		if err := validateQualifiedTarget(parts[0]); err != nil {
 			return fmt.Errorf("RP rmailbx: %w", err)
 		}
-		if err := ValidateDNSName(parts[1]); err != nil {
+		if err := validateQualifiedTarget(parts[1]); err != nil {
 			return fmt.Errorf("RP emailbx: %w", err)
 		}
 		return nil
@@ -608,7 +635,7 @@ func ValidateRecordContent(recordType, content string) error {
 		if err := validateUintField(parts[0], "AFSDB subtype", 16); err != nil {
 			return err
 		}
-		if err := ValidateDNSName(parts[1]); err != nil {
+		if err := validateQualifiedTarget(parts[1]); err != nil {
 			return fmt.Errorf("AFSDB hostname: %w", err)
 		}
 		return nil

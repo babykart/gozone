@@ -812,3 +812,37 @@ func TestValidateRecordContent_RootDotTargets(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateRecordContent_BareSingleLabelTargets pins that a domain-name
+// target containing no dot at all is refused with an actionable message: the
+// wire normalisation would silently dot "mail" into the top-level domain
+// "mail." and break the record. An explicit trailing dot keeps a single label
+// a deliberate, fully-qualified choice.
+func TestValidateRecordContent_BareSingleLabelTargets(t *testing.T) {
+	cases := []struct {
+		name, rtype, content string
+		wantErr              bool
+	}{
+		{"bare MX target", "MX", "mail", true},
+		{"bare CNAME target", "CNAME", "mail", true},
+		{"bare NS target", "NS", "ns1", true},
+		{"bare SRV target", "SRV", "10 5 5060 sipserver", true},
+		{"bare NAPTR replacement", "NAPTR", `100 10 "s" "SIP+D2U" "" target`, true},
+		{"bare AFSDB hostname", "AFSDB", "1 filesystem", true},
+		{"bare SOA mname", "SOA", "ns1 hostmaster.example.com. 1 2 3 4 5", true},
+		{"explicit single label opts in", "MX", "ni.", false},
+		{"explicit single label CNAME opts in", "CNAME", "ni.", false},
+		{"regular multi-label unaffected", "CNAME", "target.example.com", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateRecordContent(c.rtype, c.content)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("ValidateRecordContent(%s, %q) error = %v, wantErr %v", c.rtype, c.content, err, c.wantErr)
+			}
+			if c.wantErr && err != nil && !strings.Contains(err.Error(), "single label") {
+				t.Errorf("error should name the single-label problem, got: %v", err)
+			}
+		})
+	}
+}
