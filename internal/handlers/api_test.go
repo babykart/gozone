@@ -791,6 +791,63 @@ func TestAPIUpdateRecord_TTLResolution(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_QuotedFieldTypes pins the wire formatting of the
+// per-field quoted types: a bare CAA value, HINFO cpu/os and URI target must
+// reach PowerDNS quoted (it answers 422 to the unquoted form), while an
+// already-quoted value — spaces included — passes through unchanged.
+func TestAPICreateRecord_QuotedFieldTypes(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		want  string
+		wtype string
+	}{
+		{
+			"CAA bare value quoted",
+			`{"name":"example.com.","type":"CAA","ttl":3600,"records":[{"content":"0 issue letsencrypt.org"}]}`,
+			`0 issue "letsencrypt.org"`, "CAA",
+		},
+		{
+			"CAA quoted value with spaces preserved",
+			`{"name":"example.com.","type":"CAA","ttl":3600,"records":[{"content":"0 issue \"ca.example.net; account=123\""}]}`,
+			`0 issue "ca.example.net; account=123"`, "CAA",
+		},
+		{
+			"HINFO cpu os quoted",
+			`{"name":"host.example.com.","type":"HINFO","ttl":3600,"records":[{"content":"Intel Xeon"}]}`,
+			`"Intel" "Xeon"`, "HINFO",
+		},
+		{
+			"URI target quoted",
+			`{"name":"_uri.example.com.","type":"URI","ttl":3600,"records":[{"content":"10 1 https://example.com/"}]}`,
+			`10 1 "https://example.com/"`, "URI",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var sent []models.RRSet
+			h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+			defer pdnsSrv.Close()
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(c.body))
+			r.Header.Set("Content-Type", "application/json")
+			r.SetPathValue("zone_id", "example.com.")
+			h.APICreateRecord(w, r)
+
+			if w.Code != http.StatusCreated {
+				t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+			}
+			if len(sent) != 1 || sent[0].Type != c.wtype {
+				t.Fatalf("expected 1 %s RRSet, got %+v", c.wtype, sent)
+			}
+			if got := sent[0].Records[0].Content; got != c.want {
+				t.Errorf("PDNS received %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestAPIUpdateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {

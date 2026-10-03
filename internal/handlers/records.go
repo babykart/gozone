@@ -758,6 +758,11 @@ func prepareRecordContent(recordType, content string, priority int) (string, int
 		// SOA/RP/MINFO/NSEC: specific fields are FQDNs but not in the last
 		// position, so per-field normalisation is required.
 		return models.EnsureTrailingDotFields(content, models.FQDNFieldIndices(recordType)), priority
+	case models.TypeHasQuotedFields(recordType):
+		// CAA/HINFO/URI: specific fields are character-strings PowerDNS
+		// requires quoted; already-quoted fields (possibly with spaces)
+		// pass through untouched.
+		return models.QuoteContentFields(content, models.QuotedFieldIndices(recordType)), priority
 	default:
 		return content, priority
 	}

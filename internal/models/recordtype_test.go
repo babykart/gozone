@@ -344,3 +344,39 @@ func TestEnsureTrailingDotFields(t *testing.T) {
 		}
 	}
 }
+
+// TestQuoteContentFields pins the per-field wire quoting for CAA (value),
+// HINFO (cpu/os) and URI (target): a bare field is escaped and wrapped, an
+// already-quoted field — possibly containing spaces — passes through
+// untouched, and out-of-range indices are skipped.
+func TestQuoteContentFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		indices []int
+		want    string
+	}{
+		{"CAA bare value", "0 issue letsencrypt.org", []int{2}, `0 issue "letsencrypt.org"`},
+		{"CAA quoted value with spaces", `0 issue "ca.example.net; account=123"`, []int{2}, `0 issue "ca.example.net; account=123"`},
+		{"HINFO bare cpu os", "Intel Xeon", []int{0, 1}, `"Intel" "Xeon"`},
+		{"HINFO already quoted", `"Intel Xeon" "Linux 6.1"`, []int{0, 1}, `"Intel Xeon" "Linux 6.1"`},
+		{"URI bare target", "10 1 https://example.com/", []int{2}, `10 1 "https://example.com/"`},
+		{"URI quoted target", `10 1 "https://example.com/path with space"`, []int{2}, `10 1 "https://example.com/path with space"`},
+		{"escapes inside bare field", `0 issue val"ue\1`, []int{2}, `0 issue "val\"ue\\1"`},
+		{"out-of-range index skipped", "10 1", []int{2}, "10 1"},
+		{"no indices", "anything", nil, "anything"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := QuoteContentFields(c.content, c.indices); got != c.want {
+				t.Errorf("QuoteContentFields(%q, %v) = %q, want %q", c.content, c.indices, got, c.want)
+			}
+		})
+	}
+	if !TypeHasQuotedFields("CAA") || !TypeHasQuotedFields("HINFO") || !TypeHasQuotedFields("URI") {
+		t.Error("CAA, HINFO and URI must declare quoted fields")
+	}
+	if TypeHasQuotedFields("TXT") || TypeHasQuotedFields("A") {
+		t.Error("TXT (whole-content quoting) and A must not declare per-field quoting")
+	}
+}

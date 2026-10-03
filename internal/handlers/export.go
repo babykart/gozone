@@ -123,6 +123,12 @@ func formatRecordContent(rtype, content string, priority int) string {
 	if models.TypeHasPriority(rtype) {
 		return models.JoinPriority(rtype, priority, content)
 	}
+	if models.TypeHasQuotedFields(rtype) {
+		// CAA/HINFO/URI already arrive in wire form (values quoted); the
+		// pass-through keeps already-quoted fields intact and is a no-op in
+		// practice, kept for symmetry with prepareRecordContent.
+		return models.QuoteContentFields(content, models.QuotedFieldIndices(rtype))
+	}
 	return models.QuoteContent(rtype, content)
 }
 

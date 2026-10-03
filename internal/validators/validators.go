@@ -536,25 +536,52 @@ func ValidateRecordContent(recordType, content string) error {
 		}
 		return nil
 	case "CAA":
-		parts := strings.Fields(content)
-		if len(parts) != 3 {
+		// RFC 8659: <flags> <tag> <value>, where the value is a
+		// character-string that may contain spaces (and is quoted in the
+		// PowerDNS wire format — quoting is added by the codec, not here).
+		// Split the two structural leading fields, then treat everything
+		// after the tag as the value so both `0 issue letsencrypt.org` and
+		// `0 issue "ca.example.net; account=123"` validate.
+		rest := strings.TrimSpace(content)
+		var leading []string
+		for len(leading) < 2 && rest != "" {
+			sp := strings.IndexAny(rest, " \t")
+			if sp < 0 {
+				leading = append(leading, rest)
+				rest = ""
+			} else {
+				leading = append(leading, rest[:sp])
+				rest = strings.TrimSpace(rest[sp+1:])
+			}
+		}
+		if len(leading) < 2 || rest == "" {
 			return fmt.Errorf("CAA content must have exactly 3 fields: flags tag value")
 		}
-		flags, err := strconv.ParseUint(parts[0], 10, 8)
+		flags, err := strconv.ParseUint(leading[0], 10, 8)
 		if err != nil {
-			return fmt.Errorf("CAA flags %q must be an 8-bit unsigned integer", parts[0])
+			return fmt.Errorf("CAA flags %q must be an 8-bit unsigned integer", leading[0])
 		}
 		if flags != 0 && flags != 128 {
 			return fmt.Errorf("CAA flags %d is not supported; use 0 or 128", flags)
 		}
-		switch parts[1] {
-		case "issue", "issuewild", "iodef":
-			// valid tags
+		switch leading[1] {
+		case "issue", "issuewild", "iodef", "issuemail", "issuevmc":
+			// valid tags (issue/issuewild/iodef per RFC 8659;
+			// issuemail/issuevmc per the IANA CAA property registry)
 		default:
-			return fmt.Errorf("CAA tag %q is not valid; use issue, issuewild or iodef", parts[1])
+			return fmt.Errorf("CAA tag %q is not valid; use issue, issuewild, iodef, issuemail or issuevmc", leading[1])
 		}
-		if parts[2] == "" {
-			return fmt.Errorf("CAA value must not be empty")
+		value := rest
+		if strings.HasPrefix(value, `"`) {
+			// A quoted value must be one complete quoted string with a
+			// non-empty interior (spaces inside are fine).
+			if !strings.HasSuffix(value, `"`) || len(value) < 3 {
+				return fmt.Errorf("CAA value %q must be a complete non-empty quoted string", value)
+			}
+		} else if strings.ContainsAny(value, " \t") {
+			// An unquoted value spanning several whitespace-separated tokens
+			// is ambiguous zone-file syntax: the value must be quoted.
+			return fmt.Errorf("CAA value containing spaces must be quoted")
 		}
 		return nil
 	case "TXT", "SPF":

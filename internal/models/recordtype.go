@@ -36,6 +36,14 @@ type recordTypeSpec struct {
 	// ("priority weight port target" → 4 fields) so JoinPriority does not strip
 	// a priority that was never there. Zero when hasPriority is false.
 	wireFields int
+	// quotedFieldIndices lists the zero-based indices of space-separated
+	// fields that are character-strings PowerDNS requires wrapped in double
+	// quotes in its wire format: the CAA value (field 2, RFC 8659), the
+	// HINFO cpu/os (fields 0 and 1, RFC 1035) and the URI target (field 2,
+	// RFC 7553). Quoting is applied via QuoteContentFields, which is
+	// quote-aware so a value already quoted — possibly containing spaces —
+	// survives untouched.
+	quotedFieldIndices []int
 }
 
 var recordTypeSpecs = map[string]recordTypeSpec{
@@ -54,6 +62,9 @@ var recordTypeSpecs = map[string]recordTypeSpec{
 	"RP":    {fqdnFieldIndices: []int{0, 1}},
 	"MINFO": {fqdnFieldIndices: []int{0, 1}},
 	"NSEC":  {fqdnFieldIndices: []int{0}},
+	"CAA":   {quotedFieldIndices: []int{2}},
+	"HINFO": {quotedFieldIndices: []int{0, 1}},
+	"URI":   {quotedFieldIndices: []int{2}},
 }
 
 // specFor returns the spec for recordType, or the zero value (no priority, not
@@ -124,6 +135,83 @@ func EnsureTrailingDotFields(content string, indices []int) string {
 		}
 	}
 	return strings.Join(fields, " ")
+}
+
+// TypeHasQuotedFields reports whether recordType has specific space-separated
+// fields that PowerDNS requires as quoted character-strings (CAA value,
+// HINFO cpu/os, URI target).
+func TypeHasQuotedFields(recordType string) bool {
+	return len(specFor(recordType).quotedFieldIndices) > 0
+}
+
+// QuotedFieldIndices returns the zero-based indices of the space-separated
+// fields that are quoted character-strings, or nil for types without any.
+func QuotedFieldIndices(recordType string) []int {
+	return specFor(recordType).quotedFieldIndices
+}
+
+// QuoteContentFields wraps the given space-separated fields of the content in
+// double quotes, for types whose PowerDNS wire format carries quoted
+// character-strings in specific positions (CAA value, HINFO cpu/os, URI
+// target). Tokenization is quote-aware: a field already opening with a quote
+// extends to its closing quote — spaces inside stay in the field, and the
+// field is left unchanged — while an unquoted field is escaped and wrapped.
+// Fields outside the content range are skipped.
+func QuoteContentFields(content string, indices []int) string {
+	if len(indices) == 0 || content == "" {
+		return content
+	}
+	tokens := splitQuotedFields(content)
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(tokens) {
+			continue
+		}
+		tokens[idx] = quoteFieldIfNeeded(tokens[idx])
+	}
+	return strings.Join(tokens, " ")
+}
+
+// splitQuotedFields splits on unquoted whitespace only, so a quoted
+// character-string containing spaces stays a single token.
+func splitQuotedFields(s string) []string {
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && inQuote && i+1 < len(s):
+			cur.WriteByte(c)
+			cur.WriteByte(s[i+1])
+			i++
+		case c == '"':
+			inQuote = !inQuote
+			cur.WriteByte(c)
+		case (c == ' ' || c == '\t') && !inQuote:
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// quoteFieldIfNeeded escapes and wraps a bare field in double quotes; a field
+// already starting with a quote passes through unchanged. Escaping order
+// matches QuoteContent: backslashes first, then double quotes.
+func quoteFieldIfNeeded(field string) string {
+	if strings.HasPrefix(field, `"`) {
+		return field
+	}
+	escaped := strings.ReplaceAll(field, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 // SplitPriority detaches the leading priority from a priority-bearing record's
