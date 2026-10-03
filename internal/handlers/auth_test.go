@@ -15,6 +15,7 @@ import (
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/oidc"
 )
 
 func TestLoginPage(t *testing.T) {
@@ -79,9 +80,116 @@ func TestLogin_Success(t *testing.T) {
 	}
 }
 
-// TestLogin_CaseInsensitiveAndTrimmedUsername guards REVIEW.md L-5: the DB
-// lookup must be case-insensitive (LOWER(username) = ?) and the input must be
-// trimmed, matching the per-username rate limiter's normalisation
+// seedLoginUser inserts a user with a known bcrypt password.
+func seedLoginUser(t *testing.T, h *Handler, username string) {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("testpass"), 4)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		username, username+"@example.com", string(hash), "user",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+}
+
+// postLogin drives the Login handler with a form body and returns the recorder.
+func postLogin(h *Handler, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.Login(w, r)
+	return w
+}
+
+// hasSessionCookie reports whether the recorder set the gozone_session cookie.
+func hasSessionCookie(rec *httptest.ResponseRecorder) bool {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLogin_LocalLoginDisabledRefused pins that allow_local_login=false gates
+// the endpoint, not just the page: with SSO live, POST /login must refuse
+// VALID local credentials before any lookup, compare or attempt record —
+// otherwise local passwords offer a path around the IdP (and its MFA).
+func TestLogin_LocalLoginDisabledRefused(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
+		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
+	}}
+	h.Cfg.OIDC.AllowLocalLogin = false
+	seedLoginUser(t, h, "testuser")
+
+	w := postLogin(h, "username=testuser&password=testpass")
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/login?error=local_login_disabled" {
+		t.Errorf("expected /login?error=local_login_disabled, got %q", loc)
+	}
+	if hasSessionCookie(w) {
+		t.Error("no session cookie must be issued when local login is disabled")
+	}
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='login'").Scan(&count)
+	if count != 0 {
+		t.Errorf("refused request must not log a login, got %d", count)
+	}
+	var attempts int
+	h.DB.QueryRow("SELECT COUNT(*) FROM login_attempts").Scan(&attempts)
+	if attempts != 0 {
+		t.Errorf("refused request must not record a login attempt (no lockout budget consumed), got %d", attempts)
+	}
+}
+
+// TestLogin_LocalLoginStillWorksWithSSOAllowed: with SSO live and
+// allow_local_login=true (default), local credentials keep working.
+func TestLogin_LocalLoginStillWorksWithSSOAllowed(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
+		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
+	}}
+	seedLoginUser(t, h, "testuser")
+
+	w := postLogin(h, "username=testuser&password=testpass")
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if !hasSessionCookie(w) {
+		t.Error("expected gozone_session cookie")
+	}
+}
+
+// TestLogin_AllowLocalLoginFalseWithoutSSO: the flag is inert when SSO is not
+// enabled — local login is then the only authentication path and must keep
+// working, whatever the YAML says.
+func TestLogin_AllowLocalLoginFalseWithoutSSO(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = nil
+	h.Cfg.OIDC.AllowLocalLogin = false
+	seedLoginUser(t, h, "testuser")
+
+	w := postLogin(h, "username=testuser&password=testpass")
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if !hasSessionCookie(w) {
+		t.Error("expected gozone_session cookie — local login must stay the only path when SSO is off")
+	}
+}
+
+// TestLogin_CaseInsensitiveAndTrimmedUsername guards the login normalisation:
+// the DB lookup must be case-insensitive (username_lc = ?) and the input must
+// be trimmed, matching the per-username rate limiter's normalisation
 // (cmd/server.go loginUsernameKey). A user who registered as "TestUser" must be
 // able to log in as "testuser", "TESTUSER", or " TestUser ". Without the
 // case-insensitive lookup, Postgres (case-sensitive =) would resolve these to
@@ -194,7 +302,7 @@ func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
 
 	// Even the correct password must be rejected while locked. The user-facing
 	// redirect target must match the wrong-password / unknown-user path
-	// (account enumeration defence — see REVIEW.md).
+	// (account enumeration defence).
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=victim&password=goodpass"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -370,7 +478,7 @@ func TestProfilePage(t *testing.T) {
 	}
 }
 
-// TestLogin_LastAdmin_NotLocked verifies the REVIEW.md fix: an attacker that
+// TestLogin_LastAdmin_NotLocked verifies that an attacker that
 // fails to log in as the SOLE enabled admin must not be able to lock them
 // out. The counter is incremented up to maxAttempts-1 (so the next failure
 // still counts) but locked_until stays NULL.
@@ -483,7 +591,7 @@ func TestLogin_TwoAdmins_TargetedAdminLocked(t *testing.T) {
 	}
 }
 
-// TestLogin_ErrorMessage_NoEnumeration verifies the REVIEW.md fix: the
+// TestLogin_ErrorMessage_NoEnumeration verifies that the
 // user-facing redirect target is identical whether the username is
 // unknown, the password is wrong, or the account is locked. An attacker
 // who triggers a lockout on a guessed username must not be able to
@@ -785,7 +893,7 @@ func TestLogin_ManualLockHonoredWhenAutoLockoutDisabled(t *testing.T) {
 	}
 }
 
-// TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled guards the I-2
+// TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled guards the same
 // contract that B3 must NOT regress: with max_failed_attempts = 0, a stale
 // automatic lock (locked_until set while the feature was on) is ignored at
 // login — the manual-lock enforcement added for B3 must not leak into the
@@ -815,7 +923,7 @@ func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
 
 	loc := w.Header().Get("Location")
 	if strings.Contains(loc, "error=") {
-		t.Errorf("stale auto-lock must be ignored when the feature is disabled (I-2); got %q", loc)
+		t.Errorf("stale auto-lock must be ignored when the feature is disabled; got %q", loc)
 	}
 	var hasSession bool
 	for _, c := range w.Result().Cookies() {
@@ -824,7 +932,7 @@ func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
 		}
 	}
 	if !hasSession {
-		t.Error("expected a session cookie after successful login past a stale auto-lock (I-2)")
+		t.Error("expected a session cookie after successful login past a stale auto-lock")
 	}
 }
 

@@ -44,6 +44,10 @@ const (
 	// mismatch, token verification, disabled account, provisioning refused).
 	// A single generic message avoids leaking which step failed.
 	ssoError = "sso_error"
+	// localLoginDisabledError is returned by Login when SSO is live and the
+	// operator turned allow_local_login off: password authentication is
+	// refused on the endpoint too, not just hidden from the page.
+	localLoginDisabledError = "local_login_disabled"
 )
 
 // loginErrorMessages maps a query-string error code to the user-facing banner.
@@ -56,6 +60,7 @@ var loginErrorMessages = map[string]string{
 	invalidCredentialsError: "Invalid username or password.",
 	csrfInvalidError:        "Session expired or security token invalid. Please try again.",
 	ssoError:                "Single sign-on failed. Please try again or contact an administrator.",
+	localLoginDisabledError: "Local password login is disabled. Use single sign-on.",
 }
 
 // loginErrorRedirect builds the /login?error=<code> redirect target. Used by
@@ -89,6 +94,18 @@ func ensureDummyHash(cost int) {
 	})
 }
 
+// localLoginDisabled reports whether local password authentication must be
+// refused: SSO is live and the operator kept allow_local_login off. Both the
+// LoginPage form-hiding gate and the Login endpoint gate go through this one
+// predicate so the UI and the endpoint can never disagree — hiding the form
+// alone left POST /login accepting passwords, letting anyone skip the IdP
+// (and its MFA) with local credentials. When SSO is not enabled the predicate
+// is false regardless of the flag: local login is then the only path and must
+// keep working.
+func (h *Handler) localLoginDisabled() bool {
+	return h.OIDC != nil && h.OIDC.Enabled() && !h.Cfg.OIDC.AllowLocalLogin
+}
+
 // LoginPage renders the login form (GET /login).
 func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]interface{}{
@@ -98,10 +115,10 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 	// Expose SSO providers so the template can render "Sign in with X" buttons.
 	// When SSO is enabled and allow_local_login is false, the local form is
-	// hidden (the POST /login endpoint stays wired for existing tooling).
+	// hidden (and Login refuses POST /login — see localLoginDisabled).
 	if h.OIDC != nil && h.OIDC.Enabled() {
 		data["OIDCProviders"] = h.OIDC.Providers()
-		if !h.Cfg.OIDC.AllowLocalLogin {
+		if h.localLoginDisabled() {
 			data["HideLocalLogin"] = true
 		}
 	}
@@ -109,6 +126,11 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // Login authenticates a user from a POST form submission (POST /login).
+//
+// When SSO is enabled and allow_local_login is false, the request is refused
+// before any credential work (see localLoginDisabled): the setting must gate
+// the endpoint, not just the page, or local passwords would offer a path
+// around the IdP's MFA.
 //
 // On success, it generates a JWT stored in the "gozone_session" cookie and
 // redirects to /dashboard. On failure, redirects to /login?error=invalid_credentials
@@ -130,6 +152,16 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 //     bounded.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Refuse password authentication entirely when SSO is the only sanctioned
+	// path: the check happens before any lookup, compare or attempt record so
+	// a disabled endpoint neither enumerates users nor consumes lockout
+	// budget. See localLoginDisabled.
+	if h.localLoginDisabled() {
+		http.Redirect(w, r, loginErrorRedirect(localLoginDisabledError), http.StatusSeeOther)
+		return
+	}
+
 	// Normalise the username the same way the per-username rate limiter does
 	// (cmd/server.go loginUsernameKey: trim + lowercase). The DB lookup below
 	// uses LOWER(username) = ? so the match is case-insensitive — without this,
@@ -187,12 +219,12 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// A manual admin lock is enforced UNCONDITIONALLY, independent of the
 	// brute-force feature flag: an account an admin froze must stay frozen
 	// even when max_failed_attempts = 0. The automatic brute-force lockout
-	// below still follows the flag (I-2): with max_failed_attempts = 0 a stale
+	// below still follows the flag: with max_failed_attempts = 0 a stale
 	// auto-lock is ignored at login. The two are decoupled by tracking the
 	// manual lock in its own column (manual_lock_until), set alongside
 	// locked_until by AdminLockUser.
 	if manualLocked, merr := h.DB.IsManualLock(ctx, user.ID); merr != nil {
-		// Fail-closed (m34): if the manual-lock status cannot be read we
+		// Fail-closed: if the manual-lock status cannot be read we
 		// cannot confirm the account is not frozen, so deny. A dummy bcrypt
 		// compare keeps the response time in the wrong-password band.
 		logger.Error("failed to check manual lock status; denying login (fail-closed)", "user_id", user.ID, "error", merr)
@@ -223,7 +255,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if maxAttempts > 0 {
 		locked, until, lerr := h.DB.UserLockStatus(ctx, user.ID)
 		if lerr != nil {
-			// Fail-closed (m34): if the lockout status cannot be determined,
+			// Fail-closed: if the lockout status cannot be determined,
 			// deny the login rather than falling through to bcrypt. Otherwise a
 			// DB error would bypass the lockout for an account that is actually
 			// locked. A dummy bcrypt compare keeps the response time in the same

@@ -176,8 +176,10 @@ type OIDCConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// AllowLocalLogin keeps the local username/password login form available
 	// alongside SSO. When false and SSO is enabled, the local form is hidden
-	// (but the POST /login endpoint remains wired so existing sessions and
-	// API tooling keep working). Default true.
+	// AND POST /login refuses password authentication, so single sign-on
+	// (and its MFA) cannot be bypassed with local credentials. When SSO is
+	// disabled the flag is inert: local login is then the only path.
+	// Default true.
 	AllowLocalLogin bool `yaml:"allow_local_login"`
 	// AutoProvision creates a local user automatically on first successful SSO
 	// login. It gates ONLY the creation of new accounts: linking an existing
@@ -489,7 +491,7 @@ func Load(path string) (*Config, error) {
 	// derivation lives here (not in DefaultConfig) so that it always runs after
 	// env overrides and the placeholder-secret auto-generation above, and so a
 	// (theoretically impossible) HKDF failure is reported through Load's error
-	// return instead of aborting the process (REVIEW.md I-7).
+	// return instead of aborting the process.
 	jwtKey, csrfKey, err := deriveKeys([]byte(cfg.Server.SecretKey))
 	if err != nil {
 		return nil, fmt.Errorf("derive jwt/csrf keys: %w", err)
@@ -951,7 +953,7 @@ func applyOIDCProviderEnv(cfg *Config) error {
 // envInt parses an integer environment override. An unparseable value is
 // returned as an error rather than silently falling back to the default, so a
 // typo in the override fails config load instead of hiding the operator's
-// intent (REVIEW.md m13).
+// intent.
 func envInt(name, v string) (int, error) {
 	n, err := strconv.Atoi(v)
 	if err != nil {
@@ -961,7 +963,7 @@ func envInt(name, v string) (int, error) {
 }
 
 // envBool parses a boolean environment override. Unrecognized spellings are
-// returned as an error for the same reason as envInt (REVIEW.md m13).
+// returned as an error for the same reason as envInt.
 func envBool(name, v string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "t", "true", "yes", "on":
@@ -1038,7 +1040,7 @@ func isPlaceholderSecret(key string) bool {
 //
 // With sha256 and a 32-byte output the expansion cannot fail in practice —
 // HKDF-SHA256 only errors on programming mistakes (nil hash, illegal length) —
-// but returning the error (instead of panicking, REVIEW.md I-7) keeps this
+// but returning the error (instead of panicking) keeps this
 // consistent with the rest of Load, which reports errors rather than aborting.
 func deriveKeys(master []byte) (jwtKey, csrfKey []byte, err error) {
 	jwtKey, err = hkdf.Key(sha256.New, master, nil, "gozone-jwt", 32)

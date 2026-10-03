@@ -78,7 +78,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 | YAML path | Environment variable | Default | Description |
 |-----------|----------------------|---------|-------------|
 | `oidc.enabled` | `GOZONE_OIDC_ENABLED` | `false` | Master switch. |
-| `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` | Keep the username/password form alongside SSO buttons. `false` hides the form (the `POST /login` endpoint stays wired). |
+| `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` | Keep the username/password form alongside SSO buttons. `false` hides the form **and** makes `POST /login` refuse password authentication — SSO (and its MFA) cannot be bypassed with local credentials. Inert when SSO is disabled. |
 | `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. Gates only NEW account creation. When `false`, login still succeeds for a pre-existing external-identity link, or for an existing local account whose email matches a *verified* IdP email (`email_verified: true`). |
 | `oidc.require_verified_email` | `GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL` | `true` | Require `email_verified: true` to link an existing local account by email. Set to `false` for a trusted IdP whose emails are authoritative but not marked verified (e.g. a Keycloak realm that does not emit `email_verified`); linking then keys on the email alone. Only affects email linking, never provisioning. |
 | `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` | Role for auto-provisioned users (`admin` or `user`). |
