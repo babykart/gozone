@@ -49,6 +49,7 @@ All errors return a JSON body:
 | `UNAUTHORIZED` | 401 | Invalid or missing API key, or the key's user is disabled |
 | `API_KEY_EXPIRED` | 401 | The API key passed its expiry date |
 | `FORBIDDEN` | 403 | Authenticated as a non-admin on an admin-only endpoint, or no zone-group grants access to the zone |
+| `UPSTREAM_AUTH_ERROR` | 502 | PowerDNS rejected GoZone's own API credentials — a server-side configuration problem; the client's API key is valid |
 | `INTERNAL_ERROR` | 500 | Unexpected server error (also used when the zone-access lookup itself fails) |
 
 Middleware-level rejections (authentication, admin gate, zone access) use the

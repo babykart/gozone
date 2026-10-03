@@ -26,13 +26,19 @@ const (
 	ErrCodeInternalError      = "INTERNAL_ERROR"
 	ErrCodeStatsError         = "STATS_ERROR"
 	ErrCodeConflict           = "CONFLICT"
-	ErrCodeUnauthorized       = "UNAUTHORIZED"
+	ErrCodeUpstreamAuthError  = "UPSTREAM_AUTH_ERROR"
 	ErrCodeLuaUpdatesDisabled = "LUA_UPDATES_DISABLED"
 )
 
 // pdnsErrorStatus maps a typed PowerDNS client error to the appropriate HTTP
 // status code and API error code. notFoundCode lets callers distinguish a
 // missing zone from a missing record.
+//
+// A PowerDNS 401/403 is NOT passed through as this server's own 401: the
+// client's API key was already validated by GoZone's middleware, and a 401
+// here would tell a correctly-authenticated client its key is invalid. The
+// GoZone→PowerDNS credential is broken — an upstream/gateway failure — so it
+// maps to 502 UPSTREAM_AUTH_ERROR.
 func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 	switch {
 	case errors.Is(err, pdns.ErrNotFound):
@@ -42,7 +48,7 @@ func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 	case errors.Is(err, pdns.ErrConflict):
 		return http.StatusConflict, ErrCodeConflict
 	case errors.Is(err, pdns.ErrUnauthorized):
-		return http.StatusUnauthorized, ErrCodeUnauthorized
+		return http.StatusBadGateway, ErrCodeUpstreamAuthError
 	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return http.StatusBadRequest, ErrCodeLuaUpdatesDisabled
 	default:

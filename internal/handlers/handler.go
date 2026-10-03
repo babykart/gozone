@@ -99,8 +99,9 @@ func sectionFromTemplate(name string) string {
 
 // renderInternalError logs the error server-side and shows a generic message to
 // the user with HTTP 500, since these are server-side failures. Known
-// non-transient PowerDNS configuration errors are surfaced as 400 with a
-// user-friendly message instead.
+// non-transient PowerDNS errors are surfaced with their own status and a
+// user-friendly message instead (400 validation, 404 missing, 409 conflict,
+// 502 upstream authentication failure).
 func (h *Handler) renderInternalError(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	if status, message := pdnsUserFacingStatus(err); status != 0 {
 		logger.Warn(msg, "error", err, "user_message", message)
@@ -129,7 +130,9 @@ func pdnsUserFacingStatus(err error) (int, string) {
 	case errors.Is(err, pdns.ErrNotFound):
 		return http.StatusNotFound, "PowerDNS could not find the target resource."
 	case errors.Is(err, pdns.ErrUnauthorized):
-		return http.StatusUnauthorized, "PowerDNS rejected the operation (authentication failure)."
+		// Not a 401: the browser session is fine, the GoZone→PowerDNS
+		// credential is broken. A 401 page would read as "log in again".
+		return http.StatusBadGateway, "PowerDNS rejected the operation: its API credentials configured on this server are invalid. Contact the administrator."
 	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return http.StatusBadRequest, "LUA record updates are disabled on the PowerDNS server. Ask the administrator to set enable-lua-record-updates=yes."
 	default:

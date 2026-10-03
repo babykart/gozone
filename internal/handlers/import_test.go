@@ -233,9 +233,10 @@ func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.ImportZone(w, r)
-	// Must match the JSON API mapping (401), not the previous divergent 403.
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for unauthorized error, got %d", w.Code)
+	// Upstream auth failure is a gateway error (502), not a 401: the user's
+	// session is valid, GoZone's own PowerDNS credential is broken.
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 for PowerDNS unauthorized error, got %d", w.Code)
 	}
 }
 

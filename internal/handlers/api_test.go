@@ -1542,6 +1542,33 @@ func TestAPIGetZone_PDNSError(t *testing.T) {
 	}
 }
 
+// TestAPIGetZone_PDNSUnauthorizedIs502 pins the upstream-auth mapping: a 401
+// from PowerDNS must NOT surface as this API's own 401 — the client's API key
+// was already validated, and a 401 would tell a correctly-authenticated
+// caller their key is invalid. It is a gateway failure: 502
+// UPSTREAM_AUTH_ERROR.
+func TestAPIGetZone_PDNSUnauthorizedIs502(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com", nil)
+	r.SetPathValue("zone_id", "example.com")
+	h.APIGetZone(w, r)
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 for PowerDNS auth failure, got %d", w.Code)
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeUpstreamAuthError {
+		t.Errorf("expected code %s, got %s", ErrCodeUpstreamAuthError, resp.Code)
+	}
+}
+
 func TestAPICreateZone_PDNSError(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
