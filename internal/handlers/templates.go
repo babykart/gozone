@@ -502,6 +502,10 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 	missing := make(map[string]struct{})
 
 	for i, r := range records {
+		// Rows may predate the canonical-type entry normalisation, so
+		// uppercase here too: the wire-format spec lookup and the grouping
+		// key below are case-sensitive.
+		rtype := canonicalRecordType(r.Type)
 		name := replacer.Replace(r.Name)
 		content := replacer.Replace(r.Content)
 
@@ -523,18 +527,18 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 			// template, the 1-based record index and the template's original
 			// (pre-substitution) name so the operator can locate the line to
 			// fix in the template editor.
-			if err := validateParsedRecord(r.Type, name, content, r.Priority); err != nil {
-				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, r.Type, r.Name, err)
+			if err := validateParsedRecord(rtype, name, content, r.Priority); err != nil {
+				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, rtype, r.Name, err)
 			}
 		}
 
 		// Embed MX/SRV priority into the content; PDNS rejects a separate
 		// "priority" element in the PATCH body.
-		content, priority := prepareRecordContent(r.Type, content, r.Priority)
+		content, priority := prepareRecordContent(rtype, content, r.Priority)
 
 		rrsets = append(rrsets, models.RRSet{
 			Name:    name,
-			Type:    r.Type,
+			Type:    rtype,
 			TTL:     r.TTL,
 			Records: []models.RecordInfo{{Content: content, Priority: priority, Disabled: r.Disabled}},
 		})
@@ -638,7 +642,7 @@ func (h *Handler) collectTemplateVars(r *http.Request) map[string]string {
 func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.ZoneTemplateRecord, error) {
 	templateID, _ := strconv.ParseInt(templateIDStr, 10, 64)
 	name := strings.TrimSpace(r.FormValue("name"))
-	rtype := strings.TrimSpace(r.FormValue("type"))
+	rtype := canonicalRecordType(r.FormValue("type"))
 	content := strings.TrimSpace(r.FormValue("content"))
 
 	ttlStr := strings.TrimSpace(r.FormValue("ttl"))

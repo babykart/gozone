@@ -248,13 +248,15 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 }
 
 // prepareAPIRecordSet validates and normalises an RRSet from an API request for
-// the PDNS PATCH API, mirroring the web write path: it canonicalises the name
-// (trailing dot, relative-to-zone), then embeds the MX/SRV priority into each
+// the PDNS PATCH API, mirroring the web write path: it canonicalises the type
+// (uppercase) and the name (trailing dot, relative-to-zone), then embeds the
+// MX/SRV priority into each
 // record's content and quotes TXT/SPF. Content is validated in its bare form
 // (priority carried in RecordInfo.Priority), which matches what APIListRecords
 // returns, so a read-modify-write round trip works. Returns a validation error
 // for a 400, or nil when the RRSet is valid.
 func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
+	rrset.Type = canonicalRecordType(rrset.Type)
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		return err
 	}
@@ -278,7 +280,8 @@ func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 	return nil
 }
 
-// validateAPIRecordSet validates the RRSet fields and normalizes the name, but
+// validateAPIRecordSet validates the RRSet fields and canonicalizes the type
+// (uppercase) and name, but
 // does NOT normalize record content (priority embedding / quoting / trailing
 // dots). APICreateRecord uses it before merging the new records into an
 // existing RRSet: content normalization must run AFTER the merge so each
@@ -286,9 +289,9 @@ func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 // final prepareRecordContent pass (prepareRecordContent is not idempotent for
 // MX/SRV — a second pass would strip the embedded priority and re-embed the
 // now-zeroed Priority field). prepareAPIRecordSet above remains the
-// validate+normalize path for APIUpdateRecord, which does a plain REPLACE
-// (REVIEW.md M-4).
+// validate+normalize path for APIUpdateRecord, which does a plain REPLACE.
 func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
+	rrset.Type = canonicalRecordType(rrset.Type)
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		return err
 	}
@@ -313,8 +316,7 @@ func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 // sibling records) rather than replacing it, matching the web UI and REST
 // POST=append semantics; PUT /records remains the explicit REPLACE operation.
 // For MX/SRV, the priority is taken from each record's "priority" field and
-// embedded into the content for PowerDNS. Returns HTTP 201 on success
-// (REVIEW.md M-4).
+// embedded into the content for PowerDNS. Returns HTTP 201 on success.
 func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 	var rrset models.RRSet
@@ -419,6 +421,7 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Type = canonicalRecordType(req.Type)
 	if err := validators.ValidateRecordType(req.Type); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
 		return

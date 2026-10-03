@@ -264,7 +264,7 @@ func TestAPIListRecords_FilteredByName(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// REVIEW.md mineur fix: the handler must canonicalise the name to a
+	// Name canonicalisation: the handler must canonicalise the name to a
 	// trailing-dot FQDN before forwarding to PowerDNS — "www.example.com"
 	// (no dot) would silently match nothing against the real backend.
 	if !strings.Contains(gotPath, "rrset_name=www.example.com.") {
@@ -365,7 +365,7 @@ func TestAPIListRecords_Filtered_EmptyResult(t *testing.T) {
 func TestAPICreateRecord(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// APICreateRecord now issues a GET (ListRecords) to merge with any
-		// existing RRSet before the PATCH (REVIEW.md M-4).
+		// existing RRSet before the PATCH.
 		if r.Method != http.MethodGet && r.Method != http.MethodPatch {
 			t.Errorf("expected GET or PATCH, got %s", r.Method)
 		}
@@ -390,7 +390,7 @@ func TestAPICreateRecord(t *testing.T) {
 	}
 }
 
-// TestAPICreateRecord_MergesWithExisting is the REVIEW.md M-4 regression test:
+// TestAPICreateRecord_MergesWithExisting is a merge-semantics regression test:
 // POST /records must append to an existing RRSet (preserving sibling records)
 // instead of silently replacing it. The mock serves an existing A record on
 // GET; the POST of a second A record must result in a PATCH carrying both.
@@ -426,6 +426,80 @@ func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
 	}
 	if !got["1.2.3.4"] || !got["5.6.7.8"] {
 		t.Errorf("PATCH must preserve the existing record and add the new one; got %+v", got)
+	}
+}
+
+// TestAPICreateRecord_LowercaseTypeCanonicalized guards the type
+// canonicalisation at the API entry: validation is case-insensitive but the
+// RRSet merge is not. A lowercase "a" used to miss the existing A RRSet, so
+// the PATCH carried a one-record REPLACE that wiped the sibling record — the
+// API counterpart of the form regression.
+func TestAPICreateRecord_LowercaseTypeCanonicalized(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}]}`)) // #nosec G104 -- test helper
+			return
+		}
+		captureRRSets(t, &sent)(w, r)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"a","ttl":300,"records":[{"content":"5.6.7.8"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 RRSet in the PATCH, got %d", len(sent))
+	}
+	if sent[0].Type != "A" {
+		t.Errorf("RRSet type must be canonicalised to %q, got %q", "A", sent[0].Type)
+	}
+	if len(sent[0].Records) != 2 {
+		t.Fatalf("lowercase type must merge into the existing A RRSet and preserve siblings, got %d records", len(sent[0].Records))
+	}
+}
+
+// TestAPICreateRecord_LowercaseMXAndTXTWireFormat verifies that the
+// case-insensitively validated type still gets its type-specific wire
+// handling: "mx" embeds the priority into the content, "txt" quotes it.
+func TestAPICreateRecord_LowercaseMXAndTXTWireFormat(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	post := func(body string) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.SetPathValue("zone_id", "example.com.")
+		h.APICreateRecord(w, r)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+		}
+	}
+
+	post(`{"name":"example.com.","type":"mx","ttl":3600,"records":[{"content":"mail.example.com.","priority":10}]}`)
+	if len(sent) != 1 || sent[0].Type != "MX" {
+		t.Fatalf("expected 1 canonicalised MX RRSet, got %+v", sent)
+	}
+	if got := sent[0].Records[0]; got.Content != "10 mail.example.com." || got.Priority != 0 {
+		t.Errorf("lowercase mx: PDNS received content=%q priority=%d, want %q and 0", got.Content, got.Priority, "10 mail.example.com.")
+	}
+
+	post(`{"name":"_dmarc.example.com.","type":"txt","ttl":3600,"records":[{"content":"v=DMARC1; p=none"}]}`)
+	if len(sent) != 1 || sent[0].Type != "TXT" {
+		t.Fatalf("expected 1 canonicalised TXT RRSet, got %+v", sent)
+	}
+	if got := sent[0].Records[0].Content; got != `"v=DMARC1; p=none"` {
+		t.Errorf("lowercase txt: PDNS received content=%q, want the quoted form %q", got, `"v=DMARC1; p=none"`)
 	}
 }
 
@@ -467,7 +541,7 @@ func captureRRSets(t *testing.T, got *[]models.RRSet) func(http.ResponseWriter, 
 		}
 		// Non-PATCH (e.g. the GET ListRecords that APICreateRecord now issues
 		// to merge with the existing RRSet): return an empty rrsets list so the
-		// client unmarshals cleanly (REVIEW.md M-4).
+		// client unmarshals cleanly.
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
 	}
@@ -517,7 +591,7 @@ func TestAPICreateRecord_PriorityZero(t *testing.T) {
 	}
 }
 
-// TestAPICreateRecord_PriorityOutOfRange is the m49 regression test: an MX
+// TestAPICreateRecord_PriorityOutOfRange is a priority-range regression: an MX
 // priority outside the 16-bit range (0-65535) must be rejected with a 400
 // before reaching PowerDNS.
 func TestAPICreateRecord_PriorityOutOfRange(t *testing.T) {
@@ -922,7 +996,7 @@ func TestAPIDeleteRecord(t *testing.T) {
 	}
 }
 
-// TestAPIDeleteRecord_NormalizesName is the m27 regression test: a name
+// TestAPIDeleteRecord_NormalizesName is a name-normalisation regression: a name
 // without a trailing dot must be normalized to the FQDN before reaching
 // PowerDNS.
 func TestAPIDeleteRecord_NormalizesName(t *testing.T) {
@@ -945,7 +1019,7 @@ func TestAPIDeleteRecord_NormalizesName(t *testing.T) {
 	}
 }
 
-// TestAPIDeleteRecord_RejectsEmptyName verifies the m27 name validation: an
+// TestAPIDeleteRecord_RejectsEmptyName verifies the name validation: an
 // empty name is rejected with 400 before PowerDNS is contacted. This matters
 // because normalizeRecordName("") would otherwise resolve to the zone apex and
 // could delete apex records (SOA/NS).
@@ -1026,7 +1100,7 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 	}
 }
 
-// TestAPIListZones_FilterErrorFailClosed is the m25 regression test: when
+// TestAPIListZones_FilterErrorFailClosed is a fail-closed regression: when
 // filterZonesForUser fails (DB error in the zone-group lookup), the endpoint
 // must stay fail-closed — never return the unfiltered zones. It now surfaces
 // the outage as HTTP 500 instead of 200-with-empty-list: an empty list would
@@ -1276,9 +1350,8 @@ func TestAPIDeleteRecord_PDNSError(t *testing.T) {
 	}
 }
 
-// TestAPIUpdateRecord_CommentsPassedThroughUnchanged verifies the REVIEW.md
-// note "reste à vérifier que l'API JSON ne déclenche pas de re-déduplication
-// incorrecte": the REST path does NOT go through buildCommentsPatch, so the
+// TestAPIUpdateRecord_CommentsPassedThroughUnchanged pins the REST comment
+// passthrough: the REST path does NOT go through buildCommentsPatch, so the
 // `comments` array is forwarded to PowerDNS exactly as the client sent it
 // (no implicit dedup, no clearing, no padding with existing comments). The
 // client is in full control — same PDNS REPLACE semantics documented in the
@@ -1349,8 +1422,7 @@ func TestAPIUpdateRecord_CommentsAbsentInBody(t *testing.T) {
 	}
 }
 
-// TestAPIUpdateRecord_ClearCommentsTrue verifies the REVIEW.md mineur fix
-// "API REST : pas de signal explicite pour purger les commentaires RRSet":
+// TestAPIUpdateRecord_ClearCommentsTrue pins the explicit comment purge:
 // a client can set "clear_comments":true on the PUT body to wipe all existing
 // comments without resorting to the round-trip-unsafe "comments":[] convention
 // (which UnmarshalJSON normalises to "preserve").
@@ -1389,7 +1461,7 @@ func TestAPIUpdateRecord_ClearCommentsTrue(t *testing.T) {
 }
 
 // TestAPIUpdateRecord_ClearCommentsTrue_OverridesItems documents the
-// exclusivity rule discussed in REVIEW.md: when both `clear_comments` and a
+// exclusivity rule: when both `clear_comments` and a
 // non-empty `comments` array are sent, the clear wins and the supplied items
 // are discarded. This mirrors the web form's behaviour where the
 // `comment_clear` checkbox overrides the textarea. Asserted on the raw PATCH

@@ -94,7 +94,8 @@ func TestCreateRecord_Success(t *testing.T) {
 	}
 }
 
-// TestCreateRecord_RejectsInvalidTTLOrPriority guards REVIEW.md L-4: a
+// TestCreateRecord_RejectsInvalidTTLOrPriority guards the TTL/priority
+// validation contract: a
 // non-numeric or non-positive TTL, or a non-numeric/negative priority, must be
 // rejected with 400 rather than silently substituted with the defaults (which
 // left the audit log showing a TTL/priority the user never typed). Validation
@@ -140,7 +141,7 @@ func TestCreateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
 }
 
 // TestUpdateRecord_RejectsInvalidTTLOrPriority is the parseRecordForm
-// counterpart of the CreateRecord test above (REVIEW.md L-4 second site).
+// counterpart of the CreateRecord test above (same validation contract).
 func TestUpdateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer pdnsSrv.Close()
@@ -275,7 +276,7 @@ func TestDeleteRecord_Success(t *testing.T) {
 	}
 }
 
-// TestDeleteRecord_NormalizesName is the m26 regression test: a relative name
+// TestDeleteRecord_NormalizesName is a name-normalisation regression: a relative name
 // without a trailing dot must be normalized to the FQDN before reaching
 // PowerDNS.
 func TestDeleteRecord_NormalizesName(t *testing.T) {
@@ -456,7 +457,7 @@ func TestDeleteRecord_NotFound(t *testing.T) {
 	}
 }
 
-// TestDeleteRecord_RejectsInvalidType verifies the m26 type validation: an
+// TestDeleteRecord_RejectsInvalidType verifies the type validation: an
 // unsupported record type is rejected with 400 before PowerDNS is contacted.
 func TestDeleteRecord_RejectsInvalidType(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -602,7 +603,7 @@ func TestEditRecordPage_RecordRetrievalError(t *testing.T) {
 	h.EditRecordPage(w, r)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500, got %d (L-5: PowerDNS failure is a server error, not 400)", w.Code)
+		t.Errorf("expected 500, got %d (PowerDNS failure is a server error, not 400)", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "Failed to fetch records") {
 		t.Errorf("expected 'Failed to fetch records' error message, got: %s", w.Body.String())
@@ -692,7 +693,7 @@ func TestInlineUpdateRecord_InvalidType(t *testing.T) {
 	}
 }
 
-// TestInlineUpdateRecord_PDNSUpdateError_Returns500 covers the m24 error path:
+// TestInlineUpdateRecord_PDNSUpdateError_Returns500 covers the PDNS error path:
 // when PowerDNS rejects the PATCH (UpdateRecord), the AJAX handler must
 // respond 500 with a generic message — the underlying error is logged
 // server-side, never leaked to the client.
@@ -742,7 +743,7 @@ func TestInlineUpdateRecord_PDNSUpdateError_Returns500(t *testing.T) {
 	}
 }
 
-// TestInlineUpdateRecord_ListRecordsError_Returns500 covers the other m24
+// TestInlineUpdateRecord_ListRecordsError_Returns500 covers the other PDNS-listing
 // error path: when updateRecordFromForm fails to fetch the zone from PowerDNS
 // (ListRecords), the AJAX handler must respond 500 with a generic message and
 // log the underlying error server-side.
@@ -1146,9 +1147,9 @@ func TestBatchCreateRecords_Success(t *testing.T) {
 	}
 }
 
-// TestBatchCreateRecords_RejectsInvalidTTLOrPriority is the M-5 regression: the
+// TestBatchCreateRecords_RejectsInvalidTTLOrPriority pins the batch validation: the
 // batch path used to silently substitute an invalid TTL (→3600) or priority
-// (→0), contradicting the single-record CreateRecord which rejects them (L-4).
+// (→0), contradicting the single-record CreateRecord which rejects them.
 // It must now reject with a 400, and no record must reach PowerDNS.
 func TestBatchCreateRecords_RejectsInvalidTTLOrPriority(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
@@ -1191,7 +1192,7 @@ func TestBatchCreateRecords_RejectsInvalidTTLOrPriority(t *testing.T) {
 
 // TestBatchCreateRecords_AcceptsZeroPriorityMX confirms that priority=0 (a
 // valid MX priority) is no longer treated as "not provided" by a > 0 guard —
-// the empty-string presence check accepts it (REVIEW.md M-5).
+// the empty-string presence check accepts it.
 func TestBatchCreateRecords_AcceptsZeroPriorityMX(t *testing.T) {
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
@@ -1439,6 +1440,75 @@ func TestCreateRecord_MergesWithExistingRRSet(t *testing.T) {
 	}
 }
 
+// TestCreateRecord_LowercaseTypeMergesWithExistingRRSet guards the type
+// canonicalisation on the form path: validation is case-insensitive but the
+// RRSet merge is not, so a lowercase "mx" used to miss the existing MX RRSet
+// and the PATCH carried a one-record REPLACE that wiped the sibling record.
+func TestCreateRecord_LowercaseTypeMergesWithExistingRRSet(t *testing.T) {
+	var patchedRRSet []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				RRSets: []models.RRSet{
+					{
+						Name: "example.com.",
+						Type: "MX",
+						TTL:  300,
+						Records: []models.RecordInfo{
+							{Content: "10 smtp.example.com.", Priority: 0, Disabled: false},
+						},
+					},
+				},
+			})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.Unmarshal(body, &payload)
+			patchedRRSet = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=example.com&type=mx&content=smtp.example.com.&ttl=300&priority=50"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if len(patchedRRSet) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(patchedRRSet))
+	}
+	if patchedRRSet[0].Type != "MX" {
+		t.Errorf("RRSet type must be canonicalised to %q, got %q", "MX", patchedRRSet[0].Type)
+	}
+	if len(patchedRRSet[0].Records) != 2 {
+		t.Fatalf("lowercase type must merge into the existing MX RRSet and preserve siblings, got %d records", len(patchedRRSet[0].Records))
+	}
+}
+
 func TestBatchCreateRecords_MergesWithExistingRRSet(t *testing.T) {
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1519,7 +1589,7 @@ func TestBatchCreateRecords_MergesWithExistingRRSet(t *testing.T) {
 	}
 }
 
-// TestBatchCreateRecords_DedupIdenticalRows is the m31 regression test:
+// TestBatchCreateRecords_DedupIdenticalRows is a dedup regression test:
 // duplicate batch rows (same name/type/content) must collapse to a single
 // record in the RRSet sent to PowerDNS, which otherwise rejects duplicates.
 func TestBatchCreateRecords_DedupIdenticalRows(t *testing.T) {
@@ -3013,7 +3083,7 @@ func TestBulkDeleteRecords_NoSelection(t *testing.T) {
 	}
 }
 
-// TestBulkDeleteRecords_ActivityLogUsesLogicalFormat is the L-9 regression
+// TestBulkDeleteRecords_ActivityLogUsesLogicalFormat is a snapshot-format regression
 // test: the activity-log snapshot for bulk-deleted MX records must store the
 // priority in a dedicated field (logical form) — not embedded in the content
 // string (wire form) — consistent with rrsetSnapshot used by single
@@ -3054,7 +3124,7 @@ func TestBulkDeleteRecords_ActivityLogUsesLogicalFormat(t *testing.T) {
 		t.Fatal("expected non-empty old_value in activity log")
 	}
 	if !strings.Contains(oldValue, `"priority":20`) {
-		t.Errorf("expected dedicated priority:20 in snapshot (L-9 logical format), got %s", oldValue)
+		t.Errorf("expected dedicated priority:20 in snapshot (logical format), got %s", oldValue)
 	}
 	if !strings.Contains(oldValue, `"content":"mail2.example.com."`) {
 		t.Errorf("expected bare content without embedded priority, got %s", oldValue)

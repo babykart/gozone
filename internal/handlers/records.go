@@ -52,7 +52,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	name := strings.TrimSpace(r.FormValue("name"))
-	recordType := strings.TrimSpace(r.FormValue("type"))
+	recordType := canonicalRecordType(r.FormValue("type"))
 	content := strings.TrimSpace(r.FormValue("content"))
 	ttlStr := strings.TrimSpace(r.FormValue("ttl"))
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
@@ -183,7 +183,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 	recordQuery := r.URL.Query()
 
 	recordName := recordQuery.Get("name")
-	recordType := recordQuery.Get("type")
+	recordType := canonicalRecordType(recordQuery.Get("type"))
 
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
@@ -308,7 +308,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	if err != nil {
 		// parseRecordForm returns *recordValidationError for bad TTL/priority;
 		// pass it through so the caller renders a 400 rather than wrapping it
-		// into a generic error that would render as a 500 (REVIEW.md L-4).
+		// into a generic error that would render as a 500.
 		return nil, nil, err
 	}
 	if name == "" || recordType == "" || content == "" {
@@ -494,7 +494,7 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 
 	for i := 0; i < count; i++ {
 		name := strings.TrimSpace(names[i])
-		recordType := strings.TrimSpace(types[i])
+		recordType := canonicalRecordType(types[i])
 		content := strings.TrimSpace(contents[i])
 
 		if name == "" || recordType == "" || content == "" {
@@ -865,9 +865,22 @@ func normalizeRecordName(name, zoneName string) string {
 	return name + "." + zone
 }
 
+// canonicalRecordType normalises a user-submitted record type to the canonical
+// uppercase form PowerDNS uses. Validation is deliberately case-insensitive
+// ("a" is accepted like "A"), but every downstream comparison — the RRSet merge
+// against the existing records, the wire-format spec lookup (priority
+// embedding, quoting, trailing dots) and the delete patch keys — is
+// case-sensitive; an unnormalised type would miss the existing RRSet and send
+// a REPLACE carrying only the new record, wiping the siblings. Applied at
+// every entry point: web forms, batch rows, REST API payloads, deletes and the
+// template editor.
+func canonicalRecordType(recordType string) string {
+	return strings.ToUpper(strings.TrimSpace(recordType))
+}
+
 func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, priority int, disabled bool, err error) {
 	name = strings.TrimSpace(r.FormValue("name"))
-	recordType = strings.TrimSpace(r.FormValue("type"))
+	recordType = canonicalRecordType(r.FormValue("type"))
 	content = strings.TrimSpace(r.FormValue("content"))
 	ttlStr := strings.TrimSpace(r.FormValue("ttl"))
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
@@ -875,7 +888,7 @@ func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, pr
 
 	// Empty TTL defaults to 3600; an explicit non-numeric or non-positive
 	// value is rejected so the activity log records what the user actually
-	// typed, not a silent substitution (REVIEW.md L-4).
+	// typed, not a silent substitution.
 	ttl = 3600
 	if ttlStr != "" {
 		v, parseErr := strconv.Atoi(ttlStr)
@@ -911,7 +924,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	recordName := strings.TrimSpace(r.FormValue("name"))
-	recordType := strings.TrimSpace(r.FormValue("type"))
+	recordType := canonicalRecordType(r.FormValue("type"))
 
 	if recordName == "" || recordType == "" {
 		h.renderError(w, r, "Record name and type are required")
@@ -1081,7 +1094,7 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	processed := 0
 	for i := 0; i < count; i++ {
 		name := strings.TrimSpace(names[i])
-		recordType := strings.TrimSpace(types[i])
+		recordType := canonicalRecordType(types[i])
 		if name == "" || recordType == "" {
 			continue
 		}
