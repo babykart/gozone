@@ -616,11 +616,17 @@ func (h *Handler) BulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// LockUser locks a user account for the configured auto-lockout duration
+// LockUser locks a user account until an administrator unlocks it
 // (POST /users/{user_id}/lock). Admin-only. Refuses to lock the requesting
 // admin themselves to avoid self-DOS — this is the only effective last-admin
 // guard since the route is also wrapped by RequireAdmin (a non-admin cannot
 // reach the handler).
+//
+// The lock does NOT ride the automatic brute-force window: an admin froze
+// this account deliberately, and a lockout_duration_minutes expiry (15 by
+// default) would silently unfreeze a compromised account minutes later. The
+// horizon is effectively indefinite (~a century); only the Unlock action or
+// `gozone user unlock` clears it.
 //
 // The action is idempotent: locking an already-locked user extends the window
 // and resets the failed-login counter to zero.
@@ -644,10 +650,10 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lockFor := time.Duration(h.Cfg.LoginLock.LockoutDurationMinutes) * time.Minute
-	if lockFor <= 0 {
-		lockFor = 15 * time.Minute
-	}
+	// ~a century: "until unlocked" for every practical purpose, while
+	// staying a plain timestamp the Unlock paths can clear.
+	const manualLockHorizon = 100 * 365 * 24 * time.Hour
+	lockFor := manualLockHorizon
 	if err := h.DB.AdminLockUser(ctx, targetID, lockFor); err != nil {
 		h.renderInternalError(w, r, "Failed to lock user", err)
 		return

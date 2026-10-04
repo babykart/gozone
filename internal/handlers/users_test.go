@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -814,10 +815,42 @@ func TestLockUser_Success(t *testing.T) {
 	}
 }
 
-// TestLockUser_RevokesSessions is the M2 regression: the admin "Lock user"
+// TestLockUser_RevokesSessions is the session-revocation regression: the admin "Lock user"
 // action cuts every active session (tokens_valid_after bumped), so the locked
 // user is frozen on all devices immediately — not just blocked at the next
 // login.
+// TestLockUser_ManualLockNotBoundedByAutoLockout pins that the admin Lock
+// action does NOT ride the automatic brute-force window: a manual lock
+// bounded by lockout_duration_minutes (15 by default) silently unfroze a
+// compromised account minutes later. The manual horizon is effectively
+// indefinite (~a century) — only Unlock clears it.
+func TestLockUser_ManualLockNotBoundedByAutoLockout(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.LoginLock.LockoutDurationMinutes = 15
+	admin := seedAdminUser(t, h)
+	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/lock", targetID), nil)
+	r.SetPathValue("user_id", fmt.Sprintf("%d", targetID))
+	r = r.WithContext(ctx)
+	h.LockUser(httptest.NewRecorder(), r)
+
+	var lockedUntil, manualUntil sql.NullTime
+	if err := h.DB.QueryRow("SELECT locked_until, manual_lock_until FROM users WHERE id = ?", targetID).
+		Scan(&lockedUntil, &manualUntil); err != nil {
+		t.Fatalf("read lock columns: %v", err)
+	}
+	// Far beyond any auto-lockout window: still locked a year out.
+	oneYear := time.Now().Add(365 * 24 * time.Hour)
+	if !lockedUntil.Valid || !lockedUntil.Time.After(oneYear) {
+		t.Errorf("manual lock must not expire with the 15-minute auto window: locked_until=%v", lockedUntil.Time)
+	}
+	if !manualUntil.Valid || !manualUntil.Time.After(oneYear) {
+		t.Errorf("manual_lock_until must outlast any auto-lockout window: %v", manualUntil.Time)
+	}
+}
+
 func TestLockUser_RevokesSessions(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
@@ -840,7 +873,7 @@ func TestLockUser_RevokesSessions(t *testing.T) {
 	var tvaAfter time.Time
 	h.DB.QueryRow("SELECT tokens_valid_after FROM users WHERE id = ?", targetID).Scan(&tvaAfter)
 	if !tvaAfter.After(tvaBefore) {
-		t.Error("expected tokens_valid_after to be bumped when an admin locks a user (M2)")
+		t.Error("expected tokens_valid_after to be bumped when an admin locks a user")
 	}
 }
 

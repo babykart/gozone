@@ -377,8 +377,15 @@ func DefaultConfig() *Config {
 		},
 		Auth: AuthConfig{
 			SessionDurationHours: 24,
-			BcryptCost:           constants.DefaultBcryptCost,
-			MaxAPIKeysPerUser:    constants.DefaultMaxAPIKeysPerUser,
+			// Secure defaults: a stolen session cookie dies after 30 minutes
+			// of inactivity and after 24 hours of total lifetime (matching
+			// the token TTL, the minimum the refresh flow finds meaningful).
+			// Both remain overridable to 0 (disabled) for the classic
+			// behaviour — a session living exactly session_duration_hours.
+			IdleTimeoutMinutes:          30,
+			AbsoluteSessionTimeoutHours: 24,
+			BcryptCost:                  constants.DefaultBcryptCost,
+			MaxAPIKeysPerUser:           constants.DefaultMaxAPIKeysPerUser,
 		},
 		Logging: LoggingConfig{
 			Level: "info",

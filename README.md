@@ -102,10 +102,10 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
 | `auth.bcrypt_cost` | — | `12` |
 | `auth.max_api_keys_per_user` | `GOZONE_MAX_API_KEYS` | `10` |
-| `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `0` (disabled) |
-| `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `0` (disabled) |
+| `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `30` |
+| `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `24` |
 
-`idle_timeout_minutes` forces re-authentication after that many minutes of inactivity (even if the JWT has not expired). `absolute_session_timeout_hours` caps the total session lifetime across transparent refreshes: while a session stays active and below the cap, the access JWT is silently refreshed near its expiry (the session "slides" up to the cap). For refresh to trigger it must be greater than `session_duration_hours`. Both apply to local **and** SSO sessions and are enforced cluster-wide via the `sessions` table (an in-memory cache coarsens writes, so cross-instance idle lags by at most ~1 minute). Leave both `0` for the classic behaviour: a session lives exactly `session_duration_hours`.
+`idle_timeout_minutes` forces re-authentication after that many minutes of inactivity (even if the JWT has not expired). `absolute_session_timeout_hours` caps the total session lifetime across transparent refreshes: while a session stays active and below the cap, the access JWT is silently refreshed near its expiry (the session "slides" up to the cap). For refresh to trigger it must be greater than or equal to `session_duration_hours`. Both apply to local **and** SSO sessions and are enforced cluster-wide via the `sessions` table (an in-memory cache coarsens writes, so cross-instance idle lags by at most ~1 minute). Set both `0` for the classic behaviour: a session lives exactly `session_duration_hours`.
 
 ### Single Sign-On (OpenID Connect / OAuth2)
 
@@ -436,7 +436,7 @@ Admin users can define reusable DNS record templates that pre-populate records w
 Admin users can create, edit, and delete user accounts from the **Users** menu in the sidebar. The list shows username, email, name, role, status (Active/Disabled/Locked), and per-row actions (Edit, Lock/Unlock, Delete).
 
 - **Self-DOS protection**: an admin cannot lock their own account from the UI; the self-lock attempt is rejected with a 400 error.
-- **Account lockout**: the `Lock` button sets `locked_until = now + login_lock.lockout_duration_minutes` and resets the failed-login counter, so a manual lock and the automatic failed-login threshold share the same window. Locked accounts show a yellow badge with a tooltip showing the unlock time.
+- **Account lockout**: the `Lock` button locks the account **until an administrator unlocks it** (Unlock button or `gozone user unlock`) and resets the failed-login counter — a manual lock deliberately does not ride the automatic `login_lock.lockout_duration_minutes` window, which would silently unfreeze a compromised account minutes later. Locked accounts show a yellow badge.
 - **Unlock**: the `Unlock` button clears `locked_until` and resets the failed-login counter. The action is idempotent — unlocking a non-locked user still writes an `unlock_user` audit-log entry.
 - **Audit trail**: every lock and unlock writes an `activity_logs` entry with the actor's ID and the target's username.
 - **Last-admin guard**: the `UpdateUser` and `DeleteUser` handlers refuse to demote, disable, or delete the last enabled admin. The lock UI inherits this guard indirectly via the self-lock check (an admin cannot reach the lock button for the only admin).

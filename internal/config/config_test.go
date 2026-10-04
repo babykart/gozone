@@ -262,6 +262,8 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_PDNS_API_KEY", "testkey")
 	t.Setenv("GOZONE_PDNS_SERVER_ID", "test-server")
 	t.Setenv("GOZONE_SESSION_DURATION", "48")
+	t.Setenv("GOZONE_IDLE_TIMEOUT_MINUTES", "45")
+	t.Setenv("GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS", "72")
 	t.Setenv("GOZONE_ADMIN_USERNAME", "root")
 	t.Setenv("GOZONE_ADMIN_PASSWORD", "secret")
 	t.Setenv("GOZONE_ADMIN_EMAIL", "root@example.com")
@@ -301,6 +303,12 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Auth.SessionDurationHours != 48 {
 		t.Errorf("expected 48, got %d", cfg.Auth.SessionDurationHours)
+	}
+	if cfg.Auth.IdleTimeoutMinutes != 45 {
+		t.Errorf("expected idle timeout 45, got %d", cfg.Auth.IdleTimeoutMinutes)
+	}
+	if cfg.Auth.AbsoluteSessionTimeoutHours != 72 {
+		t.Errorf("expected absolute timeout 72, got %d", cfg.Auth.AbsoluteSessionTimeoutHours)
 	}
 	if cfg.Admin.Username != "root" {
 		t.Errorf("expected root, got %s", cfg.Admin.Username)

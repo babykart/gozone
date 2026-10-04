@@ -67,18 +67,20 @@ auth:
   # the cap). 0 disables the cap.
   max_api_keys_per_user: 10
   # Idle inactivity timeout (minutes). A session untouched for longer than this
-  # is forced to re-authenticate, even if the JWT has not expired. 0 (default)
-  # disables the idle check. Applies to both local and SSO sessions. Enforced
+  # is forced to re-authenticate, even if the JWT has not expired. Default 30;
+  # 0 disables the idle check. Applies to both local and SSO sessions. Enforced
   # cluster-wide via the sessions table (an in-memory cache coarsens writes, so
   # cross-instance idle lags by at most ~1 minute).
-  idle_timeout_minutes: 0
+  idle_timeout_minutes: 30
   # Absolute session cap (hours) across transparent refreshes. While a session
   # stays active (within the idle window) and below this cap, the access JWT is
   # transparently refreshed near its expiry — the session "slides" up to this
-  # TTL. After it, full re-authentication is required. 0 (default) disables the
-  # cap AND refresh (the session lives exactly session_duration_hours). For
-  # refresh to ever trigger this must be greater than session_duration_hours.
-  absolute_session_timeout_hours: 0
+  # TTL. After it, full re-authentication is required. Default 24 (matching
+  # session_duration_hours, the minimum the refresh flow finds meaningful);
+  # 0 disables the cap AND refresh (the session lives exactly
+  # session_duration_hours). For refresh to ever trigger this must be greater
+  # than or equal to session_duration_hours.
+  absolute_session_timeout_hours: 24
 
 # Password policy. Enforced whenever a password is set or changed (user
 # creation, admin user update, `gozone user reset-password`). The initial
