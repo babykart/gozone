@@ -346,34 +346,6 @@ func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
 }
 
-// UpdateTemplateRecord updates a template record.
-func (h *Handler) UpdateTemplateRecord(w http.ResponseWriter, r *http.Request) {
-	templateIDStr := r.PathValue("template_id")
-	recordIDStr := r.PathValue("record_id")
-	rec, err := parseTemplateRecordForm(r, templateIDStr)
-	if err != nil {
-		h.renderError(w, r, err.Error())
-		return
-	}
-
-	if _, err := h.DB.ExecContext(r.Context(),
-		"UPDATE zone_template_records SET name = ?, type = ?, content = ?, ttl = ?, priority = ?, disabled = ? WHERE id = ? AND template_id = ?",
-		rec.Name, rec.Type, rec.Content, rec.TTL, rec.Priority, rec.Disabled, recordIDStr, templateIDStr,
-	); err != nil {
-		h.renderInternalError(w, r, "Failed to update record", err)
-		return
-	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{
-		UserID:  activityUserIDOf(r),
-		Action:  "update_template_record",
-		Details: fmt.Sprintf("Updated %s record %s in template %s", rec.Type, rec.Name, h.templateLabelFor(r.Context(), rec.TemplateID, templateIDStr)),
-	}); err != nil {
-		logger.Error("failed to log update_template_record activity", "template_id", templateIDStr, "error", err)
-	}
-	// #nosec G710 -- templateIDStr from chi r.PathValue, controlled by route pattern
-	http.Redirect(w, r, "/templates/"+templateIDStr+"/edit", http.StatusSeeOther)
-}
-
 // DeleteTemplateRecord deletes a record from a template.
 func (h *Handler) DeleteTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")

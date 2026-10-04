@@ -244,10 +244,3 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 
 	return selectClause + where, args
 }
-
-// PurgeActivityLogs is a helper used by admin/background processes to purge
-// activity logs older than the configured retention period. It returns the
-// number of rows deleted.
-func (h *Handler) PurgeActivityLogs() (int64, error) {
-	return h.DB.PurgeActivityLogs(context.Background(), h.Cfg.Activity.RetentionDays, h.Cfg.Activity.BatchSize)
-}

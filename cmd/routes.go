@@ -81,7 +81,6 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 		r.Post("/templates/{template_id}/delete", h.DeleteTemplate)
 		r.Post("/templates/bulk-delete", h.BulkDeleteTemplates)
 		r.Post("/templates/{template_id}/records/add", h.AddTemplateRecord)
-		r.Post("/templates/{template_id}/records/{record_id}/update", h.UpdateTemplateRecord)
 		r.Post("/templates/{template_id}/records/{record_id}/delete", h.DeleteTemplateRecord)
 	})
 }

@@ -45,12 +45,6 @@ func (u *User) IsAdmin() bool {
 	return u.Role == "admin"
 }
 
-// IsLocked reports whether the account is currently locked, either by an
-// admin manual lock or by the automatic failed-login threshold.
-func (u *User) IsLocked() bool {
-	return u.LockedUntil != nil && u.LockedUntil.After(time.Now())
-}
-
 // ActivityLog represents an activity log entry.
 type ActivityLog struct {
 	ID        int64     `json:"id"`

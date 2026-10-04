@@ -534,7 +534,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 				logger.Warn("oidc logout: SSO session has no id_token_hint; provider may reject the logout",
 					"provider", authProvider)
 			}
-			if isAbsoluteHTTPURLAuth(target) {
+			if isAbsoluteHTTPURL(target) {
 				// Chromium applies the CSP form-action directive to the
 				// redirects that follow a form POST: a direct 303 to the
 				// cross-origin end_session_endpoint was blocked and the IdP
@@ -609,17 +609,6 @@ func appendQuery(baseURL, key, value string) string {
 		sep = "&"
 	}
 	return baseURL + sep + url.QueryEscape(key) + "=" + url.QueryEscape(value)
-}
-
-// isAbsoluteHTTPURLAuth reports whether u is an absolute http(s) URL with a
-// host. It guards the RP-initiated logout redirect against a malformed
-// end_session_endpoint.
-func isAbsoluteHTTPURLAuth(u string) bool {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return false
-	}
-	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
 // ProfilePage renders the authenticated user's profile (GET /profile).

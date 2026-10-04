@@ -572,7 +572,8 @@ func (h *Handler) issueSSOSession(w http.ResponseWriter, r *http.Request, user *
 }
 
 // isAbsoluteHTTPURL reports whether u is an absolute URL with an http or https
-// scheme and a non-empty host. Used to guard OIDC redirects.
+// scheme and a non-empty host. Used to guard OIDC redirects (including the
+// RP-initiated logout target).
 func isAbsoluteHTTPURL(u string) bool {
 	parsed, err := neturl.Parse(u)
 	if err != nil {
