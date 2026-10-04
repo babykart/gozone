@@ -368,6 +368,53 @@ test('generateTSIGSecret sizes the material per algorithm', () => {
     }
 });
 
+// --- copyAPIKey rejection handling -------------------------------------------
+//
+// The clipboard write can be denied (permission policy, document not
+// focused): the rejected promise used to die as an unhandled rejection; the
+// user now gets an actionable notification instead.
+
+test('copyAPIKey surfaces a denied clipboard write instead of an unhandled rejection', async () => {
+    const reveal = {
+        attrs: { 'data-key': 'gozone_secret' },
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
+        querySelector() { return null; } // no .btn inside for updateCopyButton
+    };
+
+    const notificationEl = withClassList({ textContent: '', className: 'notification hidden' });
+    const doc = stubDocument();
+    doc.setElement('notification', notificationEl);
+    doc.querySelector = (sel) => (sel === '.api-key-reveal' ? reveal : null);
+
+    const prevDocument = global.document;
+    const prevWindow = global.window;
+    const navigatorDescriptor = Object.getOwnPropertyDescriptor(global, 'navigator');
+    const prevSetTimeout = global.setTimeout;
+    global.document = doc;
+    global.window = { isSecureContext: true };
+    Object.defineProperty(global, 'navigator', {
+        value: { clipboard: { writeText: () => Promise.reject(new Error('not allowed')) } },
+        configurable: true,
+        writable: true
+    });
+    global.setTimeout = () => 1; // never fire the notification auto-hide
+
+    try {
+        await app.copyAPIKey();
+        // Let the rejection propagate to the .catch.
+        await new Promise((res) => prevSetTimeout(res, 10));
+    } finally {
+        global.document = prevDocument;
+        global.window = prevWindow;
+        if (navigatorDescriptor) Object.defineProperty(global, 'navigator', navigatorDescriptor);
+        else delete global.navigator;
+        global.setTimeout = prevSetTimeout;
+    }
+
+    assert.ok(notificationEl.textContent.indexOf('Copy failed') !== -1,
+        `a denied write must notify, got "${notificationEl.textContent}"`);
+});
+
 // --- Blocked-storage safety (storageGet/storageSet) -------------------------
 //
 // localStorage can be unavailable or throw on every access (Safari private

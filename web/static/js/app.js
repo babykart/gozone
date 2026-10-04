@@ -408,8 +408,13 @@ function copyAPIKey() {
     var text = reveal.getAttribute('data-key');
     if (!text) return;
     if (navigator.clipboard && window.isSecureContext) {
+        // The write can be denied (clipboard permission policy, document not
+        // focused): surface it instead of leaving a rejected promise that
+        // dies as an unhandled rejection in the console.
         navigator.clipboard.writeText(text).then(function() {
             updateCopyButton(reveal);
+        }).catch(function() {
+            showNotification('Copy failed — select the key and copy it manually', 'error');
         });
         return;
     }
@@ -997,6 +1002,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         applyRecordUpdate: applyRecordUpdate,
         bulkFailedSuffix: bulkFailedSuffix,
+        copyAPIKey: copyAPIKey,
         filterOptions: filterOptions,
         generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,

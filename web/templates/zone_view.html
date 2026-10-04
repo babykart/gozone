@@ -57,22 +57,22 @@
                 <td class="nowrap"><span class="badge badge-type badge-type-{{.Type}}">{{.Type}}</span></td>
                 <td class="nowrap">
                     <span class="rv rv-ttl">{{.TTL}}</span>
-                    <input type="number" class="ev ev-ttl form-control-inline hidden" value="{{.TTL}}" min="0">
+                    <input type="number" class="ev ev-ttl form-control-inline hidden" value="{{.TTL}}" min="0" aria-label="TTL for {{.Name}}">
                 </td>
                 <td class="col-prio">
                     <span class="rv rv-prio">{{if .Record.Priority}}{{.Record.Priority}}{{else}}-{{end}}</span>
-                    <input type="number" class="ev ev-prio form-control-inline hidden" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" min="0">
+                    <input type="number" class="ev ev-prio form-control-inline hidden" value="{{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}" min="0" aria-label="Priority for {{.Name}}">
                 </td>
                 <td>
                     <span class="rv rv-content">{{.Record.Content}}</span>
-                    <textarea class="ev ev-content hidden" rows="2">{{.Record.Content}}</textarea>
+                    <textarea class="ev ev-content hidden" rows="2" aria-label="Content for {{.Name}}">{{.Record.Content}}</textarea>
                 </td>
                 <td class="col-comment">
                     {{if .Comments}}{{if .Comments.Items}}
                     <div class="rv rv-comments record-comments">{{range .Comments.Items}}{{.Content}}
 {{end}}</div>
                     {{end}}{{end}}
-                    <textarea class="ev ev-comments record-comments-edit hidden" rows="2" placeholder="Comment (one per line)">{{if .Comments}}{{range .Comments.Items}}{{.Content}}
+                    <textarea class="ev ev-comments record-comments-edit hidden" rows="2" placeholder="Comment (one per line)" aria-label="Comments for {{.Name}}">{{if .Comments}}{{range .Comments.Items}}{{.Content}}
 {{end}}{{end}}</textarea>
                     <label class="ev ev-comment-clear hidden">
                         <input type="checkbox" class="ev-comment-clear-cb" value="1">

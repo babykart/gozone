@@ -28,14 +28,14 @@
         </div>
     </div>
     <nav class="sidebar-nav">
-        <a href="/dashboard" title="Dashboard" class="{{if eq $.Section "dashboard"}}active{{end}}"><span class="nav-icon">◈</span><span class="nav-text">Dashboard</span></a>
-        <a href="/activity" title="Activity" class="{{if eq $.Section "activity"}}active{{end}}"><span class="nav-icon">◉</span><span class="nav-text">Activity</span></a>
-        <a href="/zones" title="Zones" class="{{if eq $.Section "zones"}}active{{end}}"><span class="nav-icon">⊙</span><span class="nav-text">Zones</span></a>
-        {{if .IsAdmin}}<a href="/tsigkeys" title="TSIG Keys" class="{{if eq $.Section "tsigkeys"}}active{{end}}"><span class="nav-icon">⊕</span><span class="nav-text">TSIG Keys</span></a>{{end}}
-        <a href="/profile/api-keys" title="API Keys" class="{{if eq $.Section "apikeys"}}active{{end}}"><span class="nav-icon">⚷</span><span class="nav-text">API Keys</span></a>
-        {{if .IsAdmin}}<a href="/users" title="Users" class="{{if eq $.Section "users"}}active{{end}}"><span class="nav-icon">⊞</span><span class="nav-text">Users</span></a>{{end}}
-        {{if .IsAdmin}}<a href="/groups" title="Groups" class="{{if eq $.Section "groups"}}active{{end}}"><span class="nav-icon">⊡</span><span class="nav-text">Groups</span></a>{{end}}
-        {{if .IsAdmin}}<a href="/templates" title="Templates" class="{{if eq $.Section "templates"}}active{{end}}"><span class="nav-icon">⊗</span><span class="nav-text">Templates</span></a>{{end}}
+        <a href="/dashboard" title="Dashboard" class="{{if eq $.Section "dashboard"}}active{{end}}" {{if eq $.Section "dashboard"}}aria-current="page"{{end}}><span class="nav-icon">◈</span><span class="nav-text">Dashboard</span></a>
+        <a href="/activity" title="Activity" class="{{if eq $.Section "activity"}}active{{end}}" {{if eq $.Section "activity"}}aria-current="page"{{end}}><span class="nav-icon">◉</span><span class="nav-text">Activity</span></a>
+        <a href="/zones" title="Zones" class="{{if eq $.Section "zones"}}active{{end}}" {{if eq $.Section "zones"}}aria-current="page"{{end}}><span class="nav-icon">⊙</span><span class="nav-text">Zones</span></a>
+        {{if .IsAdmin}}<a href="/tsigkeys" title="TSIG Keys" class="{{if eq $.Section "tsigkeys"}}active{{end}}" {{if eq $.Section "tsigkeys"}}aria-current="page"{{end}}><span class="nav-icon">⊕</span><span class="nav-text">TSIG Keys</span></a>{{end}}
+        <a href="/profile/api-keys" title="API Keys" class="{{if eq $.Section "apikeys"}}active{{end}}" {{if eq $.Section "apikeys"}}aria-current="page"{{end}}><span class="nav-icon">⚷</span><span class="nav-text">API Keys</span></a>
+        {{if .IsAdmin}}<a href="/users" title="Users" class="{{if eq $.Section "users"}}active{{end}}" {{if eq $.Section "users"}}aria-current="page"{{end}}><span class="nav-icon">⊞</span><span class="nav-text">Users</span></a>{{end}}
+        {{if .IsAdmin}}<a href="/groups" title="Groups" class="{{if eq $.Section "groups"}}active{{end}}" {{if eq $.Section "groups"}}aria-current="page"{{end}}><span class="nav-icon">⊡</span><span class="nav-text">Groups</span></a>{{end}}
+        {{if .IsAdmin}}<a href="/templates" title="Templates" class="{{if eq $.Section "templates"}}active{{end}}" {{if eq $.Section "templates"}}aria-current="page"{{end}}><span class="nav-icon">⊗</span><span class="nav-text">Templates</span></a>{{end}}
     </nav>
 </aside>
 {{end}}
