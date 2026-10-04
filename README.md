@@ -74,6 +74,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
 | `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
 | `server.shutdown_timeout_seconds` | `GOZONE_SHUTDOWN_TIMEOUT` | `30` |
+| `server.require_secret_key` | `GOZONE_REQUIRE_SECRET_KEY` | `false` | Refuse to start when no persistent `secret_key` is configured, instead of generating an ephemeral one. Set to `true` when running more than one replica: each instance would otherwise derive a different key and reject the sessions minted by the others. |
 | `server.trusted_proxies` | `GOZONE_TRUSTED_PROXIES` | *empty* (TCP source IP only) | Comma-separated CIDR ranges whose X-Forwarded-For headers are trusted. Use `/32` for a single IPv4 host, `/128` for IPv6. Plain IPs without a prefix are rejected at startup. |
 | `server.external_url` | `GOZONE_EXTERNAL_URL` | *empty* | Canonical base URL GoZone is served at (e.g. `https://dns.example.com`). When set, OIDC `redirect_uri` and `post_logout_redirect_uri` values are built from it instead of being derived from the client-controlled `Host` header (defense-in-depth; the IdP already validates both against its registered lists). Must be an absolute `http(s)` URL with a host and no path; validated and normalised to `scheme://host` at startup. When empty, both URLs are derived per-request from the resolved scheme and `Host` header. |
 

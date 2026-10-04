@@ -126,6 +126,131 @@ activity:
 	}
 }
 
+// TestLoad_StrictYAMLRejectsUnknownField pins KnownFields decoding: a typo in
+// a key name used to be silently ignored (the default in force stayed in
+// place), so "por: 9090" booted on port 8080 without a word.
+func TestLoad_StrictYAMLRejectsUnknownField(t *testing.T) {
+	content := `
+server:
+  por: 9090
+`
+	tmpFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tmpFile.Close()
+	if _, err := tmpFile.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Load(tmpFile.Name())
+	if err == nil {
+		t.Fatal("an unknown YAML field must fail config load")
+	}
+	if !strings.Contains(err.Error(), "por") {
+		t.Errorf("the error must name the unknown field, got: %v", err)
+	}
+}
+
+// TestValidate_DriverAliases pins that validation accepts every driver the
+// dialect selector accepts: "mariadb" and "postgresql" used to pass
+// selectDialect but die in validate with a misleading message.
+func TestValidate_DriverAliases(t *testing.T) {
+	for _, driver := range []string{"sqlite3", "mysql", "mariadb", "postgres", "postgresql"} {
+		cfg := DefaultConfig()
+		cfg.Server.SecretKey = strings.Repeat("k", 64)
+		cfg.Database.Driver = driver
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() must accept driver %q (selectDialect does): %v", driver, err)
+		}
+	}
+}
+
+// TestValidate_LockoutDurationZeroWithAttempts pins the contradictory
+// lockout: max_failed_attempts > 0 with lockout_duration_minutes = 0 locks
+// accounts with locked_until = now (re-locking forever while never keeping
+// anyone out for a window).
+func TestValidate_LockoutDurationZeroWithAttempts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Server.SecretKey = strings.Repeat("k", 64)
+	cfg.LoginLock.MaxFailedAttempts = 5
+	cfg.LoginLock.LockoutDurationMinutes = 0
+	if err := cfg.validate(); err == nil {
+		t.Fatal("lockout enabled with a zero duration must be rejected")
+	}
+
+	// Both disabled is a valid configuration.
+	cfg.LoginLock.MaxFailedAttempts = 0
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("lockout fully disabled must validate: %v", err)
+	}
+}
+
+// TestValidate_RetentionCoversLockout pins the retention/lockout coupling:
+// the attempts retention window must outlast the lockout window so failed
+// attempts remain visible for the whole time a user could still be locked
+// out.
+func TestValidate_RetentionCoversLockout(t *testing.T) {
+	base := func() *Config {
+		cfg := DefaultConfig()
+		cfg.Server.SecretKey = strings.Repeat("k", 64)
+		cfg.LoginLock.MaxFailedAttempts = 5
+		cfg.LoginLock.LockoutDurationMinutes = 90
+		return cfg
+	}
+	short := base()
+	short.LoginLock.AttemptsRetentionHours = 1 // 60 min < 90 min lockout
+	if err := short.validate(); err == nil {
+		t.Fatal("a retention window shorter than the lockout window must be rejected")
+	}
+
+	equal := base()
+	equal.LoginLock.AttemptsRetentionHours = 2 // 120 min >= 90 min
+	if err := equal.validate(); err != nil {
+		t.Fatalf("a retention window covering the lockout must validate: %v", err)
+	}
+
+	forever := base()
+	forever.LoginLock.AttemptsRetentionHours = 0 // keep forever
+	if err := forever.validate(); err != nil {
+		t.Fatalf("retention disabled (keep forever) must validate: %v", err)
+	}
+}
+
+// TestLoad_RequireSecretKey pins the multi-replica guard: with
+// server.require_secret_key set, the missing/placeholder secret is a hard
+// error instead of an ephemeral-key warning.
+func TestLoad_RequireSecretKey(t *testing.T) {
+	t.Run("placeholder secret refused", func(t *testing.T) {
+		t.Setenv("GOZONE_REQUIRE_SECRET_KEY", "true")
+		_, err := Load("")
+		if err == nil {
+			t.Fatal("a placeholder secret must fail load when require_secret_key is set")
+		}
+		if !strings.Contains(err.Error(), "require_secret_key") {
+			t.Errorf("the error must name the setting, got: %v", err)
+		}
+	})
+
+	t.Run("ephemeral fallback without the flag", func(t *testing.T) {
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("default Load generates an ephemeral key: %v", err)
+		}
+		if len(cfg.Server.SecretKey) < minSecretKeyLength {
+			t.Error("an ephemeral key must have been generated")
+		}
+	})
+
+	t.Run("persistent secret passes the flag", func(t *testing.T) {
+		t.Setenv("GOZONE_REQUIRE_SECRET_KEY", "true")
+		t.Setenv("GOZONE_SECRET_KEY", strings.Repeat("k", 64))
+		if _, err := Load(""); err != nil {
+			t.Fatalf("a configured secret must pass: %v", err)
+		}
+	})
+}
+
 func TestLoadEnvOverrides(t *testing.T) {
 	const secretKey = "mysecret-mysecret-mysecret-mysecret" // >= minSecretKeyLength
 	t.Setenv("GOZONE_SERVER_HOST", "192.168.1.1")
@@ -293,7 +418,7 @@ func TestIsPlaceholderSecret(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsShortSecretKey is the minimum-length guard (m12): a
+// TestLoad_RejectsShortSecretKey is the minimum-length guard: a
 // non-placeholder secret below minSecretKeyLength must fail config load
 // fail-fast rather than being used to derive low-entropy signing keys.
 func TestLoad_RejectsShortSecretKey(t *testing.T) {
@@ -359,7 +484,7 @@ func TestLoad_SecureCookiesEnvOverride(t *testing.T) {
 		})
 	}
 
-	// Unrecognized non-empty boolean spellings must fail config load (m13):
+	// Unrecognized non-empty boolean spellings must fail config load
 	// the override intent is surfaced instead of silently keeping the default.
 	for _, bad := range []string{"garbage", "maybe", "2"} {
 		t.Run("invalid/"+bad, func(t *testing.T) {
@@ -667,7 +792,7 @@ func TestLoad_DoesNotCreateHardcodedDataDir(t *testing.T) {
 	}
 }
 
-// TestDefaultConfig_DeferKeyDerivation verifies the I-7 contract: DefaultConfig
+// TestDefaultConfig_DeferKeyDerivation verifies the deferred-derivation contract: DefaultConfig
 // returns the master SecretKey but leaves the derived JWTKey/CSRFKey empty —
 // derivation is Load()'s job (it has an error return and runs after env
 // overrides). See TestLoad_HasDerivedKeys for the derived-keys coverage.

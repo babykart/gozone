@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
@@ -124,6 +125,15 @@ type ServerConfig struct {
 	// requests to finish during graceful shutdown (SIGINT/SIGTERM). Must
 	// be positive. Default: 30.
 	ShutdownTimeoutSeconds int `yaml:"shutdown_timeout_seconds"`
+	// RequireSecretKey turns the missing-secret_key fallback into a hard
+	// error. By default Load generates an ephemeral random key when the
+	// placeholder is still configured (single-instance convenience, at the
+	// cost of invalidating sessions on restart). With more than one replica
+	// that behaviour is broken — each instance derives a different key and
+	// every request answered by another replica fails JWT/CSRF validation —
+	// so multi-replica deployments should set this to true and configure a
+	// persistent secret. Default: false.
+	RequireSecretKey bool `yaml:"require_secret_key"`
 }
 
 // DatabaseConfig holds database connection settings.
@@ -427,7 +437,8 @@ func DefaultConfig() *Config {
 //
 //	server:     GOZONE_SERVER_HOST, GOZONE_SERVER_PORT, GOZONE_APP_NAME,
 //	            GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_EXTERNAL_URL,
-//	            GOZONE_SHUTDOWN_TIMEOUT, GOZONE_TRUSTED_PROXIES
+//	            GOZONE_SHUTDOWN_TIMEOUT, GOZONE_TRUSTED_PROXIES,
+//	            GOZONE_REQUIRE_SECRET_KEY
 //	database:   GOZONE_DB_DRIVER, GOZONE_DB_DSN
 //	powerdns:   GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID
 //	auth:       GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
@@ -472,7 +483,14 @@ func Load(path string) (*Config, error) {
 				return nil, err
 			}
 		} else {
-			if err := yaml.Unmarshal(data, cfg); err != nil {
+			// Strict decoding (KnownFields): a typo in a key name used to be
+			// silently ignored (yaml.Unmarshal skips unknown fields), so
+			// "port: 9090" vs "por: 9090" or a renamed setting left the
+			// default in place with no signal to the operator. An unknown
+			// field now fails config load with its name and line.
+			dec := yaml.NewDecoder(bytes.NewReader(data))
+			dec.KnownFields(true)
+			if err := dec.Decode(cfg); err != nil {
 				return nil, err
 			}
 		}
@@ -486,6 +504,14 @@ func Load(path string) (*Config, error) {
 	// Auto-generate a secret key if a well-known placeholder is still in use.
 	// This prevents deployments from running with a publicly known default key.
 	if isPlaceholderSecret(cfg.Server.SecretKey) {
+		// Operators running more than one replica (or intolerant of every
+		// restart invalidating all sessions and CSRF tokens) can make the
+		// ephemeral fallback a hard error instead of a warning: with
+		// replicas, each instance would mint a different key and every
+		// request answered by another replica would look tampered with.
+		if cfg.Server.RequireSecretKey {
+			return nil, fmt.Errorf("server.secret_key is not configured but server.require_secret_key is true: set it to a persistent value (openssl rand -hex 32)")
+		}
 		key, err := generateSecretKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate secret key: %w", err)
@@ -581,10 +607,13 @@ func (cfg *Config) validate() error {
 	}
 
 	switch cfg.Database.Driver {
-	case "sqlite3", "mysql", "postgres":
-		// supported
+	case "sqlite3", "mysql", "mariadb", "postgres", "postgresql":
+		// supported; "mariadb" and "postgresql" are the aliases the dialect
+		// selector (database.selectDialect) has always accepted — validation
+		// and selection must agree, or an alias passes one and dies in the
+		// other at startup with a misleading message.
 	default:
-		return fmt.Errorf("unsupported database driver %q; choose one of sqlite3, mysql, postgres", cfg.Database.Driver)
+		return fmt.Errorf("unsupported database driver %q; choose one of sqlite3, mysql, mariadb, postgres, postgresql", cfg.Database.Driver)
 	}
 
 	if cfg.Activity.RetentionDays < 0 {
@@ -601,11 +630,27 @@ func (cfg *Config) validate() error {
 	if cfg.LoginLock.LockoutDurationMinutes < 0 {
 		return fmt.Errorf("invalid login_lock.lockout_duration_minutes %d: must be non-negative", cfg.LoginLock.LockoutDurationMinutes)
 	}
+	// Lockout enabled with a zero duration is contradictory: every failed
+	// attempt would set locked_until = now, re-locking the account forever
+	// while never actually keeping anyone out for a window.
+	if cfg.LoginLock.MaxFailedAttempts > 0 && cfg.LoginLock.LockoutDurationMinutes == 0 {
+		return fmt.Errorf("invalid login_lock.lockout_duration_minutes 0: must be positive when max_failed_attempts is %d (set both to 0 to disable lockout)",
+			cfg.LoginLock.MaxFailedAttempts)
+	}
 	if cfg.LoginLock.UsernameRateLimitPerMinute < 0 {
 		return fmt.Errorf("invalid login_lock.username_rate_limit_per_minute %d: must be non-negative", cfg.LoginLock.UsernameRateLimitPerMinute)
 	}
 	if cfg.LoginLock.AttemptsRetentionHours < 0 {
 		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must be non-negative", cfg.LoginLock.AttemptsRetentionHours)
+	}
+	// The retention window must outlast the lockout window: failed attempts
+	// must remain visible in login_attempts for the whole time a user could
+	// still be locked out, or the forensic trail is purged while the lockout
+	// it produced is still in force.
+	if cfg.LoginLock.AttemptsRetentionHours > 0 && cfg.LoginLock.MaxFailedAttempts > 0 &&
+		cfg.LoginLock.AttemptsRetentionHours*60 < cfg.LoginLock.LockoutDurationMinutes {
+		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must cover the lockout window of %d minutes (set it to at least %d hours, or 0 to keep attempts forever)",
+			cfg.LoginLock.AttemptsRetentionHours, cfg.LoginLock.LockoutDurationMinutes, (cfg.LoginLock.LockoutDurationMinutes+59)/60)
 	}
 
 	if cfg.Password.MinLength < 0 {
@@ -893,6 +938,7 @@ var envOverrides = []envOverride{
 	strOverride{"GOZONE_APP_NAME", func(c *Config, v string) { c.Server.AppName = v }},
 	strOverride{"GOZONE_SECRET_KEY", func(c *Config, v string) { c.Server.SecretKey = v }},
 	boolOverride{"GOZONE_SECURE_COOKIES", func(c *Config, b bool) { c.Server.SecureCookies = b }},
+	boolOverride{"GOZONE_REQUIRE_SECRET_KEY", func(c *Config, b bool) { c.Server.RequireSecretKey = b }},
 	strOverride{"GOZONE_EXTERNAL_URL", func(c *Config, v string) { c.Server.ExternalURL = v }},
 	intOverride{"GOZONE_SHUTDOWN_TIMEOUT", func(c *Config, n int) { c.Server.ShutdownTimeoutSeconds = n }},
 	sliceOverride{"GOZONE_TRUSTED_PROXIES", func(c *Config, v []string) { c.Server.TrustedProxies = v }},

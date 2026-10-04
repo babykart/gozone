@@ -27,6 +27,11 @@ server:
   # Maximum time (in seconds) to wait for in-flight requests to finish
   # during graceful shutdown (SIGINT/SIGTERM). Default: 30.
   shutdown_timeout_seconds: 30
+  # Refuse to start when no persistent secret_key is configured, instead of
+  # generating an ephemeral one. Set to true when running more than one
+  # replica: each instance would otherwise derive a different key and reject
+  # the sessions minted by the others. Default: false.
+  # require_secret_key: true
   # Trusted reverse-proxy CIDR ranges from which X-Forwarded-For headers are
   # honored. Each entry MUST be a CIDR prefix — use "/32" for a single IPv4
   # host ("192.0.2.1/32") and "/128" for a single IPv6 host ("2001:db8::1/128").
