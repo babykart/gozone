@@ -44,10 +44,10 @@ func TestCache_Expiry(t *testing.T) {
 }
 
 func TestCache_GetEvictsExpiredEntry(t *testing.T) {
-	// REVIEW.md L-16a: Get must proactively delete an expired entry instead
-	// of leaving it for the background sweep. Verify by inspecting the map
-	// directly (Len() filters by expiry, so it cannot distinguish "deleted"
-	// from "still present but expired").
+	// Get must proactively delete an expired entry instead of leaving it
+	// for the background sweep. Verified by inspecting the map directly
+	// (Len() filters by expiry, so it cannot distinguish "deleted" from
+	// "still present but expired").
 	c := New[string](10 * time.Millisecond)
 	defer c.Stop()
 
@@ -179,20 +179,38 @@ func TestCache_GenericTypes(t *testing.T) {
 }
 
 func TestCache_Sweep(t *testing.T) {
-	c := New[string](50 * time.Millisecond)
+	// sweep() is exercised DIRECTLY: the background sweeper's interval is
+	// max(ttl, 1 minute), so the old 120 ms sleep never reached a sweep and
+	// Len() reported 0 only because it filters by expiry — the sweep path
+	// itself had zero coverage.
+	//
+	// A nanosecond-TTL entry is expired the moment sweep observes it (no
+	// sleep needed), and a long-lived entry is planted manually so the sweep
+	// must distinguish expired from live rather than wiping everything.
+	c := New[string](time.Nanosecond)
 	defer c.Stop()
 
-	c.Set("k1", "a")
-	c.Set("k2", "b")
+	c.Set("expired", "a")
+	c.mu.Lock()
+	c.items["live"] = &entry[string]{value: "b", expiry: time.Now().Add(time.Hour)}
+	c.mu.Unlock()
 
-	if c.Len() != 2 {
-		t.Fatalf("expected 2 items, got %d", c.Len())
+	c.sweep()
+
+	c.mu.RLock()
+	_, hasExpired := c.items["expired"]
+	_, hasLive := c.items["live"]
+	n := len(c.items)
+	c.mu.RUnlock()
+
+	if hasExpired {
+		t.Error("sweep must remove the expired entry from the map")
 	}
-
-	time.Sleep(120 * time.Millisecond)
-
-	if c.Len() != 0 {
-		t.Errorf("expected 0 after sweep, got %d", c.Len())
+	if !hasLive {
+		t.Error("sweep must keep the un-expired entry")
+	}
+	if n != 1 {
+		t.Errorf("expected exactly 1 entry after sweep, got %d", n)
 	}
 }
 

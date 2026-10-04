@@ -101,26 +101,31 @@ database:
 }
 
 func TestStartPeriodicJob(t *testing.T) {
-	var count int32
+	// Deterministic synchronization instead of fixed sleeps: the old 20/80 ms
+	// sleeps raced the 50 ms ticker and flaked under -race. The job signals
+	// every run; the test waits for the immediate run and then the first
+	// tick, each with a generous timeout that only fires on a real failure.
+	ran := make(chan struct{}, 8)
 	job := func(ctx context.Context) error {
-		atomic.AddInt32(&count, 1)
+		ran <- struct{}{}
 		return nil
 	}
 
-	stop := startPeriodicJob(context.Background(), "test job", 50*time.Millisecond, 100*time.Millisecond, job)
+	stop := startPeriodicJob(context.Background(), "test job", 10*time.Millisecond, time.Second, job)
 	defer stop()
 
-	// The job should run once immediately.
-	time.Sleep(20 * time.Millisecond)
-	if atomic.LoadInt32(&count) < 1 {
-		t.Fatal("expected job to run immediately")
+	waitRuns := func(n int) {
+		for i := 0; i < n; i++ {
+			select {
+			case <-ran:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timed out waiting for periodic job run %d of %d", i+1, n)
+			}
+		}
 	}
 
-	// It should then run again on the next tick.
-	time.Sleep(80 * time.Millisecond)
-	if atomic.LoadInt32(&count) < 2 {
-		t.Fatalf("expected at least one periodic run, got %d", atomic.LoadInt32(&count))
-	}
+	waitRuns(1) // the immediate startup run
+	waitRuns(1) // the first ticker-driven run
 }
 
 // TestStartPeriodicJob_StopWaitsForInFlightRun pins the WaitGroup semantics:
