@@ -13,13 +13,36 @@ function updateThemeIcon() {
     }
 }
 
+// storageGet/storageSet wrap localStorage defensively: the storage can be
+// unavailable or throw on every access (Safari private mode, blocked cookies,
+// quota exhausted, enterprise policies). An unguarded access in the boot
+// block used to abort the whole script before initDelegatedListeners ran,
+// killing every interaction on the page. Persistence is best-effort: when
+// the storage is blocked the UI still works, the preference just does not
+// survive navigation.
+function storageGet(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (e) {
+        return null;
+    }
+}
+
+function storageSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch (e) {
+        /* best-effort persistence only */
+    }
+}
+
 (function() {
     // Browser-only boot: restore the persisted sidebar state and paint the
     // theme-toggle icon. Both need the <body> DOM that is present once
     // app.js runs at the end of <body>. Guarded so the file also loads inert
     // under Node (unit tests in web/jstest/) where no DOM exists.
     if (typeof document === 'undefined') return;
-    var collapsed = localStorage.getItem('gozone-sidebar') === 'true';
+    var collapsed = storageGet('gozone-sidebar') === 'true';
     if (collapsed) {
         document.body.classList.add('sidebar-collapsed');
     }
@@ -31,14 +54,14 @@ function toggleTheme() {
     var current = document.documentElement.getAttribute('data-theme');
     var next = current === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('gozone-theme', next);
+    storageSet('gozone-theme', next);
     updateThemeIcon();
 }
 
 function toggleSidebar() {
     document.body.classList.toggle('sidebar-collapsed');
     var collapsed = document.body.classList.contains('sidebar-collapsed');
-    localStorage.setItem('gozone-sidebar', collapsed);
+    storageSet('gozone-sidebar', collapsed);
 }
 
 function generateTSIGSecret() {
@@ -936,6 +959,8 @@ if (typeof module !== 'undefined' && module.exports) {
         filterOptions: filterOptions,
         initDelegatedListeners: initDelegatedListeners,
         saveRecordRow: saveRecordRow,
+        storageGet: storageGet,
+        storageSet: storageSet,
         syncCommentClearValue: syncCommentClearValue,
         updateRowComments: updateRowComments
     };

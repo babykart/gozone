@@ -239,6 +239,53 @@ test('input event drives filterOptions through the delegated listener', () => {
     assert.strictEqual(select.options[1].hidden, true, 'bob filtered out via the delegated input handler');
 });
 
+// --- Blocked-storage safety (storageGet/storageSet) -------------------------
+//
+// localStorage can be unavailable or throw on every access (Safari private
+// mode, blocked cookies, quota, enterprise policies). The boot block used to
+// hit it unguarded, aborting the whole script before the delegated listeners
+// were wired — every interaction on the page died with the preference.
+
+test('storageGet returns the stored value when the storage works', () => {
+    const store = { 'gozone-sidebar': 'true' };
+    const prev = global.localStorage;
+    global.localStorage = {
+        getItem: (k) => Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null,
+        setItem: (k, v) => { store[k] = String(v); }
+    };
+    try {
+        assert.strictEqual(app.storageGet('gozone-sidebar'), 'true');
+        assert.strictEqual(app.storageGet('missing'), null);
+        app.storageSet('gozone-theme', 'dark');
+        assert.strictEqual(store['gozone-theme'], 'dark');
+    } finally {
+        global.localStorage = prev;
+    }
+});
+
+test('storageGet/storageSet survive a storage that throws on every access', () => {
+    const prev = global.localStorage;
+    const boom = () => { throw new Error('SecurityError: storage blocked'); };
+    global.localStorage = { getItem: boom, setItem: boom };
+    try {
+        assert.strictEqual(app.storageGet('gozone-sidebar'), null, 'a blocked read must yield null, not throw');
+        assert.doesNotThrow(() => app.storageSet('gozone-theme', 'dark'), 'a blocked write must be swallowed');
+    } finally {
+        global.localStorage = prev;
+    }
+});
+
+test('storageGet/storageSet survive localStorage being entirely undefined', () => {
+    const prev = global.localStorage;
+    delete global.localStorage;
+    try {
+        assert.strictEqual(app.storageGet('gozone-sidebar'), null);
+        assert.doesNotThrow(() => app.storageSet('gozone-sidebar', true));
+    } finally {
+        global.localStorage = prev;
+    }
+});
+
 // --- Batch "Clear all comments" flag sync -----------------------------------
 //
 // The flag is submitted by a per-row hidden input (exactly one 0/1 value per
