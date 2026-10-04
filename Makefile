@@ -42,28 +42,34 @@ test-race:
 clean:
 	rm -rf $(BIN_DIR)/$(APP_NAME) ./data/gozone.db*
 
-# format all source files
+# format all source files — gofmt -s, the exact form the CI gate checks
+# (gofmt -l -s); plain "go fmt" does not apply the -s simplifications
 fmt:
-	go fmt ./...
+	gofmt -s -w $$(find . -name '*.go' -not -path './vendor/*')
 
 # run vet on all packages
 vet:
 	go vet ./...
 
-# run staticcheck static analysis (optional tool, fails on findings like CI)
+# run staticcheck static analysis (fails on findings like CI, and fails
+# loudly when the tool is missing — a silent 0 let a missing binary pass for
+# a clean run)
 staticcheck:
 	@if command -v staticcheck > /dev/null 2>&1; then \
 		staticcheck ./...; \
 	else \
 		echo "staticcheck not installed. Run: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+		exit 1; \
 	fi
 
-# run gosec security analysis (optional tool, fails on findings like CI)
+# run gosec security analysis (fails on findings like CI, and fails loudly
+# when the tool is missing)
 gosec:
 	@if command -v gosec > /dev/null 2>&1; then \
 		gosec -exclude-dir='.cache|vendor|bin' ./...; \
 	else \
 		echo "gosec not installed. Run: go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
+		exit 1; \
 	fi
 
 # run update

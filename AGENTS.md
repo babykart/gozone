@@ -28,7 +28,7 @@
 Run a single test: `go test -count=1 -run TestName -v ./internal/handlers/`
 Run a single package: `go test -count=1 ./internal/config/`
 
-Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete. `just staticcheck` and `just gosec` hard-require the binaries on PATH (no fallback); install with `go install honnef.co/go/tools/cmd/staticcheck@latest` / `go install github.com/securego/gosec/v2/cmd/gosec@latest` (the `make` targets print these hints instead of failing).
+Write co-located `*_test.go` when adding code. After any change, run `just fmt` then `just gosec` and fix every issue before considering the task complete. `just staticcheck` and `just gosec` (and their `make` counterparts) hard-require the binaries on PATH (no fallback — a missing tool fails the target); install with `go install honnef.co/go/tools/cmd/staticcheck@latest` / `go install github.com/securego/gosec/v2/cmd/gosec@latest` (the `make` targets print these hints and exit non-zero).
 
 CI (`.github/workflows/pr.yml`) runs: a `gofmt -l -s` check (excluding `vendor/`), `go vet`, `staticcheck` (zero findings required, like gosec), the frontend unit tests (`node --test web/jstest/` plus a `node --check` syntax pass on theme.js), `go test -race -count=1`, gosec, and govulncheck. Total statement coverage must stay ≥ 80 % (an enforced floor in the CI test job — raise it as the suite grows; it was 85.2 % when introduced). `just test-race` runs the exact same test flags as CI, so local parity is verifiable instead of memorised; plain `just test` skips the (slower) race detector. govulncheck is reachability-based and fails only when code actually calls a vulnerable path.
 

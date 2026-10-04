@@ -47,9 +47,10 @@ test-race:
 clean:
     rm -rf {{ bin_dir }}/{{ app_name }} ./data/gozone.db*
 
-# format all source files
+# format all source files — gofmt -s, the exact form the CI gate checks
+# (gofmt -l -s); plain "go fmt" does not apply the -s simplifications
 fmt:
-    go fmt ./...
+    gofmt -s -w $(find . -name '*.go' -not -path './vendor/*')
 
 # run vet on all packages
 vet:
