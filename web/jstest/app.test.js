@@ -415,6 +415,139 @@ test('copyAPIKey surfaces a denied clipboard write instead of an unhandled rejec
         `a denied write must notify, got "${notificationEl.textContent}"`);
 });
 
+// --- Bulk controller (makeBulkController) ------------------------------------
+//
+// The factory drives every list's selection state; these tests pin the
+// count label, the select-all indicator and the row resolution.
+
+function stubBulkDocument(boxes, countEl, selectAll) {
+    return {
+        getElementById(id) { return id === 'bulk-count' ? countEl : null; },
+        querySelector(sel) { return sel === '[data-action="select-all"]' ? selectAll : null; },
+        querySelectorAll(sel) { return sel === '.bulk-box' ? boxes : []; }
+    };
+}
+
+test('makeBulkController.updateCount reports the selection and syncs select-all', () => {
+    const countEl = { textContent: '' };
+    const selectAll = { checked: false };
+    const boxes = [
+        { checked: true, closest: () => ({ id: 'r1' }) },
+        { checked: true, closest: () => ({ id: 'r2' }) },
+        { checked: false, closest: () => ({ id: 'r3' }) }
+    ];
+    const doc = stubBulkDocument(boxes, countEl, selectAll);
+
+    const ctrl = app.makeBulkController({
+        name: 'zones', checkboxClass: 'bulk-box', countId: 'bulk-count',
+        noun: 'zone', selectAllAction: 'select-all', deleteAction: 'd',
+        barId: 'bar', endpoint: '/zones/bulk-delete',
+        idField: 'zone_id', idAttr: 'data-zone-id', failedSuffix: null
+    });
+
+    withDocument(doc, () => ctrl.updateCount());
+    assert.strictEqual(countEl.textContent, '2 zones selected');
+    assert.strictEqual(selectAll.checked, false, 'select-all stays off with a partial selection');
+
+    boxes[2].checked = true;
+    withDocument(doc, () => ctrl.updateCount());
+    assert.strictEqual(countEl.textContent, '3 zones selected');
+    assert.strictEqual(selectAll.checked, true, 'select-all flips on when every box is checked');
+
+    // Singular noun for a single item.
+    boxes[1].checked = false;
+    boxes[2].checked = false;
+    withDocument(doc, () => ctrl.updateCount());
+    assert.strictEqual(countEl.textContent, '1 zone selected');
+});
+
+test('makeBulkController.selectedRows resolves the checked rows', () => {
+    const row1 = { id: 'r1' };
+    const row2 = { id: 'r2' };
+    const boxes = [
+        { checked: true, closest: () => row1 },
+        { checked: false, closest: () => row2 }
+    ];
+    const doc = stubBulkDocument(boxes, { textContent: '' }, { checked: false });
+    const ctrl = app.makeBulkController({
+        name: 'zones', checkboxClass: 'bulk-box', countId: 'bulk-count',
+        noun: 'zone', selectAllAction: 'select-all', deleteAction: 'd',
+        barId: 'bar', endpoint: '/zones/bulk-delete',
+        idField: 'zone_id', idAttr: 'data-zone-id', failedSuffix: null
+    });
+    withDocument(doc, () => {
+        const rows = ctrl.selectedRows();
+        assert.strictEqual(rows.length, 1);
+        assert.strictEqual(rows[0], row1);
+    });
+});
+
+// --- Per-page selector (applyPerPage) ----------------------------------------
+
+test('applyPerPage builds the href from window.location', () => {
+    const select = { attrs: { 'data-prefix': 'log' }, value: '20' };
+    select.getAttribute = function(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; };
+    const searchInput = { value: 'foo' };
+
+    const doc = stubDocument();
+    doc.querySelector = () => searchInput;
+
+    const prevDocument = global.document;
+    const prevWindow = global.window;
+    let captured = '';
+    global.document = doc;
+    global.window = {
+        location: {
+            search: '?logPage=3&logPerPage=10&Page=2&search=foo',
+            get href() { return ''; },
+            set href(v) { captured = v; }
+        }
+    };
+    try {
+        app.applyPerPage(select);
+    } finally {
+        global.document = prevDocument;
+        global.window = prevWindow;
+    }
+
+    const params = new URLSearchParams(captured.replace(/^\?/, ''));
+    assert.strictEqual(params.get('logPerPage'), '20', 'this section size changes');
+    assert.strictEqual(params.has('logPage'), false, 'this section page resets');
+    assert.strictEqual(params.get('Page'), '2', 'the other section is preserved');
+    assert.strictEqual(params.get('search'), 'foo', 'the search is preserved');
+});
+
+test('applyPerPage drops an emptied search and works with no prefix', () => {
+    const select = { attrs: {}, value: '0' };
+    select.getAttribute = function(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; };
+    const searchInput = { value: '' };
+
+    const doc = stubDocument();
+    doc.querySelector = () => searchInput;
+
+    const prevDocument = global.document;
+    const prevWindow = global.window;
+    let captured = '';
+    global.document = doc;
+    global.window = {
+        location: {
+            search: '?Page=7&PerPage=10&search=old',
+            set href(v) { captured = v; }
+        }
+    };
+    try {
+        app.applyPerPage(select);
+    } finally {
+        global.document = prevDocument;
+        global.window = prevWindow;
+    }
+
+    const params = new URLSearchParams(captured.replace(/^\?/, ''));
+    assert.strictEqual(params.get('PerPage'), '0', 'All');
+    assert.strictEqual(params.has('Page'), false, 'page resets');
+    assert.strictEqual(params.has('search'), false, 'an emptied search is dropped');
+});
+
 // --- Blocked-storage safety (storageGet/storageSet) -------------------------
 //
 // localStorage can be unavailable or throw on every access (Safari private

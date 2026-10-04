@@ -65,6 +65,42 @@ func TestPasswordExpiryWarnDays(t *testing.T) {
 	}
 }
 
+// TestChangePasswordPage renders the self-service form for a signed-in user,
+// with and without the forced-change flag surfaced to the template.
+func TestChangePasswordPage(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+
+	newCtx := func() context.Context {
+		return context.WithValue(context.Background(), middleware.UserContextKey,
+			&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash})
+	}
+
+	w := httptest.NewRecorder()
+	h.ChangePasswordPage(w, httptest.NewRequest(http.MethodGet, "/change-password", nil).WithContext(newCtx()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Change Password") {
+		t.Errorf("expected the change-password page, got: %s", w.Body.String())
+	}
+
+	// Forced-change variant: the flag is set, and the handler tolerates a
+	// user without it equally (the page renders in both states).
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+	w2 := httptest.NewRecorder()
+	user := &models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true}
+	r2 := httptest.NewRequest(http.MethodGet, "/change-password", nil).WithContext(
+		context.WithValue(context.Background(), middleware.UserContextKey, user))
+	h.ChangePasswordPage(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for the forced-change variant, got %d", w2.Code)
+	}
+}
+
 // TestChangePassword_Success exercises the self-service change flow: a forced
 // user (must_change=1) changes their password; the hash rotates, the policy is
 // enforced, and must_change_password is cleared.

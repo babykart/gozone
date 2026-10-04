@@ -238,6 +238,11 @@ func (c *cachedClient) DeleteRecord(ctx context.Context, zoneID string, name, re
 }
 
 func (c *cachedClient) PatchRecords(ctx context.Context, zoneID string, rrsets []models.RRSet) error {
+	if len(rrsets) == 0 {
+		// Nothing is sent upstream (the client short-circuits too); flushing
+		// the caches would only cause a needless refetch storm.
+		return nil
+	}
 	if err := c.client.PatchRecords(ctx, zoneID, rrsets); err != nil {
 		return err
 	}

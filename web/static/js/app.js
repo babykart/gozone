@@ -999,12 +999,14 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
 // this block is inert in production.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        applyPerPage: applyPerPage,
         applyRecordUpdate: applyRecordUpdate,
         bulkFailedSuffix: bulkFailedSuffix,
         copyAPIKey: copyAPIKey,
         filterOptions: filterOptions,
         generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,
+        makeBulkController: makeBulkController,
         saveRecordRow: saveRecordRow,
         showNotification: showNotification,
         storageGet: storageGet,

@@ -367,6 +367,56 @@ func TestCachedInvalidateZoneCache(t *testing.T) {
 	}
 }
 
+// TestCachedPatchRecords_InvalidatesZones pins the cached wrapper: a raw
+// PatchRecords call clears the zone caches (a follow-up list is a fresh
+// upstream fetch) and an error leaves them untouched.
+func TestCachedPatchRecords_InvalidatesZones(t *testing.T) {
+	var listCalls atomic.Int64
+	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/zones") {
+			listCalls.Add(1)
+			w.Write([]byte(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`)) // #nosec G104 -- test helper
+			return
+		}
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Write([]byte(`[]`)) // #nosec G104 -- test helper
+	})
+
+	ctx := context.Background()
+	cached.ListZones(ctx) // populate the cache
+	cached.ListZones(ctx)
+	if listCalls.Load() != 1 {
+		t.Fatalf("expected 1 list call after the cached reads, got %d", listCalls.Load())
+	}
+
+	// A patch invalidates: the next list must go upstream again.
+	if err := cached.PatchRecords(ctx, "z1.", []models.RRSet{{
+		Name: "www.z1.", Type: "A", TTL: 60, ChangeType: "REPLACE",
+		Records: []models.RecordInfo{{Content: "192.0.2.1"}},
+	}}); err != nil {
+		t.Fatalf("PatchRecords: %v", err)
+	}
+	cached.ListZones(ctx)
+	if listCalls.Load() != 2 {
+		t.Errorf("PatchRecords must invalidate the zone-list cache, got %d list calls", listCalls.Load())
+	}
+
+	// An empty patch is a no-op and must NOT flush the fresh cache: the two
+	// surrounding reads are both cache hits, so the count stays at 2.
+	cached.ListZones(ctx)
+	if err := cached.PatchRecords(ctx, "z1.", nil); err != nil {
+		t.Fatalf("empty PatchRecords: %v", err)
+	}
+	cached.ListZones(ctx)
+	if listCalls.Load() != 2 {
+		t.Errorf("an empty patch must not invalidate, got %d list calls", listCalls.Load())
+	}
+}
+
 func TestCachedRecordMutations_InvalidateZonesAndStats(t *testing.T) {
 	var listCalls, statCalls, patchCalls atomic.Int64
 	cached := newCachedClient(t, func(w http.ResponseWriter, r *http.Request) {

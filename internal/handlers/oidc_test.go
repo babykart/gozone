@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -66,6 +67,141 @@ func TestOIDCCallback_MissingParams(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "/login?error=sso_error" {
 		t.Errorf("missing params should redirect to error, got %q", loc)
+	}
+}
+
+// TestOIDCLogin_RedirectsToProvider covers the happy path: a configured
+// provider yields a 303 to the (validated) authorization URL, and the
+// state-binding cookie is set so the callback can enforce the login-CSRF
+// check.
+func TestOIDCLogin_RedirectsToProvider(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
+		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
+	}}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/login", nil)
+	r.SetPathValue("provider", "gitea")
+	h.OIDCLogin(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "https://idp.example.com/auth?provider=gitea&state=fixed-state" {
+		t.Errorf("unexpected redirect target %q", loc)
+	}
+	found := false
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.OIDCStateCookieName {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the state-binding cookie must be set alongside the redirect")
+	}
+}
+
+// authErrSSO fails to build the authorization URL (e.g. no discovery
+// document could be fetched for the provider).
+type authErrSSO struct{ fakeSSOService }
+
+func (a *authErrSSO) AuthCodeURL(string, string) (string, error) {
+	return "", errors.New("provider discovery failed")
+}
+
+func TestOIDCLogin_AuthCodeURLError(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &authErrSSO{fakeSSOService{providers: []*oidc.ProviderInstance{{Name: "gitea"}}}}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/login", nil)
+	r.SetPathValue("provider", "gitea")
+	h.OIDCLogin(w, r)
+
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?error=sso_error" {
+		t.Errorf("expected 303 to sso_error, got %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// badURLSSO returns a non-absolute authorization URL, exercising the
+// open-redirect defense-in-depth gate.
+type badURLSSO struct{ fakeSSOService }
+
+func (b *badURLSSO) AuthCodeURL(string, string) (string, error) {
+	return "file:///etc/passwd?state=x", nil
+}
+
+func TestOIDCLogin_NonAbsoluteAuthURLRefused(t *testing.T) {
+	h := newTestHandler(t)
+	h.OIDC = &badURLSSO{fakeSSOService{providers: []*oidc.ProviderInstance{{Name: "gitea"}}}}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/login", nil)
+	r.SetPathValue("provider", "gitea")
+	h.OIDCLogin(w, r)
+
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?error=sso_error" {
+		t.Errorf("a non-absolute auth URL must redirect to sso_error, got %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// TestApplySSORole_LastAdminDemotionRefused pins the last-admin guard on the
+// SSO role-sync path: an IdP claim demoting the ONLY enabled admin keeps the
+// admin role instead of locking the instance out.
+func TestApplySSORole_LastAdminDemotionRefused(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h) // the single enabled admin
+
+	if err := h.applySSORole(context.Background(), admin, "user"); err != nil {
+		t.Fatalf("applySSORole: %v", err)
+	}
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id = ?", admin.ID).Scan(&role)
+	if role != "admin" {
+		t.Errorf("the last enabled admin must keep the admin role, got %q", role)
+	}
+}
+
+// TestApplySSORole_DemotionAllowedWithSecondAdmin: the guard only protects
+// the LAST admin — with another enabled admin present, the IdP's demotion
+// applies.
+func TestApplySSORole_DemotionAllowedWithSecondAdmin(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	if _, err := h.DB.Exec(
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('admin2', 'a2@e.com', 'x', 'admin', 1)`); err != nil {
+		t.Fatalf("insert second admin: %v", err)
+	}
+
+	if err := h.applySSORole(context.Background(), admin, "user"); err != nil {
+		t.Fatalf("applySSORole: %v", err)
+	}
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id = ?", admin.ID).Scan(&role)
+	if role != "user" {
+		t.Errorf("demotion must apply with a second admin present, got %q", role)
+	}
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='sso_role_sync'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 sso_role_sync activity log, got %d", count)
+	}
+}
+
+// TestApplySSORole_PromotionApplied covers the user→admin direction.
+func TestApplySSORole_PromotionApplied(t *testing.T) {
+	h := newTestHandler(t)
+	uid := testutil.SeedTestUser(t, h.DB, "promotee", "p", "user", true)
+
+	user := &models.User{ID: uid, Username: "promotee", Role: "user"}
+	if err := h.applySSORole(context.Background(), user, "admin"); err != nil {
+		t.Fatalf("applySSORole: %v", err)
+	}
+	var role string
+	h.DB.QueryRow("SELECT role FROM users WHERE id = ?", uid).Scan(&role)
+	if role != "admin" {
+		t.Errorf("expected promotion to admin, got %q", role)
 	}
 }
 

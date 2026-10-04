@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/pdns"
 	"github.com/babykart/gozone/internal/testutil"
 )
 
@@ -1587,6 +1590,33 @@ func TestAPIGetZone_NotFound(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Code != ErrCodeZoneNotFound {
 		t.Errorf("expected code %s, got %s", ErrCodeZoneNotFound, resp.Code)
+	}
+}
+
+// TestPdnsErrorStatus_Mapping pins the full PowerDNS error mapping table,
+// including the wrapped-error cases callers actually produce.
+func TestPdnsErrorStatus_Mapping(t *testing.T) {
+	cases := []struct {
+		name         string
+		err          error
+		notFoundCode string
+		wantStatus   int
+		wantCode     string
+	}{
+		{"not found uses the caller's code", fmt.Errorf("get: %w", pdns.ErrNotFound), ErrCodeZoneNotFound, http.StatusNotFound, ErrCodeZoneNotFound},
+		{"validation", fmt.Errorf("patch: %w", pdns.ErrValidation), ErrCodeRecordError, http.StatusBadRequest, ErrCodeValidationError},
+		{"conflict", fmt.Errorf("patch: %w", pdns.ErrConflict), ErrCodeRecordError, http.StatusConflict, ErrCodeConflict},
+		{"upstream auth is 502, never 401", fmt.Errorf("patch: %w", pdns.ErrUnauthorized), ErrCodeRecordError, http.StatusBadGateway, ErrCodeUpstreamAuthError},
+		{"lua updates disabled", fmt.Errorf("patch: %w", pdns.ErrLuaUpdatesDisabled), ErrCodeRecordError, http.StatusBadRequest, ErrCodeLuaUpdatesDisabled},
+		{"unknown stays internal", errors.New("connection refused"), ErrCodeRecordError, http.StatusInternalServerError, ErrCodeInternalError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := pdnsErrorStatus(tc.err, tc.notFoundCode)
+			if status != tc.wantStatus || code != tc.wantCode {
+				t.Errorf("pdnsErrorStatus(%v) = %d/%s, want %d/%s", tc.err, status, code, tc.wantStatus, tc.wantCode)
+			}
+		})
 	}
 }
 

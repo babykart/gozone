@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,59 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.S
 		ServerID: "localhost",
 	})
 	return client, server
+}
+
+// TestClient_PatchRecords covers the raw PATCH: an empty slice is a no-op
+// (no HTTP call), ChangeType defaults to REPLACE when unset, and a mixed
+// batch honoring an explicit DELETE is sent verbatim in one atomic request.
+func TestClient_PatchRecords(t *testing.T) {
+	var calls atomic.Int64
+	var bodies []string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		calls.Add(1)
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Empty batch: no request at all.
+	if err := client.PatchRecords(context.Background(), "z1.", nil); err != nil {
+		t.Fatalf("empty PatchRecords: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("an empty batch must not hit PowerDNS, got %d calls", calls.Load())
+	}
+
+	// Mixed batch: one explicit DELETE, one unset (client fills in REPLACE).
+	err := client.PatchRecords(context.Background(), "z1.", []models.RRSet{
+		{Name: "old.z1.", Type: "A", ChangeType: "DELETE"},
+		{Name: "new.z1.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "192.0.2.1"}}},
+	})
+	if err != nil {
+		t.Fatalf("PatchRecords: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("expected exactly 1 PATCH, got %d", calls.Load())
+	}
+
+	var payload struct {
+		RRSets []models.RRSet `json:"rrsets"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(payload.RRSets) != 2 {
+		t.Fatalf("expected both RRSets in one atomic PATCH, got %d", len(payload.RRSets))
+	}
+	if payload.RRSets[0].ChangeType != "DELETE" {
+		t.Errorf("explicit ChangeType must be honored, got %q", payload.RRSets[0].ChangeType)
+	}
+	if payload.RRSets[1].ChangeType != "REPLACE" {
+		t.Errorf("unset ChangeType must default to REPLACE, got %q", payload.RRSets[1].ChangeType)
+	}
 }
 
 func TestNewClient_URLNormalization(t *testing.T) {
@@ -67,16 +121,16 @@ func TestNewClient_Transport(t *testing.T) {
 	// m43: per-phase transport timeouts must be set (not just the global
 	// http.Client.Timeout) so a stuck phase fails fast.
 	if tr.DialContext == nil {
-		t.Error("DialContext: nil, expected a net.Dialer with a dial timeout (m43)")
+		t.Error("DialContext: nil, expected a net.Dialer with a dial timeout")
 	}
 	if tr.TLSHandshakeTimeout != pdnsTLSHandshakeTimeout {
-		t.Errorf("TLSHandshakeTimeout: got %v, want %v (m43)", tr.TLSHandshakeTimeout, pdnsTLSHandshakeTimeout)
+		t.Errorf("TLSHandshakeTimeout: got %v, want %v)", tr.TLSHandshakeTimeout, pdnsTLSHandshakeTimeout)
 	}
 	if tr.ResponseHeaderTimeout != pdnsResponseHeaderTimeout {
-		t.Errorf("ResponseHeaderTimeout: got %v, want %v (m43)", tr.ResponseHeaderTimeout, pdnsResponseHeaderTimeout)
+		t.Errorf("ResponseHeaderTimeout: got %v, want %v)", tr.ResponseHeaderTimeout, pdnsResponseHeaderTimeout)
 	}
 	if tr.ExpectContinueTimeout != pdnsExpectContinueTimeout {
-		t.Errorf("ExpectContinueTimeout: got %v, want %v (m43)", tr.ExpectContinueTimeout, pdnsExpectContinueTimeout)
+		t.Errorf("ExpectContinueTimeout: got %v, want %v)", tr.ExpectContinueTimeout, pdnsExpectContinueTimeout)
 	}
 	// Each phase timeout must be strictly less than the overall client timeout
 	// (30s) so it is the binding constraint for a stuck phase rather than being
@@ -850,8 +904,8 @@ func TestDeleteTSIGKey_Error(t *testing.T) {
 
 // TestPathEscaping_NoPathTraversal verifies that request-controlled path
 // segments — zoneID, metadata kind, TSIG key id — are path-escaped so a
-// malicious value cannot inject extra path components into the PowerDNS API URL
-// (m41). The injected "/" must become "%2F" and ".." must stay within the same
+// malicious value cannot inject extra path components into the PowerDNS API
+// URL. The injected "/" must become "%2F" and ".." must stay within the same
 // segment rather than being interpreted as a path separator.
 func TestPathEscaping_NoPathTraversal(t *testing.T) {
 	cases := []struct {
@@ -924,7 +978,7 @@ func TestPathEscaping_NormalValuesUnchanged(t *testing.T) {
 	}
 }
 
-// TestReadLimitedBody covers the response-size cap (m42). The limit+1 trick is
+// TestReadLimitedBody covers the response-size cap. The limit+1 trick is
 // exercised at the boundary: a body exactly equal to the limit is accepted, a
 // single extra byte is rejected, and the helper never silently truncates.
 func TestReadLimitedBody(t *testing.T) {
@@ -990,7 +1044,7 @@ func TestPatchZone_OmitsPriorityEvenWhenNonZero(t *testing.T) {
 		t.Fatalf("UpdateRecord: %v", err)
 	}
 	if bytes.Contains(body, []byte(`"priority"`)) {
-		t.Errorf("PATCH body must not contain a priority element (m53), got: %s", body)
+		t.Errorf("PATCH body must not contain a priority element, got: %s", body)
 	}
 	// Sanity: the content (with priority embedded) and disabled must still be
 	// present so the record itself is well-formed.
