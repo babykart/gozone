@@ -143,6 +143,16 @@ function resetRowValues(row) {
     if (editCommentClear) editCommentClear.checked = false;
 }
 
+// notificationTimer holds the pending auto-hide timeout so a new
+// notification cancels the previous one: without this, a message shown
+// within 5 seconds of the previous one was hidden early by the earlier
+// timer.
+var notificationTimer = null;
+
+// showNotification flashes a message in the shared #notification live region.
+// Visibility toggles the .hidden class — never inline style.display — per the
+// CSP/inline-style convention, and so screen readers register the region
+// appearing: a live region that sits in display:none is not announced.
 function showNotification(message, type) {
     var el = document.getElementById('notification');
     if (!el) {
@@ -150,12 +160,20 @@ function showNotification(message, type) {
         console.error(message);
         return;
     }
+    if (notificationTimer !== null) {
+        clearTimeout(notificationTimer);
+        notificationTimer = null;
+    }
     el.textContent = message;
-    el.className = 'notification notification-' + (type || 'error');
-    el.style.display = 'block';
-    setTimeout(function() {
-        el.style.display = 'none';
+    // Recompose the classes without inline styles: drop the previous type
+    // modifier and the hidden state, apply the new type. The base
+    // "notification" class is on the element from the template.
+    el.classList.remove('notification-success', 'notification-error', 'notification-warning', 'hidden');
+    el.classList.add('notification-' + (type || 'error'));
+    notificationTimer = setTimeout(function() {
+        el.classList.add('hidden');
         el.textContent = '';
+        notificationTimer = null;
     }, 5000);
 }
 
@@ -417,7 +435,8 @@ function toggleTemplateVars(select) {
     var targetId = select.getAttribute('data-target') || 'template-vars';
     var target = document.getElementById(targetId);
     if (!target) return;
-    target.style.display = select.value ? 'block' : 'none';
+    // Toggle .hidden per the CSP/inline-style convention (see toggleEditMode).
+    target.classList.toggle('hidden', !select.value);
 }
 
 function applyPerPage(select) {
@@ -712,8 +731,10 @@ var confirmDialogLastFocus = null;
 function ensureConfirmDialog() {
     if (confirmDialogEl) return;
     confirmDialogEl = document.createElement('div');
-    confirmDialogEl.className = 'modal-overlay';
-    confirmDialogEl.style.display = 'none';
+    // .modal-overlay defaults to display:flex; .hidden (later in the
+    // stylesheet) overrides it — visibility stays class-based, no inline
+    // styles (CSP/inline-style convention).
+    confirmDialogEl.className = 'modal-overlay hidden';
     confirmDialogEl.setAttribute('role', 'dialog');
     confirmDialogEl.setAttribute('aria-modal', 'true');
     confirmDialogEl.setAttribute('aria-labelledby', 'confirm-dialog-title');
@@ -763,7 +784,7 @@ function confirmDialog(message, opts) {
     var okBtn = confirmDialogEl.querySelector('[data-confirm-ok]');
     okBtn.textContent = opts.confirmText || 'Confirm';
     okBtn.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
-    confirmDialogEl.style.display = 'flex';
+    confirmDialogEl.classList.remove('hidden');
     confirmDialogEl.setAttribute('aria-hidden', 'false');
     confirmDialogLastFocus = document.activeElement;
     // Focus Cancel first so a stray Enter does not confirm a destructive
@@ -774,7 +795,7 @@ function confirmDialog(message, opts) {
 
 function closeConfirmDialog(ok) {
     if (!confirmDialogEl) return;
-    confirmDialogEl.style.display = 'none';
+    confirmDialogEl.classList.add('hidden');
     confirmDialogEl.setAttribute('aria-hidden', 'true');
     var resolve = confirmDialogResolve;
     confirmDialogResolve = null;
@@ -980,6 +1001,7 @@ if (typeof module !== 'undefined' && module.exports) {
         generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,
         saveRecordRow: saveRecordRow,
+        showNotification: showNotification,
         storageGet: storageGet,
         storageSet: storageSet,
         syncCommentClearValue: syncCommentClearValue,

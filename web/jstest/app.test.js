@@ -239,6 +239,75 @@ test('input event drives filterOptions through the delegated listener', () => {
     assert.strictEqual(select.options[1].hidden, true, 'bob filtered out via the delegated input handler');
 });
 
+// withClassList attaches a minimal classList implementation to a stub element,
+// backed by its className string (like the browser's live classList).
+function withClassList(el) {
+    var classes = function() {
+        return (el.className || '').split(/\s+/).filter(Boolean);
+    };
+    el.classList = {
+        add: function() {
+            var set = new Set(classes());
+            for (var i = 0; i < arguments.length; i++) set.add(arguments[i]);
+            el.className = Array.from(set).join(' ');
+        },
+        remove: function() {
+            var drop = new Set(arguments);
+            el.className = classes().filter(function(c) { return !drop.has(c); }).join(' ');
+        },
+        toggle: function(name, force) {
+            var has = classes().indexOf(name) !== -1;
+            var want = force === undefined ? !has : !!force;
+            if (want && !has) el.classList.add(name);
+            if (!want && has) el.classList.remove(name);
+            return want;
+        },
+        contains: function(name) { return classes().indexOf(name) !== -1; }
+    };
+    return el;
+}
+
+// --- Notifications (showNotification) ----------------------------------------
+//
+// A notification shown within 5 seconds of the previous one used to be hidden
+// early by the earlier timer, and visibility was driven by inline
+// style.display (against the classList convention, and hiding the aria-live
+// region from screen readers).
+
+test('showNotification cancels the previous timer and toggles .hidden', () => {
+    const el = withClassList({ textContent: '', className: 'notification hidden' });
+    const doc = stubDocument();
+    doc.setElement('notification', el);
+
+    const timeouts = [];
+    const clears = [];
+    const prevSet = global.setTimeout;
+    const prevClear = global.clearTimeout;
+    global.setTimeout = (fn) => { timeouts.push(fn); return timeouts.length; };
+    global.clearTimeout = (id) => { clears.push(id); };
+    try {
+        withDocument(doc, () => {
+            app.showNotification('first', 'error');
+            app.showNotification('second', 'success');
+        });
+    } finally {
+        global.setTimeout = prevSet;
+        global.clearTimeout = prevClear;
+    }
+
+    assert.strictEqual(timeouts.length, 2, 'each notification schedules one hide timer');
+    assert.deepStrictEqual(clears, [1], 'the first timer must be cancelled when a second notification arrives');
+    assert.strictEqual(el.textContent, 'second');
+    assert.ok(!el.classList.contains('hidden'), 'visible via .hidden removal, not inline style');
+    assert.ok(el.classList.contains('notification-success'), 'type modifier applied');
+    assert.ok(!el.classList.contains('notification-error'), 'previous type modifier dropped');
+
+    // Fire the pending timer: hides via .hidden and clears the text.
+    timeouts[1]();
+    assert.ok(el.classList.contains('hidden'));
+    assert.strictEqual(el.textContent, '');
+});
+
 // --- TSIG Generate (generateTSIGSecret) --------------------------------------
 //
 // The Generate button used to force-select hmac-sha512, silently reverting an
@@ -503,7 +572,7 @@ test('saveRecordRow posts the row identity and resyncs from the response', async
         updated: { content: 'backup.example.com.', priority: 20, disabled: true }
     };
     const doc = stubDocument();
-    doc.setElement('notification', { textContent: '', className: '', style: {} });
+    doc.setElement('notification', withClassList({ textContent: '', className: 'notification hidden' }));
     const prevDocument = global.document;
     const prevFetch = global.fetch;
     const calls = [];
