@@ -64,8 +64,29 @@ function toggleSidebar() {
     storageSet('gozone-sidebar', collapsed);
 }
 
+// generateTSIGSecret fills the key textarea with fresh random bytes, sized to
+// the selected algorithm (the digest length is a sensible default for each).
+// It no longer force-selects hmac-sha512: the overwrite silently reverted an
+// operator's deliberate algorithm choice the moment they clicked Generate.
+// The default is only applied when the placeholder is still selected.
 function generateTSIGSecret() {
-    var bytes = new Uint8Array(64);
+    var algo = document.getElementById('algorithm');
+    var byteLen = 64;
+    switch (algo ? algo.value : '') {
+        case 'hmac-md5':
+            byteLen = 16;
+            break;
+        case 'hmac-sha256':
+            byteLen = 32;
+            break;
+        case 'hmac-sha384':
+            byteLen = 48;
+            break;
+        case 'hmac-sha512':
+            byteLen = 64;
+            break;
+    }
+    var bytes = new Uint8Array(byteLen);
     crypto.getRandomValues(bytes);
     var binary = '';
     for (var i = 0; i < bytes.length; i++) {
@@ -74,8 +95,7 @@ function generateTSIGSecret() {
     var base64 = btoa(binary);
     var keyEl = document.getElementById('key');
     if (keyEl) keyEl.value = base64;
-    var algo = document.getElementById('algorithm');
-    if (algo) {
+    if (algo && algo.value === '') {
         algo.value = 'hmac-sha512';
     }
 }
@@ -957,6 +977,7 @@ if (typeof module !== 'undefined' && module.exports) {
         applyRecordUpdate: applyRecordUpdate,
         bulkFailedSuffix: bulkFailedSuffix,
         filterOptions: filterOptions,
+        generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,
         saveRecordRow: saveRecordRow,
         storageGet: storageGet,

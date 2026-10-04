@@ -239,6 +239,66 @@ test('input event drives filterOptions through the delegated listener', () => {
     assert.strictEqual(select.options[1].hidden, true, 'bob filtered out via the delegated input handler');
 });
 
+// --- TSIG Generate (generateTSIGSecret) --------------------------------------
+//
+// The Generate button used to force-select hmac-sha512, silently reverting an
+// operator's deliberate algorithm choice. It must respect the selection (and
+// size the key to it), only defaulting when the placeholder is still chosen.
+
+function stubTsigPage(algorithmValue) {
+    const algo = { value: algorithmValue };
+    const key = { value: '' };
+    const doc = {
+        getElementById(id) {
+            if (id === 'algorithm') return algo;
+            if (id === 'key') return key;
+            return null;
+        }
+    };
+    return { algo: algo, key: key, doc: doc };
+}
+
+function withDocumentRun(doc, fn) {
+    const prev = global.document;
+    global.document = doc;
+    try {
+        fn();
+    } finally {
+        global.document = prev;
+    }
+}
+
+test('generateTSIGSecret keeps the operator-selected algorithm', () => {
+    const page = stubTsigPage('hmac-sha256');
+    withDocumentRun(page.doc, () => app.generateTSIGSecret());
+    assert.strictEqual(page.algo.value, 'hmac-sha256', 'a chosen algorithm must not be overwritten');
+    // 32 raw bytes -> 44 base64 chars (with padding).
+    assert.strictEqual(page.key.value.length, 44, 'key material must be sized to hmac-sha256 (32 bytes)');
+});
+
+test('generateTSIGSecret defaults the algorithm only from the placeholder', () => {
+    const page = stubTsigPage('');
+    withDocumentRun(page.doc, () => app.generateTSIGSecret());
+    assert.strictEqual(page.algo.value, 'hmac-sha512', 'no explicit choice -> default hmac-sha512');
+    // 64 raw bytes -> 88 base64 chars.
+    assert.strictEqual(page.key.value.length, 88, 'default key material must be sized to hmac-sha512 (64 bytes)');
+});
+
+test('generateTSIGSecret sizes the material per algorithm', () => {
+    const cases = [
+        ['hmac-md5', 16, 24],
+        ['hmac-sha256', 32, 44],
+        ['hmac-sha384', 48, 64],
+        ['hmac-sha512', 64, 88]
+    ];
+    for (const [algo, raw, b64] of cases) {
+        const page = stubTsigPage(algo);
+        withDocumentRun(page.doc, () => app.generateTSIGSecret());
+        assert.strictEqual(page.key.value.length, b64, `${algo}: expected ${raw} bytes (${b64} base64 chars), got ${page.key.value.length}`);
+        assert.strictEqual(page.algo.value, algo);
+    }
+});
+
 // --- Blocked-storage safety (storageGet/storageSet) -------------------------
 //
 // localStorage can be unavailable or throw on every access (Safari private
