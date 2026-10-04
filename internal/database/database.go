@@ -86,7 +86,12 @@ func (db *DB) IsUniqueViolation(err error) bool {
 	return db.dialect.IsUniqueViolation(err)
 }
 
-// New opens a database connection and runs migrations.
+// openFunc opens a *sql.DB for the given driver name and DSN. It is the
+// injection seam that lets tests substitute a counting connector and assert
+// that New's failure paths close the pool.
+type openFunc func(driverName, dsn string) (*sql.DB, error)
+
+// New opens a database connection and runs the schema migrations.
 //
 // Supported drivers:
 //   - "sqlite3" (default, local file or ":memory:")
@@ -96,8 +101,15 @@ func (db *DB) IsUniqueViolation(err error) bool {
 // Parameters:
 //   - cfg: database configuration containing driver name and DSN
 //
-// Returns a ready-to-use DB handle or an error if connection or migration fails.
+// Returns a ready-to-use DB handle or an error if connection or migration
+// fails. On failure the pool is closed: leaking it would keep the SQLite
+// sweep goroutines and any pinned migration-lock connection alive for the
+// process lifetime, compounding on callers that retry New.
 func New(cfg *config.DatabaseConfig) (*DB, error) {
+	return newWithOpener(cfg, sql.Open)
+}
+
+func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	dialect, err := selectDialect(cfg.Driver)
 	if err != nil {
 		return nil, err
@@ -113,7 +125,7 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 	}
 
 	dsn := dialect.DSN(cfg.DSN)
-	conn, err := sql.Open(dialect.DriverName(), dsn)
+	conn, err := open(dialect.DriverName(), dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -122,12 +134,18 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 	conn.SetMaxIdleConns(dialect.MaxIdleConns())
 	conn.SetConnMaxLifetime(dialect.ConnMaxLifetime())
 
+	// From here on conn is open: every failure path must close it, or the
+	// pool (and its background machinery — the SQLite sweep goroutines, the
+	// pinned migration-lock connection) leaks for the lifetime of the
+	// process. Callers retrying New in a loop would compound the leak.
 	if err := conn.Ping(); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
 	db := &DB{Conn: conn, dialect: dialect}
 	if err := db.migrate(); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 

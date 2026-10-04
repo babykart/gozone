@@ -3,11 +3,13 @@ package database
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/babykart/gozone/internal/config"
@@ -799,6 +801,89 @@ func TestApplyMigration_AlreadyExistsSkipsStatementNotMigration(t *testing.T) {
 	var recorded int
 	if err := conn.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&recorded); err != nil || recorded != 1 {
 		t.Errorf("version must be recorded after the tolerated replay (recorded=%d, err=%v)", recorded, err)
+	}
+}
+
+// countingConnector is a database/sql driver that counts connections and
+// closes, with an optional Ping failure. It lets the tests observe that
+// newWithOpener CLOSES the pool on its failure paths — a leaked *sql.DB keeps
+// its background machinery alive for the process lifetime.
+type countingConnector struct {
+	connects atomic.Int64
+	closes   atomic.Int64
+	failPing bool
+}
+
+func (c *countingConnector) Connect(context.Context) (driver.Conn, error) {
+	c.connects.Add(1)
+	return &countingConn{c: c}, nil
+}
+
+func (c *countingConnector) Driver() driver.Driver { return countingDriver{} }
+
+type countingDriver struct{}
+
+func (countingDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("countingDriver: use the connector, not Open")
+}
+
+type countingConn struct {
+	c *countingConnector
+}
+
+func (cc *countingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("countingConn: statements not implemented")
+}
+
+func (cc *countingConn) Close() error {
+	cc.c.closes.Add(1)
+	return nil
+}
+
+func (cc *countingConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("countingConn: transactions not implemented")
+}
+
+func (cc *countingConn) Ping(context.Context) error {
+	if cc.c.failPing {
+		return errors.New("countingConn: ping refused")
+	}
+	return nil
+}
+
+// TestNew_PingFailureClosesPool pins the failure-path cleanup: when Ping
+// fails, New must return the wrapped error AND close the pool — the driver
+// observes exactly one connect and one close.
+func TestNew_PingFailureClosesPool(t *testing.T) {
+	conn := &countingConnector{failPing: true}
+	_, err := newWithOpener(
+		&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"},
+		func(string, string) (*sql.DB, error) { return sql.OpenDB(conn), nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "ping database") {
+		t.Fatalf("expected a ping failure error, got %v", err)
+	}
+	if got := conn.connects.Load(); got != 1 {
+		t.Errorf("expected exactly 1 connection attempt, got %d", got)
+	}
+	if got := conn.closes.Load(); got != 1 {
+		t.Errorf("the pool must be closed after a ping failure, got %d closes", got)
+	}
+}
+
+// TestNew_MigrateFailureClosesPool is the migrate-path twin: a failing
+// migration must also close the pool.
+func TestNew_MigrateFailureClosesPool(t *testing.T) {
+	conn := &countingConnector{} // Ping succeeds; every statement fails
+	_, err := newWithOpener(
+		&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"},
+		func(string, string) (*sql.DB, error) { return sql.OpenDB(conn), nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "run migrations") {
+		t.Fatalf("expected a migration failure error, got %v", err)
+	}
+	if got := conn.closes.Load(); got != 1 {
+		t.Errorf("the pool must be closed after a migration failure, got %d closes", got)
 	}
 }
 
