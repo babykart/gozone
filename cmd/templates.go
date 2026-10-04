@@ -50,7 +50,7 @@ func relativeName(recordName, zoneName string) string {
 // staticAssetVersion returns a short content hash of the bundled JS/CSS so
 // templates can append it as ?v=… to asset URLs. Deploying a new build changes
 // the hash, which invalidates browser caches despite the 24h max-age served by
-// fileServer (REVIEW.md L-16c). Computed from the embedded files, so it varies
+// fileServer (see static.go for the hash rationale). Computed from the embedded files, so it varies
 // on every content change regardless of the version label.
 func staticAssetVersion() string {
 	h := sha256.New()
@@ -66,9 +66,12 @@ func staticAssetVersion() string {
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
-// templateFuncMap builds the FuncMap shared by the real templates and the
-// handler-test stub set. assetVer is baked into the assetVersion func; see
-// staticAssetVersion for the cache-busting rationale.
+// templateFuncMap builds the FuncMap used by the real embedded templates.
+// The handler-test stub set (internal/handlers testTemplateSet) carries its
+// own minimal FuncMap — same names, urlquery and relativeName as
+// pass-through no-ops, assetVersion pinned to a constant — so it must be
+// kept in sync whenever a func is added here. assetVer is baked into the
+// assetVersion func; see staticAssetVersion for the cache-busting rationale.
 func templateFuncMap(assetVer string) template.FuncMap {
 	return template.FuncMap{
 		"add":          func(a, b int) int { return a + b },

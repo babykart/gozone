@@ -41,6 +41,7 @@ func testTemplateSet() *template.Template {
 		"add":          func(a, b int) int { return a + b },
 		"sub":          func(a, b int) int { return a - b },
 		"urlquery":     func(s string) string { return s },
+		"relativeName": func(recordName, zoneName string) string { return recordName },
 		"assetVersion": func() string { return "testv" },
 		"dict": func(values ...interface{}) (map[string]interface{}, error) {
 			if len(values)%2 != 0 {
