@@ -713,7 +713,14 @@ func (db *DB) migrate() error {
 		// failure midway never leaves the schema changed but unrecorded (or
 		// vice-versa). See applyMigration.
 		if err := db.applyMigration(m, version); err != nil {
-			// m22: a migration whose content hash changed (e.g. a typo fix in
+			// Another process (e.g. the server and the CLI starting
+			// together) claimed the migration between the outside check and
+			// the in-transaction claim: it owns this migration, skip quietly.
+			if errors.Is(err, errMigrationAppliedElsewhere) {
+				logger.Info("migration applied concurrently by another instance; skipping", "version", version)
+				continue
+			}
+			// A migration whose content hash changed (e.g. a typo fix in
 			// an old, already-applied migration) re-runs here and fails on
 			// non-idempotent DDL (ALTER TABLE ADD COLUMN) because the object
 			// already exists. Treat that as "already applied": record the new
@@ -740,13 +747,20 @@ func (db *DB) migrate() error {
 // recordMigrationVersion marks a migration as applied in schema_migrations
 // without running it. It is the fallback path for migrations that are already
 // present in the schema (detected via IsAlreadyExistsError) but whose content
-// hash changed, so they don't re-run on every startup.
+// hash changed, so they don't re-run on every startup. The insert-ignore form
+// keeps it race-safe against another instance recording the same version
+// concurrently.
 func (db *DB) recordMigrationVersion(ctx context.Context, version string) error {
-	if _, err := db.Conn.ExecContext(ctx, db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
+	if _, err := db.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version); err != nil {
 		return fmt.Errorf("record migration %s: %w", version, err)
 	}
 	return nil
 }
+
+// errMigrationAppliedElsewhere reports that applyMigration lost the claim on a
+// migration version to another process that is applying (or has applied) it.
+// The caller skips the migration instead of failing startup.
+var errMigrationAppliedElsewhere = errors.New("migration claimed by another instance")
 
 // applyMigration runs a single migration's statements and records it in
 // schema_migrations inside one transaction, so a failure midway never leaves
@@ -755,6 +769,15 @@ func (db *DB) recordMigrationVersion(ctx context.Context, version string) error 
 // MultiStatements disabled for defense-in-depth; executing each statement
 // separately also lets every dialect apply a multi-step migration atomically
 // inside the transaction.
+//
+// The version row is CLAIMED at the start of the transaction with a
+// dialect-portable insert-ignore, not appended at the end: the outside
+// "already applied" check races against another process (the server and the
+// CLI can start together — on SQLite the file lock only serializes
+// transactions, not the check-then-insert sequence), and the loser used to
+// abort with a primary-key violation on schema_migrations. A zero-rows claim
+// means another instance owns the migration: the transaction rolls back and
+// errMigrationAppliedElsewhere is returned for the caller to skip.
 //
 // Note: MySQL/MariaDB implicitly commit on most DDL statements, so on those
 // dialects a multi-statement migration is not fully rollback-able. This is a
@@ -767,14 +790,23 @@ func (db *DB) applyMigration(sqlText, version string) error {
 	}
 	defer tx.Rollback() // no-op after Commit
 
+	// Claim the version row inside the transaction (dialect-portable
+	// insert-ignore with automatic placeholder rebinding).
+	res, err := tx.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version)
+	if err != nil {
+		return fmt.Errorf("claim migration %s: %w", version, err)
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		// Another instance recorded this version between the outside check
+		// and this claim. Its transaction owns the migration; ours must not
+		// run the statements a second time.
+		return errMigrationAppliedElsewhere
+	}
+
 	for _, stmt := range splitStatements(sqlText) {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
 		}
-	}
-
-	if _, err := tx.ExecContext(ctx, db.dialect.Rebind("INSERT INTO schema_migrations (version) VALUES (?)"), version); err != nil {
-		return fmt.Errorf("record migration %s: %w", version, err)
 	}
 
 	if err := tx.Commit(); err != nil {

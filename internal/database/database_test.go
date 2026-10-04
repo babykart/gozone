@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -191,7 +192,7 @@ func TestClose(t *testing.T) {
 	}
 }
 
-// TestDB_ExecContext_UniqueViolationWrapped is the regression test for L-7:
+// TestDB_ExecContext_UniqueViolationWrapped is the regression test:
 // DB.ExecContext wraps any driver-level UNIQUE-constraint violation with
 // database.ErrUniqueViolation so handlers can detect it idiomatically via
 // errors.Is instead of pattern-matching driver-specific error text. Also
@@ -256,7 +257,7 @@ func TestDB_ExecContext_UniqueViolationWrapped(t *testing.T) {
 
 // TestTx_ExecContext_UniqueViolationWrapped mirrors
 // TestDB_ExecContext_UniqueViolationWrapped for the transactional path so
-// the Tx.ExecContext wrapper stays consistent with the DB one (REVIEW.md L-7).
+// the Tx.ExecContext wrapper stays consistent with the DB one.
 func TestTx_ExecContext_UniqueViolationWrapped(t *testing.T) {
 	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
 	db, err := New(cfg)
@@ -295,7 +296,7 @@ func TestTx_ExecContext_UniqueViolationWrapped(t *testing.T) {
 // TestDB_ExecReturnID verifies that ExecReturnID returns the new row's "id"
 // primary key and that a UNIQUE-constraint violation is wrapped in
 // ErrUniqueViolation. On SQLite/PostgreSQL the RETURNING path is exercised
-// here; on MySQL the LastInsertId fallback applies (REVIEW.md H-1).
+// here; on MySQL the LastInsertId fallback applies.
 func TestDB_ExecReturnID(t *testing.T) {
 	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
 	db, err := New(cfg)
@@ -435,7 +436,7 @@ func TestIndexUsage(t *testing.T) {
 			"SELECT user_id, expires_at FROM api_keys WHERE key_hash = 'test'",
 		},
 		{
-			// REVIEW.md M-6: ListAPIKeys filters by user_id and orders by
+			// ListAPIKeys filters by user_id and orders by
 			// created_at DESC — must be served by idx_api_keys_user_created,
 			// not a full table scan.
 			"api_keys list by user",
@@ -503,7 +504,7 @@ func TestSanitizeDSN_MySQL(t *testing.T) {
 			"admin:p@ss:w0rd@tcp(host)/mydb",
 			"admin:***@tcp(host)/mydb",
 		},
-		// Unix-socket DSNs (REVIEW.md m20): previously leaked verbatim because
+		// Unix-socket DSNs: previously leaked verbatim because
 		// only "@tcp(" was recognised.
 		{
 			"user:password@unix(/var/run/mysqld/mysqld.sock)/gozone",
@@ -667,6 +668,89 @@ func TestMigrationVersion_Stability(t *testing.T) {
 	}
 	if v1 == migrationVersion("CREATE TABLE t (id TEXT)") {
 		t.Error("different SQL should produce different versions")
+	}
+}
+
+// TestApplyMigration_ClaimSkipsWhenVersionRecorded pins the concurrent-instance
+// claim: when another process has recorded the version between the outside
+// "already applied" check and the in-transaction claim, applyMigration must
+// return errMigrationAppliedElsewhere WITHOUT executing any statement — the
+// old code appended the version row at the end of the transaction and the
+// loser aborted startup with a primary-key violation on schema_migrations.
+func TestApplyMigration_ClaimSkipsWhenVersionRecorded(t *testing.T) {
+	dialect := &sqliteDialect{}
+	conn, err := sql.Open("sqlite3", dialect.DSN(":memory:"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	db := &DB{Conn: conn, dialect: dialect}
+	if _, err := conn.Exec(`CREATE TABLE schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	// Another instance already recorded this exact version.
+	sqlText := "CREATE TABLE raced_marker (id INTEGER)"
+	version := migrationVersion(sqlText)
+	if _, err := conn.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+
+	if err := db.applyMigration(sqlText, version); !errors.Is(err, errMigrationAppliedElsewhere) {
+		t.Fatalf("expected errMigrationAppliedElsewhere, got %v", err)
+	}
+	// The loser must not have executed the migration's statements.
+	var n int
+	if err := conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='raced_marker'").Scan(&n); err != nil {
+		t.Fatalf("sqlite_master: %v", err)
+	}
+	if n != 0 {
+		t.Error("the losing instance must not run the migration statements")
+	}
+}
+
+// TestMigrate_SecondConnectionSameFile is the cross-process restart shape on
+// a real on-disk file (the server and the CLI sharing it): a second
+// connection migrating after the first must be a clean no-op — no duplicate
+// version rows, no errors. The mid-flight claim race itself is pinned
+// deterministically by TestApplyMigration_ClaimSkipsWhenVersionRecorded.
+func TestMigrate_SecondConnectionSameFile(t *testing.T) {
+	dialect := &sqliteDialect{}
+	path := filepath.Join(t.TempDir(), "restart.db")
+	dsn := dialect.DSN(path)
+
+	open := func() *DB {
+		conn, err := sql.Open("sqlite3", dsn)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return &DB{Conn: conn, dialect: dialect}
+	}
+
+	db1 := open()
+	if err := db1.migrate(); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+	db2 := open()
+	if err := db2.migrate(); err != nil {
+		t.Fatalf("second migrate on the same file: %v", err)
+	}
+
+	var rows int
+	if err := db1.Conn.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if want := len(dialect.Migrations()); rows != want {
+		t.Errorf("expected exactly %d recorded versions, got %d", want, rows)
+	}
+	// The schema is complete and queryable from the second connection.
+	var users int
+	if err := db2.Conn.QueryRow("SELECT COUNT(*) FROM users").Scan(&users); err != nil {
+		t.Fatalf("users table must exist for the second connection: %v", err)
 	}
 }
 
@@ -978,8 +1062,8 @@ func newIntegrationDB(t *testing.T, driverName, dsn string) *DB {
 	return db
 }
 
-// seedIntegrationUser inserts a user (the FK target for revoked_tokens.user_id,
-// REVIEW.md I-9) on a MySQL/PostgreSQL integration DB and returns its id. The
+// seedIntegrationUser inserts a user (the FK target for revoked_tokens.user_id)
+// on a MySQL/PostgreSQL integration DB and returns its id. The
 // "?" placeholders are rebound by ExecReturnID for the dialect, which also
 // abstracts id retrieval (lib/pq does not implement LastInsertId).
 func seedIntegrationUser(t *testing.T, db *DB, username string) int64 {

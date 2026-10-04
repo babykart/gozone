@@ -118,8 +118,12 @@ func (s *sqliteDialect) RateLimitHitUpsert() (string, bool) {
 
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
 // database-file level and MaxOpenConns is set to 1, so concurrent migration
-// races from a single process are impossible. Cross-process access is handled
-// by SQLite's own file locking.
+// races from a single process are impossible. Cross-process concurrency (the
+// server and the CLI starting together on the same file) is handled by the
+// migration runner itself: each migration claims its version row with an
+// in-transaction INSERT OR IGNORE (see applyMigration), so the loser skips
+// instead of failing with a primary-key violation — file locking alone only
+// serializes individual transactions, not the check-then-insert sequence.
 func (s *sqliteDialect) LockMigrations(conn *sql.DB) (func(), error) {
 	return func() {}, nil
 }
