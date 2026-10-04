@@ -27,8 +27,11 @@ func TestAPIListZones(t *testing.T) {
 	})
 	defer pdnsSrv.Close()
 
+	// In production the Auth middleware always sets the user (admin sees
+	// every zone); the handler is called directly here.
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), user)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
 	h.APIListZones(w, r)
 
 	if w.Code != http.StatusOK {
@@ -44,6 +47,35 @@ func TestAPIListZones(t *testing.T) {
 	}
 	if zones[0].Name != "example.com" {
 		t.Errorf("expected example.com, got %s", zones[0].Name)
+	}
+}
+
+// TestAPIListZones_NilUserFailsClosed pins the fail-closed fallback: a
+// request that reaches the handler without an authenticated user (the Auth
+// middleware never ran — a wiring bug) must yield an EMPTY list, never every
+// zone.
+func TestAPIListZones_NilUserFailsClosed(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.Zone{
+			{ID: "example.com", Name: "example.com", Kind: "Native"},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	h.APIListZones(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var zones []models.Zone
+	if err := json.NewDecoder(w.Body).Decode(&zones); err != nil {
+		t.Fatal(err)
+	}
+	if len(zones) != 0 {
+		t.Errorf("a nil user must fail closed to an empty list, got %d zones", len(zones))
 	}
 }
 

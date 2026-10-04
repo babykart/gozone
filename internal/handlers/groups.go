@@ -843,9 +843,17 @@ func (h *Handler) getUserAllowedZoneIDs(ctx context.Context, userID int64) (map[
 }
 
 // filterZonesForUser returns the PowerDNS zones the user is allowed to see.
+// A nil user (a handler reached without the Auth middleware having run — a
+// wiring bug) fails CLOSED with an empty list instead of returning every
+// zone: the permissive fallback would turn a wiring mistake into a full
+// disclosure.
 func (h *Handler) filterZonesForUser(r *http.Request, zones []models.Zone) ([]models.Zone, error) {
 	user := middleware.GetUser(r)
-	if user == nil || user.IsAdmin() {
+	if user == nil {
+		logger.Error("filterZonesForUser reached without an authenticated user; failing closed")
+		return []models.Zone{}, nil
+	}
+	if user.IsAdmin() {
 		return zones, nil
 	}
 
@@ -863,10 +871,15 @@ func (h *Handler) filterZonesForUser(r *http.Request, zones []models.Zone) ([]mo
 	return filtered, nil
 }
 
-// filterZonesWithInfoForUser returns the PowerDNS zones with info the user is allowed to see.
+// filterZonesWithInfoForUser returns the PowerDNS zones with info the user is
+// allowed to see. Nil user fails closed — see filterZonesForUser.
 func (h *Handler) filterZonesWithInfoForUser(r *http.Request, zones []models.ZoneWithInfo) ([]models.ZoneWithInfo, error) {
 	user := middleware.GetUser(r)
-	if user == nil || user.IsAdmin() {
+	if user == nil {
+		logger.Error("filterZonesWithInfoForUser reached without an authenticated user; failing closed")
+		return []models.ZoneWithInfo{}, nil
+	}
+	if user.IsAdmin() {
 		return zones, nil
 	}
 

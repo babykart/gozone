@@ -109,11 +109,14 @@ func TestIntegration_CompleteAPIFlow(t *testing.T) {
 	})
 	defer pdnsSrv.Close()
 
-	userID := seedIntegrationUser(t, h, "apiuser", "apipass", "user", true)
+	userID := seedIntegrationUser(t, h, "apiuser", "apipass", "admin", true)
 	seedIntegrationAPIKey(t, h, userID, "my-integration-api-key")
 
+	// The API middleware would set this user from the key; an admin sees
+	// every zone.
+	user := &models.User{ID: userID, Username: "apiuser", Role: "admin"}
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), user)
 	r.Header.Set("X-API-Key", "my-integration-api-key")
 	h.APIListZones(w, r)
 

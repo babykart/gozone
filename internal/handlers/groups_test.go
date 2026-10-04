@@ -732,7 +732,11 @@ func TestFilterZonesForUser_AdminReturnsAll(t *testing.T) {
 	}
 }
 
-func TestFilterZonesForUser_NilUserReturnsAll(t *testing.T) {
+// TestFilterZonesForUser_NilUserFailsClosed pins the fail-closed fallback: a
+// nil user means the Auth middleware never ran (a wiring bug) — returning
+// every zone would turn that wiring mistake into full disclosure. The filter
+// returns an EMPTY list and logs server-side.
+func TestFilterZonesForUser_NilUserFailsClosed(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -746,8 +750,8 @@ func TestFilterZonesForUser_NilUserReturnsAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filterZonesForUser: %v", err)
 	}
-	if len(result) != 1 {
-		t.Errorf("expected 1 zone for nil user, got %d", len(result))
+	if len(result) != 0 {
+		t.Errorf("expected 0 zones for a nil user (fail closed), got %d", len(result))
 	}
 }
 
@@ -821,6 +825,28 @@ func TestFilterZonesWithInfoForUser_AdminReturnsAll(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Errorf("expected 2 zones for admin, got %d", len(result))
+	}
+}
+
+// TestFilterZonesWithInfoForUser_NilUserFailsClosed: same fail-closed
+// contract as filterZonesForUser — a nil user yields an EMPTY list, never
+// every zone.
+func TestFilterZonesWithInfoForUser_NilUserFailsClosed(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	zones := []models.ZoneWithInfo{
+		{Zone: models.Zone{ID: "z1.com.", Name: "z1.com."}},
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	result, err := h.filterZonesWithInfoForUser(r, zones)
+	if err != nil {
+		t.Fatalf("filterZonesWithInfoForUser: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 zones for a nil user (fail closed), got %d", len(result))
 	}
 }
 
