@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,9 +115,11 @@ func runServer(cfg *config.Config) error {
 	// Periodically purge old activity logs based on the configured retention
 	// period (default 90 days). Runs once at startup, then daily. A retention
 	// period of 0 means "keep forever" and skips the background job entirely.
-	var stopActivityPurge func()
+	// The stop is deferred RIGHT HERE: registering it later (after the admin
+	// seed below) meant a seed failure returned without stopping the job,
+	// leaving goroutines running against the closing database.
 	if cfg.Activity.RetentionDays > 0 {
-		stopActivityPurge = startPeriodicJob(context.Background(), "purge activity logs", 24*time.Hour, 5*time.Minute, func(ctx context.Context) error {
+		stopActivityPurge := startPeriodicJob(context.Background(), "purge activity logs", 24*time.Hour, 5*time.Minute, func(ctx context.Context) error {
 			start := time.Now()
 			n, err := db.PurgeActivityLogs(ctx, cfg.Activity.RetentionDays, cfg.Activity.BatchSize)
 			if err != nil {
@@ -128,14 +131,15 @@ func runServer(cfg *config.Config) error {
 			)
 			return nil
 		})
+		defer stopActivityPurge()
 	}
 
 	// Periodically purge login attempts older than the configured retention
 	// window. The retention window must outlast the lockout window so failed
 	// attempts remain visible while a user could still be locked out.
-	var stopLoginAttemptsPurge func()
+	// Stop deferred right here — see the activity-purge note above.
 	if cfg.LoginLock.AttemptsRetentionHours > 0 {
-		stopLoginAttemptsPurge = startPeriodicJob(context.Background(), "purge login attempts", time.Hour, 30*time.Second, func(ctx context.Context) error {
+		stopLoginAttemptsPurge := startPeriodicJob(context.Background(), "purge login attempts", time.Hour, 30*time.Second, func(ctx context.Context) error {
 			start := time.Now()
 			n, err := db.PurgeLoginAttempts(ctx, cfg.LoginLock.AttemptsRetentionHours)
 			if err != nil {
@@ -149,34 +153,25 @@ func runServer(cfg *config.Config) error {
 			}
 			return nil
 		})
+		defer stopLoginAttemptsPurge()
 	}
 
 	// Periodically purge expired SSO ID-token hints (server-side id_token_hint
 	// storage for RP-initiated logout) so the sso_id_tokens table does not grow
 	// without bound. Runs once at startup, then hourly until shutdown; rows are
 	// also deleted at logout. Only needed when SSO is configured.
-	var stopSSOTokensPurge func()
+	// Stop deferred right here — see the activity-purge note above.
 	if cfg.OIDC.Enabled {
-		stopSSOTokensPurge = startPeriodicJob(context.Background(), "purge expired SSO id tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
+		stopSSOTokensPurge := startPeriodicJob(context.Background(), "purge expired SSO id tokens", time.Hour, 30*time.Second, func(ctx context.Context) error {
 			_, err := db.PurgeExpiredSSOIDTokens(ctx, time.Now().UTC())
 			return err
 		})
+		defer stopSSOTokensPurge()
 	}
 
 	// Seed admin user if no users exist
 	if err := database.SeedAdminUser(context.Background(), db, cfg); err != nil {
 		return fmt.Errorf("seed admin user: %w", err)
-	}
-
-	// Stop the periodic purge goroutines on exit.
-	if stopActivityPurge != nil {
-		defer stopActivityPurge()
-	}
-	if stopLoginAttemptsPurge != nil {
-		defer stopLoginAttemptsPurge()
-	}
-	if stopSSOTokensPurge != nil {
-		defer stopSSOTokensPurge()
 	}
 
 	// Parse templates
@@ -534,13 +529,28 @@ func runServer(cfg *config.Config) error {
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
 		<-sigCh
 		logger.Info("shutting down")
+		// A second signal force-exits: an operator pressing Ctrl-C twice
+		// wants out NOW, not after a stuck drain or a slow deferred cleanup.
+		go func() {
+			<-sigCh
+			logger.Warn("second shutdown signal received; forcing exit")
+			os.Exit(130) // 128 + SIGINT
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(),
 			time.Duration(cfg.Server.ShutdownTimeoutSeconds)*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
-			logger.Error("shutdown error", "error", err)
+			// The graceful drain expired. Close force-cancels the remaining
+			// connections so the deferred cleanup (db.Close, caches) never
+			// runs against requests that are still being served — proceeding
+			// anyway would close the database under in-flight handlers.
+			logger.Error("shutdown timed out; force-closing remaining connections", "error", err)
+			if cerr := srv.Close(); cerr != nil {
+				logger.Error("force close failed", "error", cerr)
+			}
 		}
 		close(shutdownDone)
 	}()
@@ -560,11 +570,17 @@ func runServer(cfg *config.Config) error {
 // startPeriodicJob starts a goroutine that runs job immediately, then again on
 // every tick of interval. Each invocation gets a fresh context with the
 // provided timeout and runs in the given parent context. The returned stop
-// function cancels the periodic job and stops the goroutine; it is safe to call
-// multiple times.
+// function cancels the periodic job, WAITS for an in-flight invocation to
+// finish (the invocation's context is canceled first, so a context-aware job
+// aborts promptly), and stops the goroutine; it is safe to call multiple
+// times. Waiting is what keeps shutdown ordered: a deferred db.Close() can
+// never race a purge that is still executing.
 func startPeriodicJob(ctx context.Context, name string, interval, timeout time.Duration, job func(context.Context) error) func() {
 	ctx, stop := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		run := func() {
 			c, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
@@ -584,5 +600,8 @@ func startPeriodicJob(ctx context.Context, name string, interval, timeout time.D
 			}
 		}
 	}()
-	return stop
+	return func() {
+		stop()
+		wg.Wait()
+	}
 }

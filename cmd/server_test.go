@@ -123,6 +123,44 @@ func TestStartPeriodicJob(t *testing.T) {
 	}
 }
 
+// TestStartPeriodicJob_StopWaitsForInFlightRun pins the WaitGroup semantics:
+// stop() returns only after an in-flight invocation has finished (its context
+// is canceled first, so a context-aware job aborts promptly). Without the
+// wait, a deferred db.Close() could race a purge that was still executing.
+func TestStartPeriodicJob_StopWaitsForInFlightRun(t *testing.T) {
+	started := make(chan struct{})
+	var finished atomic.Bool
+	job := func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done() // a context-aware job aborts on stop
+		finished.Store(true)
+		return nil
+	}
+
+	stop := startPeriodicJob(context.Background(), "blocking job", time.Hour, time.Minute, job)
+	<-started
+
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	// Give stop() a moment to misbehave (returning before the job finished).
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-stopped:
+		if !finished.Load() {
+			t.Fatal("stop() returned while the in-flight job was still running")
+		}
+	default:
+	}
+
+	<-stopped
+	if !finished.Load() {
+		t.Error("stop() must wait for the in-flight job to finish")
+	}
+}
+
 // freePort reserves an ephemeral TCP port on the loopback interface and
 // returns its number. The listener is released before the caller can bind it,
 // which is a (small, test-acceptable) TOCTOU race against other processes.
