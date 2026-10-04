@@ -191,6 +191,7 @@ var mysqlAlreadyExistsCodes = map[uint16]bool{
 	1060: true, // ER_DUP_FIELDNAME       - Duplicate column name
 	1061: true, // ER_DUP_KEYNAME         - Duplicate key name (index)
 	1068: true, // ER_MULTIPLE_PRI_KEY    - Multiple primary key defined
+	1091: true, // ER_CANT_DROP_FIELD_OR_KEY - index/column already dropped
 	1826: true, // ER_DUP_FOREIGN_KEY_NAME - Duplicate foreign key constraint name
 }
 
@@ -260,8 +261,7 @@ func (m *mysqlDialect) Migrations() []string {
 			last_used_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			expires_at DATETIME,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-			KEY idx_api_keys_key_hash (key_hash)
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS zone_groups (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -380,8 +380,7 @@ func (m *mysqlDialect) Migrations() []string {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE KEY uq_external_identities_issuer_subject (issuer, subject),
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-			KEY idx_external_identities_user (user_id),
-			KEY idx_external_identities_issuer_subject (issuer, subject)
+			KEY idx_external_identities_user (user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		// Session lifetime tracking (idle/absolute enforcement, shared across
 		// instances). See sqlite_dialect.go for the rationale.
@@ -433,5 +432,17 @@ func (m *mysqlDialect) Migrations() []string {
 		// startup; dedupe first (see sqlite_dialect.go).
 		`ALTER TABLE users ADD COLUMN username_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(username)) STORED, ADD UNIQUE INDEX idx_users_username_lc (username_lc)`,
 		`ALTER TABLE users DROP INDEX idx_users_email_lc, ADD UNIQUE INDEX idx_users_email_lc (email_lc)`,
+		// Drop redundant indexes that duplicate UNIQUE constraints:
+		// api_keys.key_hash is UNIQUE and external_identities(issuer, subject)
+		// carries a UNIQUE key. Each duplicate index only added write
+		// amplification. MySQL has no DROP INDEX IF EXISTS — the runner
+		// tolerates ER_CANT_DROP_FIELD_OR_KEY (1091), which is how a missing
+		// index surfaces, so both fresh and migrated databases converge.
+		`ALTER TABLE api_keys DROP INDEX idx_api_keys_key_hash`,
+		`ALTER TABLE external_identities DROP INDEX idx_external_identities_issuer_subject`,
+		// PurgeRateLimitCounters deletes by window_start alone; the composite
+		// primary key (bucket_key first) cannot serve that seek, so the purge
+		// scanned the whole table.
+		`CREATE INDEX idx_rate_limit_counters_window_start ON rate_limit_counters(window_start)`,
 	}
 }

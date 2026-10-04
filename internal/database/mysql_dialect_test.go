@@ -189,6 +189,7 @@ func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
 		want   bool
 	}{
 		{1050, true},  // ER_TABLE_EXISTS_ERROR
+		{1091, true},  // ER_CANT_DROP_FIELD_OR_KEY (DROP INDEX without IF EXISTS)
 		{1060, true},  // ER_DUP_FIELDNAME
 		{1061, true},  // ER_DUP_KEYNAME
 		{1068, true},  // ER_MULTIPLE_PRI_KEY

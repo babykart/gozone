@@ -922,6 +922,39 @@ func TestNew_MigrateFailureClosesPool(t *testing.T) {
 	}
 }
 
+// TestMigrate_DropsRedundantIndexesAndAddsRateLimitWindowIndex pins the
+// index hygiene on a fresh SQLite schema: no index may duplicate a UNIQUE
+// constraint (api_keys.key_hash, external_identities(issuer, subject)), and
+// the rate-limit purge must have a window_start index to seek with (the
+// composite primary key leads with bucket_key and cannot serve that query).
+func TestMigrate_DropsRedundantIndexesAndAddsRateLimitWindowIndex(t *testing.T) {
+	dialect := &sqliteDialect{}
+	conn, err := sql.Open("sqlite3", dialect.DSN(":memory:"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	db := &DB{Conn: conn, dialect: dialect}
+	if err := db.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	assertIndex := func(name string, want bool) {
+		t.Helper()
+		var n int
+		if err := conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", name).Scan(&n); err != nil {
+			t.Fatalf("query %s: %v", name, err)
+		}
+		if (n > 0) != want {
+			t.Errorf("index %s present=%v, want %v", name, n > 0, want)
+		}
+	}
+	assertIndex("idx_api_keys_key_hash", false)
+	assertIndex("idx_external_identities_issuer_subject", false)
+	assertIndex("idx_rate_limit_counters_window_start", true)
+}
+
 func TestMigrate_ReorderSafe(t *testing.T) {
 	dialect := &sqliteDialect{}
 	dsn := dialect.DSN(":memory:")

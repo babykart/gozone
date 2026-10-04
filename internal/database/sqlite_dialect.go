@@ -193,7 +193,6 @@ func (s *sqliteDialect) Migrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_id ON activity_logs(zone_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_created ON activity_logs(zone_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
 		`CREATE TABLE IF NOT EXISTS zone_groups (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL UNIQUE,
@@ -318,7 +317,6 @@ func (s *sqliteDialect) Migrations() []string {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
 		// Session lifetime tracking (idle/absolute enforcement). Shared state so
 		// multi-instance deployments enforce the same idle/absolute window: each
 		// instance throttled-writes last_seen here and reads other instances'
@@ -366,6 +364,13 @@ func (s *sqliteDialect) Migrations() []string {
 			expires_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sso_id_tokens_expires_at ON sso_id_tokens(expires_at)`,
+		// Drop redundant indexes that duplicate UNIQUE constraints:
+		// api_keys.key_hash is UNIQUE (its implicit index already serves the
+		// auth lookup) and external_identities(issuer, subject) carries a
+		// UNIQUE table constraint. Each duplicate index only added write
+		// amplification.
+		`DROP INDEX IF EXISTS idx_api_keys_key_hash`,
+		`DROP INDEX IF EXISTS idx_external_identities_issuer_subject`,
 		// Cluster-wide fixed-window rate-limit counters. One row per
 		// (bucket, window): the shared primary key makes the counter durable
 		// across instances, so the login rate limits no longer scale with the
@@ -379,6 +384,10 @@ func (s *sqliteDialect) Migrations() []string {
 			hits INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_key, window_start)
 		)`,
+		// PurgeRateLimitCounters deletes by window_start alone; the composite
+		// primary key (bucket_key first) cannot serve that seek, so the purge
+		// scanned the whole table.
+		`CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window_start ON rate_limit_counters(window_start)`,
 		// Case-insensitive uniqueness for username and email. The plain
 		// UNIQUE constraints are binary (case-sensitive) on SQLite, so
 		// "Alice" and "alice" could coexist while Login looked them up via

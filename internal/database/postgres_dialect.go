@@ -259,7 +259,6 @@ func (p *postgresDialect) Migrations() []string {
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_id ON activity_logs(zone_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_zone_created ON activity_logs(zone_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
 		`CREATE TABLE IF NOT EXISTS zone_groups (
 			id SERIAL PRIMARY KEY,
 			name VARCHAR(255) NOT NULL UNIQUE,
@@ -357,7 +356,6 @@ func (p *postgresDialect) Migrations() []string {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_external_identities_user ON external_identities(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_external_identities_issuer_subject ON external_identities(issuer, subject)`,
 		// Session lifetime tracking (idle/absolute enforcement, shared across
 		// instances). See sqlite_dialect.go for the rationale.
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -397,6 +395,10 @@ func (p *postgresDialect) Migrations() []string {
 			hits INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (bucket_key, window_start)
 		)`,
+		// PurgeRateLimitCounters deletes by window_start alone; the composite
+		// primary key (bucket_key first) cannot serve that seek, so the purge
+		// scanned the whole table.
+		`CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window_start ON rate_limit_counters(window_start)`,
 		// Case-insensitive uniqueness for username and email: PostgreSQL's
 		// UNIQUE constraints are binary while the lookups fold the case, so
 		// "Alice" and "alice" could coexist. UNIQUE indexes on the generated
@@ -407,5 +409,11 @@ func (p *postgresDialect) Migrations() []string {
 		`DROP INDEX IF EXISTS idx_users_email_lc`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lc ON users(username_lc)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
+		// Drop redundant indexes that duplicate UNIQUE constraints:
+		// api_keys.key_hash is UNIQUE and external_identities(issuer, subject)
+		// carries a UNIQUE table constraint. Each duplicate index only added
+		// write amplification.
+		`DROP INDEX IF EXISTS idx_api_keys_key_hash`,
+		`DROP INDEX IF EXISTS idx_external_identities_issuer_subject`,
 	}
 }
