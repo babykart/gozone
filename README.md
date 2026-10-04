@@ -100,7 +100,7 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | YAML Path | Environment Variable | Default |
 |-----------|---------------------|---------|
 | `auth.session_duration_hours` | `GOZONE_SESSION_DURATION` | `24` |
-| `auth.bcrypt_cost` | — | `12` |
+| `auth.bcrypt_cost` | `GOZONE_BCRYPT_COST` | `12` |
 | `auth.max_api_keys_per_user` | `GOZONE_MAX_API_KEYS` | `10` |
 | `auth.idle_timeout_minutes` | `GOZONE_IDLE_TIMEOUT_MINUTES` | `30` |
 | `auth.absolute_session_timeout_hours` | `GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS` | `24` |
@@ -110,9 +110,10 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 ### Single Sign-On (OpenID Connect / OAuth2)
 
 GoZone can delegate login to one or more external identity providers using
-OpenID Connect (OIDC) — Authorization Code flow with PKCE (S256), a signed
-`state` parameter (CSRF), a `nonce`, JWKS ID-token verification, just-in-time
-user provisioning, role/group mapping from claims, and RP-initiated logout.
+OpenID Connect (OIDC) — Authorization Code flow with PKCE (S256), an
+AES-256-GCM **encrypted** `state` parameter (confidentiality + CSRF), a
+`nonce`, JWKS ID-token verification, just-in-time user provisioning,
+role/group mapping from claims, and RP-initiated logout.
 Built-in provider presets: **Gitea**, Google, GitLab, Keycloak, Authentik,
 Azure AD (any other name is treated as a generic OIDC provider).
 
