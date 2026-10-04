@@ -993,10 +993,18 @@ func sanitizeDSN(dsn string) string {
 		}
 		return dsn // no password present in userinfo
 	}
-	// PostgreSQL-style: password=secret
-	re := regexp.MustCompile(`password=[^ ]+`)
-	if re.MatchString(dsn) {
-		return re.ReplaceAllString(dsn, "password=***")
+	// PostgreSQL-style key=value: password=secret or password='two words'.
+	// A single-quoted value (lib/pq's form for values containing spaces, with
+	// backslash escapes) is redacted whole, quotes included — the previous
+	// [^ ]+ match stopped at the first space and leaked the rest of a quoted
+	// password into the log. Quoted values are handled first so the bare
+	// pattern cannot truncate them.
+	if strings.Contains(dsn, "password=") {
+		quoted := regexp.MustCompile(`password='(?:[^'\\]|\\.)*'`)
+		dsn = quoted.ReplaceAllString(dsn, "password=***")
+		bare := regexp.MustCompile(`password=[^ ]+`)
+		dsn = bare.ReplaceAllString(dsn, "password=***")
+		return dsn
 	}
 	// SQLite: file path, no credentials
 	return dsn

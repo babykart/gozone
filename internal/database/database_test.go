@@ -586,6 +586,41 @@ func TestSanitizeDSN_NoCredentials(t *testing.T) {
 	}
 }
 
+// TestSanitizeDSN_PostgresQuotedPassword pins the key=value quoted form: a
+// single-quoted password containing spaces (lib/pq's syntax) must be redacted
+// whole, quotes included. The previous [^ ]+ match stopped at the first space
+// and leaked the rest of the password into the log.
+func TestSanitizeDSN_PostgresQuotedPassword(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			"host=db user=admin password='my secret' dbname=gozone",
+			"host=db user=admin password=*** dbname=gozone",
+		},
+		{
+			"password=' leading and trailing '",
+			"password=***",
+		},
+		// Backslash-escaped quote inside the quoted value: still redacted whole.
+		{
+			`host=db password='it\'s complex' dbname=gozone`,
+			`host=db password=*** dbname=gozone`,
+		},
+		// Unquoted form unchanged in behaviour.
+		{
+			"host=db password=secret dbname=gozone",
+			"host=db password=*** dbname=gozone",
+		},
+	}
+	for _, tt := range tests {
+		if got := sanitizeDSN(tt.input); got != tt.expected {
+			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
 func TestSanitizeDSN_URLForm(t *testing.T) {
 	tests := []struct {
 		input    string
