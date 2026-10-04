@@ -110,13 +110,15 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	// multi-instance startup (or a slow/stuck holder) that exhausts MySQL's
 	// connection/thread pool — which then makes GET_LOCK itself return NULL,
 	// the exact "thread limit" failure gozone boots into. Migrations finish in
-	// seconds, so 60s is a generous bound for a waiting instance. A NULL is
-	// retried a few times because it can also reflect a transient server-side
+	// seconds, so 60s is a generous per-attempt bound — and a TIMED-OUT
+	// attempt is retried (up to ≈ 5 minutes total) so a long migration on the
+	// holder no longer aborts a waiting replica's startup. A NULL is retried
+	// for the same span because it can also reflect a transient server-side
 	// hiccup that clears on its own.
 	const (
 		lockTimeoutSec = 60
-		maxAttempts    = 3
-		retryBackoff   = 2 * time.Second
+		maxAttempts    = 5
+		retryBackoff   = 5 * time.Second
 	)
 	query := fmt.Sprintf("SELECT GET_LOCK('gozone_migrations', %d)", lockTimeoutSec)
 	var got sql.NullInt64
@@ -126,12 +128,13 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 			conn.Close() // #nosec G104 -- best-effort cleanup on error path
 			return nil, fmt.Errorf("acquire migration lock: %w", err)
 		}
-		// Retry only on a NULL result (server-side error); a definitive 1
-		// (acquired) or 0 (timed out) falls through to mysqlGetLockResult.
-		if got.Valid || attempt >= maxAttempts {
+		// Retry while the lock was not acquired (NULL internal error or a
+		// timed-out attempt); a definitive 1 (acquired) breaks immediately,
+		// and the final attempt falls through to mysqlGetLockResult.
+		if !mysqlLockRetryable(got) || attempt >= maxAttempts {
 			break
 		}
-		logger.Warn("GET_LOCK returned NULL (MySQL internal error); retrying",
+		logger.Warn("GET_LOCK not acquired (timed out or NULL); retrying",
 			"attempt", attempt, "of", maxAttempts, "backoff", retryBackoff.String())
 		time.Sleep(retryBackoff)
 	}
@@ -151,6 +154,14 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
+}
+
+// mysqlLockRetryable reports whether a GET_LOCK result warrants another
+// attempt: NULL (internal error, often transient) or 0 (timed out — the
+// holder may legitimately still be migrating). A definitive 1 (acquired) and
+// any other unexpected value are not retryable.
+func mysqlLockRetryable(got sql.NullInt64) bool {
+	return !got.Valid || got.Int64 == 0
 }
 
 // mysqlGetLockResult classifies the integer returned by MySQL's GET_LOCK:

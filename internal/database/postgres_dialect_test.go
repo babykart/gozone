@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -221,8 +222,9 @@ func TestPostgresDialect_Migrations_UseIfNotExists(t *testing.T) {
 
 func TestPostgresDialect_LockMigrations(t *testing.T) {
 	d := &postgresDialect{}
-	// The lock uses a fixed advisory lock ID. We verify that calling the release
-	// function does not panic and logs no errors when given a working stub.
+	// The lock is a transaction-scoped PostgreSQL advisory lock. We verify
+	// that calling the release function does not panic and logs no errors
+	// when given a working stub.
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open stub db: %v", err)
@@ -231,9 +233,43 @@ func TestPostgresDialect_LockMigrations(t *testing.T) {
 
 	release, err := d.LockMigrations(db)
 	if err == nil {
-		// SQLite does not implement pg_advisory_lock, so acquiring the lock must
-		// fail against this stub. If it succeeded unexpectedly, behave normally.
+		// SQLite does not implement the PostgreSQL statements, so acquiring
+		// the lock must fail against this stub. If it succeeded
+		// unexpectedly, behave normally.
 		release()
+	}
+}
+
+// TestPostgresAdvisoryLockKey pins the advisory-lock key derivation: stable,
+// distinctive (not the banal small constants like 42 any other application
+// on the cluster could take), and different from another string's hash.
+func TestPostgresAdvisoryLockKey(t *testing.T) {
+	k1, k2 := postgresAdvisoryLockKey(), postgresAdvisoryLockKey()
+	if k1 != k2 {
+		t.Fatalf("key must be deterministic, got %d then %d", k1, k2)
+	}
+	if k1 == 42 {
+		t.Fatal("key must not be the banal constant 42")
+	}
+	h := fnv.New64a()
+	h.Write([]byte("some-other-application"))
+	if k1 == int64(h.Sum64()) {
+		t.Fatal("key must be derived from a GoZone-specific string")
+	}
+}
+
+// TestIsPgQueryCanceled pins the retry classification: only SQLSTATE 57014
+// (query_canceled — what statement_timeout surfaces as) is a retryable lock
+// wait; other driver errors and plain errors are not.
+func TestIsPgQueryCanceled(t *testing.T) {
+	if !isPgQueryCanceled(&pq.Error{Code: "57014"}) {
+		t.Error("57014 (query_canceled) must be retryable")
+	}
+	if isPgQueryCanceled(&pq.Error{Code: "57000"}) {
+		t.Error("57000 must not be classified as a lock-wait timeout")
+	}
+	if isPgQueryCanceled(errors.New("plain error")) {
+		t.Error("a non-driver error must not be classified as a lock-wait timeout")
 	}
 }
 

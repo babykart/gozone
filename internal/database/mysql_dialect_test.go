@@ -276,6 +276,29 @@ func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 	}
 }
 
+// TestMySQLLockRetryable pins the retry decision: a timed-out attempt (0) and
+// a NULL internal error are retried — the holder may legitimately still be
+// migrating — while an acquired lock (1) and unexpected values are not.
+func TestMySQLLockRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		got  sql.NullInt64
+		want bool
+	}{
+		{"acquired", sql.NullInt64{Int64: 1, Valid: true}, false},
+		{"timeout_zero", sql.NullInt64{Int64: 0, Valid: true}, true},
+		{"null_internal_error", sql.NullInt64{}, true},
+		{"unexpected_value", sql.NullInt64{Int64: 2, Valid: true}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mysqlLockRetryable(tc.got); got != tc.want {
+				t.Errorf("mysqlLockRetryable(%v) = %v, want %v", tc.got, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMySQLGetLockResult covers the GET_LOCK return-value classifier that
 // LockMigrations relies on. Previously only ExecContext's error was inspected,
 // so a NULL (internal error) or 0 (timeout) result silently let migrations run

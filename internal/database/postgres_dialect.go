@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -78,37 +79,105 @@ func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []
 		table, cols, placeholders(len(columns)), target)
 }
 
+// postgresAdvisoryLockKey derives the migration advisory-lock key from the
+// module path. The previous constant 42 was banal enough that any other
+// application sharing the PostgreSQL cluster could take (or hold) it. A
+// stable FNV-1a hash of a GoZone-specific string gives a distinctive,
+// deterministic key.
+func postgresAdvisoryLockKey() int64 {
+	h := fnv.New64a()
+	// #nosec G104 -- hash.Hash's Write never returns an error.
+	h.Write([]byte("github.com/babykart/gozone/schema-migrations"))
+	// #nosec G115 -- intentional bit-pattern reinterpretation: PostgreSQL
+	// advisory-lock keys are signed int64, and an arbitrary (possibly
+	// "negative") key is exactly what we want from a hash.
+	return int64(h.Sum64())
+}
+
+// Bounds for the PostgreSQL migration-lock acquisition: the per-attempt wait
+// (statement_timeout) and the total number of attempts before giving up
+// (≈ 5 minutes with the backoff). Migrations finish in seconds; the bound
+// exists so a stuck holder cannot pin a replica's startup forever.
+const (
+	postgresLockTimeoutSecs = 60
+	postgresLockMaxAttempts = 5
+	postgresLockBackoff     = 5 * time.Second
+)
+
 // LockMigrations acquires a PostgreSQL advisory lock so only one instance
 // runs migrations at a time. The lock is released by the returned function.
 //
-// pg_advisory_lock and pg_advisory_unlock are session-scoped: they must
-// execute on the same connection. A single *sql.Conn is pinned from the
-// pool for the entire acquire/release lifecycle. Without this pinning,
-// *sql.DB.Exec borrows a different connection per call and the unlock is
-// a silent no-op, leaking the lock until the original connection is closed.
+// The lock is transaction-scoped (pg_advisory_xact_lock) and held by an open
+// transaction on a single pinned *sql.Conn:
+//
+//   - It auto-releases at COMMIT/ROLLBACK, so the release can never silently
+//     miss the session, and it works behind PgBouncer in transaction pooling
+//     mode, where a session-level pg_advisory_lock can be taken on one server
+//     session and released on another, leaking the lock until that session
+//     dies.
+//   - The wait is bounded: SET LOCAL statement_timeout caps each attempt
+//     (advisory-lock waits honour it) and the acquisition is retried with a
+//     backoff. The previous unqualified pg_advisory_lock waited FOREVER,
+//     pinning a pooled connection and every replica's startup behind a slow
+//     or stuck holder.
+//   - The key is derived from the module path instead of the banal 42.
 func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	ctx := context.Background()
 	conn, err := pool.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire connection for migration lock: %w", err)
 	}
-	const lockID = 42
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", lockID); err != nil {
+	key := postgresAdvisoryLockKey()
+
+	var tx *sql.Tx
+	for attempt := 1; ; attempt++ {
+		if tx, err = conn.BeginTx(ctx, nil); err != nil {
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = '%ds'", postgresLockTimeoutSecs)); err != nil {
+			_ = tx.Rollback()
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire migration lock (set statement_timeout): %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", key); err == nil {
+			break // lock held by this open transaction
+		}
+		// The canceled statement aborts the transaction; retry on a fresh one.
+		_ = tx.Rollback()
+		if isPgQueryCanceled(err) && attempt < postgresLockMaxAttempts {
+			logger.Warn("pg_advisory_xact_lock timed out; retrying",
+				"attempt", attempt, "of", postgresLockMaxAttempts, "backoff", postgresLockBackoff.String())
+			time.Sleep(postgresLockBackoff)
+			continue
+		}
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("acquire migration lock: %w", err)
 	}
+
 	released := false
 	release := func() {
 		if released {
 			return
 		}
 		released = true
-		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
+		// The transaction did nothing but hold the lock: rolling it back
+		// releases the advisory lock deterministically.
+		if err := tx.Rollback(); err != nil {
 			logger.Error("failed to release postgres migration lock", "error", err)
 		}
 		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
 	}
 	return release, nil
+}
+
+// isPgQueryCanceled reports whether err is PostgreSQL's query_canceled
+// SQLSTATE (57014) — the error a statement terminated by statement_timeout
+// surfaces as, used to distinguish "lock wait timed out, retry" from a real
+// failure.
+func isPgQueryCanceled(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "57014"
 }
 
 // postgresAlreadyExistsSQLSTATEs are PostgreSQL SQLSTATE codes indicating a
