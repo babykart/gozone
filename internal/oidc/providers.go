@@ -46,12 +46,11 @@ var presets = map[string]Preset{
 		DefaultScopes: []string{ScopeOpenID, ScopeProfile, ScopeEmail},
 		Icon:          "google",
 	},
-	"github": {
-		Type:          "github",
-		DisplayName:   "GitHub",
-		DefaultScopes: []string{ScopeOpenID, ScopeProfile, ScopeEmail},
-		Icon:          "github",
-	},
+	// GitHub has NO preset: its user OAuth2 apps do not issue an id_token
+	// (and do not expose OIDC discovery), so a preset would advertise a
+	// configuration that can never complete GoZone's authorization-code +
+	// id_token flow. Federate through an OIDC-capable IdP instead — see
+	// docs/SSO.md "GitHub — not directly supported".
 	"gitlab": {
 		Type:          "gitlab",
 		DisplayName:   "GitLab",

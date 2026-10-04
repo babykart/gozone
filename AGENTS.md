@@ -87,7 +87,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - Delegated login is **off** unless `oidc.enabled` (`GOZONE_OIDC_ENABLED`) is set; the `internal/oidc` package is the concrete impl behind `Handler.OIDC SSOService`. `SSOService.Enabled()` gates the login-page provider buttons and the `/auth/oidc/*` handlers (no-op → `/login` when disabled).
 - Flow: Authorization Code + PKCE (S256), AES-256-GCM encrypted `state` (confidentiality + CSRF), `nonce`, JWKS ID-token verification, just-in-time provisioning, role/group mapping from claims, RP-initiated logout. The `(issuer, subject)` pair is the link key to the local user; `oidc.Claims` exposes normalized fields plus `Raw` for config-driven dotted-path mapping (e.g. `realm_access.roles`).
 - The shared `oauth2.Config` is **cloned per callback** (`cloneOAuth2Config`) so concurrent callbacks cannot race on `RedirectURL`.
-- Built-in provider presets: Gitea, Google, GitHub, GitLab, Keycloak, Authentik, Azure AD (any other name = generic OIDC). The redirect URI is always `https://<host>/auth/oidc/<name>/callback`.
+- Built-in provider presets: Gitea, Google, GitLab, Keycloak, Authentik, Azure AD (any other name = generic OIDC). GitHub has NO preset — its user OAuth does not issue `id_token`s; federate via an OIDC-capable IdP (see `docs/SSO.md`). The redirect URI is always `https://<host>/auth/oidc/<name>/callback`.
 - Idle/absolute session timeouts apply to local **and** SSO sessions, enforced cluster-wide via the `sessions` table (in-memory cache coarsens writes to ~1 min). See README "Authentication" and `docs/SSO.md` for full provider setup.
 
 ## Password Policy

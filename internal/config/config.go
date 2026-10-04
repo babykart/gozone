@@ -256,9 +256,11 @@ type OIDCConfig struct {
 }
 
 // OIDCProviderConfig describes a single identity provider. Name maps to a
-// well-known preset (gitea, google, github, gitlab, keycloak, authentik,
+// well-known preset (gitea, google, gitlab, keycloak, authentik,
 // azure) that supplies defaults (display name, scopes); any other name is
-// treated as a generic OIDC provider using standard discovery.
+// treated as a generic OIDC provider using standard discovery. There is
+// deliberately no "github" preset: GitHub's user OAuth2 apps do not issue
+// id_tokens (see docs/SSO.md).
 type OIDCProviderConfig struct {
 	// Name is the unique provider slug: the URL key (/auth/oidc/{name}/...),
 	// the preset lookup key, and the cookie/state prefix. Must be unique within

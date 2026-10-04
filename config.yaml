@@ -151,8 +151,10 @@ admin:
 #
 # Each provider is discovered via its issuer_url
 # (/.well-known/openid-configuration). Known provider names (gitea, google,
-# github, gitlab, keycloak, authentik, azure) supply default display names and
-# scopes; any other name is treated as a generic OIDC provider.
+# gitlab, keycloak, authentik, azure) supply default display names and
+# scopes; any other name is treated as a generic OIDC provider. There is no
+# "github" preset: GitHub's user OAuth does not issue id_tokens (see
+# docs/SSO.md for the federation workaround).
 #
 # Override everything via GOZONE_OIDC_* env vars; a single provider can be
 # declared entirely from env (GOZONE_OIDC_PROVIDER_NAME / _ISSUER_URL /

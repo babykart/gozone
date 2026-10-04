@@ -34,10 +34,21 @@ func TestGiteaPresetRegistered(t *testing.T) {
 }
 
 func TestStandardPresetsRegistered(t *testing.T) {
-	for _, name := range []string{"google", "github", "gitlab", "keycloak", "authentik", "azure"} {
+	for _, name := range []string{"google", "gitlab", "keycloak", "authentik", "azure"} {
 		if _, ok := LookupPreset(name); !ok {
 			t.Errorf("standard preset %q must be registered", name)
 		}
+	}
+}
+
+// TestGithubPresetNotRegistered pins the deliberate absence of the github
+// preset: GitHub's user OAuth2 apps do not issue an id_token (nor expose
+// OIDC discovery), so a "github" preset advertised a configuration that can
+// never complete GoZone's authorization-code + id_token flow. Operators
+// federate through an OIDC-capable IdP (see docs/SSO.md).
+func TestGithubPresetNotRegistered(t *testing.T) {
+	if _, ok := LookupPreset("github"); ok {
+		t.Error("the github preset must stay unregistered: GitHub user OAuth does not issue id_tokens (see docs/SSO.md)")
 	}
 }
 
