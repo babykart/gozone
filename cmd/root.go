@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	versionpkg "github.com/babykart/gozone/internal/version"
+
 	"github.com/spf13/cobra"
 )
 
@@ -22,9 +24,13 @@ func newRootCmd() *cobra.Command {
 		Short: "PowerDNS Admin Interface",
 		Long:  "GoZone — PowerDNS Admin Interface. Start the HTTP server with `gozone server`, or run `gozone user <subcommand>` for emergency user-account operations (e.g. `gozone user unlock`).",
 		// Version enables Cobra's built-in --version flag (prints
-		// "gozone version <version>"). Use `gozone version` for the full
-		// banner (commit, build date, go version, platform).
-		Version: version,
+		// "gozone version <version>"). It must go through versionpkg.Resolve
+		// exactly like `gozone version`: with the raw ldflags variable a
+		// `go install` binary (no ldflags) printed "dev" while the version
+		// subcommand resolved a real commit from the embedded VCS metadata.
+		// Use `gozone version` for the full banner (commit, build date, go
+		// version, platform).
+		Version: versionpkg.Resolve(version, commit, buildDate).Version,
 		// Silence cobra's own error/usage printing: errors are surfaced by
 		// main() via logger.Fatal so we keep a single, structured report
 		// path and avoid stderr noise during tests.

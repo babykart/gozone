@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/babykart/gozone/internal/config"
+	versionpkg "github.com/babykart/gozone/internal/version"
 )
 
 // executeServer builds a fresh root command and runs `gozone server` with
@@ -97,6 +98,30 @@ database:
 	}
 	if !strings.Contains(err.Error(), "/32") {
 		t.Errorf("error should suggest the /32 form for the operator, got: %v", err)
+	}
+}
+
+// TestRootVersionUsesResolved pins that the built-in --version flag reports
+// the version resolved through internal/version (ldflags, falling back to
+// the embedded VCS metadata) — the same value as `gozone version`. It used
+// to print the raw ldflags variable, so a `go install` binary (no ldflags)
+// answered "dev" while the version subcommand reported a real commit.
+func TestRootVersionUsesResolved(t *testing.T) {
+	want := versionpkg.Resolve(version, commit, buildDate).Version
+	root := newRootCmd()
+	if root.Version != want {
+		t.Errorf("rootCmd.Version = %q, want the resolved %q", root.Version, want)
+	}
+
+	// The --version output must carry the resolved version too.
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetArgs([]string{"--version"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute --version: %v", err)
+	}
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("--version output %q must contain the resolved version %q", out.String(), want)
 	}
 }
 
