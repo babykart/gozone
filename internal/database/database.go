@@ -720,21 +720,6 @@ func (db *DB) migrate() error {
 				logger.Info("migration applied concurrently by another instance; skipping", "version", version)
 				continue
 			}
-			// A migration whose content hash changed (e.g. a typo fix in
-			// an old, already-applied migration) re-runs here and fails on
-			// non-idempotent DDL (ALTER TABLE ADD COLUMN) because the object
-			// already exists. Treat that as "already applied": record the new
-			// hash and continue instead of aborting startup. The content-hash
-			// identity still rejects genuinely-new migrations (their statements
-			// don't trip an already-exists error) and survives slice
-			// reordering (all hashes stay recorded, so none re-run).
-			if db.dialect.IsAlreadyExistsError(err) {
-				logger.Warn("migration already applied; recording new content hash (migration was likely edited)", "version", version, "error", err)
-				if err := db.recordMigrationVersion(context.Background(), version); err != nil {
-					return err
-				}
-				continue
-			}
 			return err
 		}
 
@@ -744,23 +729,18 @@ func (db *DB) migrate() error {
 	return nil
 }
 
-// recordMigrationVersion marks a migration as applied in schema_migrations
-// without running it. It is the fallback path for migrations that are already
-// present in the schema (detected via IsAlreadyExistsError) but whose content
-// hash changed, so they don't re-run on every startup. The insert-ignore form
-// keeps it race-safe against another instance recording the same version
-// concurrently.
-func (db *DB) recordMigrationVersion(ctx context.Context, version string) error {
-	if _, err := db.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version); err != nil {
-		return fmt.Errorf("record migration %s: %w", version, err)
-	}
-	return nil
-}
-
 // errMigrationAppliedElsewhere reports that applyMigration lost the claim on a
 // migration version to another process that is applying (or has applied) it.
 // The caller skips the migration instead of failing startup.
 var errMigrationAppliedElsewhere = errors.New("migration claimed by another instance")
+
+// firstLine returns the first line of a SQL statement, for log brevity.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
 
 // applyMigration runs a single migration's statements and records it in
 // schema_migrations inside one transaction, so a failure midway never leaves
@@ -805,6 +785,18 @@ func (db *DB) applyMigration(sqlText, version string) error {
 
 	for _, stmt := range splitStatements(sqlText) {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			// An already-existing object is skipped STATEMENT BY STATEMENT:
+			// a re-run migration (edited content hash, or a database whose
+			// objects predate tracking) used to abort at its first
+			// already-exists error and every FOLLOWING statement was silently
+			// dropped — on MySQL, where DDL implicitly commits, that left a
+			// partially applied migration recorded as fully applied. Skipping
+			// just the offending statement lets the remaining ones run.
+			if db.dialect.IsAlreadyExistsError(err) {
+				logger.Warn("migration statement skipped: object already exists",
+					"version", version, "statement", firstLine(stmt), "error", err)
+				continue
+			}
 			return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
 		}
 	}

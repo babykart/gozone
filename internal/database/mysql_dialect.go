@@ -191,6 +191,7 @@ var mysqlAlreadyExistsCodes = map[uint16]bool{
 	1060: true, // ER_DUP_FIELDNAME       - Duplicate column name
 	1061: true, // ER_DUP_KEYNAME         - Duplicate key name (index)
 	1068: true, // ER_MULTIPLE_PRI_KEY    - Multiple primary key defined
+	1826: true, // ER_DUP_FOREIGN_KEY_NAME - Duplicate foreign key constraint name
 }
 
 // IsAlreadyExistsError reports whether err is a MySQL "object already exists"
@@ -326,7 +327,7 @@ func (m *mysqlDialect) Migrations() []string {
 			KEY idx_login_attempts_user (user_id, attempted_at),
 			KEY idx_login_attempts_attempted_at (attempted_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		// m21: idx_activity_logs_zone_created was originally created inline
+		// Note: idx_activity_logs_zone_created was originally created inline
 		// above as (zone_id, created_at) without DESC, unlike the SQLite and
 		// PostgreSQL dialects which both order created_at DESC. Rebuild the
 		// index with DESC so zone-scoped activity queries (ORDER BY
@@ -353,15 +354,23 @@ func (m *mysqlDialect) Migrations() []string {
 		// idx_api_keys_key_hash (auth lookup), so per-user listing degrades to
 		// a full table scan as the table grows across all users. MySQL < 8.0
 		// parses DESC but ignores it; MySQL 8.0+ / modern MariaDB build a real
-		// descending index (see m21 note above).
+		// descending index (see the idx_activity_logs_zone_created note above).
 		`CREATE INDEX idx_api_keys_user_created ON api_keys(user_id, created_at DESC)`,
 		// revoked_tokens.user_id had no FK, so deleting a user
 		// left orphan revocation rows until the expiry cleanup — unlike
 		// password_history / api_keys / group_members which all cascade. Add a
 		// real FK with ON DELETE CASCADE, matching the other user_id tables.
-		// Pre-existing orphans are removed first so the constraint can be added.
+		// Pre-existing orphans are removed first so the constraint can be
+		// added. The constraint is NAMED: an unnamed ADD FOREIGN KEY succeeds
+		// again on every replay (MySQL mints a fresh table_ibfk_N each time,
+		// silently stacking duplicate constraints), while the named form
+		// fails deterministically with ER_DUP_FOREIGN_KEY_NAME (1826) which
+		// the migration runner tolerates as already-applied. Databases that
+		// ran the original unnamed form keep their auto-named constraint and
+		// gain this named twin once — identical semantics, bounded, and
+		// fresh databases get only the named one.
 		`DELETE FROM revoked_tokens WHERE user_id NOT IN (SELECT id FROM users);
-		ALTER TABLE revoked_tokens ADD FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
+		ALTER TABLE revoked_tokens ADD CONSTRAINT fk_revoked_tokens_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
 		// OpenID Connect / OAuth2: see sqlite_dialect.go for the rationale.
 		`CREATE TABLE IF NOT EXISTS external_identities (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -387,7 +396,8 @@ func (m *mysqlDialect) Migrations() []string {
 		// SSO account-linking lookup (FindUserByEmail). A generated column is
 		// used instead of a functional index because the project supports
 		// MySQL < 8.0.13 / MariaDB where functional indexes are unavailable
-		// (see m21 note). Works on MySQL 5.7+ and MariaDB.
+		// (generated columns are supported there; see the
+		// idx_activity_logs_zone_created note). Works on MySQL 5.7+ and MariaDB.
 		`ALTER TABLE users ADD COLUMN email_lc VARCHAR(255) GENERATED ALWAYS AS (LOWER(email)) STORED, ADD INDEX idx_users_email_lc (email_lc)`,
 		// Per-user session-revocation cutoff. See
 		// sqlite_dialect.go for the rationale.

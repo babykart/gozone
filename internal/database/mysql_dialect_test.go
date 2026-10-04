@@ -192,6 +192,7 @@ func TestMySQLDialect_IsAlreadyExistsError(t *testing.T) {
 		{1060, true},  // ER_DUP_FIELDNAME
 		{1061, true},  // ER_DUP_KEYNAME
 		{1068, true},  // ER_MULTIPLE_PRI_KEY
+		{1826, true},  // ER_DUP_FOREIGN_KEY_NAME (named FK replay)
 		{1146, false}, // ER_NO_SUCH_TABLE
 		{1064, false}, // ER_PARSE_ERROR
 	}

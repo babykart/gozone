@@ -754,6 +754,54 @@ func TestMigrate_SecondConnectionSameFile(t *testing.T) {
 	}
 }
 
+// TestApplyMigration_AlreadyExistsSkipsStatementNotMigration pins the
+// per-statement already-exists tolerance: a re-run multi-statement migration
+// must skip only the statement whose object exists and STILL run the
+// remaining statements, then record its version. The previous whole-
+// migration fallback dropped every statement after the first already-exists
+// error — on MySQL, where DDL implicitly commits, a partially applied
+// migration ended up recorded as fully applied.
+func TestApplyMigration_AlreadyExistsSkipsStatementNotMigration(t *testing.T) {
+	dialect := &sqliteDialect{}
+	conn, err := sql.Open("sqlite3", dialect.DSN(":memory:"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+
+	db := &DB{Conn: conn, dialect: dialect}
+	if _, err := conn.Exec(`CREATE TABLE schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	// The SECOND statement's object already exists (edited-migration replay,
+	// or a database whose objects predate migration tracking).
+	if _, err := conn.Exec("CREATE TABLE stmt_two (id INTEGER)"); err != nil {
+		t.Fatalf("pre-create stmt_two: %v", err)
+	}
+
+	sqlText := "CREATE TABLE stmt_one (id INTEGER);\nCREATE TABLE stmt_two (id INTEGER);\nCREATE TABLE stmt_three (id INTEGER)"
+	version := migrationVersion(sqlText)
+	if err := db.applyMigration(sqlText, version); err != nil {
+		t.Fatalf("applyMigration with a pre-existing object: %v", err)
+	}
+
+	// The statements BEFORE and AFTER the already-existing object must have
+	// run, and the version must be recorded.
+	for _, table := range []string{"stmt_one", "stmt_three"} {
+		var n int
+		if err := conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&n); err != nil || n != 1 {
+			t.Errorf("table %s must be created by the re-run migration (count=%d, err=%v)", table, n, err)
+		}
+	}
+	var recorded int
+	if err := conn.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&recorded); err != nil || recorded != 1 {
+		t.Errorf("version must be recorded after the tolerated replay (recorded=%d, err=%v)", recorded, err)
+	}
+}
+
 func TestMigrate_ReorderSafe(t *testing.T) {
 	dialect := &sqliteDialect{}
 	dsn := dialect.DSN(":memory:")
