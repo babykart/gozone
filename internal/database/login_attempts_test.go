@@ -6,18 +6,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 func newLoginAttemptsTestDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDB(t)
 }
 
 func insertUserForLoginTests(t *testing.T, db *DB, username string) int64 {
@@ -427,7 +420,7 @@ func TestIsLastEnabledAdmin_DisabledAdmin(t *testing.T) {
 }
 
 // TestIsLastEnabledAdmin_ConcurrentLockOrder exercises the lock-ordering
-// invariant fixed in REVIEW.md M-2: IsLastEnabledAdmin must acquire the
+// invariant: IsLastEnabledAdmin must acquire the
 // enabled-admin set lock (CountEnabledAdmins' FOR UPDATE) BEFORE the target
 // row, matching UpdateUser/DeleteUser. Some goroutines repeatedly call
 // IsLastEnabledAdmin while others open a tx, call CountEnabledAdmins (the

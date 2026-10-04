@@ -4,18 +4,11 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 func newRevokedTokensTestDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDB(t)
 }
 
 // seedUser inserts a user (the FK target for revoked_tokens.user_id) and
@@ -101,7 +94,7 @@ func TestCleanupRevokedTokens(t *testing.T) {
 	}
 }
 
-// TestRevokedTokens_CascadeOnUserDelete is the I-9 regression test:
+// TestRevokedTokens_CascadeOnUserDelete is a regression test:
 // revoked_tokens.user_id is now a real FK with ON DELETE CASCADE (matching
 // password_history / api_keys / group_members), so deleting a user must remove
 // their revocation rows instead of leaving orphans for the expiry cleanup.

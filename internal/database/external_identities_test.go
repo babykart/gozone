@@ -5,8 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 func TestExternalIdentitiesLookupNotFound(t *testing.T) {
@@ -123,7 +121,7 @@ func TestFindUserByEmail(t *testing.T) {
 }
 
 func TestFindUserByEmail_UsesEmailIndex(t *testing.T) {
-	// Regression guard for REVIEW.md L-13: the lookup must seek through
+	// Regression guard: the lookup must seek through
 	// idx_users_email_lc (generated LOWER(email)) rather than wrapping the
 	// UNIQUE-indexed column in LOWER(), which defeated the index and forced a
 	// full scan. SQLite exposes the chosen plan via EXPLAIN QUERY PLAN; a
@@ -284,17 +282,6 @@ func TestSetUserRole(t *testing.T) {
 	}
 }
 
-// newTestDB mirrors the handler-test helper but lives in the database package
-// so these tests do not import handlers (which would be a cycle).
-func newTestDB(t *testing.T) *DB {
-	t.Helper()
-	db, err := New(&config.DatabaseConfig{
-		Driver: "sqlite3",
-		DSN:    ":memory:",
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
+// newTestDB now lives in matrix_test.go: in-memory SQLite by default, the
+// dbmatrix live server when GOZONE_TEST_DB_DRIVER/GOZONE_TEST_DB_DSN are
+// set — so this suite runs on the CI dialect matrix too.

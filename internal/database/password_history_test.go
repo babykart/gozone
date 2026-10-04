@@ -5,27 +5,24 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
-// newHistoryTestDB returns an in-memory DB with a single seeded user. The
+// newHistoryTestDB returns a test DB (in-memory SQLite, or the dbmatrix
+// live server under the CI dialect jobs) with a single seeded user. The
 // caller must close the returned DB.
 func newHistoryTestDB(t *testing.T) (*DB, int64) {
 	t.Helper()
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	res, err := db.ExecContext(context.Background(),
+	db := newTestDB(t)
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it
+	// (the portability convention), and this suite runs on the dialect
+	// matrix.
+	uid, err := db.ExecReturnID(context.Background(),
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, 'x', 'user', 1)`,
 		"histuser", "hist@test.local",
 	)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	uid, _ := res.LastInsertId()
 	return db, uid
 }
 
@@ -124,7 +121,7 @@ func TestPasswordHistory_RespectsLimit(t *testing.T) {
 	}
 }
 
-// TestPasswordHistory_DetectsReuseAtAnyPosition is the I-4 regression test: a
+// TestPasswordHistory_DetectsReuseAtAnyPosition is a regression test: a
 // reuse must be detected no matter where it sits in the history window. The
 // function must compare every loaded hash — it must not short-circuit on the
 // first match, otherwise the response time would leak the rank of the reuse.

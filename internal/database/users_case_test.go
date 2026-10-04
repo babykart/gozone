@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 // TestUsersCaseInsensitiveUnique pins the folded uniqueness of username and
@@ -15,11 +13,7 @@ import (
 // failures onto the wrong account, and turned SSO email linking
 // non-deterministic.
 func TestUsersCaseInsensitiveUnique(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := newTestDB(t)
 	ctx := context.Background()
 
 	seed := func(username, email string) error {

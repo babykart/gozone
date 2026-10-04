@@ -6,18 +6,11 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 func newRateLimitTestDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDB(t)
 }
 
 func TestHitRateLimit_CountsAndBlocks(t *testing.T) {
@@ -186,11 +179,7 @@ func TestRateLimitHitUpsertSQL(t *testing.T) {
 // under concurrency: N goroutines hitting the same window must all be
 // accounted (final count == N) with no lost increments.
 func TestHitRateLimit_ConcurrentSameKeySerialized(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := newTestDB(t)
 
 	const n = 32
 	window := time.Now().UTC().Truncate(time.Minute)

@@ -4,18 +4,11 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/babykart/gozone/internal/config"
 )
 
 func newActivityLogsTestDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return newTestDB(t)
 }
 
 func TestPurgeActivityLogs(t *testing.T) {

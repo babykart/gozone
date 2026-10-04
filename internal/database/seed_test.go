@@ -38,11 +38,7 @@ func captureLog(t *testing.T, fn func()) string {
 }
 
 func TestSeedAdminUser_DefaultPasswordWarning(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -59,11 +55,7 @@ func TestSeedAdminUser_DefaultPasswordWarning(t *testing.T) {
 }
 
 func TestSeedAdminUser_CustomPasswordNoWarning(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -81,11 +73,7 @@ func TestSeedAdminUser_CustomPasswordNoWarning(t *testing.T) {
 }
 
 func TestSeedAdminUser_FirstStartup(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -131,11 +119,7 @@ func TestSeedAdminUser_FirstStartup(t *testing.T) {
 }
 
 func TestSeedAdminUser_ExistingUsers(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -160,11 +144,7 @@ func TestSeedAdminUser_ExistingUsers(t *testing.T) {
 }
 
 func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	t.Setenv("GOZONE_ADMIN_PASSWORD", "custom-secret")
 
@@ -195,11 +175,7 @@ func TestSeedAdminUser_EnvVarOverride(t *testing.T) {
 }
 
 func TestSeedAdminUser_CustomConfig(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -245,14 +221,10 @@ func TestSeedAdminUser_CustomConfig(t *testing.T) {
 }
 
 func TestSeedAdminUser_RecordsPasswordHistory(t *testing.T) {
-	// REVIEW.md L-15a: the seed password hash must be recorded in
+	// The seed password hash must be recorded in
 	// password_history even when history is disabled (HistorySize == 0), so
 	// that enabling history later catches a revert to the seed password.
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -293,17 +265,13 @@ func TestSeedAdminUser_RecordsPasswordHistory(t *testing.T) {
 }
 
 func TestSeedAdminUser_ConcurrentBootstrapIsIdempotent(t *testing.T) {
-	// REVIEW.md L-15b: two instances starting concurrently on a fresh database
+	// Two instances starting concurrently on a fresh database
 	// must not race — InsertIgnore turns the loser's insert into a silent
 	// no-op instead of aborting with ErrUniqueViolation. SQLite serializes
 	// writers (MaxOpenConns == 1) so the real race window only reproduces on
 	// MySQL/PostgreSQL, but the test still guards idempotency and duplicate
-	// avoidance under concurrent invocation (mirrors the M-2 approach).
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	// avoidance under concurrent invocation.
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
@@ -350,11 +318,7 @@ func TestSeedAdminUser_ConcurrentBootstrapIsIdempotent(t *testing.T) {
 // test verified. must_change_password stays 0: forcing a change on first
 // login is a separate, deliberate bootstrap exemption.
 func TestSeedAdminUser_PasswordChangedAtSet(t *testing.T) {
-	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := newTestDB(t)
 
 	cfg := config.DefaultConfig()
 	cfg.Auth.BcryptCost = 4
