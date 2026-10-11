@@ -122,7 +122,7 @@ func TestService_StateReplayRejected(t *testing.T) {
 	}
 	// Replay — must be rejected.
 	if svc.usedStates.consume(state) {
-		t.Error("replayed state must be rejected (REVIEW.md L-3)")
+		t.Error("replayed state must be rejected")
 	}
 }
 
@@ -141,7 +141,7 @@ func TestAuthCodeURL_DoesNotMutateSharedConfig(t *testing.T) {
 
 	inst, _ := svc.Provider("test")
 	if inst.oauth2.RedirectURL != "" {
-		t.Errorf("shared oauth2.Config.RedirectURL was mutated to %q; must remain empty (REVIEW.md L-4)",
+		t.Errorf("shared oauth2.Config.RedirectURL was mutated to %q; must remain empty",
 			inst.oauth2.RedirectURL)
 	}
 }
@@ -173,7 +173,7 @@ func TestAuthCodeURL_ConcurrentNoRace(t *testing.T) {
 			}
 			got := parsed.Query().Get("redirect_uri")
 			if got != cb {
-				t.Errorf("goroutine %d: redirect_uri = %q, want %q (shared config mutation — REVIEW.md L-4)",
+				t.Errorf("goroutine %d: redirect_uri = %q, want %q (shared config mutation)",
 					n, got, cb)
 			}
 		}(i)

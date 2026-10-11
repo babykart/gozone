@@ -11,7 +11,7 @@ import (
 
 // csrfCookieName is the default cookie name used by gorilla/csrf (the upstream
 // constant is unexported). It identifies the CSRF Set-Cookie header for
-// per-request Secure-attribute rewriting (REVIEW.md L-2).
+// per-request Secure-attribute rewriting.
 const csrfCookieName = "_gorilla_csrf"
 
 // csrfSecureCookieWriter wraps an http.ResponseWriter to dynamically set the
@@ -24,7 +24,7 @@ const csrfCookieName = "_gorilla_csrf"
 // csrf.Secure(false) so the library never writes the Secure attribute itself;
 // this wrapper then appends "Secure" to the CSRF cookie's Set-Cookie header
 // when the request is served over HTTPS, mirroring the session cookie's
-// Secure: IsHTTPS(r) behaviour (REVIEW.md L-2).
+// Secure: IsHTTPS(r) behaviour so the two cookies can never disagree.
 //
 // applySecureFlag is called lazily on the first Write/WriteHeader and again
 // after the handler returns (to cover the no-body edge case). It is idempotent.

@@ -49,7 +49,7 @@ func (c *Cache[V]) Stop() {
 // When Get observes an already-expired entry it proactively deletes it (under
 // the write lock, with a re-check) so stale entries do not linger until the
 // next background sweep — this bounds memory retention on read traffic even
-// when the sweeper interval is long (REVIEW.md L-16a). The valid-entry path
+// when the sweeper interval is long. The valid-entry path
 // stays on the read lock.
 func (c *Cache[V]) Get(key string) (V, bool) {
 	now := time.Now()

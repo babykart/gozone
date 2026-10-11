@@ -71,7 +71,7 @@ jobs:
 
       - name: Report coverage
         # Publish the total coverage line to the run/PR check summary and keep
-        # the profile downloadable as an artifact (REVIEW.md B-2).
+        # the profile downloadable as an artifact.
         run: |
           {
             echo '## Test coverage'
@@ -177,5 +177,5 @@ jobs:
       - name: Run govulncheck
         # govulncheck is reachability-based: it fails the job only when code
         # actually calls a vulnerable path. Non-reachable advisories in deps are
-        # printed but do not fail the build (exit 0) (REVIEW.md B-2).
+        # printed but do not fail the build (exit 0).
         run: govulncheck ./...

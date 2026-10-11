@@ -20,9 +20,9 @@ func TestParseTemplates(t *testing.T) {
 }
 
 func TestStaticAssetVersion(t *testing.T) {
-	// REVIEW.md L-16c: the asset version is a short content hash of the bundled
-	// JS/CSS so a new deployment busts the browser cache via ?v=… despite the
-	// 24h max-age served by fileServer.
+	// Cache-busting regression guard: the asset version is a short content hash
+	// of the bundled JS/CSS so a new deployment busts the browser cache via
+	// ?v=… despite the 24h max-age served by fileServer.
 	got := staticAssetVersion()
 	if len(got) != 16 { // first 8 bytes of SHA-256, hex-encoded
 		t.Fatalf("expected a 16-hex-char content hash, got %q (len %d)", got, len(got))
@@ -73,9 +73,9 @@ func TestAssetVersionRenderedInTemplates(t *testing.T) {
 }
 
 func TestSkipLinkAndMainAnchor(t *testing.T) {
-	// REVIEW.md L-16d: every authenticated page must expose a skip-to-content
-	// link as the first focusable element and a focusable main landmark it
-	// targets, so keyboard users can jump past the sidebar/topbar.
+	// Accessibility requirement: every authenticated page must expose a
+	// skip-to-content link as the first focusable element and a focusable main
+	// landmark it targets, so keyboard users can jump past the sidebar/topbar.
 	tmpl, err := parseTemplates()
 	if err != nil {
 		t.Fatalf("parseTemplates: %v", err)
@@ -108,15 +108,16 @@ func TestSkipLinkAndMainAnchor(t *testing.T) {
 }
 
 func TestAppJSNoNativeConfirm(t *testing.T) {
-	// REVIEW.md L-16d: blocking window.confirm() must be gone in favour of the
-	// custom confirmDialog modal. "confirm(" is not a substring of confirmDialog(
-	// / closeConfirmDialog(, so a Contains check reliably guards against a revert.
+	// Accessibility regression guard: blocking window.confirm() must be gone in
+	// favour of the custom confirmDialog modal. "confirm(" is not a substring of
+	// confirmDialog( / closeConfirmDialog(, so a Contains check reliably guards
+	// against a revert.
 	js, err := web.FS.ReadFile("static/js/app.js")
 	if err != nil {
 		t.Fatalf("read app.js: %v", err)
 	}
 	if strings.Contains(string(js), "confirm(") {
-		t.Error("app.js must not call the native window.confirm(); use confirmDialog() instead (REVIEW.md L-16d)")
+		t.Error("app.js must not call the native window.confirm(); use confirmDialog() instead (blocking confirm() regression)")
 	}
 }
 

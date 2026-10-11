@@ -8,7 +8,7 @@ import (
 )
 
 // stateStore tracks consumed OIDC state tokens to enforce single-use semantics
-// server-side (REVIEW.md L-3). The stateless design (state token = AES-GCM
+// server-side. The stateless design (state token = AES-GCM
 // encrypted payload carrying the PKCE verifier + nonce) means a captured state
 // is otherwise replayable within its TTL. This store closes that gap: once a
 // state token passes decryption + expiry verification in HandleCallback, it is

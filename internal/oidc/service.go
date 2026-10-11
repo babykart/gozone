@@ -64,8 +64,8 @@ type ProviderInstance struct {
 
 // cloneOAuth2Config returns a copy of the provider's oauth2.Config with
 // RedirectURL set to callbackURL. The shared instance is never mutated, so
-// concurrent calls to AuthCodeURL / HandleCallback cannot race on RedirectURL
-// (REVIEW.md L-4). The Scopes slice is shared (read-only after discovery), all
+// concurrent calls to AuthCodeURL / HandleCallback cannot race on RedirectURL.
+// The Scopes slice is shared (read-only after discovery), all
 // other fields are value types.
 func (inst *ProviderInstance) cloneOAuth2Config(callbackURL string) oauth2.Config {
 	cfg := *inst.oauth2
@@ -312,7 +312,7 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 	}
 	// Clone the oauth2.Config per request instead of mutating the shared
 	// instance — concurrent AuthCodeURL/Exchange calls would otherwise race on
-	// RedirectURL (REVIEW.md L-4). The callbackURL must be byte-identical
+	// RedirectURL. The callbackURL must be byte-identical
 	// between the auth request and the token exchange.
 	cfg := inst.cloneOAuth2Config(callbackURL)
 	return cfg.AuthCodeURL(state,
@@ -320,7 +320,7 @@ func (s *Service) AuthCodeURL(provider, callbackURL string) (authURL string, err
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		// Send the nonce to the IdP so it echoes it back in the id_token; the
 		// callback verifies it against the value embedded in the encrypted
-		// state to block token replay (REVIEW.md C-1).
+		// state to block token replay.
 		oidc.Nonce(nonce),
 	), nil
 }
@@ -390,7 +390,7 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 		return nil, fmt.Errorf("state: already consumed (possible replay)")
 	}
 
-	// Clone the oauth2.Config per request (REVIEW.md L-4 — see AuthCodeURL).
+	// Clone the oauth2.Config per request (see AuthCodeURL for why).
 	cfg := inst.cloneOAuth2Config(callbackURL)
 	token, err := cfg.Exchange(ctx, code,
 		oauth2.SetAuthURLParam("code_verifier", payload.Verifier),

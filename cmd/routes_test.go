@@ -41,7 +41,7 @@ func TestAdminRoutesProtectedByRequireAdmin(t *testing.T) {
 	err := chi.Walk(r, func(method, route string, _ http.Handler, middlewares ...func(http.Handler) http.Handler) error {
 		checked++
 		if !hasMiddleware(middlewares, middleware.RequireAdmin) {
-			return fmt.Errorf("%s %s is not protected by middleware.RequireAdmin (admin route escaped the RequireAdmin group — REVIEW.md B-5)", method, route)
+			return fmt.Errorf("%s %s is not protected by middleware.RequireAdmin (admin route escaped the RequireAdmin group)", method, route)
 		}
 		return nil
 	})

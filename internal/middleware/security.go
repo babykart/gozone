@@ -65,7 +65,7 @@ func ForwardedProtoIsHTTPS(header string) bool {
 // payments, no USB). Locking them down hardens the page against a future XSS
 // or rogue dependency that would otherwise be able to request them. Features
 // with benign uses (fullscreen, sync-xhr, picture-in-picture) are deliberately
-// left alone. (REVIEW.md I-5.)
+// left alone.
 const permissionsPolicy = "accelerometer=(), ambient-light-sensor=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
 
 // SecurityHeaders adds common HTTP security headers to all responses.
@@ -92,7 +92,7 @@ const permissionsPolicy = "accelerometer=(), ambient-light-sensor=(), camera=(),
 // <style> blocks are needed. JS CSSOM mutations (element.style.foo) remain
 // allowed — CSP style-src governs document markup, not the CSSOM.
 //
-// Strict-Transport-Security intentionally omits "preload" (REVIEW.md I-5):
+// Strict-Transport-Security intentionally omits "preload":
 // preload is an opt-in to the browser HSTS preload list (hstspreload.org) and is
 // effectively irreversible for the apex domain — it forces HTTPS for all
 // subdomains for years even if TLS is later removed. It must only be added by

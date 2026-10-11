@@ -38,8 +38,8 @@ func generateAPIKey() (string, string, error) {
 // error=not_found / error=limit_reached). ListAPIKeys validates the incoming
 // query params against these sets so a crafted link such as
 // ?flash=Your+account+is+compromised cannot inject arbitrary text into the
-// page — the handler is the trust boundary, mirroring loginErrorBanner
-// (REVIEW.md L-1). The template already gates display on {{if eq .Flash "…"}}
+// page — the handler is the trust boundary, mirroring loginErrorBanner's
+// allow-list approach. The template already gates display on {{if eq .Flash "…"}}
 // so this is defence-in-depth against a future template edit that renders the
 // value verbatim.
 var (
@@ -300,8 +300,8 @@ func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	// Ownership-scoped delete mirrors BulkDeleteAPIKeys (DELETE ... WHERE
 	// id = ? AND user_id = ?). RowsAffected==0 means the key does not exist
 	// OR belongs to another user; both cases collapse into the same
-	// ?error=not_found so a probing user cannot distinguish them (REVIEW.md
-	// M-2 — IDOR existence oracle). The prior SELECT + distinct
+	// ?error=not_found so a probing user cannot distinguish them (IDOR
+	// existence oracle). The prior SELECT + distinct
 	// ?error=forbidden branch leaked key-id existence regardless of ownership.
 	res, err := tx.ExecContext(ctx, "DELETE FROM api_keys WHERE id = ? AND user_id = ?", keyID, user.ID)
 	if err != nil {

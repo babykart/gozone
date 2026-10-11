@@ -117,7 +117,7 @@ func TestToggleCryptokey_Activate(t *testing.T) {
 	}
 
 	// The activity log must carry the exact action string produced by binding
-	// actionName (cryptokey_activate), not a concatenated fragment (REVIEW.md L-2).
+	// actionName (cryptokey_activate), not a concatenated fragment.
 	var action string
 	h.DB.QueryRow("SELECT action FROM activity_logs WHERE action='cryptokey_activate' LIMIT 1").Scan(&action)
 	if action != "cryptokey_activate" {
@@ -151,7 +151,7 @@ func TestToggleCryptokey_Deactivate(t *testing.T) {
 	}
 
 	// The activity log must carry the exact action string produced by binding
-	// actionName (cryptokey_deactivate), not a concatenated fragment (REVIEW.md L-2).
+	// actionName (cryptokey_deactivate), not a concatenated fragment.
 	var action string
 	h.DB.QueryRow("SELECT action FROM activity_logs WHERE action='cryptokey_deactivate' LIMIT 1").Scan(&action)
 	if action != "cryptokey_deactivate" {
@@ -189,7 +189,7 @@ func TestDeleteCryptokey(t *testing.T) {
 	}
 }
 
-// TestToggleDeleteCryptokey_RejectsNonPositiveKeyID guards REVIEW.md L-6:
+// TestToggleDeleteCryptokey_RejectsNonPositiveKeyID guards key-ID validation:
 // cryptokey IDs must be positive integers. A key_id of 0, -1 (which
 // strconv.Atoi happily parses), or a non-numeric value must be rejected with
 // 400 rather than forwarded to PowerDNS — mirroring the ParseInt → <= 0 → 400

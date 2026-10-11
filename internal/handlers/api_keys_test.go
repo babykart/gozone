@@ -295,7 +295,8 @@ func TestDeleteAPIKey_OwnKey(t *testing.T) {
 	}
 }
 
-// TestDeleteAPIKey_NotFoundAndForbiddenCollapsed guards REVIEW.md M-2: a
+// TestDeleteAPIKey_NotFoundAndForbiddenCollapsed guards against an IDOR
+// existence oracle: a
 // nonexistent key id and a foreign user's key id must yield the identical
 // ?error=not_found redirect so the handler is not an IDOR existence oracle
 // (the prior ?error=forbidden branch leaked key-id existence regardless of
@@ -352,7 +353,7 @@ func TestDeleteAPIKey_NotFoundAndForbiddenCollapsed(t *testing.T) {
 	}
 }
 
-// TestListAPIKeys_AllowListsFlashErrorCodes guards REVIEW.md L-1: the ?flash
+// TestListAPIKeys_AllowListsFlashErrorCodes guards query-param injection: the ?flash
 // and ?error query params are validated against a server-side allow-list
 // (flash=created|deleted, error=not_found) so a crafted link such as
 // ?flash=Your+account+compromised cannot inject arbitrary text into the page.

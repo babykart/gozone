@@ -41,8 +41,8 @@ func realPaginationSet(t *testing.T) *template.Template {
 	return tmpl
 }
 
-// TestPagination_PerPageSelect_VisibleWhenTotalPagesIsOne is the REVIEW.md
-// mineur regression test: when every result fits on a single page, the
+// TestPagination_PerPageSelect_VisibleWhenTotalPagesIsOne is a regression
+// test: when every result fits on a single page, the
 // per-page <select> must still render so the user can change the page size.
 func TestPagination_PerPageSelect_VisibleWhenTotalPagesIsOne(t *testing.T) {
 	tmpl := realPaginationSet(t)

@@ -28,7 +28,7 @@ func TestStateStore_ConsumeReplayRejected(t *testing.T) {
 		t.Fatal("first consume should succeed")
 	}
 	if s.consume("state-replay") {
-		t.Error("second consume of the same state must return false (replay rejected — REVIEW.md L-3)")
+		t.Error("second consume of the same state must return false (replay rejected)")
 	}
 }
 

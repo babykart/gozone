@@ -9,7 +9,7 @@ import (
 
 // TestCSRFSecureCookieWriter verifies that csrfSecureCookieWriter dynamically
 // adds the Secure attribute to the CSRF cookie based on the per-request HTTPS
-// flag (REVIEW.md L-2). The session cookie already uses IsHTTPS(r) per-request;
+// flag. The session cookie already uses IsHTTPS(r) per-request;
 // this wrapper brings the CSRF cookie in line so the two never disagree.
 func TestCSRFSecureCookieWriter(t *testing.T) {
 	// Helper: build a ResponseRecorder wrapped in csrfSecureCookieWriter,
@@ -57,7 +57,7 @@ func TestCSRFSecureCookieWriter(t *testing.T) {
 	t.Run("HTTPS adds Secure to CSRF cookie only", func(t *testing.T) {
 		csrfCookie, otherCookie := run(t, true)
 		if !csrfCookie.Secure {
-			t.Errorf("CSRF cookie Secure = false, want true (HTTPS request — REVIEW.md L-2)")
+			t.Errorf("CSRF cookie Secure = false, want true (HTTPS request)")
 		}
 		if otherCookie.Secure {
 			t.Errorf("other cookie should not have been modified (Secure = true)")
