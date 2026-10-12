@@ -11,6 +11,7 @@
         <p><strong>Role:</strong> <span class="badge badge-{{.User.Role}}">{{.User.Role}}</span></p>
         <p><strong>Member since:</strong> {{.User.CreatedAt}}</p>
     </div>
+    <a class="btn btn-primary" href="/change-password">Change Password</a>
 </div>
 {{template "app_layout_end" .}}
 {{end}}

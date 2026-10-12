@@ -107,6 +107,41 @@ func TestSkipLinkAndMainAnchor(t *testing.T) {
 	}
 }
 
+func TestProfilePageLinksChangePassword(t *testing.T) {
+	// The self-service change-password form (/change-password) is mounted in
+	// the authenticated group — not behind RequireAdmin — but without a link
+	// on the profile page a non-admin has no visible path to it: /users is
+	// admin-only and the dashboard banner only renders inside the
+	// expiry_warn_days window (default 0 = never).
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+	data := map[string]interface{}{
+		"Title":     "Test",
+		"AppName":   "GoZone",
+		"Section":   "profile",
+		"IsAdmin":   false,
+		"CSRFToken": "tok",
+		"User": map[string]interface{}{
+			"Username":  "alice",
+			"Email":     "alice@example.com",
+			"FirstName": "Alice",
+			"LastName":  "Doe",
+			"Role":      "user",
+			"CreatedAt": "2026-01-01",
+		},
+	}
+	var buf strings.Builder
+	if err := tmpl.ExecuteTemplate(&buf, "profile.html", data); err != nil {
+		t.Fatalf("execute profile.html: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `href="/change-password"`) {
+		t.Errorf("profile.html missing the /change-password link:\n%s", out)
+	}
+}
+
 func TestAppJSNoNativeConfirm(t *testing.T) {
 	// Accessibility regression guard: blocking window.confirm() must be gone in
 	// favour of the custom confirmDialog modal. "confirm(" is not a substring of
