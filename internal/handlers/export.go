@@ -3,10 +3,11 @@ package handlers
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"net/http"
-	"sort"
 	"strings"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -47,27 +48,17 @@ func (h *Handler) ExportZone(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// relativeBindName converts an absolute record name to relative form for BIND output.
+// relativeBindName converts an absolute record name to relative form for
+// BIND output; the implementation lives in the dnsops service layer (shared
+// with the MCP zone resource).
 func relativeBindName(name, origin string) string {
-	originNorm := strings.TrimSuffix(origin, ".")
-	nameNorm := strings.TrimSuffix(name, ".")
-
-	if nameNorm == originNorm {
-		return "@"
-	}
-
-	suffix := "." + originNorm
-	if strings.HasSuffix(nameNorm, suffix) {
-		return strings.TrimSuffix(nameNorm, suffix)
-	}
-
-	if !strings.HasSuffix(name, ".") {
-		return name + "."
-	}
-	return name
+	return dnsops.RelativeBindName(name, origin)
 }
 
-// exportBind writes records in RFC 1035 BIND zone file format.
+// exportBind writes records in RFC 1035 BIND zone file format. The rendering
+// lives in the dnsops service layer (dnsops.RenderZoneFile) so the web
+// export and the MCP gozone://zones/{zone} resource produce byte-identical
+// output.
 func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records []models.RRSet) {
 	origin := zone.Name
 	if !strings.HasSuffix(origin, ".") {
@@ -79,57 +70,15 @@ func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records [
 	// #nosec G601 — filename derived from PowerDNS zone name (server-controlled)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 
-	sortRRSets(records)
-
-	defaultTTL := findSOATTL(records)
-
-	// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
-	fmt.Fprintf(w, "$ORIGIN %s\n", origin)
-	// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
-	fmt.Fprintf(w, "$TTL %d\n", defaultTTL)
-	fmt.Fprintln(w)
-
-	for _, rr := range records {
-		for _, rec := range rr.Records {
-			if rec.Disabled {
-				continue
-			}
-
-			name := relativeBindName(rr.Name, origin)
-			ttl := rr.TTL
-			if ttl == 0 {
-				ttl = defaultTTL
-			}
-
-			if ttl != defaultTTL {
-				// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
-				fmt.Fprintf(w, "%s %d", name, ttl)
-			} else {
-				// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
-				fmt.Fprint(w, name)
-			}
-
-			fmt.Fprintf(w, " IN %s", rr.Type)
-
-			content := formatRecordContent(rr.Type, rec.Content, rec.Priority)
-
-			// #nosec G705 — zone data from PowerDNS server, rendered as text/plain
-			fmt.Fprintf(w, " %s\n", content)
-		}
-	}
+	// #nosec G104 — writing the export to the ResponseWriter; an error here
+	// only means the client went away mid-transfer.
+	_, _ = io.WriteString(w, dnsops.RenderZoneFile(zone, records))
 }
 
+// formatRecordContent renders one record's wire content for a BIND zone
+// file; the implementation lives in the dnsops service layer.
 func formatRecordContent(rtype, content string, priority int) string {
-	if models.TypeHasPriority(rtype) {
-		return models.JoinPriority(rtype, priority, content)
-	}
-	if models.TypeHasQuotedFields(rtype) {
-		// CAA/HINFO/URI already arrive in wire form (values quoted); the
-		// pass-through keeps already-quoted fields intact and is a no-op in
-		// practice, kept for symmetry with prepareRecordContent.
-		return models.QuoteContentFields(content, models.QuotedFieldIndices(rtype))
-	}
-	return models.QuoteContent(rtype, content)
+	return dnsops.FormatRecordContent(rtype, content, priority)
 }
 
 // exportCSV writes records in CSV format.
@@ -191,39 +140,15 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 	writer.Flush()
 }
 
-// findSOATTL returns the TTL from the first SOA RRSet, or 3600 as default.
+// findSOATTL returns the TTL from the first SOA RRSet, or 3600 as default;
+// the implementation lives in the dnsops service layer.
 func findSOATTL(records []models.RRSet) int {
-	for _, rr := range records {
-		if rr.Type == "SOA" && rr.TTL > 0 {
-			return rr.TTL
-		}
-	}
-	return 3600
+	return dnsops.FindSOATTL(records)
 }
 
 // sortRRSets orders records: SOA first, then NS, then others alphabetically
-// by name. The comparator is a strict weak ordering: two records of the same
-// priority are resolved by name+type, never by returning true in both
-// directions — an inconsistent comparator hands sort an ill-defined problem
-// (and pdqsort may panic on some inputs).
+// by name; the implementation lives in the dnsops service layer
+// (dnsops.SortRRSets).
 func sortRRSets(records []models.RRSet) {
-	sort.SliceStable(records, func(i, j int) bool {
-		a, b := records[i], records[j]
-		if a.Type == "SOA" && b.Type != "SOA" {
-			return true
-		}
-		if b.Type == "SOA" && a.Type != "SOA" {
-			return false
-		}
-		if a.Type == "NS" && b.Type != "NS" {
-			return true
-		}
-		if b.Type == "NS" && a.Type != "NS" {
-			return false
-		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		return a.Type < b.Type
-	})
+	dnsops.SortRRSets(records)
 }

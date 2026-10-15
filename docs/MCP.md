@@ -85,6 +85,16 @@ stable (`ZONE_NOT_FOUND`, `FORBIDDEN`, `VALIDATION_ERROR`, `RECORD_NOT_FOUND`,
 interne (DSN, réponse brute PowerDNS) — la cause complète part dans les logs
 serveur.
 
+## Resources
+
+Les resources (lecture seule, disponibles quelle que soit la valeur de
+`read_only`) permettent à un client d'attacher du contexte GoZone :
+
+| URI | MIME | Contenu |
+|---|---|---|
+| `gozone://zones/{zone}` (template) | `text/dns` | Export BIND complet de la zone (RFC 1035 : `$ORIGIN`, `$TTL`, enregistrements triés SOA→NS→nom ; les enregistrements désactivés sont omis). `{zone}` = l'ID canonique renvoyé par `list_zones`. L'accès exige un grant de groupe (ou une clé admin) — refus fail-closed avant tout appel PowerDNS. Au-delà de 1 Mio le contenu est **tronqué explicitement** avec une bannière pointant vers `GET /zones/{zone}/export?format=bind` pour l'export complet. |
+| `gozone://record-types` | `application/json` | Map JSON de chaque type supportné vers ses règles de normalisation : champ `priority` séparé (MX/SRV), contenu quoté (TXT/SPF), cible FQDN, indices de champs FQDN/quotés. À lire avant toute création/modification d'enregistrement. |
+
 ## Configuration client
 
 ### Claude Code
@@ -112,6 +122,6 @@ npx @modelcontextprotocol/inspector
 ## Hors périmètre (v1)
 
 DNSSEC (cryptokeys), clés TSIG, utilisateurs/groupes, import de zone,
-métadonnées — pas de surface MCP plus large que l'API publique. Les
-resources/prompts MCP (export BIND en contexte, audit de zone) sont prévus
-en phase ultérieure (voir `MCP_PLAN.md`).
+métadonnées — pas de surface MCP plus large que l'API publique. Les prompts
+MCP (audit de zone, guide de migration) restent optionnels et non livrés
+(voir `MCP_PLAN.md` §3.3).

@@ -41,6 +41,7 @@ func New(ops *dnsops.Service, cfg *config.MCPConfig, version string) http.Handle
 	if !cfg.ReadOnly {
 		registerWriteTools(srv, ops)
 	}
+	registerResources(srv, ops)
 
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv

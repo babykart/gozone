@@ -342,3 +342,44 @@ func unescapeQuotedContent(s string) string {
 	}
 	return b.String()
 }
+
+// RecordTypeRule describes the content-normalisation rules of one record
+// type, derived from recordTypeSpecs. It is the machine-readable form used
+// by the MCP gozone://record-types resource so an agent can learn the exact
+// wire rules (priority embedding, quoting, FQDN targets) without reading
+// GoZone's source.
+type RecordTypeRule struct {
+	// Priority is true for types whose content carries a leading priority
+	// field on the wire (MX, SRV); submissions take the priority in a
+	// separate field and GoZone embeds it.
+	Priority bool `json:"priority"`
+	// Quoted is true for types whose whole content is a quoted
+	// character-string on the wire (TXT, SPF); submissions give the bare
+	// text and GoZone adds the quotes.
+	Quoted bool `json:"quoted"`
+	// FQDNTarget is true when the content is (or ends with) a DNS name that
+	// must be fully qualified with a trailing dot.
+	FQDNTarget bool `json:"fqdn_target"`
+	// FQDNFieldIndices lists the space-separated field positions that are
+	// DNS names requiring a trailing dot (e.g. SOA mname/rname = [0,1]).
+	FQDNFieldIndices []int `json:"fqdn_field_indices,omitempty"`
+	// QuotedFieldIndices lists the field positions that are character-strings
+	// the wire format requires quoted (e.g. CAA value = [2]).
+	QuotedFieldIndices []int `json:"quoted_field_indices,omitempty"`
+}
+
+// RecordTypeRules returns the normalisation rules for every known record
+// type. The map marshals to a JSON object with sorted keys.
+func RecordTypeRules() map[string]RecordTypeRule {
+	rules := make(map[string]RecordTypeRule, len(recordTypeSpecs))
+	for t, spec := range recordTypeSpecs {
+		rules[t] = RecordTypeRule{
+			Priority:           spec.hasPriority,
+			Quoted:             spec.quoted,
+			FQDNTarget:         spec.fqdnTarget,
+			FQDNFieldIndices:   spec.fqdnFieldIndices,
+			QuotedFieldIndices: spec.quotedFieldIndices,
+		}
+	}
+	return rules
+}

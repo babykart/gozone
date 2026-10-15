@@ -786,7 +786,11 @@ REST API:
 
 - `internal/mcpserver` builds an SDK server (`modelcontextprotocol/go-sdk`,
   stateless mode) whose tools call the `internal/dnsops` service layer
-  directly. No business logic lives in the transport.
+  directly. No business logic lives in the transport. Two read-only
+  resources are also served: `gozone://zones/{zone}` (BIND export via
+  `dnsops.RenderZoneFile`, shared byte-for-byte with the web export,
+  explicitly truncated past 1 MiB) and `gozone://record-types`
+  (`models.RecordTypeRules`).
 - It is mounted by `cmd/routes.go` (`mountMCPRoute`) behind the same
   limiter instances and `middleware.APIKeyAuth` as `/api/v1`; the
   authenticated user reaches the tool handlers through the request context.

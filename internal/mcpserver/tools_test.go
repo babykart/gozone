@@ -32,17 +32,27 @@ func richPDNS(t *testing.T, sent *[]models.RRSet) testutil.PDNSHandlerFunc {
 		case p == "/api/v1/servers/localhost/statistics" && r.Method == http.MethodGet:
 			w.Write([]byte(`[{"name":"uptime","type":"string","value":"10s"}]`)) // #nosec G104 -- test helper
 		case strings.HasPrefix(p, "/api/v1/servers/localhost/zones/") && r.Method == http.MethodGet:
-			// A GET on the zone path doubles as the record filter
-			// (?rrset_name=…): it must answer the rrsets envelope.
-			if r.URL.Query().Get("rrset_name") != "" {
-				json.NewEncoder(w).Encode(struct {
-					RRSets []models.RRSet `json:"rrsets"`
-				}{RRSets: []models.RRSet{
-					{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "192.0.2.1"}}},
-				}})
-				return
+			// The PowerDNS zone endpoint returns the zone object WITH its
+			// rrsets array: GetZone decodes the zone fields, ListRecords
+			// decodes the rrsets of the same body, and a ?rrset_name= query
+			// filters server-side.
+			filtered := r.URL.Query().Get("rrset_name") != ""
+			rrsets := []models.RRSet{
+				{Name: "example.com.", Type: "SOA", TTL: 3600, Records: []models.RecordInfo{{Content: "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600"}}},
+				{Name: "example.com.", Type: "NS", TTL: 3600, Records: []models.RecordInfo{{Content: "ns1.example.com."}}},
+				{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "192.0.2.1"}}},
+				{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{{Content: "mail.example.com.", Priority: 10}}},
 			}
-			json.NewEncoder(w).Encode(models.Zone{ID: "example.com.", Name: "example.com.", Kind: "Native", Serial: 42})
+			if filtered {
+				rrsets = rrsets[2:3]
+			}
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone:   models.Zone{ID: "example.com.", Name: "example.com.", Kind: "Native", Serial: 42},
+				RRSets: rrsets,
+			})
 		case strings.HasPrefix(p, "/api/v1/servers/localhost/zones/") && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		default:
