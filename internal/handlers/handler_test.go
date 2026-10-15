@@ -12,6 +12,7 @@ import (
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/testutil"
 )
 
@@ -101,6 +102,11 @@ func newTestHandler(t *testing.T) *Handler {
 		Cfg:  config.DefaultConfig(),
 		Tmpl: testTemplateSet(),
 	}
+	// Wire the shared dnsops service (the API handlers are adapters over
+	// it) and the per-zone locker the web write paths use.
+	ops := dnsops.New(db, pdnsClient)
+	h.Ops = ops
+	h.zoneLocks = ops.Locks()
 	// Handler unit tests exercise handler logic, not the password policy, so
 	// relax it (no length/class requirements, no history) to let the existing
 	// weak test passwords through. Dedicated policy tests build their own
@@ -120,6 +126,9 @@ func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Ha
 		Cfg:  config.DefaultConfig(),
 		Tmpl: testTemplateSet(),
 	}
+	ops := dnsops.New(db, client)
+	h.Ops = ops
+	h.zoneLocks = ops.Locks()
 	h.Cfg.Password = config.PasswordConfig{}
 	return h, srv
 }

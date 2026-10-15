@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -18,7 +19,10 @@ import (
 // defaultRecordTTL is applied when a record is created without an explicit
 // TTL preference (empty form field) and no existing RRSet TTL can be
 // inherited.
-const defaultRecordTTL = 3600
+// defaultRecordTTL mirrors dnsops.DefaultRecordTTL (the service layer owns
+// the value; the web write paths resolve TTLs the same way the service
+// does).
+const defaultRecordTTL = dnsops.DefaultRecordTTL
 
 // CreateRecordPage renders the record creation form for a zone (GET /zones/{zone_id}/records/new).
 func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
@@ -821,27 +825,11 @@ func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]b
 //
 // It returns an empty string for a nil RRSet (e.g. create on a new RRSet or
 // delete when the RRSet could not be fetched).
+// rrsetSnapshot renders an RRSet as the JSON audit before/after image; the
+// implementation lives in the dnsops service layer (dnsops.RRSetSnapshot) so
+// REST, web and MCP audits share one format.
 func rrsetSnapshot(rrset *models.RRSet) string {
-	if rrset == nil {
-		return ""
-	}
-	// Copy rather than mutate: callers reuse this RRSet for the PDNS PATCH,
-	// whose content must keep the priority embedded.
-	records := make([]models.RecordInfo, len(rrset.Records))
-	for i, r := range rrset.Records {
-		records[i] = r
-		if p, c, ok := models.SplitPriority(rrset.Type, r.Content); ok {
-			records[i].Content = c
-			records[i].Priority = p
-		}
-	}
-	snapshot := *rrset
-	snapshot.Records = records
-	b, err := json.Marshal(snapshot)
-	if err != nil {
-		return ""
-	}
-	return string(b)
+	return dnsops.RRSetSnapshot(rrset)
 }
 
 // prepareRecordContent normalises record content for the PDNS PATCH API,
@@ -849,30 +837,12 @@ func rrsetSnapshot(rrset *models.RRSet) string {
 // MX/SRV priority is embedded in the content (and the separate Priority element
 // cleared, since PDNS rejects it); TXT/SPF content is quoted. See the codec in
 // internal/models for the per-type rules.
+// prepareRecordContent normalises record content for the PDNS PATCH API;
+// the implementation lives in the dnsops service layer
+// (dnsops.PrepareRecordContent) so REST, web and MCP writes produce the same
+// wire content.
 func prepareRecordContent(recordType, content string, priority int) (string, int) {
-	switch {
-	case models.TypeHasPriority(recordType):
-		// MX/SRV: embed priority first, then ensure the FQDN target (the
-		// last space-separated field) ends with a trailing dot.
-		return models.EnsureTrailingDot(models.JoinPriority(recordType, priority, content)), 0
-	case models.TypeIsQuoted(recordType):
-		return models.QuoteContent(recordType, content), priority
-	case models.TypeIsFQDNTarget(recordType):
-		// CNAME/NS/PTR/ALIAS/DNAME/AFSDB/NAPTR: the entire content or the
-		// last space-separated field is a DNS name target.
-		return models.EnsureTrailingDot(content), priority
-	case models.TypeHasFQDNFields(recordType):
-		// SOA/RP/MINFO/NSEC: specific fields are FQDNs but not in the last
-		// position, so per-field normalisation is required.
-		return models.EnsureTrailingDotFields(content, models.FQDNFieldIndices(recordType)), priority
-	case models.TypeHasQuotedFields(recordType):
-		// CAA/HINFO/URI: specific fields are character-strings PowerDNS
-		// requires quoted; already-quoted fields (possibly with spaces)
-		// pass through untouched.
-		return models.QuoteContentFields(content, models.QuotedFieldIndices(recordType)), priority
-	default:
-		return content, priority
-	}
+	return dnsops.PrepareRecordContent(recordType, content, priority)
 }
 
 // mergeRecordIntoRRSet replaces the record matching originalContent+originalPriority
@@ -898,20 +868,11 @@ func mergeRecordIntoRRSet(existing []models.RecordInfo, originalContent string, 
 // trailing dot, or duplicate batch rows) collapse correctly; for MX/SRV the
 // priority is embedded in the content, so targets with different priorities
 // are kept.
+// dedupRecordsByContent removes records with identical wire content within
+// an RRSet; the implementation lives in the dnsops service layer
+// (dnsops.DedupRecordsByContent).
 func dedupRecordsByContent(records []models.RecordInfo) []models.RecordInfo {
-	if len(records) < 2 {
-		return records
-	}
-	seen := make(map[string]struct{}, len(records))
-	out := make([]models.RecordInfo, 0, len(records))
-	for _, r := range records {
-		if _, ok := seen[r.Content]; ok {
-			continue
-		}
-		seen[r.Content] = struct{}{}
-		out = append(out, r)
-	}
-	return out
+	return dnsops.DedupRecordsByContent(records)
 }
 
 // buildCommentPatch constructs a *CommentPatch from a multi-line textarea value
@@ -987,34 +948,12 @@ func buildCommentsPatch(existing []models.Comment, clear bool, newLines ...strin
 // with trailing dot for the PDNS PATCH API. PDNS requires canonical names
 // (e.g., "www.example.com."). Names without trailing dot are treated as
 // relative to the zone. "@" is mapped to the zone name.
+// normalizeRecordName canonicalises a record name against its zone; the
+// implementation lives in the dnsops service layer
+// (dnsops.NormalizeRecordName) so REST, web and MCP paths canonicalise
+// identically.
 func normalizeRecordName(name, zoneName string) string {
-	name = strings.TrimSpace(name)
-	name = strings.ToLower(name)
-	zone := strings.ToLower(zoneName)
-	if !strings.HasSuffix(zone, ".") {
-		zone += "."
-	}
-	root := strings.TrimSuffix(zone, ".")
-	if name == "@" || name == "" {
-		return zone
-	}
-	// Already fully qualified (ends with dot)
-	if strings.HasSuffix(name, ".") {
-		if strings.EqualFold(name, zone) {
-			return zone
-		}
-		return name
-	}
-	// Just the zone root (e.g., "example.com")
-	if strings.EqualFold(name, root) {
-		return zone
-	}
-	// Ends with zone suffix without trailing dot (e.g., "www.example.com")
-	if strings.HasSuffix(name, "."+root) {
-		return name + "."
-	}
-	// Bare name — append zone with dot (e.g., "www" -> "www.example.com.")
-	return name + "." + zone
+	return dnsops.NormalizeRecordName(name, zoneName)
 }
 
 // canonicalRecordType normalises a user-submitted record type to the canonical
@@ -1026,8 +965,11 @@ func normalizeRecordName(name, zoneName string) string {
 // a REPLACE carrying only the new record, wiping the siblings. Applied at
 // every entry point: web forms, batch rows, REST API payloads, deletes and the
 // template editor.
+// canonicalRecordType normalises a user-submitted record type to the
+// canonical uppercase form; the implementation lives in the dnsops service
+// layer (dnsops.CanonicalRecordType).
 func canonicalRecordType(recordType string) string {
-	return strings.ToUpper(strings.TrimSpace(recordType))
+	return dnsops.CanonicalRecordType(recordType)
 }
 
 func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, priority int, disabled bool, err error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -817,82 +818,21 @@ func filterZonesWithInfoForSearch(zones []models.ZoneWithInfo, search string) ([
 // propagation matters most here: a client that gives up cancels the lookup
 // instead of holding the connection while the response has no reader left.
 func (h *Handler) getUserAllowedZoneIDs(ctx context.Context, userID int64) (map[string]bool, error) {
-	rows, err := h.DB.QueryContext(ctx,
-		`SELECT z.zone_id FROM zone_group_members m
-		 JOIN zone_group_zones z ON m.group_id = z.group_id
-		 WHERE m.user_id = ?`, userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	zoneIDs := make(map[string]bool)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			logger.Error("failed to scan allowed zone_id", "user_id", userID, "error", err)
-			continue
-		}
-		zoneIDs[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return zoneIDs, nil
+	return dnsops.UserAllowedZoneIDs(ctx, h.DB, userID)
 }
 
 // filterZonesForUser returns the PowerDNS zones the user is allowed to see.
 // A nil user (a handler reached without the Auth middleware having run — a
 // wiring bug) fails CLOSED with an empty list instead of returning every
 // zone: the permissive fallback would turn a wiring mistake into a full
-// disclosure.
+// disclosure. The implementation lives in the dnsops service layer
+// (dnsops.FilterZonesForUser).
 func (h *Handler) filterZonesForUser(r *http.Request, zones []models.Zone) ([]models.Zone, error) {
-	user := middleware.GetUser(r)
-	if user == nil {
-		logger.Error("filterZonesForUser reached without an authenticated user; failing closed")
-		return []models.Zone{}, nil
-	}
-	if user.IsAdmin() {
-		return zones, nil
-	}
-
-	allowed, err := h.getUserAllowedZoneIDs(r.Context(), user.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user zone permissions: %w", err)
-	}
-
-	filtered := make([]models.Zone, 0)
-	for _, z := range zones {
-		if allowed[z.ID] {
-			filtered = append(filtered, z)
-		}
-	}
-	return filtered, nil
+	return dnsops.FilterZonesForUser(r.Context(), h.DB, middleware.GetUser(r), zones)
 }
 
 // filterZonesWithInfoForUser returns the PowerDNS zones with info the user is
 // allowed to see. Nil user fails closed — see filterZonesForUser.
 func (h *Handler) filterZonesWithInfoForUser(r *http.Request, zones []models.ZoneWithInfo) ([]models.ZoneWithInfo, error) {
-	user := middleware.GetUser(r)
-	if user == nil {
-		logger.Error("filterZonesWithInfoForUser reached without an authenticated user; failing closed")
-		return []models.ZoneWithInfo{}, nil
-	}
-	if user.IsAdmin() {
-		return zones, nil
-	}
-
-	allowed, err := h.getUserAllowedZoneIDs(r.Context(), user.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user zone permissions: %w", err)
-	}
-
-	filtered := make([]models.ZoneWithInfo, 0)
-	for _, z := range zones {
-		if allowed[z.Zone.ID] {
-			filtered = append(filtered, z)
-		}
-	}
-	return filtered, nil
+	return dnsops.FilterZonesWithInfoForUser(r.Context(), h.DB, middleware.GetUser(r), zones)
 }

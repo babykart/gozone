@@ -15,6 +15,7 @@ import (
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -35,11 +36,17 @@ type Handler struct {
 	// Declared as an interface so tests can substitute a fake without spinning
 	// up a live identity provider.
 	OIDC SSOService
+	// Ops is the transport-agnostic DNS service layer (internal/dnsops).
+	// The API handlers are thin adapters over it; a future MCP transport
+	// will call the same methods.
+	Ops *dnsops.Service
 	// zoneLocks serializes read-modify-write record mutations per zone
-	// within this process (see zonelock.go). Every Handler method that
+	// within this process (see dnsops.ZoneLocks). It is the SAME instance
+	// the dnsops service uses, so REST, web and (later) MCP writes on one
+	// zone serialize against each other. Every Handler method that
 	// fetches a zone's records, merges locally and PATCHes the result back
 	// must hold the zone lock across the whole sequence.
-	zoneLocks zoneLocks
+	zoneLocks *zoneLocks
 }
 
 // SSOService is the subset of the OIDC service used by the handlers. The
@@ -62,11 +69,15 @@ type SSOService interface {
 
 // New creates a new Handler with all dependencies.
 func New(db *database.DB, pdnsClient pdns.ZoneService, cfg *config.Config, tmpl *template.Template) *Handler {
+	ops := dnsops.New(db, pdnsClient)
 	return &Handler{
 		DB:   db,
 		PDNS: pdnsClient,
 		Cfg:  cfg,
 		Tmpl: tmpl,
+		Ops:  ops,
+		// The handler and the service share one per-zone locker instance.
+		zoneLocks: ops.Locks(),
 	}
 }
 

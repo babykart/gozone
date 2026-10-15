@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -23,6 +24,7 @@ const (
 	ErrCodeZoneDeleteError    = "ZONE_DELETE_ERROR"
 	ErrCodeRecordError        = "RECORD_ERROR"
 	ErrCodeRecordNotFound     = "RECORD_NOT_FOUND"
+	ErrCodeForbidden          = "FORBIDDEN"
 	ErrCodeInternalError      = "INTERNAL_ERROR"
 	ErrCodeStatsError         = "STATS_ERROR"
 	ErrCodeConflict           = "CONFLICT"
@@ -54,6 +56,27 @@ func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 	default:
 		return http.StatusInternalServerError, ErrCodeInternalError
 	}
+}
+
+// writeServiceAuthzError maps the service layer's authorization errors to
+// HTTP responses: a genuine denial (dnsops.ErrForbidden) is a 403, and a
+// failed authorization lookup (dnsops.StageError with StageZoneAccess — a
+// database fault, fail-closed) is a distinguishable 500. authzLabel is the
+// message label used for the 500 ("failed to load zone access" on list
+// endpoints, "zone access check failed" on zone-scoped endpoints).
+//
+// Returns true when the error was handled and the response written.
+func (h *Handler) writeServiceAuthzError(w http.ResponseWriter, r *http.Request, err error, authzLabel string) bool {
+	if errors.Is(err, dnsops.ErrForbidden) {
+		writeAPIError(w, http.StatusForbidden, ErrCodeForbidden, "forbidden")
+		return true
+	}
+	var se *dnsops.StageError
+	if errors.As(err, &se) && se.Stage == dnsops.StageZoneAccess {
+		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, authzLabel, err)
+		return true
+	}
+	return false
 }
 
 // apiError is the standardized error response body.
@@ -90,37 +113,22 @@ func apiUserID(r *http.Request) string {
 	return "unknown"
 }
 
-// apiActivityUserID returns the acting user's id for the activity log. The
-// API key middleware sets the key owner in the request context; the zero
-// fallback keeps the audit insert usable if a route is ever exposed
-// unauthenticated (matching the web handlers, which also write user_id 0 in
-// that never-hit case).
-func apiActivityUserID(r *http.Request) int64 {
-	if user := middleware.GetUser(r); user != nil {
-		return user.ID
-	}
-	return 0
-}
-
 // -- Zone API ---
 
 // APIListZones returns all PowerDNS zones as a JSON array (GET /api/v1/zones).
 func (h *Handler) APIListZones(w http.ResponseWriter, r *http.Request) {
-	zones, err := h.PDNS.ListZones(r.Context())
+	zones, err := h.Ops.ListZones(r.Context(), middleware.GetUser(r))
 	if err != nil {
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to list zones", err)
-		return
-	}
-	filtered, filterErr := h.filterZonesForUser(r, zones)
-	if filterErr != nil {
 		// A failed zone-access lookup is a database fault, not an empty
 		// result: returning 200 with [] would present an outage as "you
 		// have no zones". Fail closed WITH a visible error — no zone is
 		// ever disclosed either way.
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to load zone access", filterErr)
+		if h.writeServiceAuthzError(w, r, err, "failed to load zone access") {
+			return
+		}
+		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to list zones", err)
 		return
 	}
-	zones = filtered
 	if zones == nil {
 		zones = []models.Zone{}
 	}
@@ -130,8 +138,11 @@ func (h *Handler) APIListZones(w http.ResponseWriter, r *http.Request) {
 // APIGetZone returns a single zone by zone_id as JSON (GET /api/v1/zones/{zone_id}).
 func (h *Handler) APIGetZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
-	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
+	zone, err := h.Ops.GetZone(r.Context(), middleware.GetUser(r), zoneID)
 	if err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
 		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
 		// The label must follow the status: a 500 that answers "zone not
 		// found" tells the client to delete/recreate a zone that exists.
@@ -156,44 +167,20 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validators.ValidateDomainName(req.Name); err != nil {
-		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
-		return
-	}
-
-	if req.Kind == "" {
-		req.Kind = "Native"
-	}
-
-	if err := validators.ValidateZoneKind(req.Kind); err != nil {
-		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
-		return
-	}
-
-	// Canonicalise the zone name and nameservers (lowercase + trailing dot)
-	// so the API accepts "example.com" without requiring the trailing dot
-	// that PowerDNS mandates internally.
-	req.Name = normalizeZoneName(req.Name)
-	for i := range req.Nameservers {
-		req.Nameservers[i] = normalizeZoneName(req.Nameservers[i])
-	}
-
-	zone, err := h.PDNS.CreateZone(r.Context(), req)
+	req, err := dnsops.ValidateZoneCreate(req)
 	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, err.Error())
+		return
+	}
+
+	zone, err := h.Ops.CreateZone(r.Context(), middleware.GetUser(r), req, dnsops.SourceAPI)
+	if err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
 		status, code := pdnsErrorStatus(err, ErrCodeZoneCreateError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create zone", err)
 		return
-	}
-
-	// Audit trail: mirror the web CreateZone handler so API-driven creates
-	// show up in the activity log (user_id is the API key owner).
-	if err := logActivity(r.Context(), h.DB, activityEntry{
-		UserID:  apiActivityUserID(r),
-		ZoneID:  zone.ID,
-		Action:  "create_zone",
-		Details: fmt.Sprintf("Created zone %s (kind: %s) via API", zone.Name, zone.Kind),
-	}); err != nil {
-		logger.Error("failed to log create_zone activity", "zone_id", zone.ID, "error", err)
 	}
 
 	writeJSON(w, http.StatusCreated, zone)
@@ -202,21 +189,14 @@ func (h *Handler) APICreateZone(w http.ResponseWriter, r *http.Request) {
 // APIDeleteZone deletes a zone by zone_id (DELETE /api/v1/zones/{zone_id}).
 func (h *Handler) APIDeleteZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
-	if err := h.PDNS.DeleteZone(r.Context(), zoneID); err != nil {
+	if err := h.Ops.DeleteZone(r.Context(), middleware.GetUser(r), zoneID, dnsops.SourceAPI); err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
 		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete zone", err)
 		return
 	}
-
-	// Audit trail: mirror the web DeleteZone handler so API-driven deletes show
-	// up in the activity log. user_id is the API key owner (set by APIKeyAuth).
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: apiActivityUserID(r), ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s via API", zoneID)}); err != nil {
-		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
-	}
-
-	// Same immediate grant purge as the web delete: no lingering group
-	// access until the hourly reconciliation.
-	h.purgeZoneGroupGrants(r.Context(), zoneID)
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "zone deleted"})
 }
@@ -261,16 +241,11 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 		name = normalizeRecordName(name, zoneID)
 	}
 
-	var (
-		records []models.RRSet
-		err     error
-	)
-	if name == "" {
-		records, err = h.PDNS.ListRecords(r.Context(), zoneID)
-	} else {
-		records, err = h.PDNS.ListRecord(r.Context(), zoneID, name, rrType)
-	}
+	records, err := h.Ops.ListRecords(r.Context(), middleware.GetUser(r), zoneID, name, rrType)
 	if err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
 		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to list records", err)
 		return
@@ -281,73 +256,25 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
-// prepareAPIRecordSet validates and normalises an RRSet from an API request for
-// the PDNS PATCH API, mirroring the web write path: it canonicalises the type
-// (uppercase) and the name (trailing dot, relative-to-zone), then embeds the
-// MX/SRV priority into each
-// record's content and quotes TXT/SPF. Content is validated in its bare form
-// (priority carried in RecordInfo.Priority), which matches what APIListRecords
-// returns, so a read-modify-write round trip works. Returns a validation error
-// for a 400, or nil when the RRSet is valid.
-func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
-	rrset.Type = canonicalRecordType(rrset.Type)
-	if err := validators.ValidateRecordType(rrset.Type); err != nil {
-		return err
-	}
-	if rrset.TTL < 0 {
-		return fmt.Errorf("ttl must be a non-negative integer")
-	}
-	if err := validators.ValidateRecordName(rrset.Name); err != nil {
-		return err
-	}
-	for i := range rrset.Records {
-		if err := validators.ValidateRecordContent(rrset.Type, rrset.Records[i].Content); err != nil {
-			return err
-		}
-		if err := validators.ValidateRecordPriority(rrset.Type, rrset.Records[i].Priority); err != nil {
-			return err
-		}
-	}
-
-	rrset.Name = normalizeRecordName(rrset.Name, zoneID)
-	for i := range rrset.Records {
-		rrset.Records[i].Content, rrset.Records[i].Priority =
-			prepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
-	}
-	return nil
+// validateAPIRecordSet validates and canonicalises an RRSet from an API request,
+// without normalising record content (priority embedding / quoting / trailing
+// dots). APICreateRecord uses it before the service merges the new records
+// into an existing RRSet: content normalization must run AFTER the merge so
+// each record keeps its original priority in the Priority field until the
+// single final prepareRecordContent pass (prepareRecordContent is not
+// idempotent for MX/SRV — a second pass would strip the embedded priority and
+// re-embed the now-zeroed Priority field). See dnsops.ValidateRecordSet.
+func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
+	return dnsops.ValidateRecordSet(rrset, zoneID)
 }
 
-// validateAPIRecordSet validates the RRSet fields and canonicalizes the type
-// (uppercase) and name, but
-// does NOT normalize record content (priority embedding / quoting / trailing
-// dots). APICreateRecord uses it before merging the new records into an
-// existing RRSet: content normalization must run AFTER the merge so each
-// record keeps its original priority in the Priority field until the single
-// final prepareRecordContent pass (prepareRecordContent is not idempotent for
-// MX/SRV — a second pass would strip the embedded priority and re-embed the
-// now-zeroed Priority field). prepareAPIRecordSet above remains the
-// validate+normalize path for APIUpdateRecord, which does a plain REPLACE.
-func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
-	rrset.Type = canonicalRecordType(rrset.Type)
-	if err := validators.ValidateRecordType(rrset.Type); err != nil {
-		return err
-	}
-	if rrset.TTL < 0 {
-		return fmt.Errorf("ttl must be a non-negative integer")
-	}
-	if err := validators.ValidateRecordName(rrset.Name); err != nil {
-		return err
-	}
-	for i := range rrset.Records {
-		if err := validators.ValidateRecordContent(rrset.Type, rrset.Records[i].Content); err != nil {
-			return err
-		}
-		if err := validators.ValidateRecordPriority(rrset.Type, rrset.Records[i].Priority); err != nil {
-			return err
-		}
-	}
-	rrset.Name = normalizeRecordName(rrset.Name, zoneID)
-	return nil
+// prepareAPIRecordSet validates the RRSet fields and canonicalizes the type
+// (uppercase), the name and each record's content (priority embedding /
+// quoting / trailing dots) in one pass. APIUpdateRecord uses it before the
+// service replaces the RRSet — a plain REPLACE has no merge, so content
+// normalization can run immediately. See dnsops.PrepareValidatedRecordSet.
+func prepareAPIRecordSet(rrset *models.RRSet, zoneID string) error {
+	return dnsops.PrepareValidatedRecordSet(rrset, zoneID)
 }
 
 // APICreateRecord creates a record (RRSet) in a zone from a JSON body (POST /api/v1/zones/{zone_id}/records).
@@ -360,10 +287,6 @@ func validateAPIRecordSet(rrset *models.RRSet, zoneID string) error {
 func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
-	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone (see zoneLocks) — the REST twin of the web CreateRecord.
-	defer h.zoneLocks.Lock(zoneID)()
-
 	var rrset models.RRSet
 	if err := json.NewDecoder(r.Body).Decode(&rrset); err != nil {
 		writeAPIError(w, http.StatusBadRequest, ErrCodeInvalidJSON, "invalid JSON body")
@@ -375,78 +298,27 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Merge with any existing RRSet so sibling records are preserved. This
-	// mirrors the web CreateRecord flow: list, append, normalize once. Content
-	// normalization runs AFTER the merge so each record keeps its original
-	// priority in the Priority field until the final prepareRecordContent pass
-	// (prepareRecordContent is not idempotent for MX/SRV, so normalizing the
-	// new records before the merge would lose their priority).
-	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
-	if err != nil {
-		// A missing zone surfaces as 404, not a blanket 500: the fetch fails
-		// before anything was created, and the caller can act on the zone.
-		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
-		label := "failed to fetch existing records"
-		if status == http.StatusNotFound {
-			label = "zone not found"
+	if err := h.Ops.CreateRecord(r.Context(), middleware.GetUser(r), zoneID, rrset, dnsops.SourceAPI); err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
 		}
-		h.writeAPIErrorWithCause(w, r, status, code, label, err)
-		return
-	}
-	var existingRRSet models.RRSet
-	foundExisting := false
-	for _, rr := range allRecords {
-		if rr.Name == rrset.Name && rr.Type == rrset.Type {
-			existingRRSet = rr
-			foundExisting = true
-			rrset.Records = append(append([]models.RecordInfo{}, rr.Records...), rrset.Records...)
-			break
+		// The fetch stage of the service merge maps a missing zone to 404
+		// ZONE_NOT_FOUND (the fetch fails before anything was created, and
+		// the caller can act on the zone); the PATCH stage maps to
+		// RECORD_ERROR like every record write.
+		var se *dnsops.StageError
+		if errors.As(err, &se) && se.Stage == dnsops.StageFetch {
+			status, code := pdnsErrorStatus(se.Err, ErrCodeZoneNotFound)
+			label := "failed to fetch existing records"
+			if status == http.StatusNotFound {
+				label = "zone not found"
+			}
+			h.writeAPIErrorWithCause(w, r, status, code, label, err)
+			return
 		}
-	}
-	for i := range rrset.Records {
-		rrset.Records[i].Content, rrset.Records[i].Priority =
-			prepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
-	}
-	// Deduplicate after normalisation (batch-path parity): a payload record
-	// whose wire content matches an existing sibling of the RRSet would make
-	// the merged PATCH carry a duplicate record, which PowerDNS rejects with
-	// an opaque 422. The first occurrence wins, so existing records keep
-	// their flags.
-	rrset.Records = dedupRecordsByContent(rrset.Records)
-
-	// Resolve an unspecified (zero) TTL exactly like the web CreateRecord:
-	// inherit the existing RRSet's TTL on a merge (PowerDNS applies the
-	// RRSet-level TTL to every record of the set, so submitting 0 would
-	// silently zero the TTL of the pre-existing sibling records), else the
-	// 3600 default. Negative values were rejected at validation.
-	if rrset.TTL <= 0 {
-		rrset.TTL = defaultRecordTTL
-		if foundExisting && existingRRSet.TTL > 0 {
-			rrset.TTL = existingRRSet.TTL
-		}
-	}
-
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
 		return
-	}
-
-	// Audit trail: mirror the web CreateRecord handler (before/after
-	// snapshots; old is empty when the RRSet is brand new).
-	var oldSnapshot *models.RRSet
-	if foundExisting {
-		oldSnapshot = &existingRRSet
-	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{
-		UserID:   apiActivityUserID(r),
-		ZoneID:   zoneID,
-		Action:   "create_record",
-		Details:  fmt.Sprintf("Created %s record %s -> %s via API", rrset.Type, rrset.Name, rrset.Records[len(rrset.Records)-1].Content),
-		OldValue: rrsetSnapshot(oldSnapshot),
-		NewValue: rrsetSnapshot(&rrset),
-	}); err != nil {
-		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"message": "record created"})
@@ -480,42 +352,13 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort snapshot of the RRSet being replaced, for the audit trail.
-	// A fetch failure (or a brand-new RRSet) leaves old_value empty — the
-	// REPLACE itself must not fail because the audit's before-image is
-	// unavailable.
-	var oldRRSet *models.RRSet
-	if existing, err := h.PDNS.ListRecord(r.Context(), zoneID, req.RRSet.Name, req.RRSet.Type); err == nil && len(existing) > 0 {
-		oldRRSet = &existing[0]
-	}
-
-	// Resolve an unspecified (zero) TTL like the create path: inherit the TTL
-	// of the RRSet being replaced, else the 3600 default. A REPLACE carrying
-	// ttl 0 would zero the whole set.
-	if req.RRSet.TTL <= 0 {
-		req.RRSet.TTL = defaultRecordTTL
-		if oldRRSet != nil && oldRRSet.TTL > 0 {
-			req.RRSet.TTL = oldRRSet.TTL
+	if err := h.Ops.UpdateRecord(r.Context(), middleware.GetUser(r), zoneID, req.RRSet, dnsops.SourceAPI); err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
 		}
-	}
-
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, req.RRSet); err != nil {
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to update record", err)
 		return
-	}
-
-	// Audit trail: mirror the web UpdateRecord handler (before/after
-	// snapshots).
-	if err := logActivity(r.Context(), h.DB, activityEntry{
-		UserID:   apiActivityUserID(r),
-		ZoneID:   zoneID,
-		Action:   "update_record",
-		Details:  fmt.Sprintf("Updated %s record %s via API", req.RRSet.Type, req.RRSet.Name),
-		OldValue: rrsetSnapshot(oldRRSet),
-		NewValue: rrsetSnapshot(&req.RRSet),
-	}); err != nil {
-		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record updated"})
@@ -557,27 +400,13 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = normalizeRecordName(req.Name, zoneID)
 
-	// Best-effort snapshot of the RRSet before deletion, for the audit trail.
-	var oldRRSet *models.RRSet
-	if existing, err := h.PDNS.ListRecord(r.Context(), zoneID, req.Name, req.Type); err == nil && len(existing) > 0 {
-		oldRRSet = &existing[0]
-	}
-
-	if err := h.PDNS.DeleteRecord(r.Context(), zoneID, req.Name, req.Type); err != nil {
+	if err := h.Ops.DeleteRecord(r.Context(), middleware.GetUser(r), zoneID, req.Name, req.Type, dnsops.SourceAPI); err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
 		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete record", err)
 		return
-	}
-
-	// Audit trail: mirror the web DeleteRecord handler (before snapshot).
-	if err := logActivity(r.Context(), h.DB, activityEntry{
-		UserID:   apiActivityUserID(r),
-		ZoneID:   zoneID,
-		Action:   "delete_record",
-		Details:  fmt.Sprintf("Deleted %s record %s via API", req.Type, req.Name),
-		OldValue: rrsetSnapshot(oldRRSet),
-	}); err != nil {
-		logger.Error("failed to log delete_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "record deleted"})
@@ -585,34 +414,32 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 
 // APIStats returns PowerDNS server statistics combined with the zone count (GET /api/v1/stats).
 func (h *Handler) APIStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.PDNS.GetStatistics(r.Context())
+	stats, zoneCount, err := h.Ops.Stats(r.Context(), middleware.GetUser(r))
 	if err != nil {
+		// The service tags which composite stage failed; the REST mapping
+		// differs per stage (a failed statistics call is STATS_ERROR, a raw
+		// upstream zone-list failure falls through pdnsErrorStatus to
+		// INTERNAL_ERROR, and a failed zone-access lookup is INTERNAL_ERROR
+		// without any stats body). A failed zone list must not surface as
+		// zone_count: 0 — a caller would read an empty tenant instead of an
+		// outage.
+		var se *dnsops.StageError
+		if errors.As(err, &se) {
+			switch se.Stage {
+			case dnsops.StageStatistics:
+				h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeStatsError, "failed to get statistics", err)
+				return
+			case dnsops.StageZoneList:
+				status, code := pdnsErrorStatus(se.Err, ErrCodeStatsError)
+				h.writeAPIErrorWithCause(w, r, status, code, "failed to list zones", err)
+				return
+			default:
+				h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to load zone access", err)
+				return
+			}
+		}
 		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeStatsError, "failed to get statistics", err)
 		return
-	}
-
-	zones, err := h.PDNS.ListZones(r.Context())
-	if err != nil {
-		// A failed zone list must not surface as zone_count: 0 — a caller
-		// would read an empty tenant instead of an outage. The statistics
-		// endpoint and the zone list are independent upstream calls; either
-		// failing makes the composite answer wrong.
-		status, code := pdnsErrorStatus(err, ErrCodeStatsError)
-		h.writeAPIErrorWithCause(w, r, status, code, "failed to list zones", err)
-		return
-	}
-	filtered, filterErr := h.filterZonesForUser(r, zones)
-	if filterErr != nil {
-		// Same fail-closed-with-error semantics as APIListZones: a failed
-		// zone-access lookup must not surface as zone_count: 0, which a
-		// caller would read as an empty tenant, not an outage.
-		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to load zone access", filterErr)
-		return
-	}
-	zones = filtered
-	zoneCount := 0
-	if zones != nil {
-		zoneCount = len(zones)
 	}
 
 	response := map[string]interface{}{

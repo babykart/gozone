@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -22,10 +23,10 @@ import (
 // trailing dot when missing. PowerDNS rejects zone names and nameserver
 // hostnames that lack the trailing dot, so without this normalisation a user
 // entering "example.com" (as the placeholder suggests) gets a PDNS error.
+// The implementation lives in the dnsops service layer
+// (dnsops.NormalizeZoneName).
 func normalizeZoneName(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.ToLower(name)
-	return models.EnsureTrailingDot(name)
+	return dnsops.NormalizeZoneName(name)
 }
 
 // PageInfo holds pagination state for template rendering.
@@ -426,12 +427,10 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 // reconciliation: a zone recreated under the same name within that window
 // would silently restore the old groups' access to the NEW zone. The zone ID
 // is canonicalised (lowercase + trailing dot) because the grants table keys
-// on the canonical form while a form value may arrive without the dot.
+// on the canonical form while a form value may arrive without the dot. The
+// implementation lives in the dnsops service layer.
 func (h *Handler) purgeZoneGroupGrants(ctx context.Context, zoneID string) {
-	zoneID = normalizeZoneName(zoneID)
-	if _, err := h.DB.ExecContext(ctx, "DELETE FROM zone_group_zones WHERE zone_id = ?", zoneID); err != nil {
-		logger.Error("failed to purge zone group grants", "zone_id", zoneID, "error", err)
-	}
+	dnsops.PurgeZoneGroupGrants(ctx, h.DB, zoneID)
 }
 
 // BulkDeleteZones deletes several zones by zone_id (POST /zones/bulk-delete).
