@@ -450,6 +450,8 @@ Users can generate personal API keys for programmatic access. Keys are SHA-256 h
 
 GoZone exposes a REST API under `/api/v1` for automation (zone and record CRUD, statistics, health). The complete endpoint reference — authentication, rate limiting, error envelope, every zone/record operation with payload schemas and curl examples — lives in [API.md](./docs/API.md).
 
+An **MCP server** (Model Context Protocol, for AI agents such as Claude Code) can expose the same operations over Streamable HTTP at `/mcp`, behind the same API-key authentication and zone authorization — disabled by default, see [MCP.md](./docs/MCP.md).
+
 ## Commands
 
 | Make | Just | Description |

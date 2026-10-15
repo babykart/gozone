@@ -777,3 +777,22 @@ MySQL and PostgreSQL deployments do not have these constraints and can use a nor
 - **CI/CD**: A GitHub Actions workflow (`.github/workflows/release.yml`) builds and publishes multi-architecture Docker images to GHCR on tag pushes matching `v*`.
 - **Single process**: SQLite deployments cannot scale horizontally. MySQL/PostgreSQL deployments can be scaled behind a load balancer — all in-flight state is held in either PowerDNS or the database, not in the application process.
 - **Helm chart**: A community-maintained Helm chart is available at [`babykart/helm-charts`](https://github.com/babykart/helm-charts) for Kubernetes deployments (`helm repo add babykart https://babykart.github.io/helm-charts && helm install gozone babykart/gozone`).
+
+## MCP Transport (AI agents)
+
+The MCP endpoint (`/mcp`, Streamable HTTP, disabled by default — see
+[MCP.md](MCP.md)) is a thin transport over the same building blocks as the
+REST API:
+
+- `internal/mcpserver` builds an SDK server (`modelcontextprotocol/go-sdk`,
+  stateless mode) whose tools call the `internal/dnsops` service layer
+  directly. No business logic lives in the transport.
+- It is mounted by `cmd/routes.go` (`mountMCPRoute`) behind the same
+  limiter instances and `middleware.APIKeyAuth` as `/api/v1`; the
+  authenticated user reaches the tool handlers through the request context.
+- Zone authorization and admin gates are re-checked inside `dnsops`
+  (fail-closed), record writes take the shared per-zone lock, and every
+  mutation is audited with a `via MCP` label.
+- A `mcp.allowed_origins` guard rejects browser Origins not explicitly
+  listed (DNS-rebinding protection required by the Streamable HTTP spec);
+  header-authenticated agent clients are unaffected.

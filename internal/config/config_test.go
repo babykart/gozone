@@ -1271,3 +1271,90 @@ func TestLoadDocListsEveryEnvOverride(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPDefaults pins the out-of-the-box MCP posture: disabled, read-only
+// when enabled later, no origins allowed.
+func TestMCPDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.MCP.Enabled {
+		t.Error("mcp.enabled must default to false")
+	}
+	if cfg.MCP.Path != "/mcp" {
+		t.Errorf("mcp.path default = %q, want /mcp", cfg.MCP.Path)
+	}
+	if !cfg.MCP.ReadOnly {
+		t.Error("mcp.read_only must default to true")
+	}
+	if len(cfg.MCP.AllowedOrigins) != 0 {
+		t.Errorf("mcp.allowed_origins must default to empty, got %v", cfg.MCP.AllowedOrigins)
+	}
+}
+
+// TestMCPEnvOverrides pins the GOZONE_MCP_* mapping.
+func TestMCPEnvOverrides(t *testing.T) {
+	t.Setenv("GOZONE_SECRET_KEY", strings.Repeat("k", 64))
+	t.Setenv("GOZONE_MCP_ENABLED", "true")
+	t.Setenv("GOZONE_MCP_PATH", "/agent")
+	t.Setenv("GOZONE_MCP_READ_ONLY", "false")
+	t.Setenv("GOZONE_MCP_ALLOWED_ORIGINS", "https://claude.ai,https://desktop.claude.ai")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MCP.Enabled || cfg.MCP.Path != "/agent" || cfg.MCP.ReadOnly {
+		t.Fatalf("env overrides not applied: %+v", cfg.MCP)
+	}
+	if len(cfg.MCP.AllowedOrigins) != 2 || cfg.MCP.AllowedOrigins[0] != "https://claude.ai" {
+		t.Fatalf("allowed_origins override not applied: %v", cfg.MCP.AllowedOrigins)
+	}
+}
+
+// TestValidate_MCPPath pins the reserved-route overlap rules: the endpoint
+// must not shadow the existing route trees.
+func TestValidate_MCPPath(t *testing.T) {
+	valid := []string{"/mcp", "/agent-api", "/tools/mcp"}
+	invalid := map[string]string{
+		"mcp":       "must start with '/'",
+		"/api":      "overlaps /api",
+		"/api/mcp":  "overlaps /api",
+		"/static/x": "overlaps /static",
+		"/health":   "overlaps /health",
+		"/zones":    "overlaps /zones",
+		"/mcp/":     "trailing slash",
+	}
+	for _, p := range valid {
+		cfg := DefaultConfig()
+		cfg.Server.SecretKey = strings.Repeat("k", 64)
+		cfg.MCP.Path = p
+		if err := cfg.validate(); err != nil {
+			t.Errorf("path %q must validate, got %v", p, err)
+		}
+	}
+	for p, why := range invalid {
+		cfg := DefaultConfig()
+		cfg.Server.SecretKey = strings.Repeat("k", 64)
+		cfg.MCP.Path = p
+		if err := cfg.validate(); err == nil {
+			t.Errorf("path %q must be rejected (%s)", p, why)
+		}
+	}
+}
+
+// TestValidate_MCPOrigins pins the origin syntax check: scheme://host[:port]
+// with no path component.
+func TestValidate_MCPOrigins(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Server.SecretKey = strings.Repeat("k", 64)
+	cfg.MCP.AllowedOrigins = []string{"https://claude.ai", "http://localhost:8080"}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid origins rejected: %v", err)
+	}
+	for _, bad := range []string{"claude.ai", "https://claude.ai/path", "://host", "https://"} {
+		cfg := DefaultConfig()
+		cfg.Server.SecretKey = strings.Repeat("k", 64)
+		cfg.MCP.AllowedOrigins = []string{bad}
+		if err := cfg.validate(); err == nil {
+			t.Errorf("origin %q must be rejected", bad)
+		}
+	}
+}

@@ -1,0 +1,437 @@
+package mcpserver
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/dnsops"
+	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/pdns"
+	"github.com/babykart/gozone/internal/testutil"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// apiKeyRoundTripper injects the API key header on every client request,
+// mirroring how a real MCP client passes its GoZone key.
+type apiKeyRoundTripper struct {
+	key string
+	rt  http.RoundTripper
+}
+
+func (a *apiKeyRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r.Header.Set("X-API-Key", a.key)
+	return a.rt.RoundTrip(r)
+}
+
+// hashKey replicates the middleware's key hashing for seeding.
+func hashKey(raw string) string {
+	h := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(h[:])
+}
+
+func seedAPIKey(t *testing.T, db *database.DB, userID int64) string {
+	t.Helper()
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	key := "gz-test-" + hex.EncodeToString(raw)
+	if _, err := db.ExecContext(context.Background(),
+		`INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, 'test key')`,
+		userID, hashKey(key)); err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// newMCPTestEnv wires a full MCP endpoint over a mock PowerDNS: a chi router
+// with the production authentication middleware (APIKeyAuth), the dnsops
+// service, and an httptest.Server a real SDK client can connect to.
+func newMCPTestEnv(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandlerFunc) (*mcp.ClientSession, *database.DB) {
+	return newMCPTestEnvAs(t, readOnly, pdnsHandler, "user")
+}
+
+// newMCPTestEnvAs is newMCPTestEnv with a chosen role for the seeded key
+// owner ("user" or "admin").
+func newMCPTestEnvAs(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandlerFunc, role string) (*mcp.ClientSession, *database.DB) {
+	t.Helper()
+	if pdnsHandler == nil {
+		pdnsHandler = func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodGet {
+				w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	pdnsSrv, pdnsClient := testutil.NewTestPDNSServer(t, pdnsHandler)
+	t.Cleanup(func() { pdnsSrv.Close() })
+	db := testutil.NewTestDB(t)
+	ops := dnsops.New(db, pdnsClient)
+
+	cfg := &config.MCPConfig{Enabled: true, Path: "/mcp", ReadOnly: readOnly}
+	handler := New(ops, cfg, "test-version")
+
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.APIKeyAuth(db))
+		r.Handle("/mcp", handler)
+	})
+	httpSrv := httptest.NewServer(r)
+	t.Cleanup(httpSrv.Close)
+
+	userID := testutil.SeedTestUser(t, db, "mcpuser", "pass", role, true)
+	key := seedAPIKey(t, db, userID)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-test-client", Version: "1.0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: httpSrv.URL + "/mcp",
+		HTTPClient: &http.Client{Transport: &apiKeyRoundTripper{
+			key: key,
+			rt:  http.DefaultTransport,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session, db
+}
+
+func toolNames(tools []*mcp.Tool) map[string]bool {
+	m := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		m[t.Name] = true
+	}
+	return m
+}
+
+// grantZoneToMCPUser gives the seeded non-admin user a group grant on zoneID.
+func grantZoneToMCPUser(t *testing.T, db *database.DB, zoneID string) {
+	t.Helper()
+	var userID int64
+	if err := db.QueryRow(`SELECT id FROM users WHERE username='mcpuser'`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	groupID, err := db.ExecReturnID(context.Background(), `INSERT INTO zone_groups (name) VALUES ('mcpgroup')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)`, groupID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)`, groupID, zoneID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolsList_ReadOnlyFiltering(t *testing.T) {
+	session, _ := newMCPTestEnv(t, true, nil)
+	res, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	names := toolNames(res.Tools)
+	for _, want := range []string{"list_zones", "get_zone", "list_records", "get_stats", "list_record_types"} {
+		if !names[want] {
+			t.Errorf("read-only server must list %s; got %v", want, res.Tools)
+		}
+	}
+	for _, banned := range []string{"create_record", "update_record", "delete_record", "create_zone", "delete_zone"} {
+		if names[banned] {
+			t.Errorf("read-only server must NOT list %s", banned)
+		}
+	}
+}
+
+func TestToolsList_WriteToolsWhenOptedIn(t *testing.T) {
+	session, _ := newMCPTestEnv(t, false, nil)
+	res, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	names := toolNames(res.Tools)
+	for _, want := range []string{"create_record", "update_record", "delete_record", "create_zone", "delete_zone"} {
+		if !names[want] {
+			t.Errorf("read_only=false must list %s", want)
+		}
+	}
+}
+
+func TestListZones_NonAdminSeesGrantedZonesOnly(t *testing.T) {
+	pdnsHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.Zone{
+			{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+			{ID: "b.example.", Name: "b.example.", Kind: "Native"},
+		})
+	}
+	session, db := newMCPTestEnv(t, true, pdnsHandler)
+
+	// Grant the seeded user access to one of the two zones.
+	grantZoneToMCPUser(t, db, "a.example.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_zones"})
+	if err != nil {
+		t.Fatalf("CallTool list_zones: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_zones failed: %+v", res.Content)
+	}
+	var out struct {
+		Zones []models.Zone `json:"zones"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if len(out.Zones) != 1 || out.Zones[0].ID != "a.example." {
+		t.Fatalf("non-admin must see only the granted zone, got %+v", out.Zones)
+	}
+}
+
+func resultText(res *mcp.CallToolResult) string {
+	var sb strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			sb.WriteString(tc.Text)
+		}
+	}
+	return sb.String()
+}
+
+func TestGetZone_UngrantedUserForbidden(t *testing.T) {
+	session, _ := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for a refused tool call, got %s %s", r.Method, r.URL.Path)
+	})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_zone",
+		Arguments: map[string]any{"zone": "guarded.example."},
+	})
+	if err != nil {
+		t.Fatalf("CallTool get_zone: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("ungranted get_zone must be a tool error, got %+v", res.Content)
+	}
+	if text := resultText(res); !strings.HasPrefix(text, "FORBIDDEN:") {
+		t.Fatalf("error text must carry the stable FORBIDDEN code, got %q", text)
+	}
+}
+
+func TestCreateRecord_WritesNormalizeMergeAndAudit(t *testing.T) {
+	var sent []models.RRSet
+	existing := []models.RRSet{
+		{Name: "mail.example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{{Content: "10 mail.example.com."}}},
+	}
+	pdnsHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			json.NewEncoder(w).Encode(struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}{RRSets: existing})
+		case http.MethodPatch, http.MethodPut:
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode PATCH: %v", err)
+			}
+			sent = append(sent, payload.RRSets...)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	session, db := newMCPTestEnv(t, false, pdnsHandler)
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "create_record",
+		Arguments: map[string]any{
+			"zone": "example.com.",
+			"name": "mail",
+			"type": "mx",
+			"records": []map[string]any{
+				{"content": "backup.example.com", "priority": 20},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool create_record: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_record failed: %s", resultText(res))
+	}
+
+	if len(sent) != 1 {
+		t.Fatalf("expected one PATCH, got %d", len(sent))
+	}
+	patch := sent[0]
+	if patch.Name != "mail.example.com." {
+		t.Errorf("patch name = %q, want mail.example.com. (canonicalised from the bare label)", patch.Name)
+	}
+	if patch.Type != "MX" {
+		t.Errorf("patch type = %q, want MX (uppercased)", patch.Type)
+	}
+	if len(patch.Records) != 2 {
+		t.Fatalf("patch must merge with the existing sibling, got %d records", len(patch.Records))
+	}
+	found := false
+	for _, rec := range patch.Records {
+		if rec.Content == "20 backup.example.com." {
+			found = true
+			if rec.Priority != 0 {
+				t.Errorf("priority must be embedded in the content (wire form), got priority=%d", rec.Priority)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("new record not normalised on the wire: %+v", patch.Records)
+	}
+
+	// The audit trail must attribute the write to MCP.
+	var details string
+	if err := db.QueryRow(`SELECT details FROM activity_logs WHERE action='create_record' AND zone_id='example.com.'`).Scan(&details); err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if !strings.Contains(details, "via MCP") {
+		t.Fatalf("audit details must carry the via MCP label, got %q", details)
+	}
+}
+
+func TestCreateZone_NonAdminForbidden(t *testing.T) {
+	session, db := newMCPTestEnv(t, false, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for a refused tool call, got %s %s", r.Method, r.URL.Path)
+	})
+	_ = db
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "create_zone",
+		Arguments: map[string]any{
+			"name":        "new.example.com",
+			"nameservers": []string{"ns1.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool create_zone: %v", err)
+	}
+	if !res.IsError || !strings.HasPrefix(resultText(res), "FORBIDDEN:") {
+		t.Fatalf("non-admin create_zone must fail with FORBIDDEN, got isError=%v text=%q", res.IsError, resultText(res))
+	}
+}
+
+func TestUnauthenticatedRequestRejected(t *testing.T) {
+	// A bare HTTP POST without an API key must be refused by the middleware
+	// before any MCP handling: 401 JSON envelope — the same gate as /api/v1.
+	pdnsSrv, pdnsClient := testutil.NewTestPDNSServer(t, nil)
+	defer pdnsSrv.Close()
+	db := testutil.NewTestDB(t)
+	handler := New(dnsops.New(db, pdnsClient), &config.MCPConfig{Enabled: true, Path: "/mcp", ReadOnly: true}, "test")
+
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.APIKeyAuth(db))
+		r.Handle("/mcp", handler)
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/mcp", "application/json", strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("request without an API key must get 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestOriginGuard(t *testing.T) {
+	guard := newOriginGuard([]string{"https://claude.ai"})
+	allowed := guard.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No Origin (agent/CLI client): passes.
+	w := httptest.NewRecorder()
+	allowed.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("no Origin header must pass, got %d", w.Code)
+	}
+
+	// Allowed origin: passes.
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Origin", "https://claude.ai")
+	allowed.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("allowed Origin must pass, got %d", w.Code)
+	}
+
+	// Disallowed origin: 403, fail-closed.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	allowed.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("disallowed Origin must be rejected with 403, got %d", w.Code)
+	}
+
+	// Empty allow-list: every Origin-bearing request is rejected.
+	closed := newOriginGuard(nil).Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Origin", "https://claude.ai")
+	closed.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("empty allow-list must reject all Origins, got %d", w.Code)
+	}
+}
+
+func TestMapServiceError(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{"forbidden", dnsops.ErrForbidden, "FORBIDDEN"},
+		{"zone fetch not found", &dnsops.StageError{Stage: dnsops.StageFetch, Err: pdns.ErrNotFound}, "ZONE_NOT_FOUND"},
+		{"patch not found", &dnsops.StageError{Stage: dnsops.StagePatch, Err: pdns.ErrNotFound}, "RECORD_NOT_FOUND"},
+		{"zone access fault", &dnsops.StageError{Stage: dnsops.StageZoneAccess, Err: pdns.ErrNotFound}, "INTERNAL_ERROR"},
+	}
+	for _, c := range cases {
+		te, _ := mapServiceError(c.err)
+		if te == nil || te.code != c.wantCode {
+			t.Errorf("%s: got %v, want code %s", c.name, te, c.wantCode)
+		}
+	}
+	// Unknown errors keep their cause for server-side logging while the
+	// client sees a generic internal error.
+	te, cause := mapServiceError(errors.New("boom: dsn=secret"))
+	if te.code != "INTERNAL_ERROR" {
+		t.Errorf("unknown error must map to INTERNAL_ERROR, got %s", te.code)
+	}
+	if strings.Contains(te.msg, "dsn") {
+		t.Errorf("internal detail leaked into the client-facing message: %q", te.msg)
+	}
+	if cause == nil {
+		t.Error("unknown error must return its cause for logging")
+	}
+}

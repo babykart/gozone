@@ -35,6 +35,29 @@ type Config struct {
 	LoginLock LoginLockConfig `yaml:"login_lock"`
 	Password  PasswordConfig  `yaml:"password"`
 	OIDC      OIDCConfig      `yaml:"oidc"`
+	MCP       MCPConfig       `yaml:"mcp"`
+}
+
+// MCPConfig configures the MCP (Model Context Protocol) server that exposes
+// GoZone's DNS operations to AI agents over Streamable HTTP (MCP_PLAN.md).
+//
+// The endpoint reuses the /api/v1 authentication stack (API key in the
+// Authorization header), the shared rate limiters and the dnsops service
+// layer, so an agent has exactly the rights of the user owning the API key.
+type MCPConfig struct {
+	// Enabled mounts the MCP endpoint. When false the route is not mounted
+	// at all (404), not merely refused.
+	Enabled bool `yaml:"enabled"`
+	// Path is the URL path the MCP endpoint is served on.
+	Path string `yaml:"path"`
+	// ReadOnly registers only the read-only tools. Recommended for a first
+	// deployment: write tools (create/update/delete) are not even listed.
+	ReadOnly bool `yaml:"read_only"`
+	// AllowedOrigins lists the browser origins allowed to reach the
+	// endpoint (DNS-rebinding protection required by the Streamable HTTP
+	// spec). An empty list rejects every request carrying an Origin header;
+	// non-browser clients (no Origin) are always allowed.
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // LoginLockConfig holds settings for the login brute-force protection.
@@ -392,6 +415,14 @@ func DefaultConfig() *Config {
 		Logging: LoggingConfig{
 			Level: "info",
 		},
+		MCP: MCPConfig{
+			Enabled: false,
+			Path:    "/mcp",
+			// Read-only first: write tools are not registered (nor listed)
+			// until an operator explicitly opts in.
+			ReadOnly:       true,
+			AllowedOrigins: []string{},
+		},
 		Admin: AdminConfig{
 			Username:  "admin",
 			Password:  DefaultAdminPassword,
@@ -470,6 +501,8 @@ func DefaultConfig() *Config {
 //	            GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
 //	            GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
 //	            GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS, GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES
+//	mcp:        GOZONE_MCP_ENABLED, GOZONE_MCP_PATH, GOZONE_MCP_READ_ONLY,
+//	            GOZONE_MCP_ALLOWED_ORIGINS
 //	oidc single-provider block: GOZONE_OIDC_PROVIDER_NAME, GOZONE_OIDC_ISSUER_URL,
 //	            GOZONE_OIDC_CLIENT_ID, GOZONE_OIDC_CLIENT_SECRET
 //
@@ -774,6 +807,38 @@ func (cfg *Config) validate() error {
 		return err
 	}
 
+	if err := cfg.validateMCP(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateMCP checks the MCP endpoint configuration. Path and origin checks
+// run even when the endpoint is disabled so a config that only toggles
+// mcp.enabled later fails early on a bad path or origin instead of at the
+// next restart.
+func (cfg *Config) validateMCP() error {
+	p := cfg.MCP.Path
+	if p == "" || p[0] != '/' {
+		return fmt.Errorf("invalid mcp.path %q: must start with '/'", p)
+	}
+	if p != "/" && strings.HasSuffix(p, "/") {
+		return fmt.Errorf("invalid mcp.path %q: must not end with '/'", p)
+	}
+	// The MCP endpoint must not shadow (or be shadowed by) the existing
+	// route trees: chi mounts are prefix-based.
+	for _, reserved := range []string{"/api", "/static", "/health", "/login", "/logout", "/dashboard", "/zones", "/users", "/groups", "/profile", "/activity", "/templates", "/tsigkeys", "/favicon.ico"} {
+		if p == reserved || strings.HasPrefix(p, reserved+"/") {
+			return fmt.Errorf("invalid mcp.path %q: overlaps the reserved route %q", p, reserved)
+		}
+	}
+	for _, o := range cfg.MCP.AllowedOrigins {
+		u, err := url.Parse(o)
+		if err != nil || u.Scheme == "" || u.Host == "" || u.Path != "" {
+			return fmt.Errorf("invalid mcp.allowed_origins entry %q: want scheme://host[:port] with no path", o)
+		}
+	}
 	return nil
 }
 
@@ -999,6 +1064,11 @@ var envOverrides = []envOverride{
 	sliceOverride{"GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS", func(c *Config, v []string) { c.OIDC.AllowedEmailDomains = v }},
 	strOverride{"GOZONE_OIDC_GROUP_CLAIM", func(c *Config, v string) { c.OIDC.GroupClaim = v }},
 	intOverride{"GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", func(c *Config, n int) { c.OIDC.JWKSCacheTTLMinutes = n }},
+	// MCP endpoint
+	boolOverride{"GOZONE_MCP_ENABLED", func(c *Config, b bool) { c.MCP.Enabled = b }},
+	strOverride{"GOZONE_MCP_PATH", func(c *Config, v string) { c.MCP.Path = v }},
+	boolOverride{"GOZONE_MCP_READ_ONLY", func(c *Config, b bool) { c.MCP.ReadOnly = b }},
+	sliceOverride{"GOZONE_MCP_ALLOWED_ORIGINS", func(c *Config, v []string) { c.MCP.AllowedOrigins = v }},
 }
 
 // applyEnvOverrides overlays GOZONE_-prefixed environment variables on top of

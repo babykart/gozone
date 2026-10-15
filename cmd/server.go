@@ -496,6 +496,10 @@ func runServer(cfg *config.Config) error {
 	r.With(healthLimiter.Limit(middleware.ExtractIP)).Get("/health/ready", h.HealthReady)
 	r.Get("/health/live", h.HealthLive)
 
+	// MCP endpoint (Streamable HTTP), behind the same limiter instances and
+	// API-key authentication as /api/v1. Not mounted at all when disabled.
+	mountMCPRoute(r, h, db, cfg, apiIPLimiter, apiLimiter)
+
 	// Start server
 	addr := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 

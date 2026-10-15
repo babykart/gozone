@@ -3,8 +3,10 @@ package cmd
 import (
 	"github.com/go-chi/chi/v5"
 
+	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/handlers"
+	"github.com/babykart/gozone/internal/mcpserver"
 	"github.com/babykart/gozone/internal/middleware"
 )
 
@@ -82,5 +84,29 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 		r.Post("/templates/bulk-delete", h.BulkDeleteTemplates)
 		r.Post("/templates/{template_id}/records/add", h.AddTemplateRecord)
 		r.Post("/templates/{template_id}/records/{record_id}/delete", h.DeleteTemplateRecord)
+	})
+}
+
+// mountMCPRoute registers the MCP endpoint on r, behind the same middleware
+// stack as /api/v1: pre-auth IP rate limit → API-key authentication →
+// per-key rate limit. The SAME limiter instances must be passed as the /api
+// group uses, so a client alternating REST and MCP requests draws from one
+// budget instead of doubling it (MCP_PLAN.md §4).
+//
+// The endpoint is intentionally NOT under the CSRF middleware: MCP requests
+// authenticate by header (API key), not by cookie — and the web session
+// cookie must never be accepted on /mcp.
+//
+// When mcp.enabled is false the route is not mounted at all (404), not
+// merely refused; TestMCPRoute tests both states.
+func mountMCPRoute(r chi.Router, h *handlers.Handler, db *database.DB, cfg *config.Config, apiIPLimiter, apiLimiter *middleware.RateLimiter) {
+	if !cfg.MCP.Enabled {
+		return
+	}
+	r.Group(func(r chi.Router) {
+		r.Use(apiIPLimiter.Limit(middleware.ExtractIP))
+		r.Use(middleware.APIKeyAuth(db))
+		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
+		r.Handle(cfg.MCP.Path, mcpserver.New(h.Ops, &cfg.MCP, h.Version.Version))
 	})
 }

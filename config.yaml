@@ -211,3 +211,24 @@ oidc:
   # group_mapping:
   #   "dev-team": "developers"
   #   "ops-team": "operations"
+
+# MCP (Model Context Protocol) server — exposes GoZone's DNS operations to AI
+# agents over Streamable HTTP, using the same API-key authentication, zone
+# authorization, rate limits and audit trail as the REST API. See docs/MCP.md.
+mcp:
+  # Disabled by default: the endpoint is not mounted at all (404) until an
+  # operator explicitly opts in.
+  enabled: false
+  # URL path of the endpoint. Validated at load: must start with "/" and must
+  # not overlap the existing route trees (/api, /static, /health, ...).
+  path: /mcp
+  # Read-only first: when true the write tools (create/update/delete) are not
+  # registered at all — they do not even appear in tools/list. Flip to false
+  # only once the deployment is trusted.
+  read_only: true
+  # Browser origins allowed to reach the endpoint (DNS-rebinding protection
+  # required by the Streamable HTTP spec). Entries are "scheme://host[:port]".
+  # An empty list rejects every request carrying an Origin header; non-browser
+  # clients (CLI agents) send no Origin and are always allowed.
+  # allowed_origins:
+  #   - https://claude.ai

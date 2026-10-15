@@ -1,0 +1,173 @@
+package mcpserver
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/babykart/gozone/internal/dnsops"
+	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/validators"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// The zone argument every zone-scoped tool takes is the canonical zone ID
+// exactly as returned by list_zones/get_zone (lowercase, trailing dot, e.g.
+// "example.com."). Record names accept friendlier forms (@, bare label, FQDN
+// without the dot) and are canonicalised server-side.
+const zoneArgDoc = `Canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. "example.com.").`
+
+// recordNameArgDoc documents the accepted name forms — the single biggest
+// source of agent errors, so every record tool repeats it.
+const recordNameArgDoc = `Record name. Accepts "@" (zone apex), a bare label ("www"), an FQDN without the trailing dot ("www.example.com") or a full FQDN ("www.example.com."). Canonicalised against the zone before use.`
+
+// callTool logs the mapped tool error's cause server-side and returns the
+// tool error to the SDK (which packs it into an isError result). Every tool
+// funnels its failures through it: the client sees code + safe message, the
+// operator sees the full cause in the logs.
+func callTool(tool string, terr *toolError, cause error) error {
+	if cause == nil {
+		cause = terr
+	}
+	slog.Error("mcp tool failed", "tool", tool, "code", terr.code, "error", cause)
+	return terr
+}
+
+func readOnlyAnnotations() *mcp.ToolAnnotations {
+	f := false
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:  true,
+		OpenWorldHint: &f,
+	}
+}
+
+func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
+	// -- list_zones ------------------------------------------------------
+	type listZonesIn struct{}
+	type listZonesOut struct {
+		Zones []models.Zone `json:"zones" jsonschema:"zones visible to the API key's user (admins see all; others see their group-granted zones)"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_zones",
+		Title:       "List zones",
+		Description: "List DNS zones. Admin keys see every zone; other keys see only the zones granted through zone groups. No pagination: PowerDNS serves bounded zone counts.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listZonesIn) (*mcp.CallToolResult, listZonesOut, error) {
+		user, terr := userFromContext(ctx)
+		if terr != nil {
+			return nil, listZonesOut{}, terr
+		}
+		zones, err := ops.ListZones(ctx, user)
+		if te, cause := mapServiceError(err); te != nil {
+			return nil, listZonesOut{}, callTool("list_zones", te, cause)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d zone(s) visible", len(zones))}}}, listZonesOut{Zones: zones}, nil
+	})
+
+	// -- get_zone ---------------------------------------------------------
+	type getZoneIn struct {
+		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+	}
+	type getZoneOut struct {
+		Zone models.Zone `json:"zone"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_zone",
+		Title:       "Get zone",
+		Description: "Get one zone's details (kind, serial, DNSSEC state, masters). Use list_records for the zone's records.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getZoneIn) (*mcp.CallToolResult, getZoneOut, error) {
+		user, terr := userFromContext(ctx)
+		if terr != nil {
+			return nil, getZoneOut{}, terr
+		}
+		zone, err := ops.GetZone(ctx, user, in.Zone)
+		if te, cause := mapServiceError(err); te != nil {
+			return nil, getZoneOut{}, callTool("get_zone", te, cause)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: zone.Name + " (" + zone.Kind + ")"}}}, getZoneOut{Zone: *zone}, nil
+	})
+
+	// -- list_records -----------------------------------------------------
+	type listRecordsIn struct {
+		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Name string `json:"name,omitempty" jsonschema:"optional record-name filter; accepts \"@\", a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
+		Type string `json:"type,omitempty" jsonschema:"optional record type filter (e.g. A, CNAME); requires name"`
+	}
+	type listRecordsOut struct {
+		Records []models.RRSet `json:"records"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_records",
+		Title:       "List records",
+		Description: "List a zone's record sets (RRSets). Optionally filter by name (and type — type requires name). Each RRSet carries every record of that name+type; MX/SRV priorities appear in each record's priority field, TXT/SPF content is returned unquoted.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listRecordsIn) (*mcp.CallToolResult, listRecordsOut, error) {
+		user, terr := userFromContext(ctx)
+		if terr != nil {
+			return nil, listRecordsOut{}, terr
+		}
+		name := in.Name
+		if in.Type != "" && name == "" {
+			return nil, listRecordsOut{}, toolErrorf("VALIDATION_ERROR", "the 'type' filter requires 'name'")
+		}
+		if name != "" {
+			name = dnsops.NormalizeRecordName(name, in.Zone)
+		}
+		records, err := ops.ListRecords(ctx, user, in.Zone, name, in.Type)
+		if te, cause := mapServiceError(err); te != nil {
+			return nil, listRecordsOut{}, callTool("list_records", te, cause)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d record set(s)", len(records))}}}, listRecordsOut{Records: records}, nil
+	})
+
+	// -- get_stats --------------------------------------------------------
+	type getStatsIn struct{}
+	type getStatsOut struct {
+		Statistics []models.StatisticItem `json:"statistics"`
+		ZoneCount  int                    `json:"zone_count" jsonschema:"zones visible to the key's user"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_stats",
+		Title:       "Get statistics",
+		Description: "PowerDNS server statistics plus the zone count visible to the API key's user.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ getStatsIn) (*mcp.CallToolResult, getStatsOut, error) {
+		user, terr := userFromContext(ctx)
+		if terr != nil {
+			return nil, getStatsOut{}, terr
+		}
+		stats, zoneCount, err := ops.Stats(ctx, user)
+		if te, cause := mapServiceError(err); te != nil {
+			return nil, getStatsOut{}, callTool("get_stats", te, cause)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d stat item(s), %d zone(s) visible", len(stats), zoneCount)}}}, getStatsOut{Statistics: stats, ZoneCount: zoneCount}, nil
+	})
+
+	// -- list_record_types ------------------------------------------------
+	type listRecordTypesIn struct{}
+	type listRecordTypesOut struct {
+		Types []string `json:"types" jsonschema:"supported record type names"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_record_types",
+		Title:       "List record types",
+		Description: "List the record types GoZone accepts for creation/updates. Content is validated per type; MX/SRV take a separate priority field, TXT/SPF content is quoted automatically, FQDN targets (CNAME, NS, ...) get their trailing dot added automatically.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listRecordTypesIn) (*mcp.CallToolResult, listRecordTypesOut, error) {
+		if _, terr := userFromContext(ctx); terr != nil {
+			return nil, listRecordTypesOut{}, terr
+		}
+		types := dnsops.RecordTypes()
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d supported record types", len(types))}}}, listRecordTypesOut{Types: types}, nil
+	})
+}
+
+// validateZoneArg performs the cheap zone-argument shape check shared by the
+// write tools: a syntactically valid zone name.
+func validateZoneArg(zone string) *toolError {
+	if err := validators.ValidateDomainName(zone); err != nil {
+		return toolErrorf("VALIDATION_ERROR", "%s", err.Error())
+	}
+	return nil
+}

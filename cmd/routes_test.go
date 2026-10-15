@@ -3,11 +3,15 @@ package cmd
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/middleware"
 )
@@ -54,4 +58,39 @@ func TestAdminRoutesProtectedByRequireAdmin(t *testing.T) {
 		t.Fatal("walked 0 admin routes — mountAdminRoutes registered nothing (B-5 lock is vacuous)")
 	}
 	t.Logf("verified %d admin routes are guarded by RequireAdmin", checked)
+}
+
+// TestMCPRouteMounting locks the MCP endpoint wiring: when mcp.enabled is
+// true the route exists and sits behind middleware.APIKeyAuth (a request
+// without an API key gets the middleware's 401 envelope, never reaching the
+// MCP handler); when disabled the route must not be mounted at all (404, not
+// a refusal). Driving the real router verifies the production wiring.
+func TestMCPRouteMounting(t *testing.T) {
+	build := func(enabled bool) http.Handler {
+		r := chi.NewRouter()
+		cfg := config.DefaultConfig()
+		cfg.MCP.Enabled = enabled
+		ip := middleware.NewRateLimiter(300)
+		defer ip.Close()
+		perKey := middleware.NewRateLimiter(100)
+		defer perKey.Close()
+		mountMCPRoute(r, &handlers.Handler{Ops: dnsops.New(nil, nil)}, nil, cfg, ip, perKey)
+		return r
+	}
+
+	// Enabled: the route is mounted and the API-key gate fires first — an
+	// unauthenticated POST gets 401 (APIKeyAuth), proving the middleware
+	// order; it must not 404 (route missing) nor 200 (gate bypassed).
+	w := httptest.NewRecorder()
+	build(true).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`)))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("enabled /mcp without an API key: got %d, want 401 (route mounted + APIKeyAuth in the chain)", w.Code)
+	}
+
+	// Disabled: not mounted at all — 404 from the router's NotFound handler.
+	w = httptest.NewRecorder()
+	build(false).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`)))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("disabled /mcp: got %d, want 404 (route must not be mounted)", w.Code)
+	}
 }

@@ -340,3 +340,9 @@ Response `200`:
 | `GET` | `/health` | `{"status":"ok"}` |
 | `GET` | `/health/ready` | Dependency check (DB ping + uncached PowerDNS call); returns 503 while either dependency is down. Rate-limited to 120 requests/minute per source IP (429 with `Retry-After` beyond) — keep probe intervals at or above a few seconds. |
 | `GET` | `/health/live` | Liveness probe (constant response, no dependency checks, not rate-limited) |
+## MCP (AI agents)
+
+GoZone can also expose its DNS operations to MCP (Model Context Protocol)
+clients over Streamable HTTP at `/mcp` — same API-key authentication, zone
+authorization, rate limits and audit trail as this REST API. See
+[MCP.md](./MCP.md) for activation, the tool list and client configuration.

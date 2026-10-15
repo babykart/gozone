@@ -120,9 +120,22 @@ func (s *Service) DeleteZone(ctx context.Context, user *models.User, zoneID stri
 	return nil
 }
 
+// RecordTypes returns the record types GoZone accepts for record creation
+// and updates (the union of the validator whitelist). Single source of truth
+// for the REST API surface description and the MCP list_record_types tool.
+func RecordTypes() []string {
+	return []string{
+		"A", "AAAA", "AFSDB", "ALIAS", "CAA", "CERT", "CNAME",
+		"DNAME", "DNSKEY", "DS", "HINFO", "KEY", "LOC", "MINFO",
+		"MX", "NAPTR", "NS", "NSEC", "NSEC3", "NSEC3PARAM",
+		"OPENPGPKEY", "PTR", "RP", "RRSIG", "SOA", "SPF", "SRV",
+		"SSHFP", "TLSA", "TXT", "URI",
+	}
+}
+
 // ValidateZoneCreate validates a zone-creation payload the way the REST
-// handler does, so transports that do not decode JSON (a future MCP tool)
-// can run the exact same checks: domain-name syntax, default kind, kind
+// handler does, so transports that do not decode JSON (an MCP tool) can
+// run the exact same checks: domain-name syntax, default kind, kind
 // whitelist. Returns the request with the kind default applied.
 func ValidateZoneCreate(req models.ZoneCreateRequest) (models.ZoneCreateRequest, error) {
 	if err := validators.ValidateDomainName(req.Name); err != nil {
