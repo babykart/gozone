@@ -59,6 +59,7 @@ mcp:
 | `list_records` (`zone`, `name?`, `type?`) | `GET …/records` | zone access | read-only |
 | `get_stats` | `GET /api/v1/stats` | any user | read-only |
 | `list_record_types` | — | any user | read-only |
+| `export_zone` (`zone`, `format: bind\|csv`) | web export | zone access | read-only |
 | `create_record` (`zone`, `name`, `type`, `ttl?`, `records[]`) | `POST …/records` | zone access | write, not idempotent |
 | `update_record` (`zone`, `name`, `type`, `ttl?`, `records[]`, `clear_comments?`) | `PUT …/records` | zone access | write, idempotent, **destructive** (REPLACE) |
 | `delete_record` (`zone`, `name`, `type`) | `DELETE …/records` | zone access | **destructive**, idempotent |
@@ -77,6 +78,11 @@ because they are what prevents the most LLM mistakes):
 - TXT/SPF: bare content, quoting is automatic.
 - `update_record` is a **REPLACE**: the submitted list becomes the whole set
   (`list_records` first, so nothing is lost).
+- `export_zone` returns the whole zone as an RFC 1035 BIND zone file
+  (`format=bind`, the default — identical to the `gozone://zones/{zone}`
+  resource) or as CSV (one row per record, disabled records flagged);
+  past 1 MiB the content is explicitly truncated with a banner naming the
+  REST export endpoint.
 
 Errors: an `isError: true` result + a `CODE: description` message with a
 stable code (`ZONE_NOT_FOUND`, `FORBIDDEN`, `VALIDATION_ERROR`,

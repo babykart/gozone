@@ -146,7 +146,7 @@ func TestToolsList_ReadOnlyFiltering(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	names := toolNames(res.Tools)
-	for _, want := range []string{"list_zones", "get_zone", "list_records", "get_stats", "list_record_types"} {
+	for _, want := range []string{"list_zones", "get_zone", "list_records", "get_stats", "list_record_types", "export_zone"} {
 		if !names[want] {
 			t.Errorf("read-only server must list %s; got %v", want, res.Tools)
 		}

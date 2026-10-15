@@ -144,3 +144,41 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func TestRenderZoneCSV(t *testing.T) {
+	zone := &models.Zone{ID: "example.com.", Name: "example.com.", Kind: "Native"}
+	records := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "192.0.2.1"},
+			{Content: "192.0.2.9", Disabled: true},
+		}},
+		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "mail.example.com.", Priority: 10},
+		}},
+		{Name: "txt.example.com.", Type: "TXT", TTL: 300, Records: []models.RecordInfo{
+			{Content: `"v=spf1 -all"`},
+		}},
+	}
+
+	out := RenderZoneCSV(zone, records)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+
+	if lines[0] != "name,type,content,ttl,priority,disabled,comment" {
+		t.Fatalf("header wrong: %q", lines[0])
+	}
+	wantRows := map[string]bool{
+		"www.example.com.,A,192.0.2.1,3600,0,false,":       true,
+		"www.example.com.,A,192.0.2.9,3600,0,true,":        true, // disabled flagged, kept in CSV
+		"example.com.,MX,mail.example.com.,3600,10,false,": true,
+		`txt.example.com.,TXT,v=spf1 -all,300,0,false,`:    true, // single-string TXT unquoted (csv quotes only commas/quotes/newlines)
+	}
+	seen := 0
+	for _, l := range lines[1:] {
+		if wantRows[l] {
+			seen++
+		}
+	}
+	if seen != len(wantRows) {
+		t.Fatalf("missing expected rows (got %d/%d):\n%s", seen, len(wantRows), out)
+	}
+}

@@ -75,7 +75,7 @@ func registerResources(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, resourceError("read gozone://zones", zone, err)
 		}
 
-		text := truncateResource(dnsops.RenderZoneFile(zoneInfo, records), zone)
+		text := truncateResource(dnsops.RenderZoneFile(zoneInfo, records), zone, "bind")
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
 			URI:      req.Params.URI,
 			MIMEType: "text/dns",
@@ -97,11 +97,11 @@ func zoneFromResourceURI(uri string) (string, error) {
 	return zone, nil
 }
 
-// truncateResource caps a zone-file body at maxResourceBytes, cutting at the
+// truncateResource caps an export body at maxResourceBytes, cutting at the
 // last complete line and appending an explicit banner that names the REST
 // endpoint serving the full export, so the client can fall back. Content
 // under the limit is returned unchanged.
-func truncateResource(text, zone string) string {
+func truncateResource(text, zone, format string) string {
 	if len(text) <= maxResourceBytes {
 		return text
 	}
@@ -109,9 +109,9 @@ func truncateResource(text, zone string) string {
 	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
 		cut = cut[:i+1] // keep the trailing newline: the cut is line-aligned
 	}
-	slog.Warn("mcp zone resource truncated", "zone", zone, "limit_bytes", maxResourceBytes)
-	return cut + fmt.Sprintf("\n; --- TRUNCATED at %d bytes (limit %d): attach the full zone via GET /zones/%s/export?format=bind ---\n",
-		len(cut), maxResourceBytes, zone)
+	slog.Warn("mcp export truncated", "zone", zone, "format", format, "limit_bytes", maxResourceBytes)
+	return cut + fmt.Sprintf("\n; --- TRUNCATED at %d bytes (limit %d): fetch the full export via GET /zones/%s/export?format=%s ---\n",
+		len(cut), maxResourceBytes, zone, format)
 }
 
 // resourceError maps a service failure for a resource read. Unlike tool

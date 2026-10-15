@@ -1,6 +1,7 @@
 package dnsops
 
 import (
+	"encoding/csv"
 	"fmt"
 	"sort"
 	"strings"
@@ -128,5 +129,67 @@ func RenderZoneFile(zone *models.Zone, records []models.RRSet) string {
 			fmt.Fprintf(&b, " %s\n", content)
 		}
 	}
+	return b.String()
+}
+
+// RenderZoneCSV renders a zone and its RRSets as CSV: one row per record
+// (including disabled ones, flagged in the disabled column), with the
+// canonical header "name,type,content,ttl,priority,disabled,comment".
+// Multi-string TXT/SPF content keeps its wire form; single-string values are
+// unquoted so encoding/csv applies its own quoting (see UnquoteContent).
+//
+// The rendering is shared by the web export (handlers.ExportZone) and the
+// MCP export_zone tool so both produce byte-identical output.
+func RenderZoneCSV(zone *models.Zone, records []models.RRSet) string {
+	var b strings.Builder
+	writer := csv.NewWriter(&b)
+	// #nosec G104 — writing into a strings.Builder cannot fail
+	_ = writer.Write([]string{"name", "type", "content", "ttl", "priority", "disabled", "comment"})
+
+	// Multiple comments per RRSet are joined with newlines so the cell can
+	// round-trip via the standard CSV embedded-newline quoting. The same
+	// value is repeated on every row of the RRSet for consistency.
+	joinedComments := func(comments *models.CommentPatch) string {
+		if comments == nil || len(comments.Items) == 0 {
+			return ""
+		}
+		parts := make([]string, len(comments.Items))
+		for i, c := range comments.Items {
+			parts[i] = c.Content
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	for _, rr := range records {
+		commentCell := joinedComments(rr.Comments)
+		for _, rec := range rr.Records {
+			ttl := rr.TTL
+			disabled := "false"
+			if rec.Disabled {
+				disabled = "true"
+			}
+			priority := 0
+			if models.TypeHasPriority(rr.Type) {
+				priority = rec.Priority
+			}
+			// Strip the PDNS TXT/SPF quotes of a single-string value so
+			// the CSV writer can apply proper quoting itself. Multi-string
+			// values ("part1" "part2") are exported in wire form: their
+			// outer quotes are string delimiters, and stripping them would
+			// corrupt the round trip.
+			content := models.UnquoteContent(rr.Type, rec.Content)
+			// #nosec G104 — writing into a strings.Builder cannot fail
+			_ = writer.Write([]string{
+				rr.Name,
+				rr.Type,
+				content,
+				fmt.Sprintf("%d", ttl),
+				fmt.Sprintf("%d", priority),
+				disabled,
+				commentCell,
+			})
+		}
+	}
+	writer.Flush()
 	return b.String()
 }

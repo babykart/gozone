@@ -230,3 +230,111 @@ func TestCreateZone_AdminSuccessAuditsViaMCP(t *testing.T) {
 		t.Fatalf("create_zone audit must carry via MCP, got %q", details)
 	}
 }
+
+func TestExportZoneTool_BIND(t *testing.T) {
+	session, db := newMCPTestEnv(t, true, richPDNS(t, &[]models.RRSet{}))
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "export_zone",
+		Arguments: map[string]any{"zone": "example.com."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("export_zone failed: %s", resultText(res))
+	}
+	var out struct {
+		Zone        string `json:"zone"`
+		Format      string `json:"format"`
+		RecordCount int    `json:"record_count"`
+		Content     string `json:"content"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if out.Format != "bind" {
+		t.Errorf("default format = %q, want bind", out.Format)
+	}
+	for want := range map[string]bool{
+		"$ORIGIN example.com.": true,
+		"@ IN SOA ns1":         true,
+		"www IN A 192.0.2.1":   true,
+	} {
+		if !strings.Contains(out.Content, want) {
+			t.Errorf("BIND export missing %q:\n%s", want, out.Content)
+		}
+	}
+	// 4 RRSets in the fixture, none disabled → 4 records in the BIND body.
+	if out.RecordCount != 4 {
+		t.Errorf("record_count = %d, want 4", out.RecordCount)
+	}
+}
+
+func TestExportZoneTool_CSV(t *testing.T) {
+	session, db := newMCPTestEnv(t, true, richPDNS(t, &[]models.RRSet{}))
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "export_zone",
+		Arguments: map[string]any{"zone": "example.com.", "format": "csv"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("export_zone failed: %s", resultText(res))
+	}
+	var out struct {
+		Format  string `json:"format"`
+		Content string `json:"content"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Format != "csv" {
+		t.Errorf("format = %q, want csv", out.Format)
+	}
+	for want := range map[string]bool{
+		"name,type,content,ttl,priority,disabled,comment":  true,
+		"www.example.com.,A,192.0.2.1":                     true,
+		"example.com.,MX,mail.example.com.,3600,10,false,": true,
+	} {
+		if !strings.Contains(out.Content, want) {
+			t.Errorf("CSV export missing %q:\n%s", want, out.Content)
+		}
+	}
+}
+
+func TestExportZoneTool_InvalidFormat(t *testing.T) {
+	session, _ := newMCPTestEnv(t, true, nil)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "export_zone",
+		Arguments: map[string]any{"zone": "example.com.", "format": "xml"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.HasPrefix(resultText(res), "VALIDATION_ERROR:") {
+		t.Fatalf("unknown format must be a validation error, got %q", resultText(res))
+	}
+}
+
+func TestExportZoneTool_UngrantedForbidden(t *testing.T) {
+	session, _ := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for a refused export, got %s %s", r.Method, r.URL.Path)
+	})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "export_zone",
+		Arguments: map[string]any{"zone": "example.com."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.HasPrefix(resultText(res), "FORBIDDEN:") {
+		t.Fatalf("ungranted export must fail with FORBIDDEN, got %q", resultText(res))
+	}
+}

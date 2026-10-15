@@ -116,7 +116,7 @@ func TestReadZoneResource_InvalidURI(t *testing.T) {
 
 func TestTruncateResource(t *testing.T) {
 	small := "$ORIGIN example.com.\nwww IN A 192.0.2.1\n"
-	if got := truncateResource(small, "example.com."); got != small {
+	if got := truncateResource(small, "example.com.", "bind"); got != small {
 		t.Fatalf("small body must pass through unchanged, got %q", got)
 	}
 
@@ -127,7 +127,7 @@ func TestTruncateResource(t *testing.T) {
 		sb.WriteString(line)
 	}
 	big := sb.String()
-	got := truncateResource(big, "example.com.")
+	got := truncateResource(big, "example.com.", "bind")
 	if len(got) <= maxResourceBytes {
 		t.Fatalf("truncated body must exceed the raw limit (banner appended), got %d", len(got))
 	}

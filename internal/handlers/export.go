@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/csv"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,63 +80,18 @@ func formatRecordContent(rtype, content string, priority int) string {
 	return dnsops.FormatRecordContent(rtype, content, priority)
 }
 
-// exportCSV writes records in CSV format.
+// exportCSV writes records in CSV format. The rendering lives in the dnsops
+// service layer (dnsops.RenderZoneCSV) so the web export and the MCP
+// export_zone tool produce byte-identical output.
 func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []models.RRSet) {
 	filename := fmt.Sprintf("%s.csv", strings.TrimSuffix(zone.Name, "."))
 	w.Header().Set("Content-Type", "text/csv")
 	// #nosec G601 — filename derived from PowerDNS zone name (server-controlled)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 
-	writer := csv.NewWriter(w)
-	// #nosec G104 — csv.Writer.Write errors in HTTP handler context; Flush at end reports accumulated errors
-	_ = writer.Write([]string{"name", "type", "content", "ttl", "priority", "disabled", "comment"})
-
-	// Multiple comments per RRSet are joined with newlines so the cell can
-	// round-trip via the standard CSV embedded-newline quoting. The same
-	// value is repeated on every row of the RRSet for consistency.
-	joinedComments := func(comments *models.CommentPatch) string {
-		if comments == nil || len(comments.Items) == 0 {
-			return ""
-		}
-		parts := make([]string, len(comments.Items))
-		for i, c := range comments.Items {
-			parts[i] = c.Content
-		}
-		return strings.Join(parts, "\n")
-	}
-
-	for _, rr := range records {
-		commentCell := joinedComments(rr.Comments)
-		for _, rec := range rr.Records {
-			ttl := rr.TTL
-			disabled := "false"
-			if rec.Disabled {
-				disabled = "true"
-			}
-			priority := 0
-			if models.TypeHasPriority(rr.Type) {
-				priority = rec.Priority
-			}
-			// Strip the PDNS TXT/SPF quotes of a single-string value so
-			// encoding/csv.Writer can apply proper CSV quoting itself.
-			// Multi-string values ("part1" "part2") are exported in wire
-			// form: their outer quotes are string delimiters, and stripping
-			// them would corrupt the round trip (the re-imported content
-			// would collapse into one string with literal quotes).
-			content := models.UnquoteContent(rr.Type, rec.Content)
-			// #nosec G104 — csv.Writer.Write errors in HTTP handler context; Flush reports cumulative errors
-			_ = writer.Write([]string{
-				rr.Name,
-				rr.Type,
-				content,
-				fmt.Sprintf("%d", ttl),
-				fmt.Sprintf("%d", priority),
-				disabled,
-				commentCell,
-			})
-		}
-	}
-	writer.Flush()
+	// #nosec G104 — writing the export to the ResponseWriter; an error here
+	// only means the client went away mid-transfer.
+	_, _ = io.WriteString(w, dnsops.RenderZoneCSV(zone, records))
 }
 
 // findSOATTL returns the TTL from the first SOA RRSet, or 3600 as default;

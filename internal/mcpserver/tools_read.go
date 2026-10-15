@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/models"
@@ -160,6 +161,77 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		}
 		types := dnsops.RecordTypes()
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d supported record types", len(types))}}}, listRecordTypesOut{Types: types}, nil
+	})
+	// -- export_zone ------------------------------------------------------
+	type exportZoneIn struct {
+		Zone   string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Format string `json:"format,omitempty" jsonschema:"output format: \"bind\" (default; RFC 1035 zone file) or \"csv\" (one row per record)"`
+	}
+	type exportZoneOut struct {
+		Zone        string `json:"zone"`
+		Format      string `json:"format" jsonschema:"bind or csv"`
+		RecordCount int    `json:"record_count" jsonschema:"number of records in the export (disabled records included in csv, omitted in bind)"`
+		Content     string `json:"content" jsonschema:"the export body; truncated with an explicit banner past 1 MiB"`
+	}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "export_zone",
+		Title:       "Export zone",
+		Description: "Export a whole zone as an RFC 1035 BIND zone file (format=bind, the default — $ORIGIN/$TTL header, records sorted, disabled records omitted) or as CSV (one row per record, disabled records flagged). The gozone://zones/{zone} resource serves the same BIND content for context attachment. Output past 1 MiB is explicitly truncated with a banner naming the REST export endpoint.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in exportZoneIn) (*mcp.CallToolResult, exportZoneOut, error) {
+		user, terr := userFromContext(ctx)
+		if terr != nil {
+			return nil, exportZoneOut{}, terr
+		}
+		format := strings.ToLower(strings.TrimSpace(in.Format))
+		if format == "" {
+			format = "bind"
+		}
+		if format != "bind" && format != "csv" {
+			return nil, exportZoneOut{}, toolErrorf("VALIDATION_ERROR", "unknown format %q: use \"bind\" or \"csv\"", format)
+		}
+
+		// Both reads go through the service layer, which re-checks the zone
+		// grant (fail-closed) before any PowerDNS call — same as the resource.
+		zoneInfo, err := ops.GetZone(ctx, user, in.Zone)
+		if err != nil {
+			if te, cause := mapServiceError(err); te != nil {
+				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
+			}
+		}
+		records, err := ops.ListRecords(ctx, user, in.Zone, "", "")
+		if err != nil {
+			if te, cause := mapServiceError(err); te != nil {
+				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
+			}
+		}
+
+		recordCount := 0
+		var body string
+		if format == "csv" {
+			body = dnsops.RenderZoneCSV(zoneInfo, records)
+			for _, rr := range records {
+				recordCount += len(rr.Records)
+			}
+		} else {
+			body = dnsops.RenderZoneFile(zoneInfo, records)
+			for _, rr := range records {
+				for _, rec := range rr.Records {
+					if !rec.Disabled {
+						recordCount++
+					}
+				}
+			}
+		}
+		truncated := len(body) > maxResourceBytes
+		body = truncateResource(body, in.Zone, format)
+
+		summary := fmt.Sprintf("%s export of %s: %d record(s), %d bytes", strings.ToUpper(format), in.Zone, recordCount, len(body))
+		if truncated {
+			summary += " (TRUNCATED at 1 MiB — banner names the REST endpoint for the full export)"
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}},
+			exportZoneOut{Zone: in.Zone, Format: format, RecordCount: recordCount, Content: body}, nil
 	})
 }
 
