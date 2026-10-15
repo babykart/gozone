@@ -12,16 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// The zone argument every zone-scoped tool takes is the canonical zone ID
-// exactly as returned by list_zones/get_zone (lowercase, trailing dot, e.g.
-// "example.com."). Record names accept friendlier forms (@, bare label, FQDN
-// without the dot) and are canonicalised server-side.
-const zoneArgDoc = `Canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. "example.com.").`
-
-// recordNameArgDoc documents the accepted name forms — the single biggest
-// source of agent errors, so every record tool repeats it.
-const recordNameArgDoc = `Record name. Accepts "@" (zone apex), a bare label ("www"), an FQDN without the trailing dot ("www.example.com") or a full FQDN ("www.example.com."). Canonicalised against the zone before use.`
-
 // callTool logs the mapped tool error's cause server-side and returns the
 // tool error to the SDK (which packs it into an isError result). Every tool
 // funnels its failures through it: the client sees code + safe message, the
