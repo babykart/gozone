@@ -94,6 +94,19 @@ GoZone context:
 | `gozone://zones/{zone}` (template) | `text/dns` | Complete BIND export of the zone (RFC 1035: `$ORIGIN`, `$TTL`, records sorted SOA→NS→name; disabled records omitted). `{zone}` = the canonical zone ID returned by `list_zones`. Access requires a group grant (or an admin key) — refused fail-closed before any PowerDNS call. Beyond 1 MiB the content is **explicitly truncated** with a banner pointing at `GET /zones/{zone}/export?format=bind` for the full export. |
 | `gozone://record-types` | `application/json` | JSON map of every supported type to its normalisation rules: separate `priority` field (MX/SRV), quoted content (TXT/SPF), FQDN target, FQDN/quoted field indices. Read this before creating or updating records. |
 
+## Prompts
+
+Two ready-made instruction templates (available whatever `read_only` is —
+they only instruct; the write tools still enforce their gate):
+
+| Prompt | Arguments | Content |
+|---|---|---|
+| `audit_zone` | `zone` (required) | Read-only zone review: walks the agent through `get_zone` + `list_records` and a checklist — SOA sanity (one SOA, refresh/retry/expire ratios), apex NS, CNAME forbidden at the apex and alongside other records (RFC 1034), TTL consistency, trailing-dot hygiene, SPF (one per name, lookup budget) and DMARC presence. Ends with a findings table and **proposed** fixes — never applies them. |
+| `migrate_record` | `zone`, `name`, `type` (required) | Safe RRSet replacement procedure: read the current set first (`update_record` is a REPLACE — omitted records are deleted), show a before/after plan and wait for confirmation, apply with the full record list, verify with a re-read, and roll back with the list captured in step 1 if the verification disagrees. |
+
+Arguments are validated (domain name, record name, record type) before the
+prompt text is built.
+
 ## Client configuration
 
 ### Claude Code
@@ -156,5 +169,4 @@ npx @modelcontextprotocol/inspector
 ## Out of scope (v1)
 
 DNSSEC (cryptokeys), TSIG keys, users/groups, zone import, metadata — no MCP
-surface wider than the public API. MCP prompts (zone audit, migration guide)
-remain optional and undelivered (see `MCP_PLAN.md` §3.3).
+surface wider than the public API.

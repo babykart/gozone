@@ -790,7 +790,8 @@ REST API:
   resources are also served: `gozone://zones/{zone}` (BIND export via
   `dnsops.RenderZoneFile`, shared byte-for-byte with the web export,
   explicitly truncated past 1 MiB) and `gozone://record-types`
-  (`models.RecordTypeRules`).
+  (`models.RecordTypeRules`), plus two validated instruction prompts
+  (`audit_zone`, `migrate_record`) that drive the tools.
 - It is mounted by `cmd/routes.go` (`mountMCPRoute`) behind the same
   limiter instances and `middleware.APIKeyAuth` as `/api/v1`; the
   authenticated user reaches the tool handlers through the request context.
