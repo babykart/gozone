@@ -162,6 +162,35 @@ Tools surface as `gozone_<tool>` (e.g. `gozone_list_zones`); inside OpenCode,
 URL: `https://gozone.example.com/mcp`, header `X-API-Key: <key>` (or
 `Authorization: Bearer <key>`).
 
+### Clients that only support stdio
+
+For clients without Streamable HTTP support, the CLI ships a local bridge
+that speaks stdio and relays to the remote `/mcp` endpoint. The API key is
+read from an environment variable (never a CLI argument, which would leak
+via the process list):
+
+```bash
+export GOZONE_API_KEY="YOUR_API_KEY"
+gozone mcp stdio --url https://gozone.example --api-key-env GOZONE_API_KEY
+```
+
+`--url` accepts the base URL (the default `/mcp` path is appended) or a full
+endpoint URL. The bridge holds no session state and no business logic — it
+forwards each newline-delimited JSON-RPC message as one authenticated HTTP
+POST and writes responses back on stdout (logs go to stderr). A typical
+client entry points at the bridge as a local command:
+
+```json
+{
+  "mcpServers": {
+    "gozone": {
+      "command": "gozone",
+      "args": ["mcp", "stdio", "--url", "https://gozone.example"]
+    }
+  }
+}
+```
+
 ### Verification
 
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
