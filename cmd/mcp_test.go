@@ -27,19 +27,32 @@ func TestBuildTargetURL(t *testing.T) {
 		{"https://gozone.example", "https://gozone.example/mcp"},
 		{"https://gozone.example/", "https://gozone.example/mcp"},
 		{"http://localhost:8080", "http://localhost:8080/mcp"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080/mcp"},
+		{"http://[::1]:8080", "http://[::1]:8080/mcp"},
 		{"https://gozone.example/agent", "https://gozone.example/agent"},
 		{"https://gozone.example/agent/", "https://gozone.example/agent/"},
 	}
 	for _, c := range cases {
-		got, err := buildTargetURL(c.in)
+		got, err := buildTargetURL(c.in, false)
 		if err != nil || got != c.want {
 			t.Errorf("buildTargetURL(%q) = (%q, %v), want %q", c.in, got, err, c.want)
 		}
 	}
-	for _, bad := range []string{"", "ftp://x", "not a url"} {
-		if _, err := buildTargetURL(bad); err == nil {
+	for _, bad := range []string{"", "ftp://x", "not a url", "http:///mcp"} {
+		if _, err := buildTargetURL(bad, false); err == nil {
 			t.Errorf("buildTargetURL(%q) must fail", bad)
 		}
+	}
+
+	// Cleartext HTTP to a non-loopback host would send the API key
+	// unencrypted: refused without --insecure, allowed with it.
+	if _, err := buildTargetURL("http://gozone.example", false); err == nil {
+		t.Error("plaintext http:// to a remote host must be refused")
+	} else if !strings.Contains(err.Error(), "--insecure") {
+		t.Errorf("refusal must name the escape hatch, got %v", err)
+	}
+	if got, err := buildTargetURL("http://gozone.example", true); err != nil || got != "http://gozone.example/mcp" {
+		t.Errorf("buildTargetURL(plaintext, insecure) = (%q, %v), want the remote endpoint", got, err)
 	}
 }
 
@@ -139,6 +152,25 @@ func TestStdioBridge_UpstreamError(t *testing.T) {
 	}
 }
 
+// TestStdioBridge_RelaysJSONRPCErrorBody pins the error-body relay: when the
+// upstream answers a non-2xx whose body is the actual JSON-RPC error
+// response (the SDK's protocol-level failures), the client must receive it
+// verbatim — not a generic "upstream HTTP n" line that hides the code and
+// message.
+func TestStdioBridge_RelaysJSONRPCErrorBody(t *testing.T) {
+	upstream := `{"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"invalid params: unknown tool"}}`
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, upstream) // #nosec G104 -- test helper
+	}, "k")
+
+	out := strings.TrimSpace(runBridge(t, b, `{"jsonrpc":"2.0","id":5,"method":"tools/call"}`+"\n"))
+	if out != upstream {
+		t.Fatalf("the upstream JSON-RPC error body must be relayed verbatim, got %q", out)
+	}
+}
+
 func TestStdioBridge_MalformedLine(t *testing.T) {
 	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("malformed lines must not reach the endpoint")
@@ -210,7 +242,7 @@ func TestStdioBridge_EndToEndAgainstRealServer(t *testing.T) {
 }
 
 func TestMCPStdioCmd_MissingURLAndKey(t *testing.T) {
-	if _, err := buildTargetURL(""); err == nil {
+	if _, err := buildTargetURL("", false); err == nil {
 		t.Fatal("empty url must fail")
 	}
 	// The env guard lives in the RunE; pin its message shape via the flag
@@ -218,5 +250,8 @@ func TestMCPStdioCmd_MissingURLAndKey(t *testing.T) {
 	cmd := newMCPStdioCmd()
 	if env := cmd.Flags().Lookup("api-key-env"); env == nil || env.DefValue != "GOZONE_API_KEY" {
 		t.Fatalf("api-key-env must default to GOZONE_API_KEY, got %+v", env)
+	}
+	if f := cmd.Flags().Lookup("insecure"); f == nil || f.DefValue != "false" {
+		t.Fatalf("insecure must exist and default to false, got %+v", f)
 	}
 }

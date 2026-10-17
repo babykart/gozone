@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -63,10 +64,14 @@ Logs go to stderr only — stdout is reserved for the protocol.`,
 		RunE: func(c *cobra.Command, args []string) error {
 			rawURL, _ := c.Flags().GetString("url")
 			envName, _ := c.Flags().GetString("api-key-env")
+			insecure, _ := c.Flags().GetBool("insecure")
 
-			endpoint, err := buildTargetURL(rawURL)
+			endpoint, err := buildTargetURL(rawURL, insecure)
 			if err != nil {
 				return err
+			}
+			if insecure && strings.HasPrefix(endpoint, "http://") {
+				logger.Warn("mcp stdio bridge: --insecure sends the API key over cleartext HTTP — prefer https")
 			}
 			apiKey := strings.TrimSpace(os.Getenv(envName))
 			if apiKey == "" {
@@ -83,6 +88,7 @@ Logs go to stderr only — stdout is reserved for the protocol.`,
 	}
 	cmd.Flags().String("url", "", "base URL of the remote GoZone (e.g. https://gozone.example) or the full endpoint URL (e.g. https://gozone.example/mcp); required")
 	cmd.Flags().String("api-key-env", "GOZONE_API_KEY", "name of the environment variable holding the GoZone API key")
+	cmd.Flags().Bool("insecure", false, "allow plaintext http:// to a non-loopback host (the API key travels unencrypted; prefer https)")
 	_ = cmd.MarkFlagRequired("url")
 	return cmd
 }
@@ -90,7 +96,12 @@ Logs go to stderr only — stdout is reserved for the protocol.`,
 // buildTargetURL normalises the --url flag: a base URL without a path gets
 // the default /mcp endpoint appended; a URL that already carries a path is
 // used verbatim. Non-HTTP(S) schemes are rejected.
-func buildTargetURL(raw string) (string, error) {
+//
+// allowPlaintextRemote (--insecure) is the explicit opt-out for the
+// cleartext guard: without it, an http:// URL may only target a loopback
+// host — every request carries the API key in a header, so a plaintext
+// remote URL would hand the credential to every hop on the way there.
+func buildTargetURL(raw string, allowPlaintextRemote bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("--url is required (e.g. https://gozone.example)")
@@ -102,10 +113,28 @@ func buildTargetURL(raw string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("invalid --url %q: scheme must be http or https", raw)
 	}
+	if u.Host == "" {
+		return "", fmt.Errorf("invalid --url %q: no host", raw)
+	}
+	if u.Scheme == "http" && !allowPlaintextRemote && !isLoopbackHost(u.Hostname()) {
+		return "", fmt.Errorf("refusing to send the API key over cleartext HTTP to %q: use https, target a loopback host, or pass --insecure", u.Hostname())
+	}
 	if u.Path == "" || u.Path == "/" {
 		u.Path = "/mcp"
 	}
 	return u.String(), nil
+}
+
+// isLoopbackHost reports whether an URL hostname is local: the literal
+// "localhost" or an IP in the loopback range (127.0.0.0/8, ::1).
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // stdioBridge relays MCP JSON-RPC between an io.Reader (stdin) and a remote
@@ -203,14 +232,49 @@ func (b *stdioBridge) relay(ctx context.Context, line string, out io.Writer) err
 		// Notification accepted: no output, matching stdio semantics.
 	default:
 		// Upstream refused (401 bad key, 403 origin, 404 disabled endpoint,
-		// 5xx ...). Requests get a JSON-RPC error carrying the status so the
-		// client can surface it; notifications are logged only.
+		// 5xx ...). The MCP server answers some protocol-level failures with
+		// an HTTP error status whose body is the actual JSON-RPC error
+		// response — relay that verbatim so the client sees the real code
+		// and message instead of a generic status line. Anything else (e.g.
+		// the middleware's plain JSON envelope) falls back to a synthesized
+		// JSON-RPC error carrying the status.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+			if msg, ok := jsonRPCErrorMessage(body); ok {
+				writeLine(out, msg)
+				logger.Warn("mcp stdio bridge: relayed upstream JSON-RPC error", "status", resp.StatusCode, "method", env.Method)
+				return nil
+			}
+		}
 		if env.ID != nil {
 			writeJSONRPCError(out, env.ID, -32000, fmt.Sprintf("upstream HTTP %d from %s", resp.StatusCode, b.endpoint))
 		}
 		logger.Warn("mcp stdio bridge: upstream error", "status", resp.StatusCode, "method", env.Method)
 	}
 	return nil
+}
+
+// jsonRPCErrorMessage reports whether body is a complete JSON-RPC 2.0 error
+// response (the shape the remote MCP server returns for protocol-level
+// failures). Only such bodies are relayed verbatim; anything else might be
+// an HTML error page or a non-RPC JSON envelope that would confuse the
+// client's parser.
+func jsonRPCErrorMessage(body []byte) (string, bool) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return "", false
+	}
+	var probe struct {
+		JSONRPC string `json:"jsonrpc"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &probe); err != nil || probe.JSONRPC != "2.0" || probe.Error == nil {
+		return "", false
+	}
+	return trimmed, true
 }
 
 // isEventStream reports whether a Content-Type header names text/event-stream.

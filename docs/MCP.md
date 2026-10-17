@@ -177,9 +177,14 @@ gozone mcp stdio --url https://gozone.example --api-key-env GOZONE_API_KEY
 ```
 
 `--url` accepts the base URL (the default `/mcp` path is appended) or a full
-endpoint URL. The bridge holds no session state and no business logic — it
+endpoint URL. Every request carries the API key in a header, so plaintext
+`http://` is only accepted for loopback hosts; a remote cleartext URL is
+refused unless `--insecure` is passed explicitly (use https instead). The
+bridge holds no session state and no business logic — it
 forwards each newline-delimited JSON-RPC message as one authenticated HTTP
-POST and writes responses back on stdout (logs go to stderr). A typical
+POST and writes responses back on stdout (logs go to stderr). Upstream
+failures answered with a JSON-RPC error body are relayed verbatim so the
+client sees the real code and message. A typical
 client entry points at the bridge as a local command:
 
 ```json
