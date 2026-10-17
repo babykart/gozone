@@ -69,10 +69,14 @@ mcp:
 Conventions inherited from the REST API (repeated in every tool description,
 because they are what prevents the most LLM mistakes):
 
-- `zone` = the canonical zone ID returned by `list_zones` (lowercase +
-  trailing dot, e.g. `example.com.`); `name` accepts `@`, a bare label
-  (`www`), an FQDN without the trailing dot, or a full FQDN — canonicalisation
-  happens server-side.
+- `zone` accepts any casing and an optional trailing dot (`Example.COM`,
+  `example.com`): it is canonicalised to the lowercase dotted form on entry,
+  so authorization, the per-zone write lock and the audit trail always key
+  on the same ID as the web UI and REST.
+- `name` accepts `@`, a bare label (`www`), an FQDN without the trailing
+  dot, or a full FQDN — canonicalisation happens server-side.
+- Every write must carry **at least one record**: `records: []` is rejected
+  with `VALIDATION_ERROR` (removing an RRSet is `delete_record`'s job).
 - MX/SRV: `priority` is a separate field of each record (embedded into the
   content at write time).
 - TXT/SPF: bare content, quoting is automatic.
@@ -87,10 +91,20 @@ because they are what prevents the most LLM mistakes):
   `truncated: true` plus the `full_export` route — both API-key reachable.
 
 Errors: an `isError: true` result + a `CODE: description` message with a
-stable code (`ZONE_NOT_FOUND`, `FORBIDDEN`, `VALIDATION_ERROR`,
-`RECORD_NOT_FOUND`, `CONFLICT`, `UPSTREAM_AUTH_ERROR`, `INTERNAL_ERROR`, …).
-Never any internal detail (DSN, raw PowerDNS response) — the full cause goes
-to the server logs.
+stable code. Never any internal detail (DSN, raw PowerDNS response) — the
+full cause goes to the server logs. Exhaustive list:
+
+| Code | Meaning | Produced by |
+|---|---|---|
+| `UNAUTHORIZED` | No authenticated user reached the tool (endpoint wiring bug — a missing API key is a 401 before the MCP layer). | any tool (fail-closed) |
+| `FORBIDDEN` | No grant on the zone, or a non-admin key on an admin operation. | every zone-scoped tool, `create_zone`, `delete_zone`, the `gozone://zones/{zone}` resource |
+| `VALIDATION_ERROR` | Malformed arguments: bad zone/type/name, `records: []`, `type` filter without `name`, unknown export format; or PowerDNS rejected the change as invalid. | any tool |
+| `ZONE_NOT_FOUND` | The zone does not exist (upstream 404 on a zone operation, including the fetch stage of a record write). | `get_zone`, `list_records`, `export_zone`, `list_zones`, `create_zone`, `delete_zone`, `gozone://zones/{zone}`, record tools at the fetch stage |
+| `RECORD_NOT_FOUND` | Upstream 404 at the write stage of a record operation. | `create_record`, `update_record`, `delete_record` |
+| `CONFLICT` | PowerDNS reports a conflict (e.g. creating an existing zone). | `create_zone`, record writes |
+| `UPSTREAM_AUTH_ERROR` | GoZone's PowerDNS credentials are rejected — contact the administrator. | any tool reaching PowerDNS |
+| `LUA_UPDATES_DISABLED` | LUA record updates are disabled on the PowerDNS server. | record writes |
+| `INTERNAL_ERROR` | Unexpected failure, failed zone-access lookup (fail-closed), or a recovered handler panic. | any tool |
 
 ## Resources
 
