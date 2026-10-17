@@ -404,6 +404,95 @@ func TestRecoverMiddleware_KeepsServerAlive(t *testing.T) {
 	}
 }
 
+// TestCreateRecord_ZoneArgCanonicalized pins the zone-argument
+// canonicalisation: a write submitted as "Example.com" must authorize,
+// lock, PATCH and audit under the canonical "example.com." — the same key
+// the web and REST transports use — instead of taking a second lock and an
+// inconsistent audit zone_id.
+func TestCreateRecord_ZoneArgCanonicalized(t *testing.T) {
+	var sent []models.RRSet
+	var patchPath string
+	pdnsHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
+		patchPath = r.URL.Path
+		var payload struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode PATCH: %v", err)
+		}
+		sent = append(sent, payload.RRSets...)
+		w.WriteHeader(http.StatusNoContent)
+	}
+	session, db := newMCPTestEnv(t, false, pdnsHandler)
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "create_record",
+		Arguments: map[string]any{
+			"zone":    "Example.com",
+			"name":    "www",
+			"type":    "A",
+			"records": []map[string]any{{"content": "192.0.2.1"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool create_record: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_record failed: %s", resultText(res))
+	}
+
+	if !strings.HasSuffix(patchPath, "/zones/example.com.") {
+		t.Errorf("PATCH must target the canonical zone ID, got path %q", patchPath)
+	}
+	if len(sent) != 1 || sent[0].Name != "www.example.com." {
+		t.Fatalf("record name must be canonicalised against the zone, got %+v", sent)
+	}
+	// The audit trail must key on the canonical zone ID.
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE action='create_record' AND zone_id='example.com.'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("audit must record zone_id=example.com., got %d matching rows", count)
+	}
+}
+
+// TestGetZone_ZoneArgCaseInsensitiveForGrantedUser pins the authorization
+// side of the canonicalisation: a user granted "example.com." must reach the
+// zone with "Example.COM" (case-insensitive DNS), not be fail-closed into a
+// spurious FORBIDDEN.
+func TestGetZone_ZoneArgCaseInsensitiveForGrantedUser(t *testing.T) {
+	session, db := newMCPTestEnv(t, true, richPDNS(t, &[]models.RRSet{}))
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_zone",
+		Arguments: map[string]any{"zone": "Example.COM"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool get_zone: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("granted user passing a mixed-case zone ID must not be refused, got %s", resultText(res))
+	}
+	var out struct {
+		Zone models.Zone `json:"zone"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if out.Zone.ID != "example.com." {
+		t.Fatalf("expected the granted zone, got %+v", out.Zone)
+	}
+}
+
 func TestCreateZone_NonAdminForbidden(t *testing.T) {
 	session, db := newMCPTestEnv(t, false, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("no PowerDNS call expected for a refused tool call, got %s %s", r.Method, r.URL.Path)

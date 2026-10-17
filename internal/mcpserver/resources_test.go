@@ -114,6 +114,23 @@ func TestReadZoneResource_InvalidURI(t *testing.T) {
 	}
 }
 
+// TestReadZoneResource_ZoneURICanonicalised pins the resource-side zone
+// canonicalisation: a URI spelled "Example.COM" (no trailing dot, mixed
+// case) must address the same zone as "example.com." for authorization —
+// not be fail-closed into a spurious FORBIDDEN.
+func TestReadZoneResource_ZoneURICanonicalised(t *testing.T) {
+	session, db := newMCPTestEnv(t, true, richPDNS(t, &[]models.RRSet{}))
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "gozone://zones/Example.COM"})
+	if err != nil {
+		t.Fatalf("ReadResource with a non-canonical zone URI: %v", err)
+	}
+	if len(res.Contents) != 1 || !strings.Contains(res.Contents[0].Text, "$ORIGIN example.com.") {
+		t.Fatalf("expected the granted zone's BIND export, got %+v", res.Contents)
+	}
+}
+
 func TestTruncateResource(t *testing.T) {
 	small := "$ORIGIN example.com.\nwww IN A 192.0.2.1\n"
 	if got := truncateResource(small, "example.com.", "bind"); got != small {

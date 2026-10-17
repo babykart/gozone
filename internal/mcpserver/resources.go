@@ -62,6 +62,10 @@ func registerResources(srv *mcp.Server, ops *dnsops.Service) {
 		if err != nil {
 			return nil, err
 		}
+		// Canonicalise like the zone-addressed tools: authorization and the
+		// audit/share keys compare canonical IDs, so "Example.COM" in a URI
+		// addresses the same zone as "example.com.".
+		zone = dnsops.NormalizeZoneName(zone)
 
 		// Both reads go through the service layer, which re-checks the zone
 		// grant (fail-closed): the zone metadata and the record list each

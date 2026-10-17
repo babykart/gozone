@@ -57,7 +57,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 
 	// -- get_zone ---------------------------------------------------------
 	type getZoneIn struct {
-		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 	}
 	type getZoneOut struct {
 		Zone models.Zone `json:"zone"`
@@ -72,16 +72,20 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, getZoneOut{}, terr
 		}
-		zone, err := ops.GetZone(ctx, user, in.Zone)
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
+			return nil, getZoneOut{}, terr
+		}
+		zoneInfo, err := ops.GetZone(ctx, user, zone)
 		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, getZoneOut{}, callTool("get_zone", te, cause)
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: zone.Name + " (" + zone.Kind + ")"}}}, getZoneOut{Zone: *zone}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: zoneInfo.Name + " (" + zoneInfo.Kind + ")"}}}, getZoneOut{Zone: *zoneInfo}, nil
 	})
 
 	// -- list_records -----------------------------------------------------
 	type listRecordsIn struct {
-		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Name string `json:"name,omitempty" jsonschema:"optional record-name filter; accepts \"@\", a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
 		Type string `json:"type,omitempty" jsonschema:"optional record type filter (e.g. A, CNAME); requires name"`
 	}
@@ -98,14 +102,18 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, listRecordsOut{}, terr
 		}
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
+			return nil, listRecordsOut{}, terr
+		}
 		name := in.Name
 		if in.Type != "" && name == "" {
 			return nil, listRecordsOut{}, toolErrorf("VALIDATION_ERROR", "the 'type' filter requires 'name'")
 		}
 		if name != "" {
-			name = dnsops.NormalizeRecordName(name, in.Zone)
+			name = dnsops.NormalizeRecordName(name, zone)
 		}
-		records, err := ops.ListRecords(ctx, user, in.Zone, name, in.Type)
+		records, err := ops.ListRecords(ctx, user, zone, name, in.Type)
 		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, listRecordsOut{}, callTool("list_records", te, cause)
 		}
@@ -154,7 +162,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 	})
 	// -- export_zone ------------------------------------------------------
 	type exportZoneIn struct {
-		Zone   string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone   string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Format string `json:"format,omitempty" jsonschema:"output format: \"bind\" (default; RFC 1035 zone file) or \"csv\" (one row per record)"`
 	}
 	type exportZoneOut struct {
@@ -173,6 +181,10 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, exportZoneOut{}, terr
 		}
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
+			return nil, exportZoneOut{}, terr
+		}
 		format := strings.ToLower(strings.TrimSpace(in.Format))
 		if format == "" {
 			format = "bind"
@@ -183,13 +195,13 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 
 		// Both reads go through the service layer, which re-checks the zone
 		// grant (fail-closed) before any PowerDNS call — same as the resource.
-		zoneInfo, err := ops.GetZone(ctx, user, in.Zone)
+		zoneInfo, err := ops.GetZone(ctx, user, zone)
 		if err != nil {
 			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
 			}
 		}
-		records, err := ops.ListRecords(ctx, user, in.Zone, "", "")
+		records, err := ops.ListRecords(ctx, user, zone, "", "")
 		if err != nil {
 			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
@@ -214,22 +226,26 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			}
 		}
 		truncated := len(body) > maxResourceBytes
-		body = truncateResource(body, in.Zone, format)
+		body = truncateResource(body, zone, format)
 
-		summary := fmt.Sprintf("%s export of %s: %d record(s), %d bytes", strings.ToUpper(format), in.Zone, recordCount, len(body))
+		summary := fmt.Sprintf("%s export of %s: %d record(s), %d bytes", strings.ToUpper(format), zone, recordCount, len(body))
 		if truncated {
 			summary += " (TRUNCATED at 1 MiB — banner names the REST endpoint for the full export)"
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}},
-			exportZoneOut{Zone: in.Zone, Format: format, RecordCount: recordCount, Content: body}, nil
+			exportZoneOut{Zone: zone, Format: format, RecordCount: recordCount, Content: body}, nil
 	})
 }
 
-// validateZoneArg performs the cheap zone-argument shape check shared by the
-// write tools: a syntactically valid zone name.
-func validateZoneArg(zone string) *toolError {
+// canonicalZoneArg validates then canonicalises a zone argument (lowercase,
+// trailing dot). Every zone-addressed tool funnels its argument through it,
+// so the service's zone authorization, the per-zone write lock and the audit
+// trail all key on the same canonical ID whatever form the client used
+// ("example.com", "Example.COM.", "example.com.") — without it, two spellings
+// of one zone take different locks and a granted user can be wrongly refused.
+func canonicalZoneArg(zone string) (string, *toolError) {
 	if err := validators.ValidateDomainName(zone); err != nil {
-		return toolErrorf("VALIDATION_ERROR", "%s", err.Error())
+		return "", toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 	}
-	return nil
+	return dnsops.NormalizeZoneName(zone), nil
 }

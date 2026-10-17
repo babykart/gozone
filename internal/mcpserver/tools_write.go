@@ -46,7 +46,7 @@ func buildRRSet(zone, name, rrtype string, ttl int, records []recordInput) model
 func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 	// -- create_record ----------------------------------------------------
 	type createRecordIn struct {
-		Zone    string        `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone    string        `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Name    string        `json:"name" jsonschema:"record name; accepts \"@\" (apex), a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
 		Type    string        `json:"type" jsonschema:"record type from list_record_types, case-insensitive"`
 		TTL     int           `json:"ttl,omitempty" jsonschema:"TTL in seconds; 0/omitted inherits the existing RRSet TTL or defaults to 3600"`
@@ -65,14 +65,15 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		if terr := validateZoneArg(in.Zone); terr != nil {
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		rrset := buildRRSet(in.Zone, in.Name, in.Type, in.TTL, in.Records)
-		if err := dnsops.ValidateRecordSet(&rrset, in.Zone); err != nil {
+		rrset := buildRRSet(zone, in.Name, in.Type, in.TTL, in.Records)
+		if err := dnsops.ValidateRecordSet(&rrset, zone); err != nil {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
-		if err := ops.CreateRecord(ctx, user, in.Zone, rrset, dnsops.SourceMCP); err != nil {
+		if err := ops.CreateRecord(ctx, user, zone, rrset, dnsops.SourceMCP); err != nil {
 			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("create_record", te, cause)
 			}
@@ -82,7 +83,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 
 	// -- update_record ----------------------------------------------------
 	type updateRecordIn struct {
-		Zone          string        `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone          string        `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Name          string        `json:"name" jsonschema:"record name; accepts \"@\" (apex), a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
 		Type          string        `json:"type" jsonschema:"record type, case-insensitive"`
 		TTL           int           `json:"ttl,omitempty" jsonschema:"TTL in seconds; 0/omitted keeps the RRSet's current TTL"`
@@ -99,17 +100,18 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		if terr := validateZoneArg(in.Zone); terr != nil {
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		rrset := buildRRSet(in.Zone, in.Name, in.Type, in.TTL, in.Records)
+		rrset := buildRRSet(zone, in.Name, in.Type, in.TTL, in.Records)
 		if in.ClearComments {
 			rrset.Comments = &models.CommentPatch{Clear: true}
 		}
-		if err := dnsops.PrepareValidatedRecordSet(&rrset, in.Zone); err != nil {
+		if err := dnsops.PrepareValidatedRecordSet(&rrset, zone); err != nil {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
-		if err := ops.UpdateRecord(ctx, user, in.Zone, rrset, dnsops.SourceMCP); err != nil {
+		if err := ops.UpdateRecord(ctx, user, zone, rrset, dnsops.SourceMCP); err != nil {
 			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("update_record", te, cause)
 			}
@@ -119,7 +121,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 
 	// -- delete_record ----------------------------------------------------
 	type deleteRecordIn struct {
-		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Name string `json:"name" jsonschema:"record name; accepts \"@\" (apex), a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
 		Type string `json:"type" jsonschema:"record type of the RRSet to delete, case-insensitive"`
 	}
@@ -133,7 +135,8 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		if terr := validateZoneArg(in.Zone); terr != nil {
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
 			return nil, writeOut{}, terr
 		}
 		// Canonicalise exactly like the REST DELETE handler: uppercase type,
@@ -145,8 +148,8 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if err := validators.ValidateRecordName(in.Name); err != nil {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
-		name := dnsops.NormalizeRecordName(in.Name, in.Zone)
-		if err := ops.DeleteRecord(ctx, user, in.Zone, name, rrType, dnsops.SourceMCP); err != nil {
+		name := dnsops.NormalizeRecordName(in.Name, zone)
+		if err := ops.DeleteRecord(ctx, user, zone, name, rrType, dnsops.SourceMCP); err != nil {
 			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("delete_record", te, cause)
 			}
@@ -189,7 +192,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 
 	// -- delete_zone ------------------------------------------------------
 	type deleteZoneIn struct {
-		Zone string `json:"zone" jsonschema:"canonical zone ID as returned by list_zones (lowercase with trailing dot, e.g. \"example.com.\")"`
+		Zone string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "delete_zone",
@@ -201,14 +204,15 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		if terr := validateZoneArg(in.Zone); terr != nil {
+		zone, terr := canonicalZoneArg(in.Zone)
+		if terr != nil {
 			return nil, writeOut{}, terr
 		}
-		if err := ops.DeleteZone(ctx, user, in.Zone, dnsops.SourceMCP); err != nil {
+		if err := ops.DeleteZone(ctx, user, zone, dnsops.SourceMCP); err != nil {
 			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, writeOut{}, callTool("delete_zone", te, cause)
 			}
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("deleted zone %s", in.Zone)}}}, writeOut{Message: "zone deleted"}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("deleted zone %s", zone)}}}, writeOut{Message: "zone deleted"}, nil
 	})
 }
