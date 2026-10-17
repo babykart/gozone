@@ -1314,13 +1314,18 @@ func TestMCPEnvOverrides(t *testing.T) {
 func TestValidate_MCPPath(t *testing.T) {
 	valid := []string{"/mcp", "/agent-api", "/tools/mcp"}
 	invalid := map[string]string{
-		"mcp":       "must start with '/'",
-		"/api":      "overlaps /api",
-		"/api/mcp":  "overlaps /api",
-		"/static/x": "overlaps /static",
-		"/health":   "overlaps /health",
-		"/zones":    "overlaps /zones",
-		"/mcp/":     "trailing slash",
+		"mcp":              "must start with '/'",
+		"/":                "root belongs to the web UI",
+		"/api":             "overlaps /api",
+		"/api/mcp":         "overlaps /api",
+		"/static/x":        "overlaps /static",
+		"/health":          "overlaps /health",
+		"/zones":           "overlaps /zones",
+		"/auth":            "overlaps /auth (OIDC)",
+		"/auth/mcp":        "overlaps /auth (OIDC)",
+		"/change-password": "overlaps /change-password",
+		"/stats":           "overlaps /stats",
+		"/mcp/":            "trailing slash",
 	}
 	for _, p := range valid {
 		cfg := DefaultConfig()

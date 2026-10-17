@@ -814,6 +814,34 @@ func (cfg *Config) validate() error {
 	return nil
 }
 
+// ReservedMCPRoutePrefixes is the inventory of first-level route prefixes the
+// HTTP router mounts. validateMCP rejects any mcp.path overlapping one of
+// them (chi mounts are prefix-based, so a collision would shadow a route
+// tree). Exported so a routing-table test can walk the real router and
+// verify every mounted prefix appears here — a new route added without
+// extending this list fails that test instead of silently becoming
+// reachable (or unreachable) depending on mcp.path.
+var ReservedMCPRoutePrefixes = []string{
+	"/",                // web UI root (redirects to /dashboard)
+	"/api",             // REST API
+	"/auth",            // OIDC login/callback endpoints
+	"/change-password", // forced-change flow
+	"/dashboard",
+	"/health",
+	"/login",
+	"/logout",
+	"/profile",
+	"/stats", // dashboard statistics
+	"/static",
+	"/activity",
+	"/templates",
+	"/tsigkeys",
+	"/users",
+	"/groups",
+	"/zones",
+	"/favicon.ico",
+}
+
 // validateMCP checks the MCP endpoint configuration. Path and origin checks
 // run even when the endpoint is disabled so a config that only toggles
 // mcp.enabled later fails early on a bad path or origin instead of at the
@@ -823,12 +851,15 @@ func (cfg *Config) validateMCP() error {
 	if p == "" || p[0] != '/' {
 		return fmt.Errorf("invalid mcp.path %q: must start with '/'", p)
 	}
-	if p != "/" && strings.HasSuffix(p, "/") {
+	if p == "/" {
+		return fmt.Errorf(`invalid mcp.path "/": the root belongs to the web UI; mount the endpoint under a dedicated prefix such as "/mcp"`)
+	}
+	if strings.HasSuffix(p, "/") {
 		return fmt.Errorf("invalid mcp.path %q: must not end with '/'", p)
 	}
 	// The MCP endpoint must not shadow (or be shadowed by) the existing
 	// route trees: chi mounts are prefix-based.
-	for _, reserved := range []string{"/api", "/static", "/health", "/login", "/logout", "/dashboard", "/zones", "/users", "/groups", "/profile", "/activity", "/templates", "/tsigkeys", "/favicon.ico"} {
+	for _, reserved := range ReservedMCPRoutePrefixes {
 		if p == reserved || strings.HasPrefix(p, reserved+"/") {
 			return fmt.Errorf("invalid mcp.path %q: overlaps the reserved route %q", p, reserved)
 		}
