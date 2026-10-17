@@ -74,9 +74,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
 		if err := ops.CreateRecord(ctx, user, zone, rrset, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
-				return nil, writeOut{}, callTool("create_record", te, cause)
-			}
+			return nil, writeOut{}, fail("create_record", err, codeRecordNotFound)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("created %s record %s (%d record(s) submitted)", rrset.Type, rrset.Name, len(in.Records))}}}, writeOut{Message: "record created"}, nil
 	})
@@ -112,9 +110,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
 		if err := ops.UpdateRecord(ctx, user, zone, rrset, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
-				return nil, writeOut{}, callTool("update_record", te, cause)
-			}
+			return nil, writeOut{}, fail("update_record", err, codeRecordNotFound)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("updated %s record %s (%d record(s) now in the set)", rrset.Type, rrset.Name, len(rrset.Records))}}}, writeOut{Message: "record updated"}, nil
 	})
@@ -150,9 +146,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		}
 		name := dnsops.NormalizeRecordName(in.Name, zone)
 		if err := ops.DeleteRecord(ctx, user, zone, name, rrType, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
-				return nil, writeOut{}, callTool("delete_record", te, cause)
-			}
+			return nil, writeOut{}, fail("delete_record", err, codeRecordNotFound)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("deleted %s record %s", rrType, name)}}}, writeOut{Message: "record deleted"}, nil
 	})
@@ -183,9 +177,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		}
 		zone, err := ops.CreateZone(ctx, user, req, dnsops.SourceMCP)
 		if err != nil {
-			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
-				return nil, createZoneOut{}, callTool("create_zone", te, cause)
-			}
+			return nil, createZoneOut{}, fail("create_zone", err, codeZoneNotFound)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("created zone %s (%s)", zone.Name, zone.Kind)}}}, createZoneOut{Zone: *zone, Message: "zone created"}, nil
 	})
@@ -209,9 +201,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, terr
 		}
 		if err := ops.DeleteZone(ctx, user, zone, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
-				return nil, writeOut{}, callTool("delete_zone", te, cause)
-			}
+			return nil, writeOut{}, fail("delete_zone", err, codeZoneNotFound)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("deleted zone %s", zone)}}}, writeOut{Message: "zone deleted"}, nil
 	})

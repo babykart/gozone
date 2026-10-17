@@ -46,6 +46,24 @@ func toolErrorf(code, format string, args ...any) *toolError {
 	return &toolError{code: code, msg: fmt.Sprintf(format, args...)}
 }
 
+// fail maps a service error with the tool's not-found default code, logs
+// the cause server-side and returns the tool error for the SDK to pack
+// into an isError result. It is the single funnel for tool calls whose
+// service method already failed: the mapping never yields a nil tool error
+// for a non-nil input, so the caller unconditionally returns instead of
+// falling through to its success path — the pattern this replaces could
+// fall through on a nil mapping and dereference a nil result.
+func fail(tool string, err error, notFoundCode string) error {
+	te, cause := mapServiceError(err, notFoundCode)
+	if te == nil {
+		// Unreachable for a non-nil err (mapServiceError returns nil only
+		// for nil input); kept so the helper is total.
+		te = &toolError{code: codeInternal, msg: "internal error"}
+		cause = err
+	}
+	return callTool(tool, te, cause)
+}
+
 // mapServiceError translates a dnsops service error into a tool error with a
 // stable code, mirroring the REST API's pdnsErrorStatus(err, notFoundCode):
 // typed PowerDNS errors are recognised whether or not the service wrapped

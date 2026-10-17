@@ -204,9 +204,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		// endpoint and the gozone://zones/{zone} resource.
 		body, recordCount, err := ops.ExportZone(ctx, user, zone, format)
 		if err != nil {
-			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
-				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
-			}
+			return nil, exportZoneOut{}, fail("export_zone", err, codeZoneNotFound)
 		}
 
 		body, truncated := truncateResource(body, zone, format)

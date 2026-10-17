@@ -625,6 +625,28 @@ func TestMapServiceError(t *testing.T) {
 	}
 }
 
+// TestFail pins the write-tool failure funnel: a non-nil service error must
+// always produce a tool error carrying the mapped code, so a caller can
+// return unconditionally instead of testing the mapping result.
+func TestFail(t *testing.T) {
+	cases := []struct {
+		name         string
+		err          error
+		notFoundCode string
+		wantPrefix   string
+	}{
+		{"forbidden", dnsops.ErrForbidden, codeZoneNotFound, "FORBIDDEN:"},
+		{"unwrapped not found", pdns.ErrNotFound, codeZoneNotFound, "ZONE_NOT_FOUND:"},
+		{"unknown", errors.New("boom: dsn=secret"), codeZoneNotFound, "INTERNAL_ERROR:"},
+	}
+	for _, c := range cases {
+		err := fail("some_tool", c.err, c.notFoundCode)
+		if err == nil || !strings.HasPrefix(err.Error(), c.wantPrefix) {
+			t.Errorf("%s: fail() = %v, want a tool error prefixed %q", c.name, err, c.wantPrefix)
+		}
+	}
+}
+
 // TestZoneTools_UnwrappedPDNSErrorsMapToStableCodes pins the REST↔MCP error
 // parity for zone operations end to end: the service returns the PowerDNS
 // error unwrapped there, and a 404/409 from the mock must surface as
