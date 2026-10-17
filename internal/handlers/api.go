@@ -256,6 +256,51 @@ func (h *Handler) APIListRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
+// APIExportZone streams a zone export (GET /api/v1/zones/{zone_id}/export?format=bind|csv).
+//
+// This is the REST counterpart of the MCP export_zone tool and the
+// gozone://zones/{zone} resource — all three go through dnsops.ExportZone,
+// so the output is byte-identical. Unlike the MCP surfaces, the response is
+// never truncated: this endpoint is the full-fidelity fallback the MCP
+// truncation indicators point to, and it is reachable with an API key (the
+// web export route requires a session cookie).
+//
+// format defaults to bind. Success answers text/dns (bind) or text/csv
+// (csv) with a Content-Disposition attachment header.
+func (h *Handler) APIExportZone(w http.ResponseWriter, r *http.Request) {
+	zoneID := r.PathValue("zone_id")
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "" {
+		format = "bind"
+	}
+	if format != "bind" && format != "csv" {
+		writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, `unknown format: use "bind" or "csv"`)
+		return
+	}
+
+	body, _, err := h.Ops.ExportZone(r.Context(), middleware.GetUser(r), zoneID, format)
+	if err != nil {
+		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
+			return
+		}
+		status, code := pdnsErrorStatus(err, ErrCodeZoneNotFound)
+		h.writeAPIErrorWithCause(w, r, status, code, "failed to export zone", err)
+		return
+	}
+
+	name := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(zoneID, "."), "/"))
+	contentType := "text/dns"
+	extension := "zone"
+	if format == "csv" {
+		contentType = "text/csv"
+		extension = "csv"
+	}
+	w.Header().Set("Content-Type", contentType)
+	// #nosec G601 — filename derived from the zone ID path segment (validated by routing)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, name, extension))
+	w.Write([]byte(body)) // #nosec G104 — client going away mid-transfer is not an error
+}
+
 // validateAPIRecordSet validates and canonicalises an RRSet from an API request,
 // without normalising record content (priority embedding / quoting / trailing
 // dots). APICreateRecord uses it before the service merges the new records

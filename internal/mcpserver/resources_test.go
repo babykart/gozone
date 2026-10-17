@@ -133,8 +133,8 @@ func TestReadZoneResource_ZoneURICanonicalised(t *testing.T) {
 
 func TestTruncateResource(t *testing.T) {
 	small := "$ORIGIN example.com.\nwww IN A 192.0.2.1\n"
-	if got := truncateResource(small, "example.com.", "bind"); got != small {
-		t.Fatalf("small body must pass through unchanged, got %q", got)
+	if got, truncated := truncateResource(small, "example.com.", "bind"); got != small || truncated {
+		t.Fatalf("small body must pass through untruncated, got %q truncated=%v", got, truncated)
 	}
 
 	// Build a body over the limit out of complete lines.
@@ -144,17 +144,32 @@ func TestTruncateResource(t *testing.T) {
 		sb.WriteString(line)
 	}
 	big := sb.String()
-	got := truncateResource(big, "example.com.", "bind")
-	if len(got) <= maxResourceBytes {
-		t.Fatalf("truncated body must exceed the raw limit (banner appended), got %d", len(got))
+
+	// BIND: explicit comment banner naming the API-key-reachable REST route.
+	got, truncated := truncateResource(big, "example.com.", "bind")
+	if !truncated {
+		t.Fatal("oversized body must report truncation")
 	}
-	if !strings.Contains(got, "TRUNCATED at") || !strings.Contains(got, "GET /zones/example.com./export?format=bind") {
+	if !strings.Contains(got, "TRUNCATED at") || !strings.Contains(got, "GET /api/v1/zones/example.com./export?format=bind") {
 		t.Fatalf("truncation banner missing or incomplete:\n%q", got[len(got)-250:])
 	}
 	// The cut must not end mid-line: strip the banner lines and check the
 	// remaining content ends with a newline.
 	if i := strings.Index(got, "\n; ---"); i > 0 && !strings.HasSuffix(got[:i], "\n") {
 		t.Fatalf("truncated content must end at a line boundary")
+	}
+
+	// CSV: line-aligned cut with NO in-band marker (CSV has no comment
+	// syntax — a banner would corrupt the file); the flag is the signal.
+	csvGot, truncated := truncateResource(big, "example.com.", "csv")
+	if !truncated {
+		t.Fatal("oversized CSV must report truncation")
+	}
+	if strings.Contains(csvGot, "TRUNCATED") {
+		t.Fatalf("CSV cut must not carry an in-band banner, got tail %q", csvGot[len(csvGot)-120:])
+	}
+	if !strings.HasSuffix(csvGot, "\n") {
+		t.Fatal("CSV cut must end at a line boundary")
 	}
 }
 

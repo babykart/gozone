@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -314,6 +315,58 @@ func TestExportZoneTool_BIND(t *testing.T) {
 	// 4 RRSets in the fixture, none disabled → 4 records in the BIND body.
 	if out.RecordCount != 4 {
 		t.Errorf("record_count = %d, want 4", out.RecordCount)
+	}
+}
+
+// TestExportZoneTool_TruncationReportsRestFallback pins the structured
+// truncation contract: an oversized export keeps a sane body (BIND banner,
+// clean CSV cut) and reports truncated plus the full_export REST route.
+func TestExportZoneTool_TruncationReportsRestFallback(t *testing.T) {
+	// A zone whose CSV rendering far exceeds the 1 MiB cap (~44 bytes/row).
+	rrsets := make([]models.RRSet, 0, 30000)
+	for i := 0; i < 30000; i++ {
+		name := fmt.Sprintf("host%04d.example.com.", i)
+		rrsets = append(rrsets, models.RRSet{Name: name, Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "192.0.2.1"}}})
+	}
+	session, db := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{Zone: models.Zone{ID: "example.com.", Name: "example.com.", Kind: "Native"}, RRSets: rrsets})
+	})
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "export_zone",
+		Arguments: map[string]any{"zone": "example.com.", "format": "csv"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("export_zone failed: %s", resultText(res))
+	}
+	var out struct {
+		Content    string `json:"content"`
+		Truncated  bool   `json:"truncated"`
+		FullExport string `json:"full_export"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if !out.Truncated {
+		t.Fatal("oversized export must report truncated=true")
+	}
+	if out.FullExport != "/api/v1/zones/example.com./export?format=csv" {
+		t.Fatalf("full_export must name the REST route, got %q", out.FullExport)
+	}
+	if strings.Contains(out.Content, "TRUNCATED") {
+		t.Fatal("CSV content must not carry an in-band truncation marker")
+	}
+	if !strings.HasSuffix(out.Content, "\n") {
+		t.Fatal("CSV content must end at a line boundary")
 	}
 }
 

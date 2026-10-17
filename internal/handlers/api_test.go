@@ -1026,6 +1026,114 @@ func TestAPIUpdateRecord(t *testing.T) {
 	}
 }
 
+// TestAPIExportZone covers the REST export endpoint: bind and csv succeed
+// with the right content types and an attachment header, an unknown format
+// is a 400, and a user without the zone grant is refused before any
+// PowerDNS call.
+func TestAPIExportZone(t *testing.T) {
+	pdnsHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			Zone:   models.Zone{ID: "example.com.", Name: "example.com.", Kind: "Native"},
+			RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "192.0.2.1"}}}},
+		})
+	}
+
+	t.Run("bind", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsHandler)
+		defer pdnsSrv.Close()
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./export?format=bind", nil), user)
+		r.SetPathValue("zone_id", "example.com.")
+		w := httptest.NewRecorder()
+		h.APIExportZone(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/dns" {
+			t.Errorf("Content-Type = %q, want text/dns", ct)
+		}
+		if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="example.com.zone"`) {
+			t.Errorf("Content-Disposition = %q, want example.com.zone attachment", cd)
+		}
+		if !strings.Contains(w.Body.String(), "$ORIGIN example.com.") {
+			t.Errorf("body must be a BIND zone file, got %q", w.Body.String())
+		}
+	})
+
+	t.Run("csv", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsHandler)
+		defer pdnsSrv.Close()
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./export?format=csv", nil), user)
+		r.SetPathValue("zone_id", "example.com.")
+		w := httptest.NewRecorder()
+		h.APIExportZone(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "text/csv" {
+			t.Errorf("Content-Type = %q, want text/csv", ct)
+		}
+		if !strings.Contains(w.Body.String(), "name,type,content,ttl,priority,disabled,comment") {
+			t.Errorf("body must be the CSV export, got %q", w.Body.String())
+		}
+	})
+
+	t.Run("unknown format", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("no PowerDNS call expected for a bad format, got %s %s", r.Method, r.URL.Path)
+		})
+		defer pdnsSrv.Close()
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./export?format=xml", nil), user)
+		r.SetPathValue("zone_id", "example.com.")
+		w := httptest.NewRecorder()
+		h.APIExportZone(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("ungranted forbidden", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("no PowerDNS call expected for a refused export, got %s %s", r.Method, r.URL.Path)
+		})
+		defer pdnsSrv.Close()
+		user := &models.User{ID: 2, Username: "plain", Role: "user"}
+		r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./export", nil), user)
+		r.SetPathValue("zone_id", "example.com.")
+		w := httptest.NewRecorder()
+		h.APIExportZone(w, r)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("zone not found", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		defer pdnsSrv.Close()
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/zones/missing.example./export", nil), user)
+		r.SetPathValue("zone_id", "missing.example.")
+		w := httptest.NewRecorder()
+		h.APIExportZone(w, r)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+}
+
 // captureRRSets decodes the rrsets PowerDNS receives in a PATCH body.
 func captureRRSets(t *testing.T, got *[]models.RRSet) func(http.ResponseWriter, *http.Request) {
 	t.Helper()

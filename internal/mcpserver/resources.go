@@ -79,7 +79,10 @@ func registerResources(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, resourceError("read gozone://zones", zone, err)
 		}
 
-		text := truncateResource(dnsops.RenderZoneFile(zoneInfo, records), zone, "bind")
+		// BIND output keeps an in-band truncation banner: zone files have
+		// a comment syntax, so the marker names the REST route serving the
+		// full export.
+		text, _ := truncateResource(dnsops.RenderZoneFile(zoneInfo, records), zone, "bind")
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
 			URI:      req.Params.URI,
 			MIMEType: "text/dns",
@@ -101,21 +104,34 @@ func zoneFromResourceURI(uri string) (string, error) {
 	return zone, nil
 }
 
+// exportRestPath is the API-key-authenticated REST route serving the full
+// (untruncated) export; the BIND truncation banner and the tool's
+// structured output point to it as the fallback.
+func exportRestPath(zone, format string) string {
+	return fmt.Sprintf("/api/v1/zones/%s/export?format=%s", zone, format)
+}
+
 // truncateResource caps an export body at maxResourceBytes, cutting at the
-// last complete line and appending an explicit banner that names the REST
-// endpoint serving the full export, so the client can fall back. Content
-// under the limit is returned unchanged.
-func truncateResource(text, zone, format string) string {
+// last complete line, and reports whether a cut happened. BIND output gains
+// an explicit comment banner naming the REST route serving the full export
+// (zone files have comments); CSV output gets a clean line-aligned cut with
+// no banner — CSV has no comment syntax, so an in-band marker would corrupt
+// the file, and callers surface the truncation through structured output
+// instead. Content under the limit is returned unchanged.
+func truncateResource(text, zone, format string) (string, bool) {
 	if len(text) <= maxResourceBytes {
-		return text
+		return text, false
 	}
 	cut := text[:maxResourceBytes]
 	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
 		cut = cut[:i+1] // keep the trailing newline: the cut is line-aligned
 	}
 	slog.Warn("mcp export truncated", "zone", zone, "format", format, "limit_bytes", maxResourceBytes)
-	return cut + fmt.Sprintf("\n; --- TRUNCATED at %d bytes (limit %d): fetch the full export via GET /zones/%s/export?format=%s ---\n",
-		len(cut), maxResourceBytes, zone, format)
+	if format != "bind" {
+		return cut, true
+	}
+	return cut + fmt.Sprintf("\n; --- TRUNCATED at %d bytes (limit %d): fetch the full export via GET %s ---\n",
+		len(cut), maxResourceBytes, exportRestPath(zone, format)), true
 }
 
 // resourceError maps a service failure for a resource read. Unlike tool

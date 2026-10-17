@@ -1,6 +1,7 @@
 package dnsops
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"sort"
@@ -8,6 +9,47 @@ import (
 
 	"github.com/babykart/gozone/internal/models"
 )
+
+// ExportZone renders a whole zone for export: it authorizes the caller,
+// fetches the zone metadata and records from PowerDNS, and renders them in
+// the requested format ("bind" = RFC 1035 zone file, disabled records
+// omitted; "csv" = one row per record, disabled records flagged). It
+// returns the body and the record count the format reports (records for
+// csv, enabled records for bind). Upstream failures are returned as-is so
+// each transport maps its own status/code. Every transport — web export,
+// REST export endpoint, MCP export_zone tool and gozone://zones/{zone}
+// resource — goes through this method so their output is byte-identical.
+func (s *Service) ExportZone(ctx context.Context, user *models.User, zoneID, format string) (string, int, error) {
+	if format != "bind" && format != "csv" {
+		return "", 0, fmt.Errorf("unknown export format %q: use \"bind\" or \"csv\"", format)
+	}
+	if err := s.authorizeZone(ctx, user, zoneID); err != nil {
+		return "", 0, err
+	}
+	zone, err := s.PDNS.GetZone(ctx, zoneID)
+	if err != nil {
+		return "", 0, err
+	}
+	records, err := s.PDNS.ListRecords(ctx, zoneID)
+	if err != nil {
+		return "", 0, err
+	}
+	recordCount := 0
+	if format == "csv" {
+		for _, rr := range records {
+			recordCount += len(rr.Records)
+		}
+		return RenderZoneCSV(zone, records), recordCount, nil
+	}
+	for _, rr := range records {
+		for _, rec := range rr.Records {
+			if !rec.Disabled {
+				recordCount++
+			}
+		}
+	}
+	return RenderZoneFile(zone, records), recordCount, nil
+}
 
 // RelativeBindName converts an absolute record name to relative form for
 // BIND output.

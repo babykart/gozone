@@ -481,6 +481,7 @@ func runServer(cfg *config.Config) error {
 
 			r.Get("/zones/{zone_id}", h.APIGetZone)
 			r.Get("/zones/{zone_id}/records", h.APIListRecords)
+			r.Get("/zones/{zone_id}/export", h.APIExportZone)
 			r.Post("/zones/{zone_id}/records", h.APICreateRecord)
 			r.Put("/zones/{zone_id}/records", h.APIUpdateRecord)
 			r.Delete("/zones/{zone_id}/records", h.APIDeleteRecord)

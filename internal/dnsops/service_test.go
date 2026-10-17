@@ -402,6 +402,60 @@ func TestZoneLocks_SharedInstance(t *testing.T) {
 	<-done
 }
 
+// TestExportZone covers the shared export service method: format dispatch,
+// record counting (bind omits disabled records, csv counts them) and the
+// authorization gate.
+func TestExportZone(t *testing.T) {
+	rrsets := []models.RRSet{
+		{Name: "www.example.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "192.0.2.1"}}},
+		{Name: "down.example.", Type: "A", TTL: 3600, Records: []models.RecordInfo{{Content: "192.0.2.2", Disabled: true}}},
+	}
+	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{Zone: models.Zone{ID: "example.", Name: "example.", Kind: "Native"}, RRSets: rrsets})
+	})
+	defer srv.Close()
+	db := testutil.NewTestDB(t)
+	s := New(db, client)
+	ctx := context.Background()
+	adminID := testutil.SeedTestUser(t, db, "admin", "pass", "admin", true)
+	admin := &models.User{ID: adminID, Role: "admin"}
+
+	bind, count, err := s.ExportZone(ctx, admin, "example.", "bind")
+	if err != nil {
+		t.Fatalf("bind export: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("bind record count = %d, want 1 (disabled records omitted)", count)
+	}
+	if !strings.Contains(bind, "www IN A 192.0.2.1") || strings.Contains(bind, "192.0.2.2") {
+		t.Errorf("bind export must omit the disabled record, got:\n%s", bind)
+	}
+
+	csv, count, err := s.ExportZone(ctx, admin, "example.", "csv")
+	if err != nil {
+		t.Fatalf("csv export: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("csv record count = %d, want 2 (disabled records included)", count)
+	}
+	if !strings.Contains(csv, "down.example.,A,192.0.2.2,3600,0,true,") {
+		t.Errorf("csv export must flag the disabled record, got:\n%s", csv)
+	}
+
+	if _, _, err := s.ExportZone(ctx, admin, "example.", "xml"); err == nil {
+		t.Error("unknown format must be rejected")
+	}
+
+	userID := testutil.SeedTestUser(t, db, "plain", "pass", "user", true)
+	if _, _, err := s.ExportZone(ctx, &models.User{ID: userID, Role: "user"}, "example.", "bind"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("ungranted export: %v, want ErrForbidden", err)
+	}
+}
+
 // TestRecordWrites_SerializedPerZone pins the per-zone serialization of the
 // concurrent write paths: a REPLACE or DELETE landing in the middle of a
 // concurrent append's fetch→merge→PATCH cycle would be overwritten by that

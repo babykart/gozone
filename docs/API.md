@@ -93,6 +93,15 @@ curl -H "X-API-Key: gozone_yourkey" \
 
 Response `200`: single zone object (same format as list items).
 
+### Export zone
+
+```bash
+curl -H "X-API-Key: gozone_yourkey" \
+  http://localhost:8080/api/v1/zones/example.com/export?format=bind
+```
+
+Exports a zone as an RFC 1035 BIND zone file (`format=bind`, the default — `text/dns`, disabled records omitted) or as CSV (`format=csv` — `text/csv`, one row per record, disabled records flagged). The response carries a `Content-Disposition` attachment header (`example.com.zone` / `example.com.csv`) and is **never truncated**: this endpoint is the full-fidelity fallback the MCP `export_zone` tool and `gozone://zones/{zone}` resource point to when they cap their output at 1 MiB. Requires zone access (group grant or admin key); an unknown format answers `400 VALIDATION_ERROR`, a missing zone `404 ZONE_NOT_FOUND`. Output is byte-identical to the web export and the MCP surfaces (all three share the same rendering).
+
 ### Create zone (admin only)
 
 ```bash

@@ -173,12 +173,14 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		Zone        string `json:"zone"`
 		Format      string `json:"format" jsonschema:"bind or csv"`
 		RecordCount int    `json:"record_count" jsonschema:"number of records in the export (disabled records included in csv, omitted in bind)"`
-		Content     string `json:"content" jsonschema:"the export body; truncated with an explicit banner past 1 MiB"`
+		Content     string `json:"content" jsonschema:"the export body; capped at 1 MiB"`
+		Truncated   bool   `json:"truncated" jsonschema:"true when the content was cut at the 1 MiB cap"`
+		FullExport  string `json:"full_export,omitempty" jsonschema:"REST route serving the full untruncated export; set only when truncated"`
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "export_zone",
 		Title:       "Export zone",
-		Description: "Export a whole zone as an RFC 1035 BIND zone file (format=bind, the default — $ORIGIN/$TTL header, records sorted, disabled records omitted) or as CSV (one row per record, disabled records flagged). The gozone://zones/{zone} resource serves the same BIND content for context attachment. Output past 1 MiB is explicitly truncated with a banner naming the REST export endpoint.",
+		Description: "Export a whole zone as an RFC 1035 BIND zone file (format=bind, the default — $ORIGIN/$TTL header, records sorted, disabled records omitted) or as CSV (one row per record, disabled records flagged). The gozone://zones/{zone} resource serves the same BIND content for context attachment. Output past 1 MiB is capped: BIND content ends with a comment banner naming the REST export route, CSV is cut at a line boundary (no in-band marker) and the structured output reports truncated plus the full_export route.",
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in exportZoneIn) (*mcp.CallToolResult, exportZoneOut, error) {
 		user, terr := userFromContext(ctx)
@@ -197,47 +199,27 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, exportZoneOut{}, toolErrorf("VALIDATION_ERROR", "unknown format %q: use \"bind\" or \"csv\"", format)
 		}
 
-		// Both reads go through the service layer, which re-checks the zone
-		// grant (fail-closed) before any PowerDNS call — same as the resource.
-		zoneInfo, err := ops.GetZone(ctx, user, zone)
-		if err != nil {
-			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
-				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
-			}
-		}
-		records, err := ops.ListRecords(ctx, user, zone, "", "")
+		// The rendering (and the zone authorization re-check) live in the
+		// service layer, shared with the web export, the REST export
+		// endpoint and the gozone://zones/{zone} resource.
+		body, recordCount, err := ops.ExportZone(ctx, user, zone, format)
 		if err != nil {
 			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
 			}
 		}
 
-		recordCount := 0
-		var body string
-		if format == "csv" {
-			body = dnsops.RenderZoneCSV(zoneInfo, records)
-			for _, rr := range records {
-				recordCount += len(rr.Records)
-			}
-		} else {
-			body = dnsops.RenderZoneFile(zoneInfo, records)
-			for _, rr := range records {
-				for _, rec := range rr.Records {
-					if !rec.Disabled {
-						recordCount++
-					}
-				}
-			}
+		body, truncated := truncateResource(body, zone, format)
+		out := exportZoneOut{Zone: zone, Format: format, RecordCount: recordCount, Content: body, Truncated: truncated}
+		if truncated {
+			out.FullExport = exportRestPath(zone, format)
 		}
-		truncated := len(body) > maxResourceBytes
-		body = truncateResource(body, zone, format)
 
 		summary := fmt.Sprintf("%s export of %s: %d record(s), %d bytes", strings.ToUpper(format), zone, recordCount, len(body))
 		if truncated {
-			summary += " (TRUNCATED at 1 MiB — banner names the REST endpoint for the full export)"
+			summary += fmt.Sprintf(" (TRUNCATED at 1 MiB — full export via GET %s)", out.FullExport)
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}},
-			exportZoneOut{Zone: zone, Format: format, RecordCount: recordCount, Content: body}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: summary}}}, out, nil
 	})
 }
 

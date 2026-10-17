@@ -59,7 +59,7 @@ mcp:
 | `list_records` (`zone`, `name?`, `type?`) | `GET …/records` | zone access | read-only |
 | `get_stats` | `GET /api/v1/stats` | any user | read-only |
 | `list_record_types` | — | any user | read-only |
-| `export_zone` (`zone`, `format: bind\|csv`) | web export | zone access | read-only |
+| `export_zone` (`zone`, `format: bind\|csv`) | `GET …/export` | zone access | read-only |
 | `create_record` (`zone`, `name`, `type`, `ttl?`, `records[]`) | `POST …/records` | zone access | write, not idempotent |
 | `update_record` (`zone`, `name`, `type`, `ttl?`, `records[]`, `clear_comments?`) | `PUT …/records` | zone access | write, idempotent, **destructive** (REPLACE) |
 | `delete_record` (`zone`, `name`, `type`) | `DELETE …/records` | zone access | **destructive**, idempotent |
@@ -81,8 +81,10 @@ because they are what prevents the most LLM mistakes):
 - `export_zone` returns the whole zone as an RFC 1035 BIND zone file
   (`format=bind`, the default — identical to the `gozone://zones/{zone}`
   resource) or as CSV (one row per record, disabled records flagged);
-  past 1 MiB the content is explicitly truncated with a banner naming the
-  REST export endpoint.
+  past 1 MiB the content is capped: BIND ends with a comment banner naming
+  `GET /api/v1/zones/{zone}/export?format=bind`, CSV is cut at a line
+  boundary (no in-band marker) and the structured output reports
+  `truncated: true` plus the `full_export` route — both API-key reachable.
 
 Errors: an `isError: true` result + a `CODE: description` message with a
 stable code (`ZONE_NOT_FOUND`, `FORBIDDEN`, `VALIDATION_ERROR`,
@@ -97,7 +99,7 @@ GoZone context:
 
 | URI | MIME | Content |
 |---|---|---|
-| `gozone://zones/{zone}` (template) | `text/dns` | Complete BIND export of the zone (RFC 1035: `$ORIGIN`, `$TTL`, records sorted SOA→NS→name; disabled records omitted). `{zone}` = the canonical zone ID returned by `list_zones`. Access requires a group grant (or an admin key) — refused fail-closed before any PowerDNS call. Beyond 1 MiB the content is **explicitly truncated** with a banner pointing at `GET /zones/{zone}/export?format=bind` for the full export. |
+| `gozone://zones/{zone}` (template) | `text/dns` | Complete BIND export of the zone (RFC 1035: `$ORIGIN`, `$TTL`, records sorted SOA→NS→name; disabled records omitted). `{zone}` = the canonical zone ID returned by `list_zones` (any casing accepted, canonicalised). Access requires a group grant (or an admin key) — refused fail-closed before any PowerDNS call. Beyond 1 MiB the content is **explicitly truncated** with a banner pointing at `GET /api/v1/zones/{zone}/export?format=bind` (API-key reachable) for the full export. |
 | `gozone://record-types` | `application/json` | JSON map of every supported type to its normalisation rules: separate `priority` field (MX/SRV), quoted content (TXT/SPF), FQDN target, FQDN/quoted field indices. Read this before creating or updating records. |
 
 ## Prompts
