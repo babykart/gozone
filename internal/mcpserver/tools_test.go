@@ -68,6 +68,50 @@ func richPDNS(t *testing.T, sent *[]models.RRSet) testutil.PDNSHandlerFunc {
 	}
 }
 
+// TestListRecords_TypeFilterCanonicalised pins case-insensitive type
+// filtering: "mx" must reach PowerDNS as rrset_type=MX (the stored uppercase
+// form) and match — a lowercase filter used to return an empty list with no
+// signal.
+func TestListRecords_TypeFilterCanonicalised(t *testing.T) {
+	session, db := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.URL.Query().Get("rrset_type"); got != "" && got != "MX" {
+			t.Errorf("rrset_type must be canonicalised to MX, got %q", got)
+		}
+		json.NewEncoder(w).Encode(struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}{RRSets: []models.RRSet{
+			{Name: "mail.example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{{Content: "10 mail.example.com."}}},
+		}})
+	})
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "list_records",
+		Arguments: map[string]any{
+			"zone": "example.com.",
+			"name": "mail",
+			"type": "mx",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool list_records: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_records failed: %s", resultText(res))
+	}
+	var out struct {
+		Records []models.RRSet `json:"records"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if len(out.Records) != 1 || out.Records[0].Type != "MX" {
+		t.Fatalf("lowercase type filter must match the MX RRSet, got %+v", out.Records)
+	}
+}
+
 func TestReadTools_EndToEnd(t *testing.T) {
 	session, db := newMCPTestEnv(t, true, richPDNS(t, &[]models.RRSet{}))
 	grantZoneToMCPUser(t, db, "example.com.")

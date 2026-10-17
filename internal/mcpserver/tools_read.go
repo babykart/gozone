@@ -87,7 +87,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 	type listRecordsIn struct {
 		Zone string `json:"zone" jsonschema:"zone ID; accepts any casing and an optional trailing dot (\"Example.COM\", \"example.com\") — canonicalised to the lowercase dotted form"`
 		Name string `json:"name,omitempty" jsonschema:"optional record-name filter; accepts \"@\", a bare label (\"www\"), an FQDN without the trailing dot or a full FQDN"`
-		Type string `json:"type,omitempty" jsonschema:"optional record type filter (e.g. A, CNAME); requires name"`
+		Type string `json:"type,omitempty" jsonschema:"optional record type filter (e.g. A, CNAME), case-insensitive; requires name"`
 	}
 	type listRecordsOut struct {
 		Records []models.RRSet `json:"records"`
@@ -106,14 +106,18 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, listRecordsOut{}, terr
 		}
+		// Canonicalise the type filter (uppercase, trimmed) like the REST
+		// GET: PowerDNS matches rrset_type against the stored uppercase
+		// form, so a lowercase "mx" would silently match nothing.
+		rrType := dnsops.CanonicalRecordType(in.Type)
 		name := in.Name
-		if in.Type != "" && name == "" {
+		if rrType != "" && name == "" {
 			return nil, listRecordsOut{}, toolErrorf("VALIDATION_ERROR", "the 'type' filter requires 'name'")
 		}
 		if name != "" {
 			name = dnsops.NormalizeRecordName(name, zone)
 		}
-		records, err := ops.ListRecords(ctx, user, zone, name, in.Type)
+		records, err := ops.ListRecords(ctx, user, zone, name, rrType)
 		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, listRecordsOut{}, callTool("list_records", te, cause)
 		}
