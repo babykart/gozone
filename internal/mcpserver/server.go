@@ -43,6 +43,7 @@ func New(ops *dnsops.Service, cfg *config.MCPConfig, version string) http.Handle
 	}
 	registerResources(srv, ops)
 	registerPrompts(srv)
+	srv.AddReceivingMiddleware(recoverMiddleware)
 
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv

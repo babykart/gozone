@@ -602,6 +602,55 @@ func TestAPICreateRecord(t *testing.T) {
 	}
 }
 
+// TestAPICreateRecord_EmptyRecordsRejected pins the write-path invariant: an
+// RRSet submission with zero records is invalid (removing an RRSet is the
+// DELETE method's job) and must be rejected up front, before any PowerDNS
+// call.
+func TestAPICreateRecord_EmptyRecordsRejected(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for an empty-records submission, got %s %s", r.Method, r.URL.Path)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "at least one record") {
+		t.Errorf("error must explain the empty-records rejection, got %s", w.Body.String())
+	}
+}
+
+// TestAPIUpdateRecord_EmptyRecordsRejected is the REPLACE counterpart: PUT
+// with zero records used to silently delete the RRSet while logging an
+// "update"; it must now be rejected with 400 (DELETE is the explicit path).
+func TestAPIUpdateRecord_EmptyRecordsRejected(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for an empty-records submission, got %s %s", r.Method, r.URL.Path)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "at least one record") {
+		t.Errorf("error must explain the empty-records rejection, got %s", w.Body.String())
+	}
+}
+
 // TestAPICreateRecord_MergesWithExisting is a merge-semantics regression test:
 // POST /records must append to an existing RRSet (preserving sibling records)
 // instead of silently replacing it. The mock serves an existing A record on

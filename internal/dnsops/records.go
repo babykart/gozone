@@ -141,9 +141,11 @@ func RRSetSnapshot(rrset *models.RRSet) string {
 }
 
 // ValidateRecordSet validates and canonicalises an RRSet for a write: the
-// type (uppercase + whitelist), the TTL (non-negative), the name (syntax)
-// and each record's content and priority (bare form — priority carried in
-// RecordInfo.Priority). It canonicalises the name against the zone but does
+// type (uppercase + whitelist), the TTL (non-negative), a non-empty record
+// list (an RRSet with zero records is not a writable object — deleting one
+// is a separate operation), the name (syntax) and each record's content and
+// priority (bare form — priority carried in RecordInfo.Priority). It
+// canonicalises the name against the zone but does
 // NOT normalise record content; PrepareRecordContent runs later so a
 // merge-then-normalise write path keeps each record's priority in the
 // Priority field until the single final pass (PrepareRecordContent is not
@@ -155,6 +157,9 @@ func ValidateRecordSet(rrset *models.RRSet, zoneID string) error {
 	}
 	if rrset.TTL < 0 {
 		return fmt.Errorf("ttl must be a non-negative integer")
+	}
+	if len(rrset.Records) == 0 {
+		return fmt.Errorf("at least one record is required; use delete_record / DELETE to remove an RRSet")
 	}
 	if err := validators.ValidateRecordName(rrset.Name); err != nil {
 		return err
@@ -267,7 +272,12 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 	}
 
 	// Audit trail: before/after snapshots; old is empty when the RRSet is
-	// brand new.
+	// brand new. The one-liner carries the last record's content, read
+	// defensively so a malformed submission can never panic the write path.
+	lastContent := ""
+	if n := len(rrset.Records); n > 0 {
+		lastContent = rrset.Records[n-1].Content
+	}
 	var oldSnapshot *models.RRSet
 	if foundExisting {
 		oldSnapshot = &existingRRSet
@@ -276,7 +286,7 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 		UserID:   userIDOf(user),
 		ZoneID:   zoneID,
 		Action:   "create_record",
-		Details:  fmt.Sprintf("Created %s record %s -> %s via %s", rrset.Type, rrset.Name, rrset.Records[len(rrset.Records)-1].Content, src.Label()),
+		Details:  fmt.Sprintf("Created %s record %s -> %s via %s", rrset.Type, rrset.Name, lastContent, src.Label()),
 		OldValue: RRSetSnapshot(oldSnapshot),
 		NewValue: RRSetSnapshot(&rrset),
 	}); err != nil {

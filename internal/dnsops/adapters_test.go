@@ -278,7 +278,8 @@ func TestValidateRecordSet_Rejections(t *testing.T) {
 	}{
 		{"unknown type", models.RRSet{Name: "www.example.", Type: "BOGUS"}, "record type"},
 		{"negative ttl", models.RRSet{Name: "www.example.", Type: "A", TTL: -1}, "ttl"},
-		{"invalid name", models.RRSet{Name: "not a name", Type: "A"}, "invalid characters"},
+		{"empty records", models.RRSet{Name: "www.example.", Type: "A", TTL: 3600}, "at least one record"},
+		{"invalid name", models.RRSet{Name: "not a name", Type: "A", Records: []models.RecordInfo{{Content: "1.2.3.4"}}}, "invalid characters"},
 		{"invalid content", models.RRSet{Name: "www.example.", Type: "A", Records: []models.RecordInfo{{Content: "not-an-ip"}}}, "IPv4"},
 	}
 	for _, c := range cases {

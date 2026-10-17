@@ -315,6 +315,95 @@ func TestCreateRecord_WritesNormalizeMergeAndAudit(t *testing.T) {
 	}
 }
 
+// TestWriteTools_EmptyRecordsRejected pins the regression where a write tool
+// called with records: [] panicked inside the SDK's goroutine (crashing the
+// whole process) when no RRSet existed yet: the empty list must now be
+// rejected at validation, and the session must stay usable afterwards.
+func TestWriteTools_EmptyRecordsRejected(t *testing.T) {
+	session, db := newMCPTestEnv(t, false, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for an empty-records submission, got %s %s", r.Method, r.URL.Path)
+	})
+	grantZoneToMCPUser(t, db, "example.com.")
+	ctx := context.Background()
+
+	for _, tool := range []string{"create_record", "update_record"} {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: tool,
+			Arguments: map[string]any{
+				"zone": "example.com.", "name": "www", "type": "A", "ttl": 300,
+				"records": []map[string]any{},
+			},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s with records: [] must be a tool error, got %+v", tool, res.Content)
+		}
+		if text := resultText(res); !strings.HasPrefix(text, "VALIDATION_ERROR:") {
+			t.Fatalf("%s error text must carry the stable VALIDATION_ERROR code, got %q", tool, text)
+		}
+	}
+
+	// The session (and with it the process) must have survived the calls.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_record_types"})
+	if err != nil {
+		t.Fatalf("session must remain usable: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_record_types after rejection failed: %s", resultText(res))
+	}
+}
+
+// TestRecoverMiddleware_KeepsServerAlive proves the receiving-side recover
+// middleware: a panicking tool handler must come back as an isError result
+// with the stable INTERNAL_ERROR code, and the server must keep answering
+// subsequent calls. The SDK runs handlers in its own goroutines, so without
+// this middleware the panic would terminate the process.
+func TestRecoverMiddleware_KeepsServerAlive(t *testing.T) {
+	type testIn struct{}
+	type testOut struct {
+		Message string `json:"message"`
+	}
+	srv := mcp.NewServer(&mcp.Implementation{Name: "gozone-test", Version: "test"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "boom", Title: "Boom"}, func(_ context.Context, _ *mcp.CallToolRequest, _ testIn) (*mcp.CallToolResult, testOut, error) {
+		panic("kaboom")
+	})
+	mcp.AddTool(srv, &mcp.Tool{Name: "ping", Title: "Ping"}, func(_ context.Context, _ *mcp.CallToolRequest, _ testIn) (*mcp.CallToolResult, testOut, error) {
+		return &mcp.CallToolResult{}, testOut{Message: "pong"}, nil
+	})
+	srv.AddReceivingMiddleware(recoverMiddleware)
+
+	httpSrv := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{Stateless: true}))
+	t.Cleanup(httpSrv.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "recover-test-client", Version: "1.0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: httpSrv.URL}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "boom"})
+	if err != nil {
+		t.Fatalf("CallTool boom: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("panicking tool must return an isError result, got %+v", res.Content)
+	}
+	if text := resultText(res); !strings.HasPrefix(text, "INTERNAL_ERROR:") {
+		t.Fatalf("error text must carry the stable INTERNAL_ERROR code, got %q", text)
+	}
+
+	res, err = session.CallTool(context.Background(), &mcp.CallToolParams{Name: "ping"})
+	if err != nil {
+		t.Fatalf("server must keep answering after a recovered panic: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("ping after recovered panic failed: %s", resultText(res))
+	}
+}
+
 func TestCreateZone_NonAdminForbidden(t *testing.T) {
 	session, db := newMCPTestEnv(t, false, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("no PowerDNS call expected for a refused tool call, got %s %s", r.Method, r.URL.Path)
