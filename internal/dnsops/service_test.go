@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/models"
@@ -398,4 +400,77 @@ func TestZoneLocks_SharedInstance(t *testing.T) {
 	}
 	unlock()
 	<-done
+}
+
+// TestRecordWrites_SerializedPerZone pins the per-zone serialization of the
+// concurrent write paths: a REPLACE or DELETE landing in the middle of a
+// concurrent append's fetch→merge→PATCH cycle would be overwritten by that
+// merge (or resurrect the deleted record). Holding the per-zone lock across
+// each write's whole fetch→PATCH sequence makes every writer's GET and PATCH
+// adjacent — the mock widens the fetch window so an unlocked writer would
+// interleave.
+func TestRecordWrites_SerializedPerZone(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			// Widen the fetch window: without the lock, another writer's
+			// GET slips in before this one's PATCH.
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			events = append(events, "GET")
+			mu.Unlock()
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
+		mu.Lock()
+		events = append(events, "PATCH")
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer srv.Close()
+	db := testutil.NewTestDB(t)
+	s := New(db, client)
+	ctx := context.Background()
+	admin := &models.User{ID: 1, Role: "admin"}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_ = s.CreateRecord(ctx, admin, "example.", models.RRSet{
+			Name: "a.example.", Type: "A", TTL: 300,
+			Records: []models.RecordInfo{{Content: "192.0.2.1"}},
+		}, SourceAPI)
+	}()
+	go func() {
+		defer wg.Done()
+		rrset := models.RRSet{Name: "b.example.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "192.0.2.2"}}}
+		if err := PrepareValidatedRecordSet(&rrset, "example."); err != nil {
+			t.Errorf("prepare: %v", err)
+			return
+		}
+		_ = s.UpdateRecord(ctx, admin, "example.", rrset, SourceAPI)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.DeleteRecord(ctx, admin, "example.", "c.example.", "A", SourceAPI)
+	}()
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 6 {
+		t.Fatalf("expected 6 upstream calls (3 writers x fetch+write), got %v", events)
+	}
+	for i, ev := range events {
+		want := "GET"
+		if i%2 == 1 {
+			want = "PATCH"
+		}
+		if ev != want {
+			t.Fatalf("write paths must serialize per zone (each fetch immediately followed by its write), got %v", events)
+		}
+	}
 }

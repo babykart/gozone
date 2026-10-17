@@ -299,12 +299,19 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 // idempotent). rrset must already be validated and fully normalised
 // (PrepareValidatedRecordSet); this method resolves the TTL (inheriting the
 // replaced RRSet's when unspecified), takes the audit before-image, PATCHes
-// and logs. Like the REST PUT it does NOT hold the per-zone lock — the
-// replace is a single PATCH, not a read-modify-write.
+// and logs. The whole snapshot→PATCH sequence holds the per-zone lock: the
+// replace reads state (before-image, TTL inheritance) before writing, so a
+// concurrent append's fetch→merge→PATCH cycle could otherwise rewrite the
+// pre-replace state and silently lose the update.
 func (s *Service) UpdateRecord(ctx context.Context, user *models.User, zoneID string, rrset models.RRSet, src Source) error {
 	if err := s.authorizeZone(ctx, user, zoneID); err != nil {
 		return err
 	}
+
+	// Serialize the snapshot→PATCH sequence against every other read-modify-
+	// write on the same zone (create, delete, web and REST flows) — the lock
+	// is shared across transports.
+	defer s.locks.Lock(zoneID)()
 
 	// Best-effort snapshot of the RRSet being replaced, for the audit trail.
 	// A fetch failure (or a brand-new RRSet) leaves old_value empty — the
@@ -344,11 +351,15 @@ func (s *Service) UpdateRecord(ctx context.Context, user *models.User, zoneID st
 
 // DeleteRecord deletes a record (RRSet) from a zone by canonical name and
 // type, taking the audit before-image first (best-effort, like the other
-// write paths).
+// write paths). The snapshot→PATCH sequence holds the per-zone lock like
+// UpdateRecord: a concurrent append whose fetch happened before the delete
+// would otherwise re-PATCH the deleted record back into existence.
 func (s *Service) DeleteRecord(ctx context.Context, user *models.User, zoneID, name, rrType string, src Source) error {
 	if err := s.authorizeZone(ctx, user, zoneID); err != nil {
 		return err
 	}
+
+	defer s.locks.Lock(zoneID)()
 
 	// Best-effort snapshot of the RRSet before deletion, for the audit trail.
 	var oldRRSet *models.RRSet
