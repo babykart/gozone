@@ -39,7 +39,7 @@ type Config struct {
 }
 
 // MCPConfig configures the MCP (Model Context Protocol) server that exposes
-// GoZone's DNS operations to AI agents over Streamable HTTP (MCP_PLAN.md).
+// GoZone's DNS operations to AI agents over Streamable HTTP.
 //
 // The endpoint reuses the /api/v1 authentication stack (API key in the
 // Authorization header), the shared rate limiters and the dnsops service

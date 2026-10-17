@@ -8,7 +8,7 @@
 //
 // The REST handlers in internal/handlers call this service; the web handlers
 // still run their own flows but share the moved helpers (normalisation,
-// locks, audit) through thin wrappers. MCP_PLAN.md §2 is the design brief.
+// locks, audit) through thin wrappers.
 package dnsops
 
 import (

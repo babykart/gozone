@@ -13,13 +13,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// maxResourceBytes caps the body of a resource response (MCP_PLAN.md §4:
-// limit output sizes — an export of a very large zone must not be streamed
+// maxResourceBytes caps the body of a resource response (limit output
+// sizes — an export of a very large zone must not be streamed
 // unbounded into an agent's context). The truncation is explicit: a banner
 // at the end names the exact REST endpoint serving the full export.
 const maxResourceBytes = 1 << 20 // 1 MiB
 
-// registerResources adds the MCP resources (MCP_PLAN.md §3.2). Resources
+// registerResources adds the read-only MCP resources. Resources
 // are read-only, so they are registered regardless of mcp.read_only (which
 // gates the write TOOLS only).
 func registerResources(srv *mcp.Server, ops *dnsops.Service) {

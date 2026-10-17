@@ -2,8 +2,7 @@
 // subcommand today is `stdio`, a transport bridge for MCP clients that only
 // speak the stdio transport. The bridge contains NO business logic: it
 // relays line-delimited JSON-RPC from stdin to a remote GoZone `/mcp`
-// endpoint over Streamable HTTP and writes the responses back on stdout
-// (MCP_PLAN.md Phase 5).
+// endpoint over Streamable HTTP and writes the responses back on stdout.
 package cmd
 
 import (

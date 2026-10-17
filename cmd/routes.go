@@ -91,7 +91,7 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 // stack as /api/v1: pre-auth IP rate limit → API-key authentication →
 // per-key rate limit. The SAME limiter instances must be passed as the /api
 // group uses, so a client alternating REST and MCP requests draws from one
-// budget instead of doubling it (MCP_PLAN.md §4).
+// budget instead of doubling it.
 //
 // The endpoint is intentionally NOT under the CSRF middleware: MCP requests
 // authenticate by header (API key), not by cookie — and the web session

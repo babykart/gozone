@@ -4,7 +4,7 @@
 // service layer: every guarantee — API-key authentication (mounted by the
 // caller, same stack as /api/v1), zone authorization, admin gates, per-zone
 // write locks, content normalisation, audit trail, rate limiting — is
-// enforced by the same code the REST API uses (MCP_PLAN.md).
+// enforced by the same code the REST API uses.
 //
 // The server is stateless (StreamableHTTPOptions.Stateless): every HTTP
 // request is authenticated independently by its API key, which keeps the

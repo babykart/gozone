@@ -9,7 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// registerPrompts adds the MCP prompts (MCP_PLAN.md §3.3): ready-made
+// registerPrompts adds the MCP prompts: ready-made
 // instruction templates that guide an agent through a DNS review or a safe
 // record replacement using the tools above. Prompts carry no data of their
 // own — every fact they need is fetched through the tools, under the key's
