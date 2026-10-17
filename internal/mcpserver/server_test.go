@@ -496,24 +496,35 @@ func TestOriginGuard(t *testing.T) {
 
 func TestMapServiceError(t *testing.T) {
 	cases := []struct {
-		name     string
-		err      error
-		wantCode string
+		name         string
+		err          error
+		notFoundCode string
+		wantCode     string
 	}{
-		{"forbidden", dnsops.ErrForbidden, "FORBIDDEN"},
-		{"zone fetch not found", &dnsops.StageError{Stage: dnsops.StageFetch, Err: pdns.ErrNotFound}, "ZONE_NOT_FOUND"},
-		{"patch not found", &dnsops.StageError{Stage: dnsops.StagePatch, Err: pdns.ErrNotFound}, "RECORD_NOT_FOUND"},
-		{"zone access fault", &dnsops.StageError{Stage: dnsops.StageZoneAccess, Err: pdns.ErrNotFound}, "INTERNAL_ERROR"},
+		{"forbidden", dnsops.ErrForbidden, codeZoneNotFound, "FORBIDDEN"},
+		{"zone fetch not found", &dnsops.StageError{Stage: dnsops.StageFetch, Err: pdns.ErrNotFound}, codeZoneNotFound, "ZONE_NOT_FOUND"},
+		{"patch not found", &dnsops.StageError{Stage: dnsops.StagePatch, Err: pdns.ErrNotFound}, codeRecordNotFound, "RECORD_NOT_FOUND"},
+		{"zone access fault", &dnsops.StageError{Stage: dnsops.StageZoneAccess, Err: pdns.ErrNotFound}, codeZoneNotFound, "INTERNAL_ERROR"},
+		// Zone operations (GetZone, ListRecords, ListZones, CreateZone,
+		// DeleteZone) return the typed PowerDNS error unwrapped: it must
+		// map to the same codes as the StageError-wrapped record paths,
+		// with notFoundCode as the per-tool default.
+		{"unwrapped not found, zone default", pdns.ErrNotFound, codeZoneNotFound, "ZONE_NOT_FOUND"},
+		{"unwrapped not found, record default", pdns.ErrNotFound, codeRecordNotFound, "RECORD_NOT_FOUND"},
+		{"unwrapped conflict", pdns.ErrConflict, codeZoneNotFound, "CONFLICT"},
+		{"unwrapped validation", pdns.ErrValidation, codeZoneNotFound, "VALIDATION_ERROR"},
+		{"unwrapped unauthorized", pdns.ErrUnauthorized, codeZoneNotFound, "UPSTREAM_AUTH_ERROR"},
+		{"unwrapped lua disabled", pdns.ErrLuaUpdatesDisabled, codeZoneNotFound, "LUA_UPDATES_DISABLED"},
 	}
 	for _, c := range cases {
-		te, _ := mapServiceError(c.err)
+		te, _ := mapServiceError(c.err, c.notFoundCode)
 		if te == nil || te.code != c.wantCode {
 			t.Errorf("%s: got %v, want code %s", c.name, te, c.wantCode)
 		}
 	}
 	// Unknown errors keep their cause for server-side logging while the
 	// client sees a generic internal error.
-	te, cause := mapServiceError(errors.New("boom: dsn=secret"))
+	te, cause := mapServiceError(errors.New("boom: dsn=secret"), codeZoneNotFound)
 	if te.code != "INTERNAL_ERROR" {
 		t.Errorf("unknown error must map to INTERNAL_ERROR, got %s", te.code)
 	}
@@ -522,5 +533,49 @@ func TestMapServiceError(t *testing.T) {
 	}
 	if cause == nil {
 		t.Error("unknown error must return its cause for logging")
+	}
+}
+
+// TestZoneTools_UnwrappedPDNSErrorsMapToStableCodes pins the REST↔MCP error
+// parity for zone operations end to end: the service returns the PowerDNS
+// error unwrapped there, and a 404/409 from the mock must surface as
+// ZONE_NOT_FOUND/CONFLICT (the codes the migrate_record prompt tells agents
+// to branch on), not INTERNAL_ERROR.
+func TestZoneTools_UnwrappedPDNSErrorsMapToStableCodes(t *testing.T) {
+	session, _ := newMCPTestEnvAs(t, false, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPost: // create_zone
+			w.WriteHeader(http.StatusConflict)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}, "admin")
+	ctx := context.Background()
+
+	cases := []struct {
+		tool     string
+		args     map[string]any
+		wantCode string
+	}{
+		{"get_zone", map[string]any{"zone": "missing.example."}, "ZONE_NOT_FOUND"},
+		{"delete_zone", map[string]any{"zone": "missing.example."}, "ZONE_NOT_FOUND"},
+		{"create_zone", map[string]any{"name": "conflict.example.com", "nameservers": []string{"ns1.example.com"}}, "CONFLICT"},
+	}
+	for _, c := range cases {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: c.tool, Arguments: c.args})
+		if err != nil {
+			t.Fatalf("%s: %v", c.tool, err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s must be a tool error, got %+v", c.tool, res.Content)
+		}
+		if text := resultText(res); !strings.HasPrefix(text, c.wantCode+":") {
+			t.Fatalf("%s error text must carry the stable %s code, got %q", c.tool, c.wantCode, text)
+		}
 	}
 }

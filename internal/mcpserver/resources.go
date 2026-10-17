@@ -119,7 +119,7 @@ func truncateResource(text, zone, format string) string {
 // errors — the SDK converts the returned error into a JSON-RPC error whose
 // message carries the stable code and no internal detail.
 func resourceError(what, zone string, err error) error {
-	te, cause := mapServiceError(err)
+	te, cause := mapServiceError(err, codeZoneNotFound)
 	if te == nil {
 		return err
 	}

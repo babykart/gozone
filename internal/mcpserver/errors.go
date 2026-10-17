@@ -23,9 +23,11 @@ import (
 // Stable tool-error codes. They reuse the REST API's ErrCode* vocabulary so
 // an operator reading logs from both transports sees one set of codes.
 const (
-	codeUnauthorized = "UNAUTHORIZED"
-	codeForbidden    = "FORBIDDEN"
-	codeInternal     = "INTERNAL_ERROR"
+	codeUnauthorized   = "UNAUTHORIZED"
+	codeForbidden      = "FORBIDDEN"
+	codeInternal       = "INTERNAL_ERROR"
+	codeZoneNotFound   = "ZONE_NOT_FOUND"
+	codeRecordNotFound = "RECORD_NOT_FOUND"
 )
 
 // toolError is a tool-level error: the MCP client receives its Error() text
@@ -45,10 +47,17 @@ func toolErrorf(code, format string, args ...any) *toolError {
 }
 
 // mapServiceError translates a dnsops service error into a tool error with a
-// stable code. Unknown causes collapse to a generic INTERNAL_ERROR: the
-// client must not see internals; the cause is returned so the caller can log
-// it server-side.
-func mapServiceError(err error) (*toolError, error) {
+// stable code, mirroring the REST API's pdnsErrorStatus(err, notFoundCode):
+// typed PowerDNS errors are recognised whether or not the service wrapped
+// them in a StageError, so both transports report the same codes (a missing
+// zone on get_zone/delete_zone is ZONE_NOT_FOUND, a conflicting create is
+// CONFLICT, ...). notFoundCode is the caller's default for ErrNotFound —
+// zone-scoped tools pass codeZoneNotFound, record-write tools pass
+// codeRecordNotFound (a StageFetch 404 is always a missing zone: the fetch
+// stage addresses the zone itself). Unknown causes collapse to a generic
+// INTERNAL_ERROR: the client must not see internals; the cause is returned
+// so the caller can log it server-side.
+func mapServiceError(err error, notFoundCode string) (*toolError, error) {
 	var se *dnsops.StageError
 	switch {
 	case err == nil:
@@ -58,16 +67,16 @@ func mapServiceError(err error) (*toolError, error) {
 	case errors.As(err, &se) && se.Stage == dnsops.StageZoneAccess:
 		return &toolError{code: codeInternal, msg: "zone access check failed; try again later"}, nil
 	case errors.As(err, &se) && se.Stage == dnsops.StageFetch && errors.Is(se.Err, pdns.ErrNotFound):
-		return &toolError{code: "ZONE_NOT_FOUND", msg: "zone not found"}, nil
-	case errors.As(err, &se) && errors.Is(se.Err, pdns.ErrNotFound):
-		return &toolError{code: "RECORD_NOT_FOUND", msg: "record not found"}, nil
-	case errors.As(err, &se) && errors.Is(se.Err, pdns.ErrValidation):
+		return &toolError{code: codeZoneNotFound, msg: "zone not found"}, nil
+	case errors.Is(err, pdns.ErrNotFound):
+		return &toolError{code: notFoundCode, msg: "not found"}, nil
+	case errors.Is(err, pdns.ErrValidation):
 		return &toolError{code: "VALIDATION_ERROR", msg: "PowerDNS rejected the change as invalid"}, nil
-	case errors.As(err, &se) && errors.Is(se.Err, pdns.ErrConflict):
+	case errors.Is(err, pdns.ErrConflict):
 		return &toolError{code: "CONFLICT", msg: "PowerDNS reported a conflict for the requested change"}, nil
-	case errors.As(err, &se) && errors.Is(se.Err, pdns.ErrUnauthorized):
+	case errors.Is(err, pdns.ErrUnauthorized):
 		return &toolError{code: "UPSTREAM_AUTH_ERROR", msg: "GoZone's PowerDNS credentials are invalid; contact the administrator"}, nil
-	case errors.As(err, &se) && errors.Is(se.Err, pdns.ErrLuaUpdatesDisabled):
+	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return &toolError{code: "LUA_UPDATES_DISABLED", msg: "LUA record updates are disabled on the PowerDNS server"}, nil
 	default:
 		// Internal/unexpected: generic message to the client, full cause

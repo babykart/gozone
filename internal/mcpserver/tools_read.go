@@ -49,7 +49,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, listZonesOut{}, terr
 		}
 		zones, err := ops.ListZones(ctx, user)
-		if te, cause := mapServiceError(err); te != nil {
+		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, listZonesOut{}, callTool("list_zones", te, cause)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d zone(s) visible", len(zones))}}}, listZonesOut{Zones: zones}, nil
@@ -73,7 +73,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, getZoneOut{}, terr
 		}
 		zone, err := ops.GetZone(ctx, user, in.Zone)
-		if te, cause := mapServiceError(err); te != nil {
+		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, getZoneOut{}, callTool("get_zone", te, cause)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: zone.Name + " (" + zone.Kind + ")"}}}, getZoneOut{Zone: *zone}, nil
@@ -106,7 +106,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			name = dnsops.NormalizeRecordName(name, in.Zone)
 		}
 		records, err := ops.ListRecords(ctx, user, in.Zone, name, in.Type)
-		if te, cause := mapServiceError(err); te != nil {
+		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, listRecordsOut{}, callTool("list_records", te, cause)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d record set(s)", len(records))}}}, listRecordsOut{Records: records}, nil
@@ -129,7 +129,7 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, getStatsOut{}, terr
 		}
 		stats, zoneCount, err := ops.Stats(ctx, user)
-		if te, cause := mapServiceError(err); te != nil {
+		if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 			return nil, getStatsOut{}, callTool("get_stats", te, cause)
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%d stat item(s), %d zone(s) visible", len(stats), zoneCount)}}}, getStatsOut{Statistics: stats, ZoneCount: zoneCount}, nil
@@ -185,13 +185,13 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 		// grant (fail-closed) before any PowerDNS call — same as the resource.
 		zoneInfo, err := ops.GetZone(ctx, user, in.Zone)
 		if err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
 			}
 		}
 		records, err := ops.ListRecords(ctx, user, in.Zone, "", "")
 		if err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, exportZoneOut{}, callTool("export_zone", te, cause)
 			}
 		}

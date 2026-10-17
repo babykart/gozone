@@ -73,7 +73,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
 		if err := ops.CreateRecord(ctx, user, in.Zone, rrset, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("create_record", te, cause)
 			}
 		}
@@ -110,7 +110,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}
 		if err := ops.UpdateRecord(ctx, user, in.Zone, rrset, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("update_record", te, cause)
 			}
 		}
@@ -147,7 +147,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		}
 		name := dnsops.NormalizeRecordName(in.Name, in.Zone)
 		if err := ops.DeleteRecord(ctx, user, in.Zone, name, rrType, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeRecordNotFound); te != nil {
 				return nil, writeOut{}, callTool("delete_record", te, cause)
 			}
 		}
@@ -180,7 +180,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		}
 		zone, err := ops.CreateZone(ctx, user, req, dnsops.SourceMCP)
 		if err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, createZoneOut{}, callTool("create_zone", te, cause)
 			}
 		}
@@ -205,7 +205,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 			return nil, writeOut{}, terr
 		}
 		if err := ops.DeleteZone(ctx, user, in.Zone, dnsops.SourceMCP); err != nil {
-			if te, cause := mapServiceError(err); te != nil {
+			if te, cause := mapServiceError(err, codeZoneNotFound); te != nil {
 				return nil, writeOut{}, callTool("delete_zone", te, cause)
 			}
 		}
