@@ -967,7 +967,11 @@ details summary {
 .records-table .col-name {
     min-width: 10rem;
     max-width: 18rem;
-    white-space: nowrap;
+    /* Long record names must wrap inside the cell; nowrap made them
+       overflow into the Type/TTL columns (max-width is ignored by
+       auto table layout when min-content exceeds it). */
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .records-table .col-prio {
