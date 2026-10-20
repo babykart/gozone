@@ -50,7 +50,7 @@ func seedAPIKey(t *testing.T, db *database.DB, userID int64) string {
 	}
 	key := "gz-test-" + hex.EncodeToString(raw)
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, 'test key')`,
+		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, 'test key', 'mcp:write')`,
 		userID, hashKey(key)); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func newMCPTestEnvAs(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandl
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
 		r.Handle("/mcp", handler)
 	})
 	httpSrv := httptest.NewServer(r)
@@ -523,7 +523,7 @@ func TestUnauthenticatedRequestRejected(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
 		r.Handle("/mcp", handler)
 	})
 	srv := httptest.NewServer(r)

@@ -415,5 +415,10 @@ func (p *postgresDialect) Migrations() []string {
 		// write amplification.
 		`DROP INDEX IF EXISTS idx_api_keys_key_hash`,
 		`DROP INDEX IF EXISTS idx_external_identities_issuer_subject`,
+		// Scoped API keys. The DEFAULT backfills every pre-existing key as
+		// api:write, preserving its REST behaviour in one statement; those
+		// keys are no longer accepted on the MCP surface. No index: the auth
+		// lookup goes through the UNIQUE key_hash, never through scope.
+		`ALTER TABLE api_keys ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'api:write'`,
 	}
 }

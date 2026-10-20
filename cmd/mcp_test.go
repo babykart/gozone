@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/mcpserver"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
 )
 
@@ -203,15 +203,11 @@ func TestStdioBridge_EndToEndAgainstRealServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "bridge-" + hex.EncodeToString(raw)
-	hash := sha256.Sum256([]byte(key))
-	if _, err := db.Exec(`INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, 'bridge test')`,
-		userID, hex.EncodeToString(hash[:])); err != nil {
-		t.Fatal(err)
-	}
+	testutil.SeedTestAPIKeyScope(t, db, userID, key, nil, models.ScopeMCPWrite)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
 		r.Handle("/mcp", mcpserver.New(dnsops.New(db, pdnsClient), &config.MCPConfig{Enabled: true, Path: "/mcp", ReadOnly: true}, "test"))
 	})
 	httpSrv := httptest.NewServer(r)

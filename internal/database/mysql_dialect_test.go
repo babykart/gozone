@@ -546,3 +546,29 @@ func TestMySQLIntegration_HitRateLimit(t *testing.T) {
 		t.Errorf("new window must be allowed (err=%v allowed=%v)", err, allowed)
 	}
 }
+
+// TestMySQLIntegration_APIKeyScopeColumnBackfill verifies the scoped-API-key
+// migration on MySQL: the scope column exists and an INSERT that omits it
+// reads back the DEFAULT 'api:write' (the pre-migration key backfill).
+func TestMySQLIntegration_APIKeyScopeColumnBackfill(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+
+	uid := seedIntegrationUser(t, db, "scopemysql")
+
+	if _, err := db.Conn.Exec(
+		"INSERT INTO api_keys (user_id, key_hash) VALUES (?, ?)", uid, "hash-no-scope",
+	); err != nil {
+		t.Fatalf("insert api key without scope: %v", err)
+	}
+
+	var scope string
+	if err := db.Conn.QueryRow(
+		"SELECT scope FROM api_keys WHERE key_hash = 'hash-no-scope'",
+	).Scan(&scope); err != nil {
+		t.Fatalf("select scope: %v", err)
+	}
+	if scope != "api:write" {
+		t.Errorf("expected scope default 'api:write', got %q", scope)
+	}
+}

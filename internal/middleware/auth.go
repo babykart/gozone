@@ -37,6 +37,11 @@ const (
 	// UserContextKey is the context key used to store the authenticated User pointer
 	// in the request context. Use GetUser(r) to retrieve the user.
 	UserContextKey contextKey = "user"
+	// APIKeyScopeContextKey is the context key used to store the scope of the
+	// API key that authenticated the request. It is set by APIKeyAuth only;
+	// session-cookie requests carry no scope. Use APIKeyScopeFromContext to
+	// retrieve it.
+	APIKeyScopeContextKey contextKey = "api_key_scope"
 )
 
 // Claims represents the JWT claims for a session.
@@ -415,7 +420,8 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 	})
 }
 
-// APIKeyAuth returns a middleware that validates API key tokens for REST API requests.
+// APIKeyAuth returns a middleware that validates API key tokens for the given
+// transport surface (models.SurfaceAPI for /api/v1, models.SurfaceMCP for /mcp).
 //
 // The API key can be provided via:
 //  1. X-API-Key header
@@ -427,18 +433,22 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 // tokens_valid_after credential-rotation cutoff, return 401 as well
 // ("api_key_invalidated" for the latter) — an API key must not outlive the
 // credential event that should have revoked it.
-// The authenticated user is stored in the request context via UserContextKey
-// and the API key's last_used_at timestamp is recorded — coarsened to at most
-// one write per key per minute (see apiKeyLastUsedTracker), since the column
-// is informational.
-func APIKeyAuth(db *database.DB) func(http.Handler) http.Handler {
-	return apiKeyAuth(db, newAPIKeyLastUsedTracker())
+// After those validity controls, the key's stored scope is checked: an
+// unreadable scope fails closed with 401, and a key whose scope belongs to
+// another surface returns HTTP 403 "API_KEY_SCOPE_MISMATCH" — a key only ever
+// works on its own surface, so a REST key cannot drive the MCP and vice versa.
+// The authenticated user is stored in the request context via UserContextKey,
+// the key's scope via APIKeyScopeContextKey, and the API key's last_used_at
+// timestamp is recorded — coarsened to at most one write per key per minute
+// (see apiKeyLastUsedTracker), since the column is informational.
+func APIKeyAuth(db *database.DB, surface models.APIKeySurface) func(http.Handler) http.Handler {
+	return apiKeyAuth(db, newAPIKeyLastUsedTracker(), surface)
 }
 
 // apiKeyAuth is APIKeyAuth with an explicit last_used_at tracker, so tests
 // can drive the write-coarsening (age entries past the interval, observe the
 // skipped/refreshed writes).
-func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handler) http.Handler {
+func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.APIKeySurface) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("X-API-Key")
@@ -454,11 +464,12 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			keyHash := hashAPIKey(authHeader)
 
 			var userID int64
+			var scopeStr string
 			var createdAt, expiresAt sql.NullTime
 			err := db.QueryRowContext(r.Context(),
-				"SELECT user_id, created_at, expires_at FROM api_keys WHERE key_hash = ?",
+				"SELECT user_id, scope, created_at, expires_at FROM api_keys WHERE key_hash = ?",
 				keyHash,
-			).Scan(&userID, &createdAt, &expiresAt)
+			).Scan(&userID, &scopeStr, &createdAt, &expiresAt)
 
 			if err != nil {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
@@ -498,6 +509,21 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 				return
 			}
 
+			// Scope control, ordered after every validity control (so an
+			// expired key still answers API_KEY_EXPIRED) and before the
+			// last_used_at touch (so a refused usage does not count as use).
+			// An unreadable scope fails closed: the row was written by
+			// something that bypassed the parse allow-list.
+			scope, ok := models.ParseAPIKeyScope(scopeStr)
+			if !ok {
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+				return
+			}
+			if scope.Surface() != surface {
+				writeAPIErrorEnvelope(w, http.StatusForbidden, "API_KEY_SCOPE_MISMATCH", "api_key_wrong_surface")
+				return
+			}
+
 			// Record last use only once the key has authenticated a valid,
 			// enabled user: updating it earlier bumped last_used_at for
 			// orphaned keys (user deleted) and disabled-user keys,
@@ -507,9 +533,33 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker) func(http.Handl
 			tracker.touch(r.Context(), db, keyHash)
 
 			ctx := context.WithValue(r.Context(), UserContextKey, user)
+			ctx = context.WithValue(ctx, APIKeyScopeContextKey, scope)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// RequireWriteScope is a middleware for the /api/v1 mount, placed after
+// APIKeyAuth: safe methods (GET/HEAD/OPTIONS) pass for every scope, while any
+// other method requires a scope with write permission. All /api/v1 writes are
+// POST/PUT/DELETE and all reads are GET, so the method alone reliably selects
+// the required level. Scopes only restrict: the role and zone authorization of
+// the handlers still apply on top.
+func RequireWriteScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		scope, ok := APIKeyScopeFromContext(r.Context())
+		// Missing scope (session request or wiring error) fails closed too.
+		if !ok || !scope.CanWrite() {
+			writeAPIErrorEnvelope(w, http.StatusForbidden, "INSUFFICIENT_SCOPE", "insufficient_scope")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func hashAPIKey(rawKey string) string {
@@ -560,6 +610,14 @@ func GetUser(r *http.Request) *models.User {
 		return nil
 	}
 	return user
+}
+
+// APIKeyScopeFromContext retrieves the scope of the API key that authenticated
+// the request, as stored by APIKeyAuth. The bool is false for session-cookie
+// requests and for any request that has not passed APIKeyAuth.
+func APIKeyScopeFromContext(ctx context.Context) (models.APIKeyScope, bool) {
+	scope, ok := ctx.Value(APIKeyScopeContextKey).(models.APIKeyScope)
+	return scope, ok
 }
 
 // loadUser fetches the user record needed by request-time middleware

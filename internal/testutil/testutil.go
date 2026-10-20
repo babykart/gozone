@@ -17,6 +17,7 @@ import (
 
 	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/database"
+	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/pdns"
 )
 
@@ -101,7 +102,17 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 //
 // The raw key is SHA-256 hashed before storage. Pass nil for expiresAt
 // to create a non-expiring key.
+//
+// The row omits scope so the column DEFAULT applies ('api:write'), which
+// keeps every REST-oriented caller valid against SurfaceAPI without touching
+// their signatures.
 func SeedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time) {
+	SeedTestAPIKeyScope(t, db, userID, rawKey, expiresAt, models.ScopeAPIWrite)
+}
+
+// SeedTestAPIKeyScope is SeedTestAPIKey with an explicit scope. Use it for
+// every test that exercises the MCP surface or a read-only REST key.
+func SeedTestAPIKeyScope(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time, scope models.APIKeyScope) {
 	t.Helper()
 	ctx := context.Background()
 	var expires interface{}
@@ -111,8 +122,8 @@ func SeedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, 
 	h := sha256.Sum256([]byte(rawKey))
 	keyHash := hex.EncodeToString(h[:])
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO api_keys (user_id, key_hash, description, expires_at) VALUES (?, ?, ?, ?)`,
-		userID, keyHash, "test key", expires,
+		`INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope) VALUES (?, ?, ?, ?, ?)`,
+		userID, keyHash, "test key", expires, scope,
 	)
 	if err != nil {
 		t.Fatal(err)

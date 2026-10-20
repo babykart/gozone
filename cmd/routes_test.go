@@ -14,6 +14,8 @@ import (
 	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 // hasMiddleware reports whether target appears in middlewares, comparing by
@@ -92,5 +94,70 @@ func TestMCPRouteMounting(t *testing.T) {
 	build(false).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`)))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("disabled /mcp: got %d, want 404 (route must not be mounted)", w.Code)
+	}
+}
+
+// TestAPIKeyScopeSurfaceRouting drives the production /api/v1 and /mcp
+// middleware composition with real API keys to lock the surface split:
+// an mcp:* key is refused on /api/v1, an api:* key on /mcp (both
+// API_KEY_SCOPE_MISMATCH), an api:read key passes GET but is stopped by
+// RequireWriteScope on POST (INSUFFICIENT_SCOPE), and api:write passes.
+// The IP limiter always runs before auth (TestAPIRateLimitRunsBeforeAuth
+// pins that order on this same composition).
+func TestAPIKeyScopeSurfaceRouting(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	userID := testutil.SeedTestUser(t, db, "routeruser", "pass", "user", true)
+	testutil.SeedTestAPIKeyScope(t, db, userID, "api-write-key", nil, models.ScopeAPIWrite)
+	testutil.SeedTestAPIKeyScope(t, db, userID, "api-read-key", nil, models.ScopeAPIRead)
+	testutil.SeedTestAPIKeyScope(t, db, userID, "mcp-read-key", nil, models.ScopeMCPRead)
+
+	ipLimiter := middleware.NewRateLimiter(300)
+	t.Cleanup(ipLimiter.Close)
+	keyLimiter := middleware.NewRateLimiter(100)
+	t.Cleanup(keyLimiter.Close)
+
+	r := chi.NewRouter()
+
+	// Same composition as the /api/v1 mount in buildRouter.
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(ipLimiter.Limit(middleware.ExtractIP))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceAPI))
+		r.Use(keyLimiter.Limit(middleware.ExtractAPIKey))
+		r.Use(middleware.RequireWriteScope)
+		r.Get("/zones", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		r.Post("/zones/{zone_id}/records", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	})
+
+	// Same wiring as mountMCPRoute (route gated by APIKeyAuth on SurfaceMCP).
+	cfg := config.DefaultConfig()
+	cfg.MCP.Enabled = true
+	mountMCPRoute(r, &handlers.Handler{Ops: dnsops.New(nil, nil)}, db, cfg, ipLimiter, keyLimiter)
+
+	do := func(method, path, key string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, strings.NewReader(`{}`))
+		req.Header.Set("X-API-Key", key)
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := do(http.MethodGet, "/api/v1/zones", "mcp-read-key"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "api_key_wrong_surface") {
+		t.Errorf("mcp key on /api/v1: got %d %s, want 403 api_key_wrong_surface", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodPost, "/mcp", "api-write-key"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "api_key_wrong_surface") {
+		t.Errorf("api key on /mcp: got %d %s, want 403 api_key_wrong_surface", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodPost, "/api/v1/zones/z1/records", "api-read-key"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "insufficient_scope") {
+		t.Errorf("api:read POST records: got %d %s, want 403 insufficient_scope", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodGet, "/api/v1/zones", "api-read-key"); w.Code != http.StatusOK {
+		t.Errorf("api:read GET zones: got %d (%s), want 200", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodGet, "/api/v1/zones", "api-write-key"); w.Code != http.StatusOK {
+		t.Errorf("api:write GET zones: got %d (%s), want 200", w.Code, w.Body.String())
 	}
 }

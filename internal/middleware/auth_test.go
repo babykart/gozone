@@ -330,6 +330,13 @@ func seedTestUser(t *testing.T, db *database.DB, username, role string, enabled 
 }
 
 func seedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time) {
+	seedTestAPIKeyScope(t, db, userID, rawKey, expiresAt, models.ScopeAPIWrite)
+}
+
+// seedTestAPIKeyScope seeds an API key with an explicit scope string, so tests
+// can exercise surface mismatch and unknown-scope rows (which bypass the parse
+// allow-list exactly like a hand-edited row would).
+func seedTestAPIKeyScope(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time, scope models.APIKeyScope) {
 	t.Helper()
 	var expires interface{}
 	if expiresAt != nil {
@@ -338,8 +345,8 @@ func seedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, 
 	h := sha256.Sum256([]byte(rawKey))
 	keyHash := hex.EncodeToString(h[:])
 	_, err := db.Exec(
-		`INSERT INTO api_keys (user_id, key_hash, description, expires_at) VALUES (?, ?, ?, ?)`,
-		userID, keyHash, "test key", expires,
+		`INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope) VALUES (?, ?, ?, ?, ?)`,
+		userID, keyHash, "test key", expires, scope,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +358,7 @@ func TestAPIKeyAuth_XAPIKeyHeader(t *testing.T) {
 	userID := seedTestUser(t, db, "apiuser", "user", true)
 	seedTestAPIKey(t, db, userID, "test-api-key", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -378,7 +385,7 @@ func TestAPIKeyAuth_AuthorizationBearer(t *testing.T) {
 	userID := seedTestUser(t, db, "beareruser", "user", true)
 	seedTestAPIKey(t, db, userID, "bearer-key", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -402,7 +409,7 @@ func TestAPIKeyAuth_XAPIKeyPrecedence(t *testing.T) {
 	userID := seedTestUser(t, db, "precedence", "user", true)
 	seedTestAPIKey(t, db, userID, "header-key", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -421,7 +428,7 @@ func TestAPIKeyAuth_XAPIKeyPrecedence(t *testing.T) {
 func TestAPIKeyAuth_MissingKey(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -439,7 +446,7 @@ func TestAPIKeyAuth_MissingKey(t *testing.T) {
 func TestAPIKeyAuth_UnknownKey(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -461,7 +468,7 @@ func TestAPIKeyAuth_ExpiredKey(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	seedTestAPIKey(t, db, userID, "expired-key", &past)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -482,7 +489,7 @@ func TestAPIKeyAuth_LastUsedAtUpdated(t *testing.T) {
 	userID := seedTestUser(t, db, "lastused", "user", true)
 	seedTestAPIKey(t, db, userID, "used-key", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -517,7 +524,7 @@ func TestAPIKeyAuth_DisabledUserDoesNotUpdateLastUsed(t *testing.T) {
 	userID := seedTestUser(t, db, "disableduser2", "user", false)
 	seedTestAPIKey(t, db, userID, "disabled-key2", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -555,7 +562,7 @@ func TestAPIKeyAuth_OrphanKeyDoesNotUpdateLastUsed(t *testing.T) {
 	}
 	db.Exec("PRAGMA foreign_keys = ON")
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -583,7 +590,7 @@ func TestAPIKeyAuth_DisabledUser(t *testing.T) {
 	userID := seedTestUser(t, db, "disableduser", "user", false)
 	seedTestAPIKey(t, db, userID, "disabled-key", nil)
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -613,7 +620,7 @@ func TestAPIKeyAuth_NonExistentUser(t *testing.T) {
 	}
 	db.Exec("PRAGMA foreign_keys = ON")
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1259,7 +1266,7 @@ func TestAPIKeyAuth_LastUsedWriteCoarsened(t *testing.T) {
 	seedTestAPIKey(t, db, userID, "coarse-key", nil)
 
 	tracker := newAPIKeyLastUsedTracker()
-	handler := apiKeyAuth(db, tracker)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := apiKeyAuth(db, tracker, models.SurfaceAPI)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -1405,7 +1412,7 @@ func TestAPIKeyAuth_ManuallyLockedOwnerDenied(t *testing.T) {
 		t.Fatalf("seed manual lock: %v", err)
 	}
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	reached := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -1460,7 +1467,7 @@ func TestAPIKeyAuth_CredentialRotationCutoffDenied(t *testing.T) {
 		t.Fatalf("bump cutoff: %v", err)
 	}
 
-	mw := APIKeyAuth(db)
+	mw := APIKeyAuth(db, models.SurfaceAPI)
 	reached := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -1485,5 +1492,191 @@ func TestAPIKeyAuth_CredentialRotationCutoffDenied(t *testing.T) {
 
 	if w := do("fresh-rotation-key"); w.Code != http.StatusOK {
 		t.Errorf("key created after the cutoff must stay valid, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestAPIKeyAuth_SurfaceMismatch locks the surface split: an api:* key must be
+// refused on the MCP surface and an mcp:* key on the REST surface, both with
+// 403 API_KEY_SCOPE_MISMATCH, and a refused usage must not bump last_used_at.
+func TestAPIKeyAuth_SurfaceMismatch(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "surfaceuser", "user", true)
+	seedTestAPIKeyScope(t, db, userID, "api-key", nil, models.ScopeAPIWrite)
+	seedTestAPIKeyScope(t, db, userID, "mcp-key", nil, models.ScopeMCPWrite)
+
+	do := func(key string, surface models.APIKeySurface) *httptest.ResponseRecorder {
+		mw := APIKeyAuth(db, surface)
+		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("handler must not be reached on a surface mismatch")
+			w.WriteHeader(http.StatusOK)
+		}))
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		r.Header.Set("X-API-Key", key)
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	w := do("api-key", models.SurfaceMCP)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("api key on MCP surface: expected 403, got %d", w.Code)
+	}
+	assertJSONError(t, w, "api_key_wrong_surface")
+
+	w = do("mcp-key", models.SurfaceAPI)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("mcp key on API surface: expected 403, got %d", w.Code)
+	}
+	assertJSONError(t, w, "api_key_wrong_surface")
+
+	for _, key := range []string{"api-key", "mcp-key"} {
+		var lastUsed sql.NullTime
+		if err := db.QueryRow("SELECT last_used_at FROM api_keys WHERE key_hash = ?", hashAPIKey(key)).Scan(&lastUsed); err != nil {
+			t.Fatalf("query last_used_at: %v", err)
+		}
+		if lastUsed.Valid {
+			t.Errorf("last_used_at must stay NULL after a refused usage, key %s", key)
+		}
+	}
+}
+
+// TestAPIKeyAuth_UnknownScopeFailsClosed guards the fail-closed rule: a scope
+// value in the database that the parse allow-list rejects (hand-edited row,
+// future code) must authenticate as nothing — 401, handler unreached.
+func TestAPIKeyAuth_UnknownScopeFailsClosed(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "bogusscope", "user", true)
+	seedTestAPIKeyScope(t, db, userID, "bogus-key", nil, models.APIKeyScope("api:admin"))
+
+	mw := APIKeyAuth(db, models.SurfaceAPI)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler must not be reached for an unreadable scope")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "bogus-key")
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for an unreadable scope, got %d", w.Code)
+	}
+}
+
+// TestAPIKeyAuth_ScopeInContext verifies the scope is stored in the request
+// context after a successful authentication, for both surfaces.
+func TestAPIKeyAuth_ScopeInContext(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "scopesess", "user", true)
+	seedTestAPIKeyScope(t, db, userID, "read-key", nil, models.ScopeAPIRead)
+	seedTestAPIKeyScope(t, db, userID, "mcpread-key", nil, models.ScopeMCPRead)
+
+	do := func(key string, surface models.APIKeySurface) (models.APIKeyScope, bool) {
+		mw := APIKeyAuth(db, surface)
+		var scope models.APIKeyScope
+		var ok bool
+		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			scope, ok = APIKeyScopeFromContext(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		r.Header.Set("X-API-Key", key)
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d (%s)", key, w.Code, w.Body.String())
+		}
+		return scope, ok
+	}
+
+	if scope, ok := do("read-key", models.SurfaceAPI); !ok || scope != models.ScopeAPIRead {
+		t.Errorf("api:read key: scope in context = %q ok=%v, want api:read true", scope, ok)
+	}
+	if scope, ok := do("mcpread-key", models.SurfaceMCP); !ok || scope != models.ScopeMCPRead {
+		t.Errorf("mcp:read key: scope in context = %q ok=%v, want mcp:read true", scope, ok)
+	}
+}
+
+// TestAPIKeyAuth_ExpiredBeatsScope verifies the control order: an expired key
+// answers API_KEY_EXPIRED even when its scope would mismatch the surface too.
+func TestAPIKeyAuth_ExpiredBeatsScope(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "expiredscope", "user", true)
+	past := time.Now().Add(-time.Hour)
+	seedTestAPIKeyScope(t, db, userID, "expired-mcp-key", &past, models.ScopeMCPWrite)
+
+	mw := APIKeyAuth(db, models.SurfaceAPI)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler must not be reached for an expired key")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "expired-mcp-key")
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+	assertJSONError(t, w, "api_key_expired")
+}
+
+// TestRequireWriteScope walks the method x scope table for the /api/v1 mount:
+// safe methods pass for every scope, writes need a write scope, and a missing
+// scope in the context (wiring error) fails closed.
+func TestRequireWriteScope(t *testing.T) {
+	reached := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	do := func(method string, scope models.APIKeyScope, withScope bool) *httptest.ResponseRecorder {
+		reached = false
+		handler := RequireWriteScope(next)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(method, "/api/v1/zones", nil)
+		if withScope {
+			r = r.WithContext(context.WithValue(r.Context(), APIKeyScopeContextKey, scope))
+		}
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	readScopes := []models.APIKeyScope{models.ScopeAPIRead, models.ScopeMCPRead}
+	writeScopes := []models.APIKeyScope{models.ScopeAPIWrite, models.ScopeMCPWrite}
+	safe := []string{http.MethodGet, http.MethodHead, http.MethodOptions}
+	unsafe := []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
+
+	for _, method := range safe {
+		for _, scope := range append(append([]models.APIKeyScope{}, readScopes...), writeScopes...) {
+			if w := do(method, scope, true); w.Code != http.StatusOK || !reached {
+				t.Errorf("%s with %s: expected pass, got %d reached=%v", method, scope, w.Code, reached)
+			}
+		}
+	}
+
+	for _, method := range unsafe {
+		for _, scope := range readScopes {
+			reached = false
+			w := do(method, scope, true)
+			if reached || w.Code != http.StatusForbidden {
+				t.Errorf("%s with %s: expected 403 no-pass, got %d reached=%v", method, scope, w.Code, reached)
+			}
+			assertJSONError(t, w, "insufficient_scope")
+		}
+		for _, scope := range writeScopes {
+			if w := do(method, scope, true); w.Code != http.StatusOK || !reached {
+				t.Errorf("%s with %s: expected pass, got %d reached=%v", method, scope, w.Code, reached)
+			}
+		}
+		// Absent scope (session request / wiring error) fails closed.
+		reached = false
+		w := do(method, "", false)
+		if reached || w.Code != http.StatusForbidden {
+			t.Errorf("%s without scope: expected 403 fail-closed, got %d reached=%v", method, w.Code, reached)
+		}
 	}
 }

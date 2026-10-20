@@ -68,13 +68,14 @@ type ActivityLog struct {
 
 // APIKey represents an API key.
 type APIKey struct {
-	ID          int64      `json:"id"`
-	UserID      int64      `json:"user_id"`
-	KeyHash     string     `json:"-"`
-	Description string     `json:"description"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ExpiresAt   *time.Time `json:"expires_at"`
+	ID          int64       `json:"id"`
+	UserID      int64       `json:"user_id"`
+	KeyHash     string      `json:"-"`
+	Description string      `json:"description"`
+	Scope       APIKeyScope `json:"scope"`
+	LastUsedAt  *time.Time  `json:"last_used_at"`
+	CreatedAt   time.Time   `json:"created_at"`
+	ExpiresAt   *time.Time  `json:"expires_at"`
 }
 
 // Setting represents a key-value application setting.

@@ -1334,3 +1334,53 @@ func TestMigrate_LockErrorNotDoubleWrapped(t *testing.T) {
 		}
 	}
 }
+
+// TestAPIKeyScopeColumnBackfill verifies the scoped-API-key migration: the
+// scope column exists and an INSERT that omits it reads back the DEFAULT
+// 'api:write', which is the backfill for every pre-migration key.
+func TestAPIKeyScopeColumnBackfill(t *testing.T) {
+	cfg := &config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"}
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer db.Close()
+
+	uid, err := db.ExecReturnID(context.Background(),
+		"INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, '', '', 'user', 1)",
+		"scopeuser", "scopeuser@test.local", "hash",
+	)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	if _, err := db.Conn.Exec(
+		"INSERT INTO api_keys (user_id, key_hash) VALUES (?, ?)", uid, "hash-no-scope",
+	); err != nil {
+		t.Fatalf("insert api key without scope: %v", err)
+	}
+
+	var scope string
+	if err := db.Conn.QueryRow(
+		"SELECT scope FROM api_keys WHERE key_hash = 'hash-no-scope'",
+	).Scan(&scope); err != nil {
+		t.Fatalf("select scope: %v", err)
+	}
+	if scope != "api:write" {
+		t.Errorf("expected scope default 'api:write', got %q", scope)
+	}
+
+	if _, err := db.Conn.Exec(
+		"INSERT INTO api_keys (user_id, key_hash, scope) VALUES (?, ?, ?)", uid, "hash-with-scope", "mcp:read",
+	); err != nil {
+		t.Fatalf("insert api key with scope: %v", err)
+	}
+	if err := db.Conn.QueryRow(
+		"SELECT scope FROM api_keys WHERE key_hash = 'hash-with-scope'",
+	).Scan(&scope); err != nil {
+		t.Fatalf("select explicit scope: %v", err)
+	}
+	if scope != "mcp:read" {
+		t.Errorf("expected stored scope 'mcp:read', got %q", scope)
+	}
+}

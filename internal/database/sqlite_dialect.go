@@ -402,5 +402,10 @@ func (s *sqliteDialect) Migrations() []string {
 		`DROP INDEX IF EXISTS idx_users_email_lc`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lc ON users(username_lc)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lc ON users(email_lc)`,
+		// Scoped API keys. The DEFAULT backfills every pre-existing key as
+		// api:write, preserving its REST behaviour in one statement; those
+		// keys are no longer accepted on the MCP surface. No index: the auth
+		// lookup goes through the UNIQUE key_hash, never through scope.
+		`ALTER TABLE api_keys ADD COLUMN scope TEXT NOT NULL DEFAULT 'api:write'`,
 	}
 }

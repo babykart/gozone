@@ -444,5 +444,10 @@ func (m *mysqlDialect) Migrations() []string {
 		// primary key (bucket_key first) cannot serve that seek, so the purge
 		// scanned the whole table.
 		`CREATE INDEX idx_rate_limit_counters_window_start ON rate_limit_counters(window_start)`,
+		// Scoped API keys. The DEFAULT backfills every pre-existing key as
+		// api:write, preserving its REST behaviour in one statement; those
+		// keys are no longer accepted on the MCP surface. No index: the auth
+		// lookup goes through the UNIQUE key_hash, never through scope.
+		`ALTER TABLE api_keys ADD COLUMN scope VARCHAR(16) NOT NULL DEFAULT 'api:write'`,
 	}
 }

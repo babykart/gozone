@@ -8,6 +8,7 @@ import (
 	"github.com/babykart/gozone/internal/handlers"
 	"github.com/babykart/gozone/internal/mcpserver"
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
 )
 
 // mountAdminRoutes registers the admin-only web UI routes on r, every one
@@ -105,7 +106,7 @@ func mountMCPRoute(r chi.Router, h *handlers.Handler, db *database.DB, cfg *conf
 	}
 	r.Group(func(r chi.Router) {
 		r.Use(apiIPLimiter.Limit(middleware.ExtractIP))
-		r.Use(middleware.APIKeyAuth(db))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
 		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
 		r.Handle(cfg.MCP.Path, mcpserver.New(h.Ops, &cfg.MCP, h.Version.Version))
 	})

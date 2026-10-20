@@ -527,3 +527,29 @@ func TestPostgresIntegration_HitRateLimit(t *testing.T) {
 		t.Errorf("new window must be allowed (err=%v allowed=%v)", err, allowed)
 	}
 }
+
+// TestPostgresIntegration_APIKeyScopeColumnBackfill verifies the scoped-API-key
+// migration on PostgreSQL: the scope column exists and an INSERT that omits it
+// reads back the DEFAULT 'api:write' (the pre-migration key backfill).
+func TestPostgresIntegration_APIKeyScopeColumnBackfill(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+
+	uid := seedIntegrationUser(t, db, "scopepg")
+
+	if _, err := db.Conn.Exec(
+		"INSERT INTO api_keys (user_id, key_hash) VALUES (?, ?)", uid, "hash-no-scope",
+	); err != nil {
+		t.Fatalf("insert api key without scope: %v", err)
+	}
+
+	var scope string
+	if err := db.Conn.QueryRow(
+		"SELECT scope FROM api_keys WHERE key_hash = 'hash-no-scope'",
+	).Scan(&scope); err != nil {
+		t.Fatalf("select scope: %v", err)
+	}
+	if scope != "api:write" {
+		t.Errorf("expected scope default 'api:write', got %q", scope)
+	}
+}
