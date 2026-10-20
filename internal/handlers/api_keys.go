@@ -50,6 +50,7 @@ var (
 	apiKeyValidErrorCodes = map[string]struct{}{
 		"not_found":     {},
 		"limit_reached": {},
+		"invalid_scope": {},
 	}
 )
 
@@ -76,7 +77,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	countQuery := "SELECT COUNT(*) FROM api_keys WHERE " + where
-	selectQuery := `SELECT id, user_id, description, last_used_at, created_at, expires_at
+	selectQuery := `SELECT id, user_id, description, scope, last_used_at, created_at, expires_at
 		FROM api_keys WHERE ` + where + " ORDER BY created_at DESC"
 
 	var total int
@@ -107,7 +108,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	var keys []models.APIKey
 	for rows.Next() {
 		var k models.APIKey
-		if err := rows.Scan(&k.ID, &k.UserID, &k.Description, &k.LastUsedAt, &k.CreatedAt, &k.ExpiresAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Description, &k.Scope, &k.LastUsedAt, &k.CreatedAt, &k.ExpiresAt); err != nil {
 			logger.Error("failed to scan API key row", "error", err)
 			continue
 		}
@@ -141,14 +142,16 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":    "API Keys - " + h.Cfg.Server.AppName,
-		"User":     user,
-		"APIKeys":  keys,
-		"PageInfo": pageInfo,
-		"Search":   search,
-		"Flash":    flash,
-		"NewKey":   newKey,
-		"Error":    errorMsg,
+		"Title":       "API Keys - " + h.Cfg.Server.AppName,
+		"User":        user,
+		"APIKeys":     keys,
+		"PageInfo":    pageInfo,
+		"Search":      search,
+		"Flash":       flash,
+		"NewKey":      newKey,
+		"Error":       errorMsg,
+		"MCPEnabled":  h.Cfg.MCP.Enabled,
+		"MCPReadOnly": h.Cfg.MCP.ReadOnly,
 	}
 	h.render(w, r, "api_keys.html", data)
 }
@@ -182,6 +185,23 @@ func parseAPIKeyExpiryDays(formValue string) (int, error) {
 	return days, nil
 }
 
+// parseAPIKeyScopeChoice validates the form's scope value against the
+// ParseAPIKeyScope allow-list, and additionally refuses an mcp:* scope while
+// the MCP endpoint is disabled (no surface to authorize it on). Unlike
+// expires_in there is no silent default: a missing or invalid scope is a
+// client-side tampering signal and is refused with ?error=invalid_scope — the
+// form's <select> always submits a value.
+func parseAPIKeyScopeChoice(formValue string, mcpEnabled bool) (models.APIKeyScope, error) {
+	scope, ok := models.ParseAPIKeyScope(strings.TrimSpace(formValue))
+	if !ok {
+		return "", fmt.Errorf("invalid scope %q", formValue)
+	}
+	if !mcpEnabled && scope.Surface() == models.SurfaceMCP {
+		return "", fmt.Errorf("scope %q unavailable: MCP is disabled", scope)
+	}
+	return scope, nil
+}
+
 func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := middleware.GetUser(r)
@@ -194,6 +214,12 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	expiryDays, err := parseAPIKeyExpiryDays(r.FormValue("expires_in"))
 	if err != nil {
 		h.renderError(w, r, err.Error())
+		return
+	}
+
+	scope, err := parseAPIKeyScopeChoice(r.FormValue("scope"), h.Cfg.MCP.Enabled)
+	if err != nil {
+		http.Redirect(w, r, "/profile/api-keys?error=invalid_scope", http.StatusSeeOther)
 		return
 	}
 
@@ -236,8 +262,8 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		expiresAt = time.Now().UTC().Add(time.Duration(expiryDays) * 24 * time.Hour)
 	}
 	_, err = tx.ExecContext(ctx,
-		"INSERT INTO api_keys (user_id, key_hash, description, expires_at) VALUES (?, ?, ?, ?)",
-		user.ID, keyHash, description, expiresAt,
+		"INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope) VALUES (?, ?, ?, ?, ?)",
+		user.ID, keyHash, description, expiresAt, scope,
 	)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to create API key", err)
@@ -248,7 +274,7 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if expiryDays > 0 {
 		expiryDetail = fmt.Sprintf("expires in %d days", expiryDays)
 	}
-	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "create_api_key", Details: fmt.Sprintf("Created API key: %s (%s)", description, expiryDetail)})
+	err = logActivity(ctx, tx, activityEntry{UserID: user.ID, Action: "create_api_key", Details: fmt.Sprintf("Created API key: %s [%s] (%s)", description, scope, expiryDetail)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return

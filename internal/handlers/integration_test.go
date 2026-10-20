@@ -31,11 +31,11 @@ func seedIntegrationUser(t *testing.T, h *Handler, username, password, role stri
 	)
 }
 
-func seedIntegrationAPIKey(t *testing.T, h *Handler, userID int64, keyHash string) {
+func seedIntegrationAPIKey(t *testing.T, h *Handler, userID int64, keyHash string, scope models.APIKeyScope) {
 	t.Helper()
 	_, err := h.DB.Exec(
-		`INSERT INTO api_keys (user_id, key_hash, description) VALUES (?, ?, ?)`,
-		userID, keyHash, "integration test key",
+		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, ?, ?)`,
+		userID, keyHash, "integration test key", scope,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestIntegration_CompleteAPIFlow(t *testing.T) {
 	defer pdnsSrv.Close()
 
 	userID := seedIntegrationUser(t, h, "apiuser", "apipass", "admin", true)
-	seedIntegrationAPIKey(t, h, userID, "my-integration-api-key")
+	seedIntegrationAPIKey(t, h, userID, "my-integration-api-key", models.ScopeAPIWrite)
 
 	// The API middleware would set this user from the key; an admin sees
 	// every zone.

@@ -33,6 +33,10 @@
 <div class="alert alert-error">You have reached the maximum number of API keys. Delete unused or expired keys before creating a new one.</div>
 {{end}}
 
+{{if eq .Error "invalid_scope"}}
+<div class="alert alert-error">Invalid API key scope. Choose one of the offered scopes and try again.</div>
+{{end}}
+
 {{if eq .Error "forbidden"}}
 <div class="alert alert-error">You can only delete your own API keys.</div>
 {{end}}
@@ -53,6 +57,22 @@
         </select>
         <small class="form-hint">Expired keys stop authenticating immediately; delete them to free quota.</small>
     </div>
+    <div class="form-group">
+        <label for="scope">Scope</label>
+        <select id="scope" name="scope" class="form-control">
+            <optgroup label="REST API (/api/v1)">
+                <option value="api:read" selected>api:read — read-only (GET/HEAD)</option>
+                <option value="api:write">api:write — read and write</option>
+            </optgroup>
+            {{if .MCPEnabled}}
+            <optgroup label="MCP (/mcp)">
+                <option value="mcp:read">mcp:read — read-only tools</option>
+                <option value="mcp:write">mcp:write — write tools{{if .MCPReadOnly}} (read-only while mcp.read_only is set){{end}}</option>
+            </optgroup>
+            {{end}}
+        </select>
+        <small class="form-hint">Least privilege first: a scope only restricts what your account may already do, and each key works on its own surface only.</small>
+    </div>
     <button type="submit" class="btn btn-primary">Generate Key</button>
 </form>
 
@@ -72,6 +92,7 @@
             <tr>
                 <th class="col-select"><input type="checkbox" data-action="select-all-apikeys" aria-label="Select all API keys"></th>
                 <th>Description</th>
+                <th>Scope</th>
                 <th>Created</th>
                 <th>Last Used</th>
                 <th>Expires</th>
@@ -83,6 +104,7 @@
             <tr data-key-id="{{.ID}}">
                 <td class="col-select"><input type="checkbox" class="apikey-select" aria-label="Select key {{.Description}}"></td>
                 <td><strong>{{.Description}}</strong></td>
+                <td><span class="badge badge-scope-{{.Scope.Surface}}">{{.Scope}}</span></td>
                 <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
                 <td>{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
                 <td>{{if .ExpiresAt}}{{.ExpiresAt.Format "2006-01-02"}}{{else}}Never{{end}}</td>

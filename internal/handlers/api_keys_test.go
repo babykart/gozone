@@ -25,7 +25,7 @@ func TestCreateAPIKey_SetsFlashCookieNotQueryString(t *testing.T) {
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
-	body := "description=test-key"
+	body := "description=test-key&scope=api:write"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -409,7 +409,7 @@ func TestCreateAPIKey_DefaultFormNeverExpires(t *testing.T) {
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=legacy"))
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=legacy&scope=api:write"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
 	h.CreateAPIKey(w, r)
@@ -437,7 +437,7 @@ func TestCreateAPIKey_WithExpiry(t *testing.T) {
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=shortlived&expires_in=30"))
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=shortlived&expires_in=30&scope=api:write"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
 	h.CreateAPIKey(w, r)
@@ -505,13 +505,13 @@ func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
 	}
 
 	for i := 1; i <= 2; i++ {
-		w := post(fmt.Sprintf("description=key-%d", i))
+		w := post(fmt.Sprintf("description=key-%d&scope=api:write", i))
 		if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
 			t.Fatalf("creation %d under the cap should succeed, got %d -> %s", i, w.Code, w.Header().Get("Location"))
 		}
 	}
 
-	w := post("description=key-3")
+	w := post("description=key-3&scope=api:write")
 	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "error=limit_reached") {
 		t.Fatalf("creation above the cap must redirect with error=limit_reached, got %d -> %s", w.Code, w.Header().Get("Location"))
 	}
@@ -527,13 +527,13 @@ func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = r.WithContext(ctx)
 	h.DeleteAPIKey(w, r)
-	if w := post("description=key-3"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+	if w := post("description=key-3&scope=api:read"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
 		t.Fatalf("creation after freeing quota should succeed, got %d -> %s", w.Code, w.Header().Get("Location"))
 	}
 
 	// Cap disabled: 0 lets a user accumulate keys without bound.
 	h.Cfg.Auth.MaxAPIKeysPerUser = 0
-	if w := post("description=key-4"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+	if w := post("description=key-4&scope=api:read"); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
 		t.Fatalf("creation with cap disabled should succeed, got %d -> %s", w.Code, w.Header().Get("Location"))
 	}
 }
@@ -615,4 +615,173 @@ func TestBulkDeleteAPIKeys_MalformedIDReportedFailed(t *testing.T) {
 	if count != 0 {
 		t.Error("expected the owned key to be gone")
 	}
+}
+
+// TestCreateAPIKey_ScopeChoices drives the scope allow-list through the form
+// handler: every scope is accepted when MCP is enabled, the stored row carries
+// the submitted scope, and mcp:* scopes are refused with ?error=invalid_scope
+// (and no row) while the MCP endpoint is disabled.
+func TestCreateAPIKey_ScopeChoices(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	h.Cfg.MCP.Enabled = true
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.CreateAPIKey(w, r)
+		return w
+	}
+
+	for _, scope := range []models.APIKeyScope{models.ScopeAPIRead, models.ScopeAPIWrite, models.ScopeMCPRead, models.ScopeMCPWrite} {
+		w := post("description=scoped&scope=" + string(scope))
+		if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "flash=created") {
+			t.Fatalf("scope %s should be accepted, got %d -> %s", scope, w.Code, w.Header().Get("Location"))
+		}
+		var stored string
+		if err := h.DB.QueryRow(
+			"SELECT scope FROM api_keys WHERE user_id = ? ORDER BY id DESC LIMIT 1", user.ID,
+		).Scan(&stored); err != nil {
+			t.Fatalf("select scope for %s: %v", scope, err)
+		}
+		if stored != string(scope) {
+			t.Errorf("stored scope = %q, want %q", stored, scope)
+		}
+	}
+
+	// MCP disabled: mcp:* scopes are refused, no row inserted.
+	h.Cfg.MCP.Enabled = false
+	countBefore := countAPIKeys(t, h.DB, user.ID)
+	w := post("description=scoped&scope=mcp:read")
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "error=invalid_scope") {
+		t.Fatalf("mcp scope with MCP disabled must redirect error=invalid_scope, got %d -> %s", w.Code, w.Header().Get("Location"))
+	}
+	if got := countAPIKeys(t, h.DB, user.ID); got != countBefore {
+		t.Errorf("mcp scope with MCP disabled must not insert a row: before=%d after=%d", countBefore, got)
+	}
+}
+
+// TestCreateAPIKey_RejectsMissingOrInvalidScope locks the fail-closed form
+// validation: a missing scope field or a value outside the allow-list is
+// refused with ?error=invalid_scope and inserts nothing. Unlike expires_in
+// there is no silent default — the form's <select> always submits a value, so
+// an absent field is tampering.
+func TestCreateAPIKey_RejectsMissingOrInvalidScope(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	for _, body := range []string{"description=no-scope", "description=bogus&scope=api:admin", "description=spaces&scope=%20"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.CreateAPIKey(w, r)
+
+		if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "error=invalid_scope") {
+			t.Errorf("body %q: expected error=invalid_scope redirect, got %d -> %s", body, w.Code, w.Header().Get("Location"))
+		}
+	}
+	if got := countAPIKeys(t, h.DB, user.ID); got != 0 {
+		t.Errorf("no scope refusal may insert a row, got %d", got)
+	}
+}
+
+// TestCreateAPIKey_AuditDetailIncludesScope verifies the create_api_key audit
+// entry names the scope, e.g. "Created API key: ci-bot [api:read] (expires in 90 days)".
+func TestCreateAPIKey_AuditDetailIncludesScope(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=ci-bot&scope=api:read&expires_in=90"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateAPIKey(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	var details string
+	if err := h.DB.QueryRow(
+		"SELECT details FROM activity_logs WHERE action = 'create_api_key' AND user_id = ?", user.ID,
+	).Scan(&details); err != nil {
+		t.Fatalf("select audit entry: %v", err)
+	}
+	want := "Created API key: ci-bot [api:read] (expires in 90 days)"
+	if details != want {
+		t.Errorf("audit details = %q, want %q", details, want)
+	}
+}
+
+// TestListAPIKeys_ShowsScope verifies the list handler reads the scope column
+// and hands it to the template (the stub renders "desc [scope]").
+func TestListAPIKeys_ShowsScope(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	seedAPIKey(t, h.DB, user.ID, "read key", hashAPIKey("k-read"))
+	if _, err := h.DB.Exec(
+		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, 'mcp key', 'mcp:read')`,
+		user.ID, hashAPIKey("k-mcp"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/profile/api-keys", nil)
+	r = r.WithContext(ctx)
+	h.ListAPIKeys(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "read key [api:write]") || !strings.Contains(body, "mcp key [mcp:read]") {
+		t.Errorf("expected both scopes in the rendered list, got %s", body)
+	}
+}
+
+// TestCreateAPIKey_CapCountsAllScopeTypes verifies the per-user cap is a total
+// across scopes: an existing mcp key consumes quota for an api key creation.
+func TestCreateAPIKey_CapCountsAllScopeTypes(t *testing.T) {
+	h := newTestHandler(t)
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	h.Cfg.Auth.MaxAPIKeysPerUser = 1
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	seedAPIKey(t, h.DB, user.ID, "existing mcp key", hashAPIKey("k-existing"))
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=second&scope=api:read"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateAPIKey(w, r)
+
+	if w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "error=limit_reached") {
+		t.Fatalf("creation above the mixed-scope cap must redirect error=limit_reached, got %d -> %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// countAPIKeys is the row-count helper shared by the scope tests.
+func countAPIKeys(t *testing.T, db *database.DB, userID int64) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", userID).Scan(&n); err != nil {
+		t.Fatalf("count api keys: %v", err)
+	}
+	return n
 }
