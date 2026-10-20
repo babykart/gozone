@@ -61,6 +61,9 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Description: "Append record(s) to a zone's RRSet. Existing records with the same name+type are preserved — to replace an RRSet use update_record. MX/SRV: give the priority in each record's priority field, the target in content. TXT/SPF: give the bare text, quoting is automatic.",
 		Annotations: writeAnnotations(false, false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createRecordIn) (*mcp.CallToolResult, writeOut, error) {
+		if terr := requireWriteScope(ctx); terr != nil {
+			return nil, writeOut{}, terr
+		}
 		user, terr := userFromContext(ctx)
 		if terr != nil {
 			return nil, writeOut{}, terr
@@ -94,6 +97,9 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Description: "REPLACE an RRSet: the submitted record list becomes the whole set (idempotent; destructive — omitted records are removed). List the current records first if you only want to add one. ClearComments drops the RRSet's comments.",
 		Annotations: writeAnnotations(true, true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateRecordIn) (*mcp.CallToolResult, writeOut, error) {
+		if terr := requireWriteScope(ctx); terr != nil {
+			return nil, writeOut{}, terr
+		}
 		user, terr := userFromContext(ctx)
 		if terr != nil {
 			return nil, writeOut{}, terr
@@ -127,6 +133,9 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Description: "Delete an entire RRSet (every record sharing the name+type). Idempotent: deleting a set that no longer exists succeeds.",
 		Annotations: writeAnnotations(true, true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteRecordIn) (*mcp.CallToolResult, writeOut, error) {
+		if terr := requireWriteScope(ctx); terr != nil {
+			return nil, writeOut{}, terr
+		}
 		user, terr := userFromContext(ctx)
 		if terr != nil {
 			return nil, writeOut{}, terr
@@ -167,6 +176,9 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Description: "Create a new zone. ADMIN KEY REQUIRED. Name and nameservers are canonicalised (lowercase, trailing dot); omit kind for Native.",
 		Annotations: writeAnnotations(false, false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createZoneIn) (*mcp.CallToolResult, createZoneOut, error) {
+		if terr := requireWriteScope(ctx); terr != nil {
+			return nil, createZoneOut{}, terr
+		}
 		user, terr := userFromContext(ctx)
 		if terr != nil {
 			return nil, createZoneOut{}, terr
@@ -192,6 +204,9 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Description: "Delete a zone and purge its group grants. ADMIN KEY REQUIRED. Destructive and irrevocable.",
 		Annotations: writeAnnotations(true, true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteZoneIn) (*mcp.CallToolResult, writeOut, error) {
+		if terr := requireWriteScope(ctx); terr != nil {
+			return nil, writeOut{}, terr
+		}
 		user, terr := userFromContext(ctx)
 		if terr != nil {
 			return nil, writeOut{}, terr

@@ -42,7 +42,10 @@ func hashKey(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func seedAPIKey(t *testing.T, db *database.DB, userID int64) string {
+// seedAPIKeyScope seeds an API key with an explicit scope, so tests can drive
+// the per-request server selection from either side of the mcp:read/mcp:write
+// split.
+func seedAPIKeyScope(t *testing.T, db *database.DB, userID int64, scope models.APIKeyScope) string {
 	t.Helper()
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -50,8 +53,8 @@ func seedAPIKey(t *testing.T, db *database.DB, userID int64) string {
 	}
 	key := "gz-test-" + hex.EncodeToString(raw)
 	if _, err := db.ExecContext(context.Background(),
-		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, 'test key', 'mcp:write')`,
-		userID, hashKey(key)); err != nil {
+		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, 'test key', ?)`,
+		userID, hashKey(key), scope); err != nil {
 		t.Fatal(err)
 	}
 	return key
@@ -67,6 +70,11 @@ func newMCPTestEnv(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandler
 // newMCPTestEnvAs is newMCPTestEnv with a chosen role for the seeded key
 // owner ("user" or "admin").
 func newMCPTestEnvAs(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandlerFunc, role string) (*mcp.ClientSession, *database.DB) {
+	return newMCPTestEnvWithScope(t, readOnly, pdnsHandler, role, models.ScopeMCPWrite)
+}
+
+// newMCPTestEnvWithScope is newMCPTestEnvAs with a chosen API key scope.
+func newMCPTestEnvWithScope(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandlerFunc, role string, scope models.APIKeyScope) (*mcp.ClientSession, *database.DB) {
 	t.Helper()
 	if pdnsHandler == nil {
 		pdnsHandler = func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +103,7 @@ func newMCPTestEnvAs(t *testing.T, readOnly bool, pdnsHandler testutil.PDNSHandl
 	t.Cleanup(httpSrv.Close)
 
 	userID := testutil.SeedTestUser(t, db, "mcpuser", "pass", role, true)
-	key := seedAPIKey(t, db, userID)
+	key := seedAPIKeyScope(t, db, userID, scope)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-test-client", Version: "1.0"}, nil)
 	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
@@ -687,6 +695,95 @@ func TestZoneTools_UnwrappedPDNSErrorsMapToStableCodes(t *testing.T) {
 		}
 		if text := resultText(res); !strings.HasPrefix(text, c.wantCode+":") {
 			t.Fatalf("%s error text must carry the stable %s code, got %q", c.tool, c.wantCode, text)
+		}
+	}
+}
+
+// TestToolsList_ScopeBoundedToolSet locks the per-request server selection:
+// the tools/list answer follows the API key's scope, not just mcp.read_only.
+// mcp:read never sees the write tools even when read_only=false; mcp:write
+// sees them only when read_only=false.
+func TestToolsList_ScopeBoundedToolSet(t *testing.T) {
+	writeTools := []string{"create_record", "update_record", "delete_record", "create_zone", "delete_zone"}
+
+	t.Run("mcp read never sees write tools", func(t *testing.T) {
+		session, _ := newMCPTestEnvWithScope(t, false, nil, "user", models.ScopeMCPRead)
+		res, err := session.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("ListTools: %v", err)
+		}
+		names := toolNames(res.Tools)
+		for _, banned := range writeTools {
+			if names[banned] {
+				t.Errorf("mcp:read key with read_only=false must NOT list %s", banned)
+			}
+		}
+		if !names["list_zones"] || !names["export_zone"] {
+			t.Errorf("mcp:read key must keep the read tools, got %v", res.Tools)
+		}
+	})
+
+	t.Run("mcp write sees write tools when read_only false", func(t *testing.T) {
+		session, _ := newMCPTestEnvWithScope(t, false, nil, "user", models.ScopeMCPWrite)
+		res, err := session.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("ListTools: %v", err)
+		}
+		names := toolNames(res.Tools)
+		for _, want := range writeTools {
+			if !names[want] {
+				t.Errorf("mcp:write key with read_only=false must list %s", want)
+			}
+		}
+	})
+
+	t.Run("read only wins over mcp write", func(t *testing.T) {
+		session, _ := newMCPTestEnvWithScope(t, true, nil, "user", models.ScopeMCPWrite)
+		res, err := session.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("ListTools: %v", err)
+		}
+		names := toolNames(res.Tools)
+		for _, banned := range writeTools {
+			if names[banned] {
+				t.Errorf("mcp.read_only=true must hide %s even from an mcp:write key", banned)
+			}
+		}
+	})
+}
+
+// TestRequireWriteScope_Guard is the unit test of the defence-in-depth guard:
+// a write tool handler context carrying any scope other than mcp:write (or no
+// scope at all) is refused with the stable FORBIDDEN text.
+func TestRequireWriteScope_Guard(t *testing.T) {
+	mkctx := func(scope models.APIKeyScope, withScope bool) context.Context {
+		ctx := context.Background()
+		if withScope {
+			ctx = context.WithValue(ctx, middleware.APIKeyScopeContextKey, scope)
+		}
+		return ctx
+	}
+
+	if terr := requireWriteScope(mkctx(models.ScopeMCPWrite, true)); terr != nil {
+		t.Errorf("mcp:write context must pass the guard, got %v", terr)
+	}
+	for _, tc := range []struct {
+		name      string
+		scope     models.APIKeyScope
+		withScope bool
+	}{
+		{"mcp read", models.ScopeMCPRead, true},
+		{"api write", models.ScopeAPIWrite, true},
+		{"api read", models.ScopeAPIRead, true},
+		{"no scope", "", false},
+	} {
+		terr := requireWriteScope(mkctx(tc.scope, tc.withScope))
+		if terr == nil {
+			t.Errorf("%s: guard must refuse", tc.name)
+			continue
+		}
+		if terr.code != codeForbidden || terr.msg != "API key scope does not allow write operations" {
+			t.Errorf("%s: guard must answer FORBIDDEN with the stable text, got %q %q", tc.name, terr.code, terr.msg)
 		}
 	}
 }
