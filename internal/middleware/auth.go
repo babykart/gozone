@@ -41,6 +41,7 @@ const (
 	// API key that authenticated the request. It is set by APIKeyAuth only;
 	// session-cookie requests carry no scope. Use APIKeyScopeFromContext to
 	// retrieve it.
+	// #nosec G101 -- context-key identifier, not a credential.
 	APIKeyScopeContextKey contextKey = "api_key_scope"
 )
 
