@@ -762,7 +762,14 @@ func TestCreateAPIKey_CapCountsAllScopeTypes(t *testing.T) {
 	h.Cfg.Auth.MaxAPIKeysPerUser = 1
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
-	seedAPIKey(t, h.DB, user.ID, "existing mcp key", hashAPIKey("k-existing"))
+	// Explicit scope, not the DEFAULT: the property under test is that an
+	// mcp:* key consumes quota just like an api:* key.
+	if _, err := h.DB.Exec(
+		`INSERT INTO api_keys (user_id, key_hash, description, scope) VALUES (?, ?, 'existing mcp key', 'mcp:read')`,
+		user.ID, hashAPIKey("k-existing"),
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 	w := httptest.NewRecorder()
