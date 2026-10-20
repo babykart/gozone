@@ -103,9 +103,10 @@ func SeedTestUser(t *testing.T, db *database.DB, username, password, role string
 // The raw key is SHA-256 hashed before storage. Pass nil for expiresAt
 // to create a non-expiring key.
 //
-// The row omits scope so the column DEFAULT applies ('api:write'), which
-// keeps every REST-oriented caller valid against SurfaceAPI without touching
-// their signatures.
+// The key is seeded with the api:write scope, which keeps every
+// REST-oriented caller valid against SurfaceAPI without touching their
+// signatures; use SeedTestAPIKeyScope for the MCP surface or a read-only
+// REST key.
 func SeedTestAPIKey(t *testing.T, db *database.DB, userID int64, rawKey string, expiresAt *time.Time) {
 	SeedTestAPIKeyScope(t, db, userID, rawKey, expiresAt, models.ScopeAPIWrite)
 }
