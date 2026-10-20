@@ -1,6 +1,6 @@
 # GoZone REST API
 
-All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time. Each key optionally carries an expiry (30 days / 90 days / 1 year / never, chosen at creation); an expired key stops authenticating immediately with HTTP 401 and the `API_KEY_EXPIRED` error code (`error`: `"api_key_expired"`), and the number of keys a user may own is capped by `auth.max_api_keys_per_user`.
+All API endpoints are under `/api/v1` and require an API key. Keys are created via the Web UI at `/profile/api-keys` — the raw key is shown only once at creation time. Each key optionally carries an expiry (30 days / 90 days / 1 year / never, chosen at creation); an expired key stops authenticating immediately with HTTP 401 and the `API_KEY_EXPIRED` error code (`error`: `"api_key_expired"`), and the number of keys a user may own is capped by `auth.max_api_keys_per_user` (a total across all scopes).
 
 ## Authentication
 
@@ -15,6 +15,24 @@ Authorization: Bearer gozone_<base64-encoded-key>
 ```
 
 All examples below use the `X-API-Key` header.
+
+### Scopes
+
+Every key carries a scope, fixed at creation:
+
+| Scope | Surface | Rights |
+|-------|---------|--------|
+| `api:read` | `/api/v1` | safe methods only (GET/HEAD) |
+| `api:write` | `/api/v1` | reads and writes, still bounded by the key owner's role and zone grants |
+| `mcp:read` | `/mcp` | MCP read-only tools, resources, prompts (see [docs/MCP.md](./MCP.md)) |
+| `mcp:write` | `/mcp` | adds the MCP write tools — only effective when `mcp.read_only` is `false` |
+
+Scopes only restrict: they never grant a right the owning user does not
+have. A key works only on its own surface — a `mcp:*` key is refused on
+`/api/v1` (and vice versa) with HTTP 403 `API_KEY_SCOPE_MISMATCH`. On the
+REST surface, a write request (POST/PUT/DELETE) from an `api:read` key is
+refused with HTTP 403 `INSUFFICIENT_SCOPE`; GET/HEAD requests are allowed.
+The default for keys created before scopes existed is `api:write`.
 
 > **Note:** the REST API authenticates exclusively with API keys. OpenID
 > Connect single sign-on is a web-session feature (`/login` and
@@ -46,9 +64,12 @@ All errors return a JSON body:
 | `ZONE_NOT_FOUND` | 404 | Zone does not exist |
 | `RECORD_NOT_FOUND` | 404 | Record does not exist |
 | `CONFLICT` | 409 | Resource already exists |
-| `UNAUTHORIZED` | 401 | Invalid or missing API key, or the key's user is disabled |
+| `UNAUTHORIZED` | 401 | Invalid or missing API key, the key's user is disabled, or the key's stored scope is unreadable |
 | `API_KEY_EXPIRED` | 401 | The API key passed its expiry date |
+| `API_KEY_INVALIDATED` | 401 | The API key was created before the owner's credential-rotation cutoff (password change/reset, account disable, manual lock) |
 | `FORBIDDEN` | 403 | Authenticated as a non-admin on an admin-only endpoint, or no zone-group grants access to the zone |
+| `API_KEY_SCOPE_MISMATCH` | 403 | The key's scope belongs to another surface: an `mcp:*` key on `/api/v1`, or an `api:*` key on `/mcp` |
+| `INSUFFICIENT_SCOPE` | 403 | An `api:read` key attempted a write method (POST/PUT/DELETE) on `/api/v1` |
 | `UPSTREAM_AUTH_ERROR` | 502 | PowerDNS rejected GoZone's own API credentials — a server-side configuration problem; the client's API key is valid |
 | `INTERNAL_ERROR` | 500 | Unexpected server error (also used when the zone-access lookup itself fails) |
 

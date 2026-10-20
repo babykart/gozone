@@ -15,6 +15,13 @@ per-IP rate limit (pre-auth) → API key authentication → per-key rate limit
 
 - Authentication is **by API key** (`X-API-Key: <key>` or `Authorization:
   Bearer <key>`). The web session cookie is never accepted on `/mcp`.
+- **The key's scope must be `mcp:read` or `mcp:write`**: each key works only
+  on its own surface, so an `api:*` key is refused with HTTP 403
+  `API_KEY_SCOPE_MISMATCH` (and an `mcp:*` key is refused on `/api/v1`).
+- **The tool set follows the scope**: an `mcp:read` key never sees the write
+  tools (not even in `tools/list`); `mcp:write` adds them — but only when
+  `mcp.read_only` is `false`, which always wins over the key's scope. As
+  defence in depth, every write tool re-checks the scope in its handler.
 - The rate limiters are the **same instances** as `/api/v1`'s: a client
   alternating REST and MCP requests draws from a single budget.
 - Zone authorization (fail-closed) and admin rights are re-checked in the
@@ -46,9 +53,22 @@ mcp:
 
 ### Creating a dedicated API key
 
-1. Web UI → **Profile → API Keys → Create** (see the README).
+1. Web UI → **Profile → API Keys → Create** (see the README). Choose an
+   **MCP scope** in the Scope field — `mcp:read` is recommended for an agent
+   that only inspects DNS; `mcp:write` for one that applies changes.
 2. Recommendations: one key **per agent**, a dedicated non-admin user scoped
    by zone groups, a short expiry, and `read_only: true` to start with.
+
+Scope matrix — which tools a key sees:
+
+| Key scope | `mcp.read_only: true` | `mcp.read_only: false` |
+|---|---|---|
+| `mcp:read` | read tools only | read tools only |
+| `mcp:write` | read tools only | read + write tools |
+
+> **Migration note:** API keys created before scopes existed were migrated to
+> `api:write`. They keep working on `/api/v1` but are **no longer accepted on
+> `/mcp`** — create an `mcp:*` key for each agent that used one.
 
 ## Tools
 
@@ -97,7 +117,7 @@ full cause goes to the server logs. Exhaustive list:
 | Code | Meaning | Produced by |
 |---|---|---|
 | `UNAUTHORIZED` | No authenticated user reached the tool (endpoint wiring bug — a missing API key is a 401 before the MCP layer). | any tool (fail-closed) |
-| `FORBIDDEN` | No grant on the zone, or a non-admin key on an admin operation. | every zone-scoped tool, `create_zone`, `delete_zone`, the `gozone://zones/{zone}` resource |
+| `FORBIDDEN` | No grant on the zone, a non-admin key on an admin operation, or a key whose scope does not allow writes (handler-level guard; the per-request server selection already hides the write tools from `mcp:read`). | every zone-scoped tool, `create_zone`, `delete_zone`, the `gozone://zones/{zone}` resource, every write tool (scope guard) |
 | `VALIDATION_ERROR` | Malformed arguments: bad zone/type/name, `records: []`, `type` filter without `name`, unknown export format; or PowerDNS rejected the change as invalid. | any tool |
 | `ZONE_NOT_FOUND` | The zone does not exist (upstream 404 on a zone operation, including the fetch stage of a record write). | `get_zone`, `list_records`, `export_zone`, `list_zones`, `create_zone`, `delete_zone`, `gozone://zones/{zone}`, record tools at the fetch stage |
 | `RECORD_NOT_FOUND` | Upstream 404 at the write stage of a record operation. | `create_record`, `update_record`, `delete_record` |
@@ -181,7 +201,8 @@ URL: `https://gozone.example.com/mcp`, header `X-API-Key: <key>` (or
 ### Clients that only support stdio
 
 For clients without Streamable HTTP support, the CLI ships a local bridge
-that speaks stdio and relays to the remote `/mcp` endpoint. The API key is
+that speaks stdio and relays to the remote `/mcp` endpoint. The API key must
+carry an `mcp:*` scope (an `api:*` key is refused on `/mcp`). The key is
 read from an environment variable (never a CLI argument, which would leak
 via the process list):
 

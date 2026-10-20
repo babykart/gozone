@@ -424,15 +424,25 @@ Request with X-API-Key: gozone_<key>  (or Authorization: Bearer gozone_<key>)
   │
 APIKeyAuth middleware
   ├── Extract from X-API-Key (preferred) or Authorization Bearer
-  ├── SELECT user_id, expires_at FROM api_keys WHERE key_hash = SHA256(key)
+  ├── SELECT user_id, scope, created_at, expires_at FROM api_keys WHERE key_hash = SHA256(key)
   ├── Check expiration
   ├── loadUser(DB, UserID) → ensure enabled
+  ├── Check manual admin lock + tokens_valid_after credential-rotation cutoff
+  ├── ParseAPIKeyScope → unreadable scope: 401 (fail-closed)
+  ├── scope.Surface() != mounted surface → 403 API_KEY_SCOPE_MISMATCH
+  │    (SurfaceAPI on /api/v1, SurfaceMCP on /mcp)
   ├── UPDATE api_keys SET last_used_at = NOW()   ← coarsened: at most one write
   │                                                per key per minute (in-memory
   │                                                tracker), the column is
-  │                                                informational
+  │                                                informational; skipped when a
+  │                                                control above refused
   ├── RateLimiter per API key (100/min)
-  └── context.WithValue(UserContextKey, user)
+  └── context.WithValue(UserContextKey, user) + context.WithValue(APIKeyScopeContextKey, scope)
+
+RequireWriteScope (on /api/v1, after the per-key limiter)
+  ├── GET / HEAD / OPTIONS pass for every scope
+  └── other methods require scope.CanWrite() → else 403 INSUFFICIENT_SCOPE
+      (missing scope in context also fails closed)
 ```
 
 ### Rate Limiting (defense-in-depth)

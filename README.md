@@ -444,7 +444,7 @@ Admin users can create, edit, and delete user accounts from the **Users** menu i
 
 ### API Keys
 
-Users can generate personal API keys for programmatic access. Keys are SHA-256 hashed before storage — the raw key is shown only once at creation time.
+Users can generate personal API keys for programmatic access. Keys are SHA-256 hashed before storage — the raw key is shown only once at creation time. Each key carries a scope, fixed at creation: `api:read` (GET/HEAD only on `/api/v1`), `api:write` (reads and writes on `/api/v1`), `mcp:read` or `mcp:write` (the MCP surface, see [MCP.md](./docs/MCP.md)). A key works only on its own surface, and a scope only restricts what the owner may already do. The per-user key cap counts all scopes together.
 
 ## API
 

@@ -81,8 +81,10 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 | Layer | Auth Method |
 |-------|-------------|
 | Web session | JWT cookie validated against DB on every request |
-| API | API key SHA-256 hash in `Authorization: Bearer <key>` header |
+| API | API key SHA-256 hash in `Authorization: Bearer <key>` or `X-API-Key` header |
 | Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` |
+
+- **API key scopes** (`internal/models/apikey_scope.go`): every key carries a scope fixed at creation — `api:read`, `api:write`, `mcp:read`, `mcp:write`. Scopes **only restrict**: they never grant a right the user does not have (`RequireAdmin`, `CheckZoneAccess` and the `dnsops` checks still apply). The surface is enforced in `APIKeyAuth(db, surface)` (`/api/v1` vs `/mcp`, mismatch → 403 `API_KEY_SCOPE_MISMATCH`, unreadable scope → 401 fail-closed, checked after all validity controls and before the `last_used_at` touch); the scope lands in the context via `APIKeyScopeFromContext`. Read-only REST is per method (`RequireWriteScope`: GET/HEAD/OPTIONS pass, writes need `api:write`, else 403 `INSUFFICIENT_SCOPE`); read-only MCP is per server selection (`internal/mcpserver`: `mcp:write` gets the write-tool server, everything else the read-only server) plus the per-handler `requireWriteScope` guard. `mcp.read_only=true` beats `mcp:write`. Pre-scope keys backfilled to `api:write` and no longer work on `/mcp` (breaking change, v0.21.x → see docs/MCP.md).
 
 ## Single Sign-On (OIDC)
 
