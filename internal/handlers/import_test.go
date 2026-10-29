@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
 )
@@ -317,6 +321,103 @@ www,A,not-an-ip,3600,0,false`,
 				t.Errorf("a rejected import must not be audited, got %d activity rows", count)
 			}
 		})
+	}
+}
+
+// TestImportZone_ConcurrentCreateSerialized est la régression lost-update
+// import↔création: un PATCH REPLACE d'import passant entre le fetch et le
+// PATCH d'une création concurrente écrasait silencieusement l'enregistrement
+// importé (ou le nouveau, selon l'ordre). Le mock PDNS garde un état en
+// mémoire et signale l'instant où la création entre dans son fetch, afin de
+// placer l'import strictement dans la fenêtre que le verrou ferme.
+func TestImportZone_ConcurrentCreateSerialized(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		rrsets = map[string][]models.RecordInfo{}
+	)
+	getStarted := make(chan struct{})
+	var getOnce sync.Once
+
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			getOnce.Do(func() { close(getStarted) })
+			mu.Lock()
+			out := make([]models.RRSet, 0, len(rrsets))
+			for key, records := range rrsets {
+				parts := strings.SplitN(key, "|", 2)
+				out = append(out, models.RRSet{Name: parts[0], Type: parts[1], TTL: 3600, Records: records})
+			}
+			mu.Unlock()
+			json.NewEncoder(w).Encode(struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}{RRSets: out}) // #nosec G104 -- test helper
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			json.NewDecoder(r.Body).Decode(&payload) // #nosec G104 -- test helper
+			mu.Lock()
+			for _, rr := range payload.RRSets {
+				rrsets[rr.Name+"|"+rr.Type] = rr.Records
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// La création démarre et détient le verrou de zone pendant tout son
+	// fetch→merge→PATCH.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		body := "name=www&type=A&content=192.0.2.20&ttl=3600"
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/zones/example.com./records/create", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetPathValue("zone_id", "example.com.")
+		h.CreateRecord(w, req.WithContext(ctx))
+		if w.Code != http.StatusSeeOther {
+			t.Errorf("create: expected 303, got %d (%s)", w.Code, w.Body.String())
+		}
+	}()
+
+	// N'importer que lorsque la création est à l'intérieur de son fetch: sans
+	// le verrou sur l'import, son PATCH REPLACE passerait entre le fetch et le
+	// PATCH de la création et serait écrasé.
+	<-getStarted
+
+	bindContent := "$ORIGIN example.com.\n$TTL 3600\nwww IN A 192.0.2.10"
+	impBody := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.zone\"\r\nContent-Type: text/plain\r\n\r\n%s\r\n--boundary--\r\n", bindContent)
+	impReq := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(impBody))
+	impReq.SetPathValue("zone_id", "example.com.")
+	impReq.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	impReq = withUserContext(impReq, &models.User{ID: 1, Username: "admin", Role: "admin"})
+	impW := httptest.NewRecorder()
+	h.ImportZone(impW, impReq)
+	if impW.Code != http.StatusSeeOther {
+		t.Fatalf("import: expected 303, got %d (%s)", impW.Code, impW.Body.String())
+	}
+
+	wg.Wait()
+
+	mu.Lock()
+	got := rrsets["www.example.com.|A"]
+	mu.Unlock()
+	// REPLACE sérialisé: l'import est l'opération complète la plus tardive,
+	// son enregistrement doit remplacer celui de la création.
+	if len(got) != 1 || got[0].Content != "192.0.2.10" {
+		t.Fatalf("serialized import must win with exactly its record, got %+v", got)
 	}
 }
 

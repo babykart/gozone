@@ -87,6 +87,17 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parsing runs outside the lock; the REPLACE PATCH itself is serialized
+	// against concurrent writers on the same zone (web create/update, batch,
+	// REST, MCP, imports on other instances). Without the lock, a create whose
+	// fetch→merge lands around this PATCH silently loses either the imported
+	// RRSet or the new record.
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
+
 	// Route every PowerDNS failure through renderInternalError so the raw
 	// upstream error text (which may quote SQL fragments or internal paths on a
 	// backend failure) never reaches the user; pdnsUserFacingStatus maps each
