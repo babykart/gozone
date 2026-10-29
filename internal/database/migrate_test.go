@@ -9,6 +9,144 @@ import (
 	"github.com/babykart/gozone/internal/config"
 )
 
+// nonAtomicSQLiteDialect forces SQLite through the non-atomic migration path
+// (statements first, version recorded at the end) so the MySQL/MariaDB
+// implicit-DDL-commit behaviour can be exercised without a live server.
+type nonAtomicSQLiteDialect struct{ sqliteDialect }
+
+func (d *nonAtomicSQLiteDialect) DDLAtomic() bool { return false }
+
+// newNonAtomicTestDB opens an in-memory database wired to the non-atomic
+// migration path with the tracking table already created, mirroring the
+// setup of the atomic applyMigration tests.
+func newNonAtomicTestDB(t *testing.T) *DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := conn.Exec(`CREATE TABLE schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	return &DB{Conn: conn, dialect: &nonAtomicSQLiteDialect{}}
+}
+
+// TestApplyMigration_NonAtomicFailureNotRecorded est la régression du
+// versionnement des migrations sur les dialectes à commit implicite: quand la
+// dernière instruction échoue, la version ne doit PAS être enregistrée (le
+// schéma peut rester partiellement modifié — aucun rollback possible), sinon
+// le redémarrage saute la migration incomplète.
+func TestApplyMigration_NonAtomicFailureNotRecorded(t *testing.T) {
+	db := newNonAtomicTestDB(t)
+
+	const version = "mig_test_nonatomic_fail"
+	migration := `CREATE TABLE mig_nonatomic_a (id INTEGER PRIMARY KEY);
+THIS IS NOT VALID SQL;`
+
+	if err := db.applyMigration(migration, version); err == nil {
+		t.Fatal("expected migration with an invalid statement to fail, got nil")
+	}
+
+	var recorded int
+	if err := db.Conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version=?", version,
+	).Scan(&recorded); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if recorded != 0 {
+		t.Error("failed migration must not be recorded in schema_migrations")
+	}
+}
+
+// TestApplyMigration_NonAtomicResumeAfterFailure vérifie la reprise après
+// échec sur les dialectes non atomiques: la migration est relancée depuis le
+// début, l'objet déjà créé par la tentative ratée est toléré (erreur
+// already-exists ignorée instruction par instruction), et la version n'est
+// enregistrée qu'une fois toutes les instructions réussies.
+func TestApplyMigration_NonAtomicResumeAfterFailure(t *testing.T) {
+	db := newNonAtomicTestDB(t)
+
+	const version = "mig_test_nonatomic_resume"
+	failing := `CREATE TABLE mig_nonatomic_a (id INTEGER PRIMARY KEY);
+THIS IS NOT VALID SQL;`
+	if err := db.applyMigration(failing, version); err == nil {
+		t.Fatal("expected the failing migration to fail, got nil")
+	}
+
+	// Restart: the first statement's object already exists (the failed
+	// attempt created it); the re-run must skip it and complete.
+	retry := `CREATE TABLE mig_nonatomic_a (id INTEGER PRIMARY KEY);
+CREATE TABLE mig_nonatomic_b (id INTEGER PRIMARY KEY);`
+	if err := db.applyMigration(retry, version); err != nil {
+		t.Fatalf("resume migration: %v", err)
+	}
+
+	for _, table := range []string{"mig_nonatomic_a", "mig_nonatomic_b"} {
+		var n int
+		if err := db.Conn.QueryRow(
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table,
+		).Scan(&n); err != nil {
+			t.Fatalf("query %s: %v", table, err)
+		}
+		if n != 1 {
+			t.Errorf("table %s must exist after the resumed migration, got count %d", table, n)
+		}
+	}
+
+	var recorded int
+	if err := db.Conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version=?", version,
+	).Scan(&recorded); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if recorded != 1 {
+		t.Errorf("resumed migration should be recorded exactly once, got %d", recorded)
+	}
+}
+
+// TestApplyMigration_NonAtomicSuccessRecords vérifie le chemin nominal:
+// toutes les instructions réussissent et la version est enregistrée une
+// seule fois.
+func TestApplyMigration_NonAtomicSuccessRecords(t *testing.T) {
+	db := newNonAtomicTestDB(t)
+
+	const version = "mig_test_nonatomic_ok"
+	migration := `CREATE TABLE mig_nonatomic_ok_a (id INTEGER PRIMARY KEY);
+CREATE TABLE mig_nonatomic_ok_b (id INTEGER PRIMARY KEY);`
+
+	if err := db.applyMigration(migration, version); err != nil {
+		t.Fatalf("applyMigration: %v", err)
+	}
+
+	var recorded int
+	if err := db.Conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version=?", version,
+	).Scan(&recorded); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if recorded != 1 {
+		t.Errorf("migration should be recorded exactly once, got %d", recorded)
+	}
+}
+
+// TestDialectDDLAtomic pins the per-dialect DDLAtomic contract that
+// applyMigration relies on to pick the apply/record ordering.
+func TestDialectDDLAtomic(t *testing.T) {
+	if !(&sqliteDialect{}).DDLAtomic() {
+		t.Error("sqlite DDLAtomic must be true (transactional DDL)")
+	}
+	if !(&postgresDialect{}).DDLAtomic() {
+		t.Error("postgres DDLAtomic must be true (transactional DDL)")
+	}
+	if (&mysqlDialect{}).DDLAtomic() {
+		t.Error("mysql DDLAtomic must be false (DDL implicitly commits)")
+	}
+}
+
 func TestSplitStatements(t *testing.T) {
 	cases := []struct {
 		name string

@@ -778,9 +778,9 @@ func (db *DB) migrate() error {
 			continue
 		}
 
-		// Apply the migration and record it inside a single transaction so a
-		// failure midway never leaves the schema changed but unrecorded (or
-		// vice-versa). See applyMigration.
+		// Apply the migration and record it. See applyMigration for the two
+		// orderings: transactional apply+record on atomic-DDL dialects, and
+		// apply-then-record on dialects whose DDL implicitly commits.
 		if err := db.applyMigration(m, version); err != nil {
 			// Another process (e.g. the server and the CLI starting
 			// together) claimed the migration between the outside check and
@@ -812,26 +812,35 @@ func firstLine(s string) string {
 }
 
 // applyMigration runs a single migration's statements and records it in
-// schema_migrations inside one transaction, so a failure midway never leaves
-// the schema changed but unrecorded (or vice-versa). The migration SQL is
-// split into individual statements because the MySQL driver runs with
-// MultiStatements disabled for defense-in-depth; executing each statement
-// separately also lets every dialect apply a multi-step migration atomically
-// inside the transaction.
+// schema_migrations. The migration SQL is split into individual statements
+// because the MySQL driver runs with MultiStatements disabled for
+// defense-in-depth; executing each statement separately also lets every
+// dialect apply a multi-step migration uniformly.
 //
-// The version row is CLAIMED at the start of the transaction with a
-// dialect-portable insert-ignore, not appended at the end: the outside
-// "already applied" check races against another process (the server and the
-// CLI can start together — on SQLite the file lock only serializes
+// On dialects with atomic DDL (SQLite, PostgreSQL — DDLAtomic) the migration
+// runs in one transaction: the version row is CLAIMED at the start with a
+// dialect-portable insert-ignore, not appended at the end, because the
+// outside "already applied" check races against another process (the server
+// and the CLI can start together — on SQLite the file lock only serializes
 // transactions, not the check-then-insert sequence), and the loser used to
 // abort with a primary-key violation on schema_migrations. A zero-rows claim
 // means another instance owns the migration: the transaction rolls back and
 // errMigrationAppliedElsewhere is returned for the caller to skip.
 //
-// Note: MySQL/MariaDB implicitly commit on most DDL statements, so on those
-// dialects a multi-statement migration is not fully rollback-able. This is a
-// documented engine limitation; SQLite and PostgreSQL provide true atomicity.
+// On dialects whose DDL implicitly commits (MySQL/MariaDB) there is no
+// rollback, so the order is reversed: the statements run first, each taking
+// effect immediately, and the version row is recorded only after the last
+// statement succeeds. Claiming first would persist the version even when a
+// later statement fails (DDL commits the claim), and the incomplete
+// migration would be skipped on restart. A restart after a midway failure
+// re-runs the migration: the statements tolerate objects already created by
+// the previous attempt (IF NOT EXISTS / IsAlreadyExistsError skip).
+// Concurrency is still excluded on those dialects by the cluster-wide
+// migration lock held by the caller.
 func (db *DB) applyMigration(sqlText, version string) error {
+	if !db.dialect.DDLAtomic() {
+		return db.applyMigrationNonAtomic(sqlText, version)
+	}
 	ctx := context.Background()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -872,6 +881,39 @@ func (db *DB) applyMigration(sqlText, version string) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %s: %w", version, err)
+	}
+	return nil
+}
+
+// applyMigrationNonAtomic is the applyMigration variant for dialects whose
+// DDL implicitly commits (MySQL/MariaDB — see DDLAtomic). The statements run
+// outside any transaction, each taking effect immediately, and the version
+// row is recorded only after the last statement succeeds; the caller's
+// cluster-wide migration lock serializes concurrent instances. An
+// already-existing object is skipped statement by statement so a re-run
+// after a midway failure can complete.
+func (db *DB) applyMigrationNonAtomic(sqlText, version string) error {
+	ctx := context.Background()
+	for _, stmt := range splitStatements(sqlText) {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			if db.dialect.IsAlreadyExistsError(err) {
+				logger.Warn("migration statement skipped: object already exists",
+					"version", version, "statement", firstLine(stmt), "error", err)
+				continue
+			}
+			return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
+		}
+	}
+
+	res, err := db.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version)
+	if err != nil {
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		// The version appeared between the caller's outside check and this
+		// insert (lock bypassed by a foreign tool). The statements are
+		// idempotent by design, so nothing to undo: report and move on.
+		logger.Info("migration recorded concurrently by another instance; skipping", "version", version)
 	}
 	return nil
 }

@@ -605,7 +605,7 @@ GoZone supports SQLite (default for single-node deployments), MySQL, and Postgre
 
 ### Forward-Only Migrations (Rollback Policy)
 
-Migrations are **forward-only**: there are no `down` scripts and none are planned. Each migration is written with idempotent DDL (`CREATE TABLE IF NOT EXISTS`, inline index guards), applied inside a transaction together with its recorded content-hash version, and never reversed. Keeping per-dialect rollback scripts would triple the migration surface with code paths that cannot be exercised as reliably as the forward ones.
+Migrations are **forward-only**: there are no `down` scripts and none are planned. Each migration is written with idempotent DDL (`CREATE TABLE IF NOT EXISTS`, inline index guards) and never reversed. On SQLite and PostgreSQL a migration is applied and recorded inside one transaction (atomic apply+record). On MySQL/MariaDB, whose DDL implicitly commits, the statements run first and the content-hash version is recorded only after the last statement succeeds, so a failed migration is never marked applied and is re-run on restart. Keeping per-dialect rollback scripts would triple the migration surface with code paths that cannot be exercised as reliably as the forward ones.
 
 The official rollback path is therefore **restore from a pre-upgrade backup**:
 
@@ -613,7 +613,7 @@ The official rollback path is therefore **restore from a pre-upgrade backup**:
 2. **Prefer rehearsing the upgrade on a copy** — a staging database or a restore of the production backup — so the migration set is validated against real data volumes before it touches production.
 3. **After restoring the backup, run the matching pre-upgrade binary.** Rolling the schema back without rolling the binary back is not supported: an older binary starts successfully against a newer schema (all of its known migrations appear applied), but its code has never been tested against the extra tables and columns.
 
-One engine caveat reinforces the backup as the authoritative rollback: SQLite and PostgreSQL roll back a failed multi-statement migration atomically, but MySQL/MariaDB implicitly commit on most DDL, so a migration failing mid-way on MySQL can leave partial schema changes behind that only a restore cleanly undoes.
+One engine caveat reinforces the backup as the authoritative rollback: SQLite and PostgreSQL roll back a failed multi-statement migration atomically, but MySQL/MariaDB implicitly commit on most DDL, so a migration failing mid-way on MySQL can leave partial schema changes behind that only a restore cleanly undoes. Because the version row is recorded only after the last statement succeeds, a failed MySQL migration is not marked applied: the next start re-runs it from the beginning, skipping per statement any object the failed attempt already created.
 
 ### SQLite Single-Connection Pool
 

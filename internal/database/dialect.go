@@ -90,6 +90,14 @@ type Dialect interface {
 	// changed (e.g. a typo fix), so a non-idempotent ALTER TABLE ADD COLUMN no
 	// longer aborts startup.
 	IsAlreadyExistsError(err error) bool
+	// DDLAtomic reports whether DDL statements roll back together with the
+	// surrounding transaction. SQLite and PostgreSQL provide true transactional
+	// DDL; MySQL/MariaDB implicitly commit on most DDL statements, so a
+	// migration transaction cannot be rolled back there. The migration runner
+	// uses this to order apply-then-record on non-atomic dialects: recording
+	// the version first would persist the claim even when a later statement
+	// fails, and the incomplete migration would be skipped on restart.
+	DDLAtomic() bool
 	// IsUniqueViolation reports whether err indicates a DML UNIQUE-constraint
 	// violation (an INSERT/UPDATE collided with a unique index or primary
 	// key). Detection is dialect-aware: MySQL via *mysql.MySQLError code 1062,

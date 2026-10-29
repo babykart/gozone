@@ -282,6 +282,12 @@ func (m *mysqlDialect) IsUniqueViolation(err error) bool {
 	return false
 }
 
+// DDLAtomic is false for MySQL/MariaDB: most DDL statements implicitly
+// commit, so a migration transaction cannot be rolled back. The migration
+// runner therefore applies the statements first and records the version only
+// after the last one succeeds.
+func (m *mysqlDialect) DDLAtomic() bool { return false }
+
 func (m *mysqlDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (

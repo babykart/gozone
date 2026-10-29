@@ -282,6 +282,10 @@ func (p *postgresDialect) IsUniqueViolation(err error) bool {
 	return false
 }
 
+// DDLAtomic is true for PostgreSQL: DDL statements participate in the
+// surrounding transaction, so a migration applies and records atomically.
+func (p *postgresDialect) DDLAtomic() bool { return true }
+
 func (p *postgresDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (

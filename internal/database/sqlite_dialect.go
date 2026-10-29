@@ -159,6 +159,10 @@ func (s *sqliteDialect) IsUniqueViolation(err error) bool {
 	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
+// DDLAtomic is true for SQLite: DDL statements participate in the surrounding
+// transaction, so a migration applies and records atomically.
+func (s *sqliteDialect) DDLAtomic() bool { return true }
+
 func (s *sqliteDialect) Migrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS users (
