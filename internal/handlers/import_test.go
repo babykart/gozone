@@ -240,40 +240,83 @@ func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 	}
 }
 
-// TestImportZone_BIND_SkippedLinesReported is the handler-level skipped-lines test at the
-// handler level: a BIND file containing a malformed line must redirect with an
-// ?import_skipped=N query param so the frontend can surface feedback.
-func TestImportZone_BIND_SkippedLinesReported(t *testing.T) {
-	h, srv := newTestHandlerWithPDNS(t, importPDNS())
-	defer srv.Close()
-
-	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
-
-	bindContent := `$ORIGIN example.com.
+// TestImportZone_PartialImportsRejected pins the all-or-nothing import
+// contract: when any input line or directive cannot be converted into a
+// record, the handler must refuse the upload before PowerDNS is called. The
+// REPLACE semantics make a partial import destructive for every RRSet the
+// file touches.
+func TestImportZone_PartialImportsRejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		filename    string
+		contentType string
+		content     string
+	}{
+		{
+			name:        "BIND invalid line",
+			filename:    "test.zone",
+			contentType: "text/plain",
+			content: `$ORIGIN example.com.
 $TTL 3600
-@ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
 www IN A 192.0.2.1
-www 300`
-
-	body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.zone\"\r\nContent-Type: text/plain\r\n\r\n%s\r\n--boundary--\r\n", bindContent)
-	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
-	r.SetPathValue("zone_id", "example.com.")
-	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
-	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
-
-	w := httptest.NewRecorder()
-	h.ImportZone(w, r)
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("expected 303, got %d body=%s", w.Code, w.Body.String())
+www 300`,
+		},
+		{
+			name:        "BIND include directive",
+			filename:    "test.zone",
+			contentType: "text/plain",
+			content: `$ORIGIN example.com.
+$INCLUDE other.zone
+www IN A 192.0.2.1`,
+		},
+		{
+			name:        "CSV invalid row",
+			filename:    "test.csv",
+			contentType: "text/csv",
+			content: `name,type,content,ttl,priority,disabled
+www,A,192.0.2.1,3600,0,false
+www,A,not-an-ip,3600,0,false`,
+		},
 	}
-	loc := w.Header().Get("Location")
-	if !strings.Contains(loc, "import_skipped=1") {
-		t.Errorf("expected redirect to carry ?import_skipped=1, got %q", loc)
-	}
-	var details string
-	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='import_zone' LIMIT 1").Scan(&details)
-	if !strings.Contains(details, "Imported 2 RRSets (2 records) from BIND zone file, 1 lines skipped") {
-		t.Errorf("expected the summary entry to mention the skipped line count, got %q", details)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			patched := false
+			h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPatch {
+					patched = true
+				}
+				importPDNS()(w, r)
+			})
+			defer srv.Close()
+
+			testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+			body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n%s\r\n--boundary--\r\n", tc.filename, tc.contentType, tc.content)
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
+			r.SetPathValue("zone_id", "example.com.")
+			r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+			r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+
+			w := httptest.NewRecorder()
+			h.ImportZone(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+			}
+			if patched {
+				t.Fatal("a partial import must not reach PowerDNS")
+			}
+			if !strings.Contains(w.Body.String(), "no records were imported") {
+				t.Errorf("expected the no-mutation message, got: %s", w.Body.String())
+			}
+
+			var count int
+			h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='import_zone'").Scan(&count)
+			if count != 0 {
+				t.Errorf("a rejected import must not be audited, got %d activity rows", count)
+			}
+		})
 	}
 }
 
@@ -445,6 +488,30 @@ www IN A 192.0.2.1`)
 	}
 	if !gotLines["lonelytoken"] {
 		t.Errorf("expected 'lonelytoken' (single token) to be reported as skipped, got %+v", skipped)
+	}
+}
+
+// TestParseBindZone_ReportsUnsupportedInclude pins the skipped-feedback
+// contract for directives the importer does not implement: a $INCLUDE must be
+// reported explicitly so the caller can reject the upload instead of treating
+// the file as complete.
+func TestParseBindZone_ReportsUnsupportedInclude(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$INCLUDE other.zone
+www IN A 192.0.2.1`)
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected the valid A RRSet, got %+v", rrsets)
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("expected one skipped directive, got %+v", skipped)
+	}
+	if !strings.Contains(skipped[0].Line, "$INCLUDE") || !strings.Contains(skipped[0].Reason, "not supported") {
+		t.Errorf("unexpected skipped feedback: %+v", skipped[0])
 	}
 }
 
@@ -712,12 +779,12 @@ www.example.com.,A,192.0.2.4,3600,0,false
 	if err != nil {
 		t.Fatalf("parseCSVZone: %v", err)
 	}
-	if len(skipped) != 0 {
-		t.Errorf("no row should be skipped, got %+v", skipped)
+	if len(skipped) != 1 {
+		t.Fatalf("expected the empty-name NS row to be skipped, got %+v", skipped)
 	}
 
 	// All four rows collapse into the same apex/www RRSets under the
-	// canonical names; the empty-name NS row is skipped as before.
+	// canonical names; the malformed empty-name NS row is reported as skipped.
 	byName := map[string]int{}
 	for _, rr := range rrsets {
 		byName[rr.Name]++

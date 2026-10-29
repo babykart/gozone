@@ -21,7 +21,10 @@ import (
 // in the imported file replaces the existing RRSet if present, or creates
 // it if absent. Records not in the import file are untouched. Within the
 // same name+type, the import replaces the entire set of records — any
-// extra existing records with that name+type are removed.
+// extra existing records with that name+type are removed. Because the file
+// therefore describes the complete desired state of every RRSet it touches,
+// any skipped line or unsupported directive makes the upload incomplete:
+// the import is rejected before PowerDNS is called.
 func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
@@ -71,6 +74,14 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(skipped) > 0 {
+		for _, s := range skipped {
+			logger.Warn("Zone import rejected invalid input", "zone", zoneID, "line", s.Line, "reason", s.Reason)
+		}
+		h.renderError(w, r, fmt.Sprintf("Import file contains %d invalid or unsupported line(s) or directive(s). Fix the file and retry; no records were imported.", len(skipped)))
+		return
+	}
+
 	if len(rrsets) == 0 {
 		h.renderError(w, r, "No valid records found in file")
 		return
@@ -87,38 +98,23 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := middleware.GetUser(r)
-	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "skipped", len(skipped), "user", user.Username)
-
-	// Report lines that could not be parsed instead of silently dropping them
-	// plus a server-side log for operators alongside the user-facing summary.
-	for _, s := range skipped {
-		logger.Warn("Zone import skipped invalid line", "zone", zoneID, "line", s.Line, "reason", s.Reason)
-	}
+	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "user", user.Username)
 
 	// A single summary entry instead of one activity_logs row per RRSet: a
 	// 10 MiB import can carry thousands of RRSets, and each row was its own
 	// implicit transaction — on SQLite (one connection) that serialized the
 	// whole application behind the loop and drowned the zone's activity view.
-	// Per-line detail stays available in the server log above and the skipped
-	// warnings below.
 	recordCount := 0
 	for _, rs := range rrsets {
 		recordCount += len(rs.Records)
 	}
 	details := fmt.Sprintf("Imported %d RRSets (%d records) from %s zone file", len(rrsets), recordCount, strings.ToUpper(format))
-	if n := len(skipped); n > 0 {
-		details += fmt.Sprintf(", %d lines skipped", n)
-	}
 	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details}); err != nil {
 		logger.Error("failed to log import_zone activity", "zone_id", zoneID, "error", err)
 	}
 
-	redirectURL := "/zones/" + zoneID
-	if n := len(skipped); n > 0 {
-		redirectURL += fmt.Sprintf("?import_skipped=%d", n)
-	}
-	// #nosec G710 — redirectURL is "/zones/" + zoneID (chi PathValue, route-controlled) plus an optional ?import_skipped=N query where N is an int; no user-controlled host/path.
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	// #nosec G710 — redirect target is "/zones/" + zoneID (chi PathValue, route-controlled); no user-controlled host/path.
+	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
 func detectFormat(filename string) string {
@@ -136,9 +132,10 @@ type bindRecord struct {
 	data  string
 }
 
-// skippedLine records an input line that could not be turned into a record
-// (parse failure or validation failure), so the importer can surface feedback
-// instead of silently dropping it. Used for both BIND and CSV imports.
+// skippedLine records an input line or directive that could not be turned
+// into a record (parse failure, validation failure, or unsupported input), so
+// the importer can reject the upload instead of silently dropping part of the
+// file. Used for both BIND and CSV imports.
 type skippedLine struct {
 	Line   string
 	Reason string
@@ -164,8 +161,8 @@ func validateParsedRecord(rtype, name, contentBare string, priority int) error {
 }
 
 // parseBindZone parses an RFC 1035 BIND zone file and returns RRSets plus any
-// lines that could not be parsed (so the caller can surface feedback instead of
-// silently dropping them).
+// lines or directives that could not be converted into records (so the caller
+// can reject an incomplete upload instead of silently dropping part of it).
 func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, error) {
 	origin := zoneID
 	if !strings.HasSuffix(origin, ".") {
@@ -197,6 +194,7 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 			continue
 		}
 		if strings.HasPrefix(upper, "$INCLUDE") {
+			skipped = append(skipped, skippedLine{Line: bl.text, Reason: "$INCLUDE directives are not supported"})
 			continue
 		}
 
@@ -475,8 +473,9 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 }
 
 // parseCSVZone parses CSV zone data and returns RRSets plus any rows that
-// failed validation (so the caller can surface feedback instead of silently
-// dropping them, matching the BIND path). zoneID resolves the record names:
+// could not be converted into records (so the caller can reject an incomplete
+// upload instead of silently dropping part of it, matching the BIND path).
+// zoneID resolves the record names:
 // relative names and the "@" apex shorthand are canonicalised against the
 // zone, exactly like the BIND path (resolveBindName) and the web/API write
 // paths (normalizeRecordName).
@@ -523,6 +522,7 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 		disabled := getCSVField(row, headers, "disabled") == "true"
 
 		if name == "" || rtype == "" || content == "" {
+			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: "missing required name, type or content field"})
 			continue
 		}
 
