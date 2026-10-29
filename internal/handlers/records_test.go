@@ -218,7 +218,7 @@ func TestUpdateRecord_Success(t *testing.T) {
 				RRSets []models.RRSet `json:"rrsets"`
 			}{
 				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
-				RRSets: []models.RRSet{{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}}}},
+				RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}}}},
 			})
 			return
 		}
@@ -623,7 +623,7 @@ func TestInlineUpdateRecord_Success(t *testing.T) {
 				RRSets []models.RRSet `json:"rrsets"`
 			}{
 				Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
-				RRSets: []models.RRSet{{Name: "www.example.com", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}}}},
+				RRSets: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}}}},
 			})
 			return
 		}
@@ -678,7 +678,7 @@ func TestInlineUpdateRecord_ResponseReturnsNormalizedRecord(t *testing.T) {
 				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
 				// Wire form; the PDNS client read path splits the
 				// priority out (content "mail.example.com.", priority 10).
-				RRSets: []models.RRSet{{Name: "mx.example.com", Type: "MX", TTL: 300, Records: []models.RecordInfo{{Content: "10 mail.example.com."}}}},
+				RRSets: []models.RRSet{{Name: "mx.example.com.", Type: "MX", TTL: 300, Records: []models.RecordInfo{{Content: "10 mail.example.com."}}}},
 			})
 			return
 		}
@@ -795,12 +795,76 @@ func TestInlineUpdateRecord_StaleOriginalContentReturns409(t *testing.T) {
 	}
 }
 
-// TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces pins
-// the deliberate exception: on a single-record RRSet a stale
-// original_content keeps the last-write-wins replace (an SOA edit is ALWAYS
-// stale this way, because PowerDNS bumps the serial via SOA-EDIT between
-// page load and save — a 409 there would make SOA uneditable).
-func TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces(t *testing.T) {
+// TestUpdateRecord_StaleOriginalIdentityTransitions pins the stale-edit
+// transitions shared by the HTML and inline update paths: an edit whose
+// original identity no longer matches the live singleton RRSet, or whose
+// RRSet has been deleted, must be refused without touching PowerDNS. Creating
+// a genuinely new RRSet through the update form remains possible when no
+// original identity was submitted.
+func TestUpdateRecord_StaleOriginalIdentityTransitions(t *testing.T) {
+	tests := []struct {
+		name       string
+		list       []models.RRSet
+		body       string
+		wantStatus int
+		wantSent   int
+	}{
+		{
+			name: "singleton with different live record",
+			list: []models.RRSet{{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+				{Content: "10.0.0.2", Disabled: false},
+			}}},
+			body:       "name=www.example.com&type=A&content=10.0.0.3&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0",
+			wantStatus: http.StatusConflict,
+			wantSent:   0,
+		},
+		{
+			name:       "deleted RRSet",
+			list:       nil,
+			body:       "name=www.example.com&type=A&content=10.0.0.3&ttl=300&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0",
+			wantStatus: http.StatusConflict,
+			wantSent:   0,
+		},
+		{
+			name:       "new RRSet without original identity",
+			list:       nil,
+			body:       "name=www.example.com&type=A&content=10.0.0.3&ttl=300&priority=0&disabled=false",
+			wantStatus: http.StatusSeeOther,
+			wantSent:   1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []models.RRSet
+			h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, tc.list))
+			defer pdnsSrv.Close()
+
+			testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+			ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/update", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("zone_id", "example.com")
+			r = r.WithContext(ctx)
+			h.UpdateRecord(w, r)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d (%s)", tc.wantStatus, w.Code, w.Body.String())
+			}
+			if len(sent) != tc.wantSent {
+				t.Fatalf("expected %d PATCH RRSet(s), got %d: %+v", tc.wantSent, len(sent), sent)
+			}
+		})
+	}
+}
+
+// TestInlineUpdateRecord_StaleOriginalContentSingleRecordReturns409 pins the
+// singleton transition: when the stored record no longer matches the submitted
+// original identity, replacing it blindly could drop a record changed by
+// another writer. The edit must be refused without reaching PowerDNS.
+func TestInlineUpdateRecord_StaleOriginalContentSingleRecordReturns409(t *testing.T) {
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -840,11 +904,11 @@ func TestInlineUpdateRecord_StaleOriginalContentSingleRecordStillReplaces(t *tes
 	r = r.WithContext(ctx)
 	h.InlineUpdateRecord(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("single-record RRSet with stale original_content must stay last-write-wins, got %d (%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("single-record RRSet with stale original_content must return 409, got %d (%s)", w.Code, w.Body.String())
 	}
-	if len(patched) != 1 || len(patched[0].Records) != 1 || patched[0].Records[0].Content != "10.0.0.9" {
-		t.Errorf("expected the sole record replaced by the submitted edit, got %+v", patched)
+	if len(patched) != 0 {
+		t.Errorf("a refused singleton edit must not reach PowerDNS, got PATCH %+v", patched)
 	}
 }
 
@@ -1282,10 +1346,10 @@ func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) 
 				RRSets: []models.RRSet{
 					{
 						Name: "x.io.",
-						Type: "CNAME",
+						Type: "SOA",
 						TTL:  3600,
 						Records: []models.RecordInfo{
-							{Content: "target2.example.com.", Priority: 0, Disabled: false},
+							{Content: "ns1.x.io. hostmaster.x.io. 2024010102 3600 3600 604800 3600", Priority: 0, Disabled: false},
 						},
 					},
 				},
@@ -1310,10 +1374,10 @@ func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
-	body := "name=x.io.&type=CNAME" +
-		"&content=target3.example.com" +
+	body := "name=x.io.&type=SOA" +
+		"&content=ns1.x.io.+hostmaster.x.io.+2024010103+3600+3600+604800+3600" +
 		"&ttl=3600&priority=0&disabled=false" +
-		"&original_content=target1.example.com." +
+		"&original_content=ns1.x.io.+hostmaster.x.io.+2024010101+3600+3600+604800+3600" +
 		"&original_priority=0"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/zones/x.io./records/update", strings.NewReader(body))
@@ -1332,8 +1396,8 @@ func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) 
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record (replace), got %d", len(records))
 	}
-	if got := records[0].Content; got != "target3.example.com." {
-		t.Errorf("content = %q, want %q", got, "target3.example.com.")
+	if got, want := records[0].Content, "ns1.x.io. hostmaster.x.io. 2024010103 3600 3600 604800 3600"; got != want {
+		t.Errorf("content = %q, want %q", got, want)
 	}
 }
 

@@ -451,13 +451,15 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 
 	// Index of the record this edit replaces, so the inline editor can be
 	// told which record of the merged RRSet is "the saved one" (it cannot
-	// re-derive it client-side once the content is normalised). Default 0
-	// covers a new RRSet and the single-record last-write-wins replacement
-	// below; an unmatched original on a multi-record RRSet is refused.
+	// re-derive it client-side once the content is normalised). A submitted
+	// original identity also distinguishes an edit of an existing record
+	// from a request to create a new RRSet through the update form.
 	updatedIdx := 0
+	originalMatched := false
 	if existingRRSet != nil {
 		for i, rec := range existingRRSet.Records {
 			if rec.Content == originalContent && rec.Priority == originalPriority {
+				originalMatched = true
 				updatedIdx = i
 				break
 			}
@@ -465,32 +467,34 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	}
 
 	var updatedRecords []models.RecordInfo
-	if existingRRSet != nil {
-		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
-			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
-		// The merge appended instead of replacing: originalContent no longer
-		// matches any existing record — the page data is stale.
-		if len(updatedRecords) > len(existingRRSet.Records) {
-			if len(existingRRSet.Records) == 1 {
-				// For a single-record RRSet the append would produce two
-				// records, which PowerDNS rejects for types like SOA or
-				// CNAME ("only one such record allowed") — and an SOA edit
-				// is ALWAYS stale this way, because PowerDNS bumps the
-				// serial via SOA-EDIT between page load and save. Replace
-				// the sole record instead: last-write-wins for the edit the
-				// user explicitly submitted.
-				updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
-			} else {
-				// On a multi-record RRSet, appending would leave the old
-				// record in place next to the edited copy — a silent
-				// duplicate. Refuse and ask the client to reload.
-				return nil, nil, 0, &recordConflictError{
-					Message: "This record was modified by someone else (or its content changed) since the page was loaded. Reload the page and retry your edit.",
-				}
+	switch {
+	case existingRRSet == nil:
+		// An original identity on a missing RRSet means the record was
+		// deleted after the form was rendered. Refuse rather than silently
+		// recreating it; omitting the identity is the explicit create path.
+		if originalContent != "" {
+			return nil, nil, 0, &recordConflictError{
+				Message: "This record was deleted (or its RRSet changed) since the page was loaded. Reload the page and retry your edit.",
 			}
 		}
-	} else {
 		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+	case originalMatched:
+		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
+			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
+	case recordType == "SOA" && len(existingRRSet.Records) == 1:
+		// An SOA edit is always stale this way: PowerDNS bumps the serial
+		// via SOA-EDIT between page load and save, so the submitted original
+		// content no longer matches. Replace the sole record instead of
+		// appending a second one, which PowerDNS rejects.
+		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+	default:
+		// The live RRSet no longer contains the submitted identity. For a
+		// singleton that means another writer removed or replaced it; for a
+		// multi-record set appending would leave the old record next to the
+		// edited copy. Refuse and ask the client to reload.
+		return nil, nil, 0, &recordConflictError{
+			Message: "This record was modified by someone else (or its content changed) since the page was loaded. Reload the page and retry your edit.",
+		}
 	}
 
 	for i := range updatedRecords {
