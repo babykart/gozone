@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -84,6 +86,15 @@ func (m *mysqlDialect) RateLimitHitUpsert() (string, bool) {
 		ON DUPLICATE KEY UPDATE hits = hits + 1`, false
 }
 
+// Bounds for MySQL named-lock acquisition: the per-attempt wait and the total
+// number of attempts before giving up. Migration and zone locks share these
+// bounds so every cluster-wide lock acquisition stays finite.
+const (
+	mysqlLockTimeoutSec   = 60
+	mysqlLockMaxAttempts  = 5
+	mysqlLockRetryBackoff = 5 * time.Second
+)
+
 // LockMigrations acquires a named MySQL lock so only one instance runs
 // migrations at a time. The lock is released by the returned function.
 //
@@ -115,12 +126,7 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	// holder no longer aborts a waiting replica's startup. A NULL is retried
 	// for the same span because it can also reflect a transient server-side
 	// hiccup that clears on its own.
-	const (
-		lockTimeoutSec = 60
-		maxAttempts    = 5
-		retryBackoff   = 5 * time.Second
-	)
-	query := fmt.Sprintf("SELECT GET_LOCK('gozone_migrations', %d)", lockTimeoutSec)
+	query := fmt.Sprintf("SELECT GET_LOCK('gozone_migrations', %d)", mysqlLockTimeoutSec)
 	var got sql.NullInt64
 	for attempt := 1; ; attempt++ {
 		got = sql.NullInt64{}
@@ -131,12 +137,12 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 		// Retry while the lock was not acquired (NULL internal error or a
 		// timed-out attempt); a definitive 1 (acquired) breaks immediately,
 		// and the final attempt falls through to mysqlGetLockResult.
-		if !mysqlLockRetryable(got) || attempt >= maxAttempts {
+		if !mysqlLockRetryable(got) || attempt >= mysqlLockMaxAttempts {
 			break
 		}
 		logger.Warn("GET_LOCK not acquired (timed out or NULL); retrying",
-			"attempt", attempt, "of", maxAttempts, "backoff", retryBackoff.String())
-		time.Sleep(retryBackoff)
+			"attempt", attempt, "of", mysqlLockMaxAttempts, "backoff", mysqlLockRetryBackoff.String())
+		time.Sleep(mysqlLockRetryBackoff)
 	}
 	if err := mysqlGetLockResult(got); err != nil {
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
@@ -156,9 +162,64 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	return release, nil
 }
 
+// mysqlZoneLockName derives a deterministic named lock for a zone. MySQL lock
+// names are limited to 64 characters, while DNS names can be longer, so the
+// zone identity is hashed and the readable prefix stays short.
+func mysqlZoneLockName(zoneID string) string {
+	sum := sha256.Sum256([]byte("github.com/babykart/gozone/zone/" + zoneID))
+	return "gozone_zone_" + hex.EncodeToString(sum[:16])
+}
+
+// LockZone acquires a MySQL named lock scoped to one zone. As with the
+// migration lock, GET_LOCK and RELEASE_LOCK are session-scoped and therefore
+// run on one pinned connection. Acquisition is bounded and retried so a slow
+// writer on another instance cannot pin this process indefinitely.
+func (m *mysqlDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID string) (func(), error) {
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for zone lock: %w", err)
+	}
+	name := mysqlZoneLockName(zoneID)
+	query := fmt.Sprintf("SELECT GET_LOCK(?, %d)", mysqlLockTimeoutSec)
+	var got sql.NullInt64
+	for attempt := 1; ; attempt++ {
+		got = sql.NullInt64{}
+		if err := conn.QueryRowContext(ctx, query, name).Scan(&got); err != nil {
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire zone lock: %w", err)
+		}
+		if !mysqlLockRetryable(got) || attempt >= mysqlLockMaxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, ctx.Err()
+		case <-time.After(mysqlLockRetryBackoff):
+		}
+	}
+	if err := mysqlGetLockResult(got); err != nil {
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
+		return nil, fmt.Errorf("acquire zone lock: %w", err)
+	}
+
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		if _, err := conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", name); err != nil {
+			logger.Error("failed to release mysql zone lock", "zone", zoneID, "error", err)
+		}
+		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
+	}
+	return release, nil
+}
+
 // mysqlLockRetryable reports whether a GET_LOCK result warrants another
 // attempt: NULL (internal error, often transient) or 0 (timed out — the
-// holder may legitimately still be migrating). A definitive 1 (acquired) and
+// holder may still be running its operation). A definitive 1 (acquired) and
 // any other unexpected value are not retryable.
 func mysqlLockRetryable(got sql.NullInt64) bool {
 	return !got.Valid || got.Int64 == 0
@@ -167,9 +228,9 @@ func mysqlLockRetryable(got sql.NullInt64) bool {
 // mysqlGetLockResult classifies the integer returned by MySQL's GET_LOCK:
 // 1 = lock acquired, 0 = timed out (not the lock owner), NULL = internal
 // error (e.g. out of memory or the thread limit was reached). It returns a
-// non-nil error for any value other than 1, so LockMigrations never proceeds
-// without holding the lock. Extracted as a pure function so the classification
-// is unit-testable without a live MySQL.
+// non-nil error for any value other than 1, so no caller proceeds without
+// holding the lock. Extracted as a pure function so the classification is
+// unit-testable without a live MySQL.
 func mysqlGetLockResult(got sql.NullInt64) error {
 	switch {
 	case !got.Valid:

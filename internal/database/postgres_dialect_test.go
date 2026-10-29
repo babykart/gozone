@@ -258,6 +258,20 @@ func TestPostgresAdvisoryLockKey(t *testing.T) {
 	}
 }
 
+// TestPostgresZoneLockKey pins the zone-specific advisory-key derivation.
+func TestPostgresZoneLockKey(t *testing.T) {
+	a := postgresZoneLockKey("example.com.")
+	if a != postgresZoneLockKey("example.com.") {
+		t.Fatal("zone lock key must be deterministic")
+	}
+	if a == postgresZoneLockKey("example.org.") {
+		t.Fatal("different zones must derive different advisory keys")
+	}
+	if a == postgresAdvisoryLockKey() {
+		t.Fatal("zone lock keys must be distinct from the migration-lock key")
+	}
+}
+
 // TestIsPgQueryCanceled pins the retry classification: only SQLSTATE 57014
 // (query_canceled — what statement_timeout surfaces as) is a retryable lock
 // wait; other driver errors and plain errors are not.
@@ -447,6 +461,13 @@ func TestPostgresIntegration_LockMigrations(t *testing.T) {
 		t.Fatalf("second LockMigrations after release: %v (release was a no-op?)", err)
 	}
 	release2()
+}
+
+// TestPostgresIntegration_ZoneLockExclusion verifies that transaction-scoped
+// advisory zone locks are cluster-wide across independent DB handles.
+func TestPostgresIntegration_ZoneLockExclusion(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	assertZoneLockExcludesSecondDB(t, "postgres", dsn)
 }
 
 // TestPostgresIntegration_InsertIgnore verifies InsertIgnore silently skips

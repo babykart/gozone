@@ -1,10 +1,10 @@
 // Package dnsops is the transport-agnostic service layer for GoZone's DNS
 // operations (zones, records, statistics). It owns the business invariants
-// that every transport must share — per-zone write serialization, RRSet
-// merge/normalisation semantics, TTL resolution, zone authorization and the
-// activity audit trail — so the REST handlers, the web UI and (later) an MCP
-// server are thin adapters over one implementation instead of divergent
-// copies.
+// that every transport must share — per-zone write serialization across
+// database-sharing instances, RRSet merge/normalisation semantics, TTL
+// resolution, zone authorization and the activity audit trail — so the REST
+// handlers, the web UI and the MCP server are thin adapters over one
+// implementation instead of divergent copies.
 //
 // The REST handlers in internal/handlers call this service; the web handlers
 // still run their own flows but share the moved helpers (normalisation,
@@ -60,12 +60,17 @@ type Service struct {
 
 // New creates a Service over the given database and PowerDNS client.
 func New(db *database.DB, pdnsClient pdns.ZoneService) *Service {
-	return &Service{DB: db, PDNS: pdnsClient}
+	s := &Service{DB: db, PDNS: pdnsClient}
+	if db != nil {
+		s.locks.shared = db
+	}
+	return s
 }
 
 // Locks returns the shared per-zone locker. The web handlers keep using it
-// directly (Handler.zoneLocks) so REST, web and — later — MCP writes on the
-// same zone serialize against each other.
+// directly (Handler.zoneLocks) so REST, web and MCP writes on the same zone
+// serialize against each other in this process and across database-sharing
+// instances.
 func (s *Service) Locks() *ZoneLocks {
 	return &s.locks
 }

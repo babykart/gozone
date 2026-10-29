@@ -305,6 +305,25 @@ func TestMySQLLockRetryable(t *testing.T) {
 // LockMigrations relies on. Previously only ExecContext's error was inspected,
 // so a NULL (internal error) or 0 (timeout) result silently let migrations run
 // without the lock.
+// TestMySQLZoneLockName pins the named-lock derivation: deterministic,
+// zone-specific, and short enough for MySQL's 64-character lock-name limit.
+func TestMySQLZoneLockName(t *testing.T) {
+	a1, a2 := mysqlZoneLockName("example.com."), mysqlZoneLockName("example.com.")
+	if a1 != a2 {
+		t.Fatalf("zone lock name must be deterministic, got %q then %q", a1, a2)
+	}
+	if a1 == mysqlZoneLockName("example.org.") {
+		t.Fatal("different zones must derive different lock names")
+	}
+	if len(a1) > 64 {
+		t.Fatalf("zone lock name exceeds MySQL's 64-character limit: %d", len(a1))
+	}
+	longName := mysqlZoneLockName(strings.Repeat("very-long-zone-label.", 20) + "example.com.")
+	if len(longName) > 64 {
+		t.Fatalf("long zone lock name exceeds MySQL's 64-character limit: %d", len(longName))
+	}
+}
+
 func TestMySQLGetLockResult(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -403,6 +422,13 @@ func TestMySQLIntegration_LockMigrations(t *testing.T) {
 		t.Fatalf("second LockMigrations after release: %v (release was a no-op?)", err)
 	}
 	release2()
+}
+
+// TestMySQLIntegration_ZoneLockExclusion verifies that named zone locks are
+// cluster-wide: a second DB handle cannot enter while the first holds one.
+func TestMySQLIntegration_ZoneLockExclusion(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	assertZoneLockExcludesSecondDB(t, "mysql", dsn)
 }
 
 // TestMySQLIntegration_PrunePasswordHistory is a regression test:

@@ -298,7 +298,8 @@ func (h *Handler) APIExportZone(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	// #nosec G601 — filename derived from the zone ID path segment (validated by routing)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, name, extension))
-	w.Write([]byte(body)) // #nosec G104 — client going away mid-transfer is not an error
+	// #nosec G104,G705 — client disconnect; explicit non-HTML download with attachment and nosniff
+	w.Write([]byte(body))
 }
 
 // validateAPIRecordSet validates and canonicalises an RRSet from an API request,

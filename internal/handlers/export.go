@@ -71,6 +71,7 @@ func (h *Handler) exportBind(w http.ResponseWriter, zone *models.Zone, records [
 
 	// #nosec G104 — writing the export to the ResponseWriter; an error here
 	// only means the client went away mid-transfer.
+	// #nosec G705 -- explicit non-HTML download (text/plain + attachment + nosniff)
 	_, _ = io.WriteString(w, dnsops.RenderZoneFile(zone, records))
 }
 
@@ -91,6 +92,7 @@ func (h *Handler) exportCSV(w http.ResponseWriter, zone *models.Zone, records []
 
 	// #nosec G104 — writing the export to the ResponseWriter; an error here
 	// only means the client went away mid-transfer.
+	// #nosec G705 -- explicit non-HTML download (text/csv + attachment + nosniff)
 	_, _ = io.WriteString(w, dnsops.RenderZoneCSV(zone, records))
 }
 

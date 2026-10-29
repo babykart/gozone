@@ -21,6 +21,7 @@ import (
 // different zones hold independent mutexes.
 func TestZoneLocks_ExclusivePerZone(t *testing.T) {
 	var z zoneLocks
+	ctx := context.Background()
 
 	var inside int32
 	var violations int32
@@ -30,7 +31,11 @@ func TestZoneLocks_ExclusivePerZone(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				release := z.Lock("example.com.")
+				release, err := z.Lock(ctx, "example.com.")
+				if err != nil {
+					t.Errorf("Lock: %v", err)
+					return
+				}
 				if n := atomic.AddInt32(&inside, 1); n > 1 {
 					atomic.AddInt32(&violations, 1)
 				}
@@ -46,8 +51,14 @@ func TestZoneLocks_ExclusivePerZone(t *testing.T) {
 	}
 
 	// Independent zones: distinct mutexes, both usable right away.
-	releaseA := z.Lock("a.example.")
-	releaseB := z.Lock("b.example.")
+	releaseA, err := z.Lock(ctx, "a.example.")
+	if err != nil {
+		t.Fatalf("Lock A: %v", err)
+	}
+	releaseB, err := z.Lock(ctx, "b.example.")
+	if err != nil {
+		t.Fatalf("Lock B: %v", err)
+	}
 	releaseA()
 	releaseB()
 }

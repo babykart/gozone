@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/config"
 )
@@ -1261,6 +1262,51 @@ func newIntegrationDB(t *testing.T, driverName, dsn string) *DB {
 	}
 	t.Cleanup(func() { db.Close() }) // #nosec G104 -- best-effort cleanup in test
 	return db
+}
+
+// assertZoneLockExcludesSecondDB verifies the cross-process contract with two
+// independent DB handles on the same database: a zone lock held by the first
+// handle must block the second until release.
+func assertZoneLockExcludesSecondDB(t *testing.T, driverName, dsn string) {
+	t.Helper()
+	first := newIntegrationDB(t, driverName, dsn)
+	second, err := New(&config.DatabaseConfig{Driver: driverName, DSN: dsn})
+	if err != nil {
+		t.Fatalf("open second %s handle: %v", driverName, err)
+	}
+	t.Cleanup(func() { second.Close() }) // #nosec G104 -- best-effort cleanup in test
+
+	ctx := context.Background()
+	zoneID := fmt.Sprintf("zone-lock-%d", time.Now().UnixNano())
+	releaseFirst, err := first.LockZone(ctx, zoneID)
+	if err != nil {
+		t.Fatalf("first LockZone: %v", err)
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		releaseSecond, err := second.LockZone(ctx, zoneID)
+		if err == nil {
+			releaseSecond()
+		}
+		secondDone <- err
+	}()
+
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second LockZone returned while first held the lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseFirst()
+
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second LockZone after release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second LockZone did not acquire after release")
+	}
 }
 
 // seedIntegrationUser inserts a user (the FK target for revoked_tokens.user_id)

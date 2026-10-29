@@ -386,11 +386,21 @@ func TestZoneLocks_SharedInstance(t *testing.T) {
 	s := New(db, client)
 
 	var locks *ZoneLocks = s.Locks()
-	unlock := locks.Lock("example.com.")
+	ctx := context.Background()
+	unlock, err := locks.Lock(ctx, "example.com.")
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
 	done := make(chan struct{})
 	go func() {
 		// Must block until the first holder releases.
-		s.locks.Lock("example.com.")()
+		release, err := s.locks.Lock(ctx, "example.com.")
+		if err != nil {
+			t.Errorf("second Lock: %v", err)
+			close(done)
+			return
+		}
+		release()
 		close(done)
 	}()
 	select {

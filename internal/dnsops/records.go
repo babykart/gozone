@@ -220,10 +220,13 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 		return err
 	}
 
-	// Serialize the fetch→merge→PATCH sequence against concurrent writers
-	// on the same zone — the lock is shared with the web and (later) MCP
-	// write paths.
-	defer s.locks.Lock(zoneID)()
+	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
+	// the same zone, including writers served by another GoZone instance.
+	release, err := s.locks.Lock(ctx, zoneID)
+	if err != nil {
+		return &StageError{Stage: StageLock, Err: err}
+	}
+	defer release()
 
 	// Merge with any existing RRSet so sibling records are preserved. Content
 	// normalization runs AFTER the merge so each record keeps its original
@@ -309,9 +312,12 @@ func (s *Service) UpdateRecord(ctx context.Context, user *models.User, zoneID st
 	}
 
 	// Serialize the snapshot→PATCH sequence against every other read-modify-
-	// write on the same zone (create, delete, web and REST flows) — the lock
-	// is shared across transports.
-	defer s.locks.Lock(zoneID)()
+	// write on the same zone, including writers served by another instance.
+	release, err := s.locks.Lock(ctx, zoneID)
+	if err != nil {
+		return &StageError{Stage: StageLock, Err: err}
+	}
+	defer release()
 
 	// Best-effort snapshot of the RRSet being replaced, for the audit trail.
 	// A fetch failure (or a brand-new RRSet) leaves old_value empty — the
@@ -359,7 +365,11 @@ func (s *Service) DeleteRecord(ctx context.Context, user *models.User, zoneID, n
 		return err
 	}
 
-	defer s.locks.Lock(zoneID)()
+	release, err := s.locks.Lock(ctx, zoneID)
+	if err != nil {
+		return &StageError{Stage: StageLock, Err: err}
+	}
+	defer release()
 
 	// Best-effort snapshot of the RRSet before deletion, for the audit trail.
 	var oldRRSet *models.RRSet

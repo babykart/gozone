@@ -343,7 +343,7 @@ server {
 
 ### High Availability / Multi-Instance Deployments
 
-GoZone is stateless from the application's point of view: every piece of **durable** auth/security state lives in the shared database, so several instances can run behind a load balancer out of the box. A few protections are **per-node** (in-process), and this section documents which is which so operators can size their deployment and their expectations.
+GoZone keeps durable auth/security state in the shared database and coordinates multi-instance DNS writes there, so several instances can run behind a load balancer. A few protections remain **per-node** (in-process); this section documents which is which so operators can size their deployment and their expectations.
 
 **Cluster-wide (shared via the database)** — identical on every instance, enforced consistently regardless of which instance handles a request:
 
@@ -352,6 +352,7 @@ GoZone is stateless from the application's point of view: every piece of **durab
 - Password policy, password history and password expiry.
 - Session idle/absolute lifetime (the `sessions` table) and JWT revocation (`tokens_valid_after`, plus the per-`jti` `revoked_tokens` table).
 - API keys, activity/login-attempt audit, and OIDC account linking (`external_identities`).
+- **Record read-modify-write serialization** — create/update/delete/batch/template operations take a per-zone advisory lock in the shared MySQL/PostgreSQL database. Every instance serializes the full fetch→merge→PATCH sequence for a zone, preventing concurrent replicas from silently overwriting each other's records.
 
 **Per-node (in-memory, NOT shared across instances):**
 

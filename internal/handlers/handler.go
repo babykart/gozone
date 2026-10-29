@@ -40,12 +40,12 @@ type Handler struct {
 	// The API handlers are thin adapters over it; a future MCP transport
 	// will call the same methods.
 	Ops *dnsops.Service
-	// zoneLocks serializes read-modify-write record mutations per zone
-	// within this process (see dnsops.ZoneLocks). It is the SAME instance
-	// the dnsops service uses, so REST, web and (later) MCP writes on one
-	// zone serialize against each other. Every Handler method that
-	// fetches a zone's records, merges locally and PATCHes the result back
-	// must hold the zone lock across the whole sequence.
+	// zoneLocks serializes read-modify-write record mutations per zone (see
+	// dnsops.ZoneLocks). It is the SAME instance the dnsops service uses, so
+	// REST, web and MCP writes on one zone serialize against each other in
+	// this process and across database-sharing instances. Every Handler
+	// method that fetches a zone's records, merges locally and PATCHes the
+	// result back must hold the zone lock across the whole sequence.
 	zoneLocks *zoneLocks
 }
 

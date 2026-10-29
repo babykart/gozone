@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -125,6 +126,13 @@ func (s *sqliteDialect) RateLimitHitUpsert() (string, bool) {
 // instead of failing with a primary-key violation — file locking alone only
 // serializes individual transactions, not the check-then-insert sequence.
 func (s *sqliteDialect) LockMigrations(conn *sql.DB) (func(), error) {
+	return func() {}, nil
+}
+
+// LockZone is a no-op for SQLite. The single-connection pool serializes all
+// database work within one process, and SQLite deployments are not supported
+// as a shared multi-instance backend.
+func (s *sqliteDialect) LockZone(_ context.Context, _ *sql.DB, _ string) (func(), error) {
 	return func() {}, nil
 }
 

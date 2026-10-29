@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -77,6 +78,11 @@ type Dialect interface {
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.
 	LockMigrations(conn *sql.DB) (release func(), err error)
+	// LockZone acquires a cluster-wide lock scoped to one zone. The returned
+	// release function must be called when the read-modify-write operation is
+	// finished. SQLite uses the in-process single-connection guarantee and
+	// returns a no-op release.
+	LockZone(ctx context.Context, pool *sql.DB, zoneID string) (release func(), err error)
 	// IsAlreadyExistsError reports whether err indicates a DDL operation tried
 	// to create an object (column, table, index, constraint) that already
 	// exists. The migration runner uses this to tolerate re-running a

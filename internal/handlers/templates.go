@@ -427,7 +427,11 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 	// in wire form (priority embedded); detach the priority back to the
 	// read-path form first, because the final pass re-embeds it and is not
 	// idempotent for MX/SRV.
-	defer h.zoneLocks.Lock(zoneID)()
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 	existing, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to fetch existing records", err)

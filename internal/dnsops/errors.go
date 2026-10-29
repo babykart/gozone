@@ -15,6 +15,9 @@ var ErrForbidden = errors.New("forbidden")
 type Stage string
 
 const (
+	// StageLock is the acquisition of the per-zone lock that serializes a
+	// read-modify-write operation across transports and instances.
+	StageLock Stage = "lock"
 	// StageFetch is the read of the existing RRSets that precedes a write
 	// (merge input, audit before-image).
 	StageFetch Stage = "fetch"

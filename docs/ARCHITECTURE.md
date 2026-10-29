@@ -785,7 +785,7 @@ MySQL and PostgreSQL deployments do not have these constraints and can use a nor
 
 - **CGO required for SQLite**: The `mattn/go-sqlite3` driver requires a C compiler. Cross-compilation from macOS to Linux requires `CGO_ENABLED=1` and a cross-compilation toolchain. MySQL and PostgreSQL builds can use `CGO_ENABLED=0`.
 - **CI/CD**: A GitHub Actions workflow (`.github/workflows/release.yml`) builds and publishes multi-architecture Docker images to GHCR on tag pushes matching `v*`.
-- **Single process**: SQLite deployments cannot scale horizontally. MySQL/PostgreSQL deployments can be scaled behind a load balancer — all in-flight state is held in either PowerDNS or the database, not in the application process.
+- **Single process**: SQLite deployments cannot scale horizontally. MySQL/PostgreSQL deployments can be scaled behind a load balancer: durable state lives in the shared database, and record mutations coordinate through database-backed per-zone advisory locks. Flood throttles, caches and other latency-tolerant state may remain per-process.
 - **Helm chart**: A community-maintained Helm chart is available at [`babykart/helm-charts`](https://github.com/babykart/helm-charts) for Kubernetes deployments (`helm repo add babykart https://babykart.github.io/helm-charts && helm install gozone babykart/gozone`).
 
 ## MCP Transport (AI agents)

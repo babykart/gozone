@@ -58,8 +58,12 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// the same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	name := strings.TrimSpace(r.FormValue("name"))
 	recordType := canonicalRecordType(r.FormValue("type"))
@@ -246,8 +250,12 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// the same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	rrset, oldRRSet, _, err := h.updateRecordFromForm(r)
 	if err != nil {
@@ -285,8 +293,12 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// the same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZoneAPI(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	rrset, oldRRSet, updatedIdx, err := h.updateRecordFromForm(r)
 	if err != nil {
@@ -519,8 +531,12 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// the same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if err := r.ParseForm(); err != nil {
 		// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
@@ -1019,8 +1035,12 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→patch sequence against concurrent writers on the
-	// same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZone(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	recordName := strings.TrimSpace(r.FormValue("name"))
 	recordType := canonicalRecordType(r.FormValue("type"))
@@ -1171,8 +1191,12 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
 	// Serialize the fetch→patch sequence against concurrent writers on the
-	// same zone (see zoneLocks).
-	defer h.zoneLocks.Lock(zoneID)()
+	// same zone, including writers served by another GoZone instance.
+	release, ok := h.lockZoneAPI(w, r, zoneID)
+	if !ok {
+		return
+	}
+	defer release()
 
 	if err := r.ParseForm(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid form data"})

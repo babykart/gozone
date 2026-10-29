@@ -171,6 +171,71 @@ func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	return release, nil
 }
 
+// postgresZoneLockKey derives a stable, zone-specific advisory-lock key.
+func postgresZoneLockKey(zoneID string) int64 {
+	h := fnv.New64a()
+	// #nosec G104 -- hash.Hash's Write never returns an error.
+	h.Write([]byte("github.com/babykart/gozone/zone/" + zoneID))
+	// #nosec G115 -- PostgreSQL advisory-lock keys are signed int64 values;
+	// reinterpreting the hash preserves the full 64-bit entropy.
+	return int64(h.Sum64())
+}
+
+// LockZone acquires a transaction-scoped PostgreSQL advisory lock for one
+// zone. The open transaction pins one dedicated pool connection for the whole
+// read-modify-write operation; rolling it back releases the lock. The wait is
+// bounded by statement_timeout and retried, mirroring the migration lock.
+func (p *postgresDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID string) (func(), error) {
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for zone lock: %w", err)
+	}
+	key := postgresZoneLockKey(zoneID)
+
+	var tx *sql.Tx
+	for attempt := 1; ; attempt++ {
+		if tx, err = conn.BeginTx(ctx, nil); err != nil {
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire zone lock: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = '%ds'", postgresLockTimeoutSecs)); err != nil {
+			_ = tx.Rollback()
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire zone lock (set statement_timeout): %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", key); err == nil {
+			break
+		}
+		_ = tx.Rollback()
+		if isPgQueryCanceled(err) && attempt < postgresLockMaxAttempts {
+			logger.Warn("pg_advisory_xact_lock timed out; retrying",
+				"attempt", attempt, "of", postgresLockMaxAttempts, "backoff", postgresLockBackoff.String())
+			select {
+			case <-ctx.Done():
+				conn.Close() // #nosec G104 -- best-effort cleanup on error path
+				return nil, ctx.Err()
+			case <-time.After(postgresLockBackoff):
+			}
+			continue
+		}
+		conn.Close() // #nosec G104 -- best-effort cleanup on error path
+		return nil, fmt.Errorf("acquire zone lock: %w", err)
+	}
+
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		if err := tx.Rollback(); err != nil {
+			logger.Error("failed to release postgres zone lock", "zone", zoneID, "error", err)
+		}
+		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
+	}
+	return release, nil
+}
+
 // isPgQueryCanceled reports whether err is PostgreSQL's query_canceled
 // SQLSTATE (57014) — the error a statement terminated by statement_timeout
 // surfaces as, used to distinguish "lock wait timed out, retry" from a real

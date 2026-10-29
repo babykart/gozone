@@ -31,6 +31,11 @@ import (
 type DB struct {
 	Conn    *sql.DB
 	dialect Dialect
+	// zoneLockPool is a separate connection pool for per-zone advisory locks.
+	// Lock holders can wait on PowerDNS or write audit rows while holding the
+	// lock; keeping those waits on their own pool prevents them from consuming
+	// every application connection.
+	zoneLockPool *sql.DB
 }
 
 // ErrUniqueViolation is the sentinel error wrapping any driver-level
@@ -134,17 +139,38 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	conn.SetMaxIdleConns(dialect.MaxIdleConns())
 	conn.SetConnMaxLifetime(dialect.ConnMaxLifetime())
 
+	// Network databases use a second pool for per-zone advisory locks. The
+	// lock can be held across PowerDNS calls, so it must not share the finite
+	// application pool and risk starving ordinary queries.
+	var zoneLockPool *sql.DB
+	if cfg.Driver != "sqlite3" {
+		zoneLockPool, err = open(dialect.DriverName(), dsn)
+		if err != nil {
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("open zone-lock pool: %w", err)
+		}
+		zoneLockPool.SetMaxOpenConns(dialect.MaxOpenConns())
+		zoneLockPool.SetMaxIdleConns(dialect.MaxIdleConns())
+		zoneLockPool.SetConnMaxLifetime(dialect.ConnMaxLifetime())
+	}
+
 	// From here on conn is open: every failure path must close it, or the
 	// pool (and its background machinery — the SQLite sweep goroutines, the
 	// pinned migration-lock connection) leaks for the lifetime of the
 	// process. Callers retrying New in a loop would compound the leak.
 	if err := conn.Ping(); err != nil {
+		if zoneLockPool != nil {
+			zoneLockPool.Close() // #nosec G104 -- best-effort cleanup on error path
+		}
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	db := &DB{Conn: conn, dialect: dialect}
+	db := &DB{Conn: conn, dialect: dialect, zoneLockPool: zoneLockPool}
 	if err := db.migrate(); err != nil {
+		if zoneLockPool != nil {
+			zoneLockPool.Close() // #nosec G104 -- best-effort cleanup on error path
+		}
 		conn.Close() // #nosec G104 -- best-effort cleanup on error path
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
@@ -249,9 +275,34 @@ func (db *DB) Ping() error {
 	return db.Conn.Ping()
 }
 
-// Close closes the database connection pool.
+// LockZone acquires the cluster-wide lock guarding a zone's read-modify-write
+// operation. The returned release function must be called exactly once when
+// the operation finishes.
+func (db *DB) LockZone(ctx context.Context, zoneID string) (func(), error) {
+	if db == nil || db.Conn == nil || db.dialect == nil {
+		return nil, errors.New("zone lock requires an initialized database")
+	}
+	pool := db.zoneLockPool
+	if pool == nil {
+		if db.dialect.DriverName() == "sqlite3" {
+			pool = db.Conn
+		} else {
+			return nil, errors.New("zone-lock pool is not initialized")
+		}
+	}
+	return db.dialect.LockZone(ctx, pool, zoneID)
+}
+
+// Close closes the database connection pools.
 func (db *DB) Close() error {
-	return db.Conn.Close()
+	var firstErr error
+	if db.zoneLockPool != nil {
+		firstErr = db.zoneLockPool.Close()
+	}
+	if err := db.Conn.Close(); firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 // RevokeToken records a JWT ID (jti) in the revocation list so that the
