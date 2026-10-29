@@ -226,6 +226,12 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: err.Error()})
 			continue
 		}
+		// Resolve the RDATA domain-name fields against the current origin
+		// before validation: per RFC 1035 §5.1 a name that does not end with
+		// "." is relative to $ORIGIN ("@" denotes the origin). A trailing-dot
+		// append alone turns "mail" into the TLD "mail." instead of the
+		// intended "mail.<origin>.".
+		rec.data = resolveBindRData(rec.rtype, rec.data, origin)
 		// Validate the parsed record before accepting it. BIND data is wire
 		// format (priority embedded for MX/SRV), so split the priority out
 		// first and validate the bare content.
@@ -432,6 +438,38 @@ func resolveBindName(name, origin string) string {
 		return name
 	default:
 		return name + "." + origin
+	}
+}
+
+// resolveBindRData resolves the domain-name fields of a BIND RDATA against
+// the current origin, per RFC 1035 §5.1: a name that does not end with "."
+// is relative to $ORIGIN, and "@" denotes the origin itself. The affected
+// fields follow recordTypeSpecs: FQDN-target types resolve the whole
+// content (CNAME/NS/PTR/ALIAS/DNAME) or the last field (MX/SRV/AFSDB/NAPTR,
+// after the embedded priority), multi-name types resolve their declared
+// fields (SOA/RP/MINFO/NSEC). Other types pass through untouched.
+func resolveBindRData(rtype, data, origin string) string {
+	if data == "" {
+		return data
+	}
+	switch {
+	case models.TypeIsFQDNTarget(rtype):
+		fields := strings.Fields(data)
+		if len(fields) == 0 {
+			return data
+		}
+		fields[len(fields)-1] = resolveBindName(fields[len(fields)-1], origin)
+		return strings.Join(fields, " ")
+	case models.TypeHasFQDNFields(rtype):
+		fields := strings.Fields(data)
+		for _, idx := range models.FQDNFieldIndices(rtype) {
+			if idx >= 0 && idx < len(fields) {
+				fields[idx] = resolveBindName(fields[idx], origin)
+			}
+		}
+		return strings.Join(fields, " ")
+	default:
+		return data
 	}
 }
 

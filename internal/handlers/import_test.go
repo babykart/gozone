@@ -421,6 +421,53 @@ func TestImportZone_ConcurrentCreateSerialized(t *testing.T) {
 	}
 }
 
+// TestImportZone_BindRelativeTargetsResolved vérifie de bout en bout que les
+// cibles relatives BIND sont résolues contre $ORIGIN avant l'envoi à
+// PowerDNS: "mail" devient "mail.example.com.", "target.example" devient
+// "target.example.example.com.", les noms absolus passent inchangés.
+func TestImportZone_BindRelativeTargetsResolved(t *testing.T) {
+	var sent []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN MX 10 mail
+www IN CNAME target.example
+alias IN CNAME target.example.com.`
+
+	body := fmt.Sprintf("--boundary\r\nContent-Disposition: form-data; name=\"zonefile\"; filename=\"test.zone\"\r\nContent-Type: text/plain\r\n\r\n%s\r\n--boundary--\r\n", bindContent)
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./import", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+
+	w := httptest.NewRecorder()
+	h.ImportZone(w, r)
+	assertImportRedirect(t, w)
+
+	want := map[string]string{
+		"MX":          "10 mail.example.com.",
+		"CNAME:www":   "target.example.example.com.",
+		"CNAME:alias": "target.example.com.",
+	}
+	got := map[string]string{}
+	for _, rr := range sent {
+		key := rr.Type
+		if rr.Type == "CNAME" {
+			key = "CNAME:" + strings.Split(rr.Name, ".")[0]
+		}
+		got[key] = rr.Records[0].Content
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q (all sent: %+v)", k, got[k], w, sent)
+		}
+	}
+}
+
 func assertImportRedirect(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if w.Code != http.StatusSeeOther {
@@ -960,7 +1007,121 @@ func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
 
 // TestParseBindZone_FQDNTargetNormalization is a normalization regression test for
 // the BIND parser: a CNAME target without a trailing dot must get one, and MX
-// priority must be preserved through normalization.
+// priority must be preserved through normalization. Relative targets resolve
+// against $ORIGIN per RFC 1035 §5.1: "target.example.com" under
+// $ORIGIN example.com. means target.example.com.example.com., a bare
+// "mail" means mail.example.com., and absolute names pass through unchanged.
+func TestParseBindZone_FQDNTargetNormalization(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
+@ IN NS ns1.example.com.
+www IN CNAME target.example
+alias IN CNAME target.example.com.
+@ IN MX 10 mail
+@ IN MX 20 mail.example.com.`)
+
+	rrsets, _, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := map[string]string{
+		"CNAME": "target.example.example.com.",
+		"NS":    "ns1.example.com.",
+		"MX":    "10 mail.example.com.",
+	}
+	found := make(map[string]string)
+	for _, rr := range rrsets {
+		if rr.Type == "CNAME" && rr.Name == "alias.example.com." {
+			found["CNAME-ABS"] = rr.Records[0].Content
+			continue
+		}
+		if rr.Type == "MX" {
+			if rr.Records[0].Content != "10 mail.example.com." {
+				t.Errorf("MX content[0] = %q, want %q", rr.Records[0].Content, "10 mail.example.com.")
+			}
+			found["MX"] = rr.Records[0].Content
+			for _, rec := range rr.Records {
+				if rec.Content == "20 mail.example.com." {
+					found["MX-ABS"] = rec.Content
+				}
+			}
+			continue
+		}
+		if w, ok := want[rr.Type]; ok {
+			if rr.Records[0].Content != w {
+				t.Errorf("%s content = %q, want %q", rr.Type, rr.Records[0].Content, w)
+			}
+			found[rr.Type] = rr.Records[0].Content
+		}
+	}
+	for rtype := range want {
+		if _, ok := found[rtype]; !ok {
+			t.Errorf("type %s missing from parsed rrsets", rtype)
+		}
+	}
+	if found["CNAME-ABS"] != "target.example.com." {
+		t.Errorf("absolute CNAME target must pass through unchanged, got %q", found["CNAME-ABS"])
+	}
+	if found["MX-ABS"] != "20 mail.example.com." {
+		t.Errorf("absolute MX target must pass through unchanged, got %q", found["MX-ABS"])
+	}
+}
+
+// TestParseBindZone_RDataOriginResolution covers the RFC 1035 §5.1
+// resolution for the multi-name and structured RDATA types: SOA mname/rname,
+// RP and MINFO mailbox fields resolve against $ORIGIN, SRV and NAPTR resolve
+// their trailing target field while keeping priority/weight/port and the
+// quoted flags/service/regexp tokens intact.
+func TestParseBindZone_RDataOriginResolution(t *testing.T) {
+	data := []byte(`$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1 hostmaster 2024010100 3600 900 1209600 3600
+@ IN RP hostmaster txtref
+@ IN MINFO root hostmaster
+_sip._tcp IN SRV 10 20 5060 sip
+@ IN NAPTR 100 50 "s" "SIP+D2U" "" sip
+@ IN NAPTR 200 60 "" "" "" .`)
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+
+	want := map[string]string{
+		"SOA":   "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600",
+		"RP":    "hostmaster.example.com. txtref.example.com.",
+		"MINFO": "root.example.com. hostmaster.example.com.",
+		"SRV":   "10 20 5060 sip.example.com.",
+		"NAPTR": "100 50 \"s\" \"SIP+D2U\" \"\" sip.example.com.",
+	}
+	naptrRoot := "200 60 \"\" \"\" \"\" ."
+	found := make(map[string]string)
+	for _, rr := range rrsets {
+		if rr.Type == "NAPTR" && len(rr.Records) == 2 {
+			found["NAPTR-ROOT"] = rr.Records[1].Content
+		}
+		if w, ok := want[rr.Type]; ok {
+			found[rr.Type] = rr.Records[0].Content
+			if rr.Records[0].Content != w {
+				t.Errorf("%s content = %q, want %q", rr.Type, rr.Records[0].Content, w)
+			}
+		}
+	}
+	for rtype := range want {
+		if _, ok := found[rtype]; !ok {
+			t.Errorf("type %s missing from parsed rrsets", rtype)
+		}
+	}
+	if found["NAPTR-ROOT"] != naptrRoot {
+		t.Errorf("NAPTR root replacement must stay the root label, got %q", found["NAPTR-ROOT"])
+	}
+}
+
 // TestParseBindZone_SameLineParentheses is the regression test for a SOA
 // written on a single physical line: "( 2024010101 3600 900 1209600 300 )".
 // The parser used to flip into paren-continuation mode on '(' and only left
@@ -1031,39 +1192,5 @@ txt1 IN TXT "value (parenthetical) inside"
 	}
 	if !sawNS {
 		t.Error("records following a TXT with quoted parens must still parse")
-	}
-}
-
-func TestParseBindZone_FQDNTargetNormalization(t *testing.T) {
-	data := []byte(`$ORIGIN example.com.
-$TTL 3600
-@ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
-@ IN NS ns1.example.com.
-www IN CNAME target.example.com
-@ IN MX 10 mail.example.com`)
-
-	rrsets, _, err := parseBindZone(data, "example.com.")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	want := map[string]string{
-		"CNAME": "target.example.com.",
-		"MX":    "10 mail.example.com.",
-		"NS":    "ns1.example.com.",
-	}
-	found := make(map[string]string)
-	for _, rr := range rrsets {
-		if w, ok := want[rr.Type]; ok {
-			found[rr.Type] = rr.Records[0].Content
-			if rr.Records[0].Content != w {
-				t.Errorf("%s content = %q, want %q", rr.Type, rr.Records[0].Content, w)
-			}
-		}
-	}
-	for rtype := range want {
-		if _, ok := found[rtype]; !ok {
-			t.Errorf("type %s missing from parsed rrsets", rtype)
-		}
 	}
 }

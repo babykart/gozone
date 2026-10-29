@@ -409,6 +409,8 @@ Export full zone records in RFC 1035 BIND zone file format or CSV with a single 
 
 Import uses PowerDNS `REPLACE` semantics: for each name+type pair in the file, the existing RRSet is replaced if present, or created if absent. Records not referenced in the import file are left untouched. Importing a file with fewer records than currently exist for a given name+type replaces the entire RRSet — extra existing records within that same name+type are removed.
 
+BIND names — record owners and RDATA targets alike — are resolved against the current `$ORIGIN` per RFC 1035: under `$ORIGIN example.com.`, `mail` in an MX record imports as `mail.example.com.`, and `target.example` in a CNAME imports as `target.example.example.com.`. Absolute names (trailing dot) are left unchanged.
+
 **Disabled records**: BIND export skips records marked `disabled` (the BIND format has no concept of disabled). CSV export keeps them with `disabled=true` so the round-trip is preserved.
 
 **RRSet comments**: CSV export adds a `comment` column at the end of the row. Multiple comments per RRSet are joined with newlines into a single cell (using standard CSV embedded-newline quoting) and the same cell is repeated on every record row of that RRSet. On import, the cell is split on newlines (one `Comment` per line) and deduplicated across rows of the same RRSet. CSV files without the `comment` column still parse unchanged.
