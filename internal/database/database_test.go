@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/logger"
 )
 
 func TestNewInMemory(t *testing.T) {
@@ -490,214 +492,6 @@ func TestIndexUsage(t *testing.T) {
 	}
 }
 
-func TestSanitizeDSN_MySQL(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{
-			"user:password@tcp(localhost:3306)/gozone",
-			"user:***@tcp(localhost:3306)/gozone",
-		},
-		{
-			"root:secret@tcp(127.0.0.1:3306)/dbname?parseTime=true&multiStatements=true",
-			"root:***@tcp(127.0.0.1:3306)/dbname?parseTime=true&multiStatements=true",
-		},
-		{
-			"admin:p@ss:w0rd@tcp(host)/mydb",
-			"admin:***@tcp(host)/mydb",
-		},
-		// Unix-socket DSNs: previously leaked verbatim because
-		// only "@tcp(" was recognised.
-		{
-			"user:password@unix(/var/run/mysqld/mysqld.sock)/gozone",
-			"user:***@unix(/var/run/mysqld/mysqld.sock)/gozone",
-		},
-		{
-			"root:secret@unix(/tmp/mysql.sock)/db?parseTime=true",
-			"root:***@unix(/tmp/mysql.sock)/db?parseTime=true",
-		},
-		// Password containing '@' on a unix-socket DSN: the delimiter match
-		// lands on the '@' right before "unix(", so the password is redacted.
-		{
-			"admin:p@ss@unix(/sock)/db",
-			"admin:***@unix(/sock)/db",
-		},
-	}
-
-	for _, tt := range tests {
-		got := sanitizeDSN(tt.input)
-		if got != tt.expected {
-			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestSanitizeDSN_PostgreSQL(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{
-			"host=localhost port=5432 user=gozone password=secret dbname=gozone sslmode=disable",
-			"host=localhost port=5432 user=gozone password=*** dbname=gozone sslmode=disable",
-		},
-		{
-			"host=db.example.com user=admin password=changeme dbname=prod",
-			"host=db.example.com user=admin password=*** dbname=prod",
-		},
-		{
-			"user=app password=very-secret-pwd! database=mydb",
-			"user=app password=*** database=mydb",
-		},
-	}
-
-	for _, tt := range tests {
-		got := sanitizeDSN(tt.input)
-		if got != tt.expected {
-			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestSanitizeDSN_SQLite(t *testing.T) {
-	tests := []string{
-		"./data/gozone.db",
-		":memory:",
-		"/var/lib/gozone/data.db",
-	}
-
-	for _, input := range tests {
-		got := sanitizeDSN(input)
-		if got != input {
-			t.Errorf("sanitizeDSN(%q) = %q, want unchanged", input, got)
-		}
-	}
-}
-
-func TestSanitizeDSN_NoCredentials(t *testing.T) {
-	got := sanitizeDSN("host@tcp(localhost)/db")
-	if got != "host@tcp(localhost)/db" {
-		t.Errorf("DSN without password should remain unchanged: got %q", got)
-	}
-
-	got = sanitizeDSN("user=admin host=localhost dbname=prod")
-	if got != "user=admin host=localhost dbname=prod" {
-		t.Errorf("Postgres DSN without password should remain unchanged: got %q", got)
-	}
-}
-
-// TestSanitizeDSN_PostgresQuotedPassword pins the key=value quoted form: a
-// single-quoted password containing spaces (lib/pq's syntax) must be redacted
-// whole, quotes included. The previous [^ ]+ match stopped at the first space
-// and leaked the rest of the password into the log.
-func TestSanitizeDSN_PostgresQuotedPassword(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{
-			"host=db user=admin password='my secret' dbname=gozone",
-			"host=db user=admin password=*** dbname=gozone",
-		},
-		{
-			"password=' leading and trailing '",
-			"password=***",
-		},
-		// Backslash-escaped quote inside the quoted value: still redacted whole.
-		{
-			`host=db password='it\'s complex' dbname=gozone`,
-			`host=db password=*** dbname=gozone`,
-		},
-		// Unquoted form unchanged in behaviour.
-		{
-			"host=db password=secret dbname=gozone",
-			"host=db password=*** dbname=gozone",
-		},
-	}
-	for _, tt := range tests {
-		if got := sanitizeDSN(tt.input); got != tt.expected {
-			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestSanitizeDSN_URLForm(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		// lib/pq accepts URL-form DSNs; the password must not survive the
-		// startup log line.
-		{
-			"postgres://user:secret@db:5432/gozone",
-			"postgres://user:***@db:5432/gozone",
-		},
-		{
-			"postgresql://user:secret@db/gozone?sslmode=require",
-			"postgresql://user:***@db/gozone?sslmode=require",
-		},
-		{
-			"postgres://admin:hunter2@db.example.com:5432/prod?sslmode=verify-full&connect_timeout=5",
-			"postgres://admin:***@db.example.com:5432/prod?sslmode=verify-full&connect_timeout=5",
-		},
-		// Percent-encoded '@' in the password: decoded by url.Parse, and the
-		// redacted URL is re-encoded cleanly.
-		{
-			"postgres://user:p%40ss@db:5432/gozone",
-			"postgres://user:***@db:5432/gozone",
-		},
-		// No password in the userinfo: nothing to redact.
-		{
-			"postgres://user@db:5432/gozone",
-			"postgres://user@db:5432/gozone",
-		},
-	}
-
-	for _, tt := range tests {
-		got := sanitizeDSN(tt.input)
-		if got != tt.expected {
-			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestSanitizeDSN_MySQLDefaultProtocol(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		// go-sql-driver accepts a DSN without an explicit protocol: the
-		// password sits directly before "@/".
-		{
-			"user:secret@/gozone",
-			"user:***@/gozone",
-		},
-		{
-			"root:pass@/dbname?parseTime=true",
-			"root:***@/dbname?parseTime=true",
-		},
-		// Password containing '@': the delimiter match lands on the '@' right
-		// before the "/", so the password is still redacted.
-		{
-			"admin:p@ss@/db",
-			"admin:***@/db",
-		},
-		// No password present.
-		{
-			"user@/db",
-			"user@/db",
-		},
-	}
-
-	for _, tt := range tests {
-		got := sanitizeDSN(tt.input)
-		if got != tt.expected {
-			t.Errorf("sanitizeDSN(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
 func TestMigrationVersion_Stability(t *testing.T) {
 	v1 := migrationVersion("CREATE TABLE t (id INTEGER)")
 	v2 := migrationVersion("CREATE TABLE t (id INTEGER)")
@@ -885,6 +679,55 @@ func (cc *countingConn) Ping(context.Context) error {
 		return errors.New("countingConn: ping refused")
 	}
 	return nil
+}
+
+// TestNew_DoesNotLogDSN vérifie que la chaîne de connexion n'atteint jamais
+// le log de démarrage: les DSN portent des credentials (mot de passe
+// userinfo MySQL, password= PostgreSQL, y compris les formes à espaces ou
+// valeurs quotées acceptées par lib/pq) et aucune heuristique de masquage ne
+// couvre toutes les syntaxes que les pilotes acceptent — le DSN n'est donc
+// pas journalisé du tout, seul le nom du pilote l'est.
+func TestNew_DoesNotLogDSN(t *testing.T) {
+	marker := "password = 'secret-two-words'"
+	cfg := &config.DatabaseConfig{
+		Driver: "sqlite3",
+		DSN:    filepath.Join(t.TempDir(), marker+".db"),
+	}
+
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = pw
+	defer func() {
+		os.Stderr = oldStderr
+		pr.Close()
+	}()
+
+	logger.Init("info")
+	db, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	db.Close()
+
+	if err := pw.Close(); err != nil {
+		t.Fatalf("close pipe write end: %v", err)
+	}
+	os.Stderr = oldStderr
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+
+	text := string(out)
+	if !strings.Contains(text, "connected to database") {
+		t.Fatalf("expected the startup log line, got: %s", text)
+	}
+	if strings.Contains(text, marker) || strings.Contains(text, "dsn=") {
+		t.Errorf("connection string must never be logged: %s", text)
+	}
 }
 
 // TestNew_PingFailureClosesPool pins the failure-path cleanup: when Ping
