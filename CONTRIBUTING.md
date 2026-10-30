@@ -144,10 +144,15 @@ cmd/                      CLI tree (Cobra): root, server, user (unlock, reset-pa
 cmd/server.go             HTTP server bootstrap, routing, wiring
 internal/config/          Configuration (YAML + GOZONE_* env vars)
 internal/database/        Multi-dialect SQL layer: SQLite, MySQL, PostgreSQL connections + migrations
-internal/handlers/          HTTP handlers (web UI + REST API)
-internal/middleware/       JWT auth, API key auth, zone authorization, rate limiting
+internal/dnsops/          Transport-agnostic DNS operations (zones/records/stats): service layer
+                          shared by the REST handlers and the MCP server (locks, audit, authorization)
+internal/handlers/        HTTP handlers (web UI + REST API): thin adapters over dnsops
+internal/mcpserver/       MCP server (Streamable HTTP) whose tools wrap dnsops
+internal/middleware/      JWT auth, API key auth, zone authorization, rate limiting
 internal/models/          Shared data structures
+internal/oidc/            OpenID Connect single sign-on (discovery, PKCE, JWKS)
 internal/pdns/            PowerDNS REST API client (ZoneService) with read-through cache
+internal/validators/      DNS and input validation helpers
 web/templates/            Embedded Go HTML templates
 web/static/               Embedded CSS, JavaScript
 web/jstest/               Frontend unit tests (not embedded in the binary)
@@ -165,6 +170,8 @@ type Handler struct {
     Tmpl    *template.Template
     Version version.Info
     OIDC    SSOService         // nil when single sign-on is unconfigured
+    Ops     *dnsops.Service    // transport-agnostic DNS service layer
+    zoneLocks *dnsops.ZoneLocks // per-zone write lock (same instance as Ops)
 }
 ```
 

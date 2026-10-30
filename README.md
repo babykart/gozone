@@ -72,7 +72,7 @@ Configuration is via `config.yaml` or environment variables:
 | `server.port` | `GOZONE_SERVER_PORT` | `8080` |
 | `server.app_name` | `GOZONE_APP_NAME` | `GoZone` |
 | `server.secret_key` | `GOZONE_SECRET_KEY` | *auto-generated* |
-| `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` |
+| `server.secure_cookies` | `GOZONE_SECURE_COOKIES` | `false` | **No longer read.** The session and CSRF `Secure` flags are derived per request from the effective TLS context. Accepted for backward compatibility and ignored. |
 | `server.shutdown_timeout_seconds` | `GOZONE_SHUTDOWN_TIMEOUT` | `30` |
 | `server.require_secret_key` | `GOZONE_REQUIRE_SECRET_KEY` | `false` | Refuse to start when no persistent `secret_key` is configured, instead of generating an ephemeral one. Set to `true` when running more than one replica: each instance would otherwise derive a different key and reject the sessions minted by the others. Hardened mode also refuses to seed the built-in default admin password — a unique initial password (`admin.password` / `GOZONE_ADMIN_PASSWORD`) becomes mandatory. |
 
@@ -179,7 +179,7 @@ A password complexity policy is enforced whenever a password is set or changed: 
 | `password.max_age_days` | `GOZONE_PASSWORD_MAX_AGE_DAYS` | `0` | Maximum password age in days. `0` (default) means passwords never expire. When a password is older than this, the user is forced to change it on next login. |
 | `password.expiry_warn_days` | `GOZONE_PASSWORD_EXPIRY_WARN_DAYS` | `0` | Show a dashboard "password expiring soon" warning this many days before expiry. `0` disables the warning. Only meaningful when `max_age_days > 0`. |
 
-An admin/operator password reset (`UpdateUser`, `gozone user reset-password`) and admin user creation both flag the account `must_change_password`: on the next login the user is redirected to **Change Password** and the session is restricted to that page (plus `/logout`) until a new password is chosen. The same forced-change flow triggers when a password expires.
+An admin/operator password reset (`UpdateUser`, `gozone user reset-password`) flags the account `must_change_password`: on the next login the user is redirected to **Change Password** and the session is restricted to that page (plus `/logout`) until a new password is chosen. Admin user creation flags the account too by default — the "Require password change on first login" checkbox is pre-checked in the creation form, but an admin can uncheck it when the initial password is already strong. The same forced-change flow triggers when a password expires.
 
 ### Login Lockout (brute-force protection)
 
@@ -313,15 +313,13 @@ openssl rand -hex 32
 
 ### HTTPS Configuration
 
-Session cookies use the `Secure` flag and `SameSite=Strict` by default. The `Secure` flag is automatically enabled when the request arrives over HTTPS (direct TLS or via `X-Forwarded-Proto: https` header from a reverse proxy).
+GoZone does not terminate TLS itself: the server serves plain HTTP (there is no built-in `ServeTLS` path, and ports below 1024 are rejected at startup as privileged). Run it behind a TLS-terminating reverse proxy in production.
 
-The CSRF cookie's `Secure` flag is set once at startup and cannot be decided per request, so it is controlled by `server.secure_cookies` (`GOZONE_SECURE_COOKIES`). Set it to `true` whenever GoZone is served over HTTPS. Leave it `false` for plain-HTTP development, otherwise browsers will not return the CSRF cookie and form submissions will fail validation.
+Session cookies use the `Secure` flag and `SameSite=Strict`. Both the session and the CSRF cookie get `Secure` automatically whenever the request arrives over HTTPS — detected per request from the TLS connection or from `X-Forwarded-Proto: https` when the client is a configured trusted proxy (`server.trusted_proxies`). No setting is required, and plain-HTTP development keeps working.
 
-**Option 1: Direct TLS**
+> `server.secure_cookies` (`GOZONE_SECURE_COOKIES`) is **no longer read**: the per-request TLS detection described above replaced it. The key is still accepted in YAML/env for backward compatibility and is otherwise ignored.
 
-Configure `server.port` to 443 and provide TLS certificate paths (requires a reverse proxy or Go TLS config).
-
-**Option 2: Reverse Proxy (recommended)**
+**Reverse proxy (the supported setup)**
 
 Run GoZone behind nginx, Caddy, or Traefik:
 
@@ -395,7 +393,7 @@ Each zone page displays:
 - **Export** (BIND zone file or CSV) — download all zone records
 - **Import** (BIND or CSV) — upload and batch-create records into an existing zone
 - **Danger zone** (admin only) — delete zone, notify, rectify
-- **Clear cache** — invalidate the local zone list cache for the current zone, available to any user with group access to the zone
+- **Clear cache** (admin only) — invalidate the local zone list cache for the current zone
 
 ### TSIG Keys
 
@@ -425,7 +423,7 @@ GoZone exposes the PowerDNS API `comments` field for every RRSet. Comments are m
 - **CSV export/import**: round-trips through the optional `comment` column described above.
 - **API**: pass a `comments` array in the RRSet payload when creating or updating records (see the API section below).
 - **PowerDNS semantics**: the PATCH `comments` field *replaces* the entire comment list for the RRSet. GoZone preserves this behaviour — when you edit a record without touching the comment field, the existing comments are kept (the field is omitted from the PATCH body); when you add or change a comment, existing comments are echoed back and your changes are applied.
-- **Clearing all comments**: the Edit Record page and the inline editor expose a "Clear all comments" checkbox. When checked, GoZone sends `"comments":[]` to PowerDNS, which deletes every existing comment for that RRSet. The checkbox only appears in the edit forms (not in the batch-create form, where no comments exist yet by default).
+- **Clearing all comments**: the Add Records (batch-create) form, the dedicated Edit Record page and the inline editor each expose a comment textarea plus a "Clear all comments" checkbox. When checked, GoZone sends `"comments":[]` to PowerDNS, which deletes every existing comment for that RRSet. In the batch-create form the clear flag only applies when the submitted rows merge into an RRSet that already exists.
 
 ### Zone Groups
 

@@ -57,12 +57,14 @@ USER nonroot
 
 EXPOSE 8080
 
-# Image-level healthcheck so orchestrators that read only the image (plain
-# `docker run`, Kubernetes, Nomad) benefit, not just docker-compose. It probes
-# the LIVENESS endpoint: the process is up and serving HTTP. Dependency health
-# (database, PowerDNS) is deliberately excluded — an unreachable PowerDNS or a
-# database hiccup must not mark the container unhealthy and trigger restart
-# cascades across a fleet. Orchestrators that want dependency-aware gating
+# Image-level healthcheck for plain `docker run` and compose, which read it
+# from the image. It probes the LIVENESS endpoint: the process is up and
+# serving HTTP. Dependency health (database, PowerDNS) is deliberately
+# excluded — an unreachable PowerDNS or a database hiccup must not mark the
+# container unhealthy and trigger restart cascades across a fleet.
+# NOTE: Kubernetes ignores image HEALTHCHECKs — define liveness/readiness
+# probes explicitly in the pod spec (liveness on /health/live, readiness on
+# /health/ready). Orchestrators that want dependency-aware gating
 # (load-balancer removal, rollout checks) should probe /health/ready, which
 # returns 503 when DB or PowerDNS is unreachable. busybox wget ships with
 # alpine.

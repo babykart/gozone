@@ -37,8 +37,8 @@ type Handler struct {
 	// up a live identity provider.
 	OIDC SSOService
 	// Ops is the transport-agnostic DNS service layer (internal/dnsops).
-	// The API handlers are thin adapters over it; a future MCP transport
-	// will call the same methods.
+	// The API handlers and the MCP server (internal/mcpserver) are thin
+	// adapters over it; both transports call the same methods.
 	Ops *dnsops.Service
 	// zoneLocks serializes read-modify-write record mutations per zone (see
 	// dnsops.ZoneLocks). It is the SAME instance the dnsops service uses, so

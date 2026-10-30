@@ -39,8 +39,9 @@ prevent brute-forcing of the `state` parameter.
 ## Prerequisites
 
 - **HTTPS in production.** OIDC redirect URIs and cookies are HTTPS-oriented.
-  Run GoZone behind a TLS-terminating reverse proxy and set
-  `server.secure_cookies: true` (see the README HTTPS section).
+  Run GoZone behind a TLS-terminating reverse proxy: the session and CSRF
+  `Secure` flags are derived per request from the effective TLS context, so
+  no cookie setting is needed (see the README HTTPS section).
 - **SSO session cookie is `SameSite=Lax`.** The local-login cookie uses
   `SameSite=Strict`, but SSO requires `Lax`: the IdP redirects back to
   `/auth/oidc/<provider>/callback` (a cross-site top-level navigation), and the
@@ -108,7 +109,8 @@ overridden with `GOZONE_OIDC_*` environment variables.
 ```yaml
 server:
   secret_key: "<openssl rand -hex 32>"
-  secure_cookies: true            # behind HTTPS
+  # behind the TLS-terminating reverse proxy no cookie flags are needed —
+  # Secure is derived per request from the TLS context
 
 oidc:
   enabled: true
@@ -210,8 +212,9 @@ oidc:
 ```
 
 Google issues a verified `email` claim, so existing local accounts with the
-same (verified) email are auto-linked on first SSO login when
-`auto_provision: true`.
+same (verified) email are auto-linked on first SSO login. This linking runs
+independently of `auto_provision`, which gates only the creation of NEW
+accounts.
 
 ### GitLab (SaaS or self-hosted)
 

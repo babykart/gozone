@@ -52,15 +52,15 @@ This document describes the internal architecture of GoZone, a PowerDNS manageme
 └──────────────────────-┬────────────────────────────┘
                          │
                   ┌──────▼───────┐
-                  │   Handlers   │
-                  │(Handler str.)│
-                  └──┬-─────┬─-──┘
+                  │   Handlers   │   REST API & MCP tools are thin
+                  │(Handler str.)│   adapters over internal/dnsops
+                  └──┬-─────┬─-──┘   (locks, audit, authorization)
                      │      │
        ┌─────────────▼─┐ ┌──▼──────────────┐
        │  Configured   │ │  PowerDNS API   │
        │  SQL Database │ │  (internal/pdns)│
-       │(internal/db)  │ │  ┌────────────┐ │
-       │  + login_at-  │ │  │cachedClient│ │
+       │(internal/     │ │  ┌────────────┐ │
+       │  database)    │ │  │cachedClient│ │
        │  tempts audit │ │  │ (TTL cache)│ │
        └───────────────┘ └──────┬────────┘-┘
                                │
@@ -84,13 +84,16 @@ web/              Embedded HTML templates, CSS, JS via //go:embed
 
 internal/
   cache/          Generic TTL cache with background eviction (wraps the PowerDNS client)
-  config/         YAML configuration loading with GOZONE_ env var overrides + validation
+  config/         YAML configuration loading with GOZONE_* env var overrides + validation
   constants/      Application constants
   database/       Multi-dialect SQL layer (SQLite/MySQL/PostgreSQL), content-hash migrations, seeding, login_attempts purge
+  dnsops/         Transport-agnostic DNS operations shared by REST and MCP: per-zone locks, RRSet normalization, audit, zone authorization
   errors/         HTTP-aware application errors with Unwrap support
-  handlers/       HTTP handlers for Web UI, REST API, and health checks
+  handlers/       HTTP handlers for Web UI, REST API, and health checks (thin adapters over dnsops)
+  mcpserver/      MCP server (Streamable HTTP): tools wrap dnsops, read-only resources, validated prompts
   middleware/     JWT authentication, API key auth, admin guard, user context, rate limiting, client IP resolution
   models/         Shared data structures and JSON serialization
+  oidc/           OpenID Connect single sign-on: provider discovery, PKCE, JWKS verification
   pdns/           PowerDNS Authoritative Server REST API client + read-through TTL cache wrapper
   validators/     DNS and input validation helpers
 ```
