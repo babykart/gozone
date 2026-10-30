@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -111,27 +112,58 @@ func exportRestPath(zone, format string) string {
 	return fmt.Sprintf("/api/v1/zones/%s/export?format=%s", zone, format)
 }
 
-// truncateResource caps an export body at maxResourceBytes, cutting at the
-// last complete line, and reports whether a cut happened. BIND output gains
-// an explicit comment banner naming the REST route serving the full export
-// (zone files have comments); CSV output gets a clean line-aligned cut with
-// no banner — CSV has no comment syntax, so an in-band marker would corrupt
-// the file, and callers surface the truncation through structured output
-// instead. Content under the limit is returned unchanged.
+// truncateResource caps an export body at maxResourceBytes and reports
+// whether a cut happened. BIND output gains an explicit comment banner
+// naming the REST route serving the full export (zone files have comments);
+// CSV output gets no banner — CSV has no comment syntax, so an in-band
+// marker would corrupt the file, and callers surface the truncation through
+// structured output instead — but the cut is made at a complete record
+// boundary, because CSV comment cells can carry embedded newlines inside
+// quoted fields and a byte cut at the last newline can land inside a field,
+// producing output no CSV parser accepts. Content under the limit is
+// returned unchanged.
 func truncateResource(text, zone, format string) (string, bool) {
 	if len(text) <= maxResourceBytes {
 		return text, false
+	}
+	slog.Warn("mcp export truncated", "zone", zone, "format", format, "limit_bytes", maxResourceBytes)
+	if format != "bind" {
+		return truncateCSVRecords(text, maxResourceBytes), true
 	}
 	cut := text[:maxResourceBytes]
 	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
 		cut = cut[:i+1] // keep the trailing newline: the cut is line-aligned
 	}
-	slog.Warn("mcp export truncated", "zone", zone, "format", format, "limit_bytes", maxResourceBytes)
-	if format != "bind" {
-		return cut, true
-	}
 	return cut + fmt.Sprintf("\n; --- TRUNCATED at %d bytes (limit %d): fetch the full export via GET %s ---\n",
 		len(cut), maxResourceBytes, exportRestPath(zone, format)), true
+}
+
+// truncateCSVRecords re-encodes a CSV export keeping only the complete
+// records that fit within budget bytes. Decoding with encoding/csv makes
+// the record boundary quote-aware: a quoted comment cell spanning several
+// physical lines is kept or dropped whole. The single writer is flushed per
+// row so the builder length before a row is a valid cut marker. A row whose
+// addition would cross the budget is dropped along with every row after it,
+// so the result is always a strict prefix of well-formed records.
+func truncateCSVRecords(text string, budget int) string {
+	r := csv.NewReader(strings.NewReader(text))
+	var out strings.Builder
+	w := csv.NewWriter(&out)
+	for {
+		rec, err := r.Read()
+		if err != nil {
+			break // EOF, or an unparseable line: keep what parsed cleanly
+		}
+		marker := out.Len()
+		if werr := w.Write(rec); werr != nil {
+			break
+		}
+		w.Flush()
+		if out.Len() > budget {
+			return out.String()[:marker]
+		}
+	}
+	return out.String()
 }
 
 // resourceError maps a service failure for a resource read. Unlike tool

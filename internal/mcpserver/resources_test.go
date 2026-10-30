@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -170,6 +171,55 @@ func TestTruncateResource(t *testing.T) {
 	}
 	if !strings.HasSuffix(csvGot, "\n") {
 		t.Fatal("CSV cut must end at a line boundary")
+	}
+}
+
+// TestTruncateResource_CSVMultilineCommentField is the truncation-safety
+// regression: comment cells can carry embedded newlines inside quoted
+// fields, so a byte cut at the last physical line can land inside a field
+// and produce output no CSV parser accepts. The cut must happen at a
+// complete record boundary instead. The row length is tuned so the byte
+// limit falls inside a quoted multiline comment, where the old line-based
+// cut would end the output mid-field.
+func TestTruncateResource_CSVMultilineCommentField(t *testing.T) {
+	header := "name,type,content,ttl,priority,disabled,comment\n"
+	// A quoted comment cell spanning two physical lines.
+	row := "www.example.com.,A,192.0.2.1,3600,0,false,\"first line\nsecond line\"\n"
+	// Calibrate a filler row so the byte limit lands 7 bytes before a row
+	// end — after the field's embedded newline — where a line-aligned cut
+	// would end the output inside the quoted field. The filler shifts the
+	// repeating rows' alignment without changing their content.
+	fillerLen := (maxResourceBytes + 7 - len(header)) % len(row)
+	if fillerLen < 12 {
+		fillerLen += len(row)
+	}
+	// A 7-field filler row keeps the field-count assertions uniform.
+	filler := strings.Repeat("x", fillerLen-8) + ",A,,,,,\n"
+	big := header + filler + strings.Repeat(row, (maxResourceBytes/len(row))+2)
+
+	got, truncated := truncateResource(big, "example.com.", "csv")
+	if !truncated {
+		t.Fatal("oversized CSV must report truncation")
+	}
+	// The cut must be parseable and stop at a complete record: parsing the
+	// truncated body yields whole records and no error.
+	records, err := csv.NewReader(strings.NewReader(got)).ReadAll()
+	if err != nil {
+		t.Fatalf("truncated CSV must stay parseable: %v\ntail: %q", err, got[len(got)-120:])
+	}
+	if len(records) < 2 {
+		t.Fatalf("expected at least the header and one record, got %d", len(records))
+	}
+	for i, rec := range records {
+		if len(rec) != 7 {
+			t.Fatalf("record %d has %d fields, want 7 (record boundary respected)", i, len(rec))
+		}
+	}
+	// The multiline comment survives whole on the first data record
+	// (records[0] is the header, records[1] the filler row).
+	comment := records[2][6]
+	if !strings.HasPrefix(comment, "first line") || !strings.HasSuffix(comment, "second line") || !strings.Contains(comment, "\n") {
+		t.Errorf("multiline comment cell corrupted: %.80q", comment)
 	}
 }
 
