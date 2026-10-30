@@ -267,6 +267,72 @@ function withClassList(el) {
     return el;
 }
 
+// --- Bulk result replay (replayBulkResult) -----------------------------------
+//
+// The bulk-delete summary is persisted to sessionStorage before the page
+// reloads, and replayed once on the fresh page — otherwise the partial-
+// failure reasons vanished before the operator could read them.
+
+function stubSessionStorage(initial) {
+    const store = Object.assign({}, initial);
+    return {
+        getItem(k) { return k in store ? store[k] : null; },
+        setItem(k, v) { store[k] = String(v); },
+        removeItem(k) { delete store[k]; },
+        store
+    };
+}
+
+test('replayBulkResult shows the stored bulk summary once and clears it', () => {
+    const el = withClassList({ textContent: '', className: 'notification hidden' });
+    const doc = stubDocument();
+    doc.setElement('notification', el);
+    const prevSession = global.sessionStorage;
+    const prevSetTimeout = global.setTimeout;
+    let hideFn = null;
+    global.setTimeout = (fn) => { hideFn = fn; return 1; }; // isolate the auto-hide timer
+    global.sessionStorage = stubSessionStorage({
+        'gozone.bulk-result': JSON.stringify({ message: 'Deleted 2 zone(s); 1 failed: example.org.', type: 'warning' })
+    });
+    try {
+        withDocument(doc, () => {
+            app.replayBulkResult();
+            assert.strictEqual(el.textContent, 'Deleted 2 zone(s); 1 failed: example.org.');
+            assert.ok(el.className.indexOf('notification-warning') !== -1, 'warning styling');
+            // Single-use: the entry is consumed, a second replay has nothing.
+            el.textContent = '';
+            app.replayBulkResult();
+            assert.strictEqual(el.textContent, '');
+        });
+        // Run the captured auto-hide so the module's notification timer state
+        // resets for the next test.
+        if (hideFn) hideFn();
+    } finally {
+        global.sessionStorage = prevSession;
+        global.setTimeout = prevSetTimeout;
+    }
+});
+
+test('replayBulkResult is a no-op without an entry or with a malformed payload', () => {
+    const el = withClassList({ textContent: '', className: 'notification hidden' });
+    const doc = stubDocument();
+    doc.setElement('notification', el);
+    const prevSession = global.sessionStorage;
+    try {
+        withDocument(doc, () => {
+            global.sessionStorage = stubSessionStorage({});
+            app.replayBulkResult();
+            assert.strictEqual(el.textContent, '');
+
+            global.sessionStorage = stubSessionStorage({ 'gozone.bulk-result': '{not json' });
+            app.replayBulkResult();
+            assert.strictEqual(el.textContent, '');
+        });
+    } finally {
+        global.sessionStorage = prevSession;
+    }
+});
+
 // --- Notifications (showNotification) ----------------------------------------
 //
 // A notification shown within 5 seconds of the previous one used to be hidden

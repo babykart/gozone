@@ -35,6 +35,47 @@ function storageSet(key, value) {
     }
 }
 
+// Best-effort sessionStorage access (same contract as storageGet/Set): used
+// to carry the bulk-delete summary across the page reload so partial-failure
+// reasons stay visible on the fresh page.
+function sessionGet(key) {
+    try {
+        return sessionStorage.getItem(key);
+    } catch (e) {
+        return null;
+    }
+}
+
+function sessionSet(key, value) {
+    try {
+        sessionStorage.setItem(key, value);
+    } catch (e) {
+        /* best-effort persistence only */
+    }
+}
+
+// replayBulkResult surfaces the bulk-delete summary saved before the reload
+// that follows a bulk delete: without it the (possibly partial) result —
+// including the failure reasons — vanished before the operator could read
+// it. The entry is single-use: removed before showing.
+function replayBulkResult() {
+    var raw = sessionGet('gozone.bulk-result');
+    if (!raw) return;
+    try {
+        sessionStorage.removeItem('gozone.bulk-result');
+    } catch (e) {
+        /* best-effort persistence only */
+    }
+    try {
+        var payload = JSON.parse(raw);
+        if (payload && payload.message) {
+            showNotification(payload.message, payload.type || 'success');
+        }
+    } catch (e) {
+        /* malformed payload: nothing to replay */
+    }
+}
+
 (function() {
     // Browser-only boot: restore the persisted sidebar state and paint the
     // theme-toggle icon. Both need the <body> DOM that is present once
@@ -652,10 +693,15 @@ function makeBulkController(spec) {
         })
         .then(function(data) {
             var msg = 'Deleted ' + data.deleted + ' ' + spec.noun + '(s)';
+            var type = 'success';
             if (spec.failedSuffix && data.failed && data.failed.length > 0) {
                 msg += spec.failedSuffix(data.failed.length, data.failed);
+                type = 'warning';
             }
-            showNotification(msg, data.failed && data.failed.length > 0 ? 'warning' : 'success');
+            // Keep the summary across the reload that follows: the partial-
+            // failure reasons would otherwise vanish with the page.
+            sessionSet('gozone.bulk-result', JSON.stringify({ message: msg, type: type }));
+            showNotification(msg, type);
             window.location.reload();
         })
         .catch(function(err) {
@@ -1031,12 +1077,14 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined') {
             initRecordPriority();
             initImportFeedback();
             syncAllBulkCounts();
+            replayBulkResult();
         });
     } else {
         initDelegatedListeners();
         initRecordPriority();
         initImportFeedback();
         syncAllBulkCounts();
+        replayBulkResult();
     }
 }
 
@@ -1052,7 +1100,10 @@ if (typeof module !== 'undefined' && module.exports) {
         generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,
         makeBulkController: makeBulkController,
+        replayBulkResult: replayBulkResult,
         saveRecordRow: saveRecordRow,
+        sessionGet: sessionGet,
+        sessionSet: sessionSet,
         showNotification: showNotification,
         storageGet: storageGet,
         storageSet: storageSet,
