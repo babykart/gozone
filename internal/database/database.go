@@ -617,6 +617,26 @@ func (tx *Tx) CountEnabledAdmins(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// LockUserRow locks the user's row for the remainder of the transaction
+// (FOR UPDATE on MySQL/PostgreSQL; the clause is omitted on SQLite, whose
+// single-writer pool already serializes writers) and returns their
+// credential_version. Locking the owner row serializes concurrent
+// quota-checked inserts against the same user (e.g. CreateAPIKey's
+// COUNT(*)+INSERT pair): each transaction takes the row lock before counting,
+// so two concurrent creations cannot both read "one below the cap" and
+// insert past it. Returns an error for a missing user.
+func (tx *Tx) LockUserRow(ctx context.Context, userID int64) (int64, error) {
+	query := "SELECT credential_version FROM users WHERE id = ?"
+	if tx.dialect.DriverName() != "sqlite3" {
+		query += " FOR UPDATE"
+	}
+	var version int64
+	if err := tx.QueryRowContext(ctx, query, userID).Scan(&version); err != nil {
+		return 0, fmt.Errorf("lock user row: %w", err)
+	}
+	return version, nil
+}
+
 // IsLastEnabledAdmin reports whether userID is the only enabled admin in the
 // database, with the same FOR UPDATE semantics as CountEnabledAdmins so the
 // answer is stable for the lifetime of the calling transaction. Returns

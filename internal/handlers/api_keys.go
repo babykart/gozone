@@ -236,11 +236,22 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// Lock the owner row for the rest of the transaction and read the
+	// credential_version in the same round-trip: on MySQL/PostgreSQL the
+	// FOR UPDATE serializes concurrent creations, so the count below cannot
+	// interleave with another insert past the cap.
+	credentialVersion, err := tx.LockUserRow(ctx, user.ID)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to lock the user row", err)
+		return
+	}
+
 	// Cap the number of keys a single user may own. An API key carries its
 	// owner's full permissions, so unbounded accumulation defeats expiry
-	// hygiene. The count runs inside the creation transaction, and the limit
-	// is only enforced when positive (0 disables the cap). Expired keys count
-	// toward the cap: deleting them is what frees quota.
+	// hygiene. The count runs inside the creation transaction behind the
+	// owner-row lock above, and the limit is only enforced when positive (0
+	// disables the cap). Expired keys count toward the cap: deleting them is
+	// what frees quota.
 	if h.Cfg.Auth.MaxAPIKeysPerUser > 0 {
 		var owned int
 		if err := tx.QueryRowContext(ctx,
@@ -257,18 +268,12 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	// expires_at is NULL for a non-expiring key; otherwise now + the chosen
 	// duration, in UTC per the project-wide DB timestamp convention. The
-	// key carries the owner's credential_version at creation so a rotation
-	// landing after minting — even in the same second — invalidates it.
+	// key carries the owner's credential_version (read above, under the row
+	// lock) so a rotation landing after minting — even in the same second —
+	// invalidates it.
 	var expiresAt any
 	if expiryDays > 0 {
 		expiresAt = time.Now().UTC().Add(time.Duration(expiryDays) * 24 * time.Hour)
-	}
-	var credentialVersion int64
-	if err := tx.QueryRowContext(ctx,
-		"SELECT credential_version FROM users WHERE id = ?", user.ID,
-	).Scan(&credentialVersion); err != nil {
-		h.renderInternalError(w, r, "Failed to read credential version", err)
-		return
 	}
 	_, err = tx.ExecContext(ctx,
 		"INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope, credential_version) VALUES (?, ?, ?, ?, ?, ?)",

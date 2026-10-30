@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -401,6 +402,62 @@ func TestListAPIKeys_AllowListsFlashErrorCodes(t *testing.T) {
 // TestCreateAPIKey_DefaultFormNeverExpires verifies the expiry handling of the
 // original form (no expires_in field): the key is stored without an expiry and
 // therefore authenticates until deleted.
+// TestCreateAPIKey_ConcurrentCreationsRespectCap is the quota race
+// regression: two creations racing under a cap of one must not both succeed
+// (COUNT-then-INSERT without a lock let both read "below the cap" on
+// MySQL/PostgreSQL). The handler now takes the owner row lock (FOR UPDATE)
+// before counting; on SQLite the single-writer pool serializes, so the race
+// window is closed on every dialect.
+func TestCreateAPIKey_ConcurrentCreationsRespectCap(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Auth.MaxAPIKeysPerUser = 1
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	post := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/profile/api-keys/create", strings.NewReader("description=race&scope=api:write"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.CreateAPIKey(w, r.WithContext(ctx))
+		return w
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan *httptest.ResponseRecorder, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- post()
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	created, limited := 0, 0
+	for w := range results {
+		switch {
+		case w.Code == http.StatusSeeOther && strings.Contains(w.Header().Get("Location"), "error=limit_reached"):
+			limited++
+		case w.Code == http.StatusSeeOther:
+			created++
+		default:
+			t.Errorf("unexpected response: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if created != 1 || limited != 1 {
+		t.Errorf("expected exactly 1 created + 1 limit_reached, got created=%d limited=%d", created, limited)
+	}
+
+	var total int
+	h.DB.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID).Scan(&total)
+	if total != 1 {
+		t.Errorf("the cap must hold: %d keys exist, want 1", total)
+	}
+}
+
 func TestCreateAPIKey_DefaultFormNeverExpires(t *testing.T) {
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)

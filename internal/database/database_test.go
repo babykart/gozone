@@ -33,6 +33,40 @@ func TestDBPingContextHonorsCancellation(t *testing.T) {
 	}
 }
 
+// TestLockUserRow verifies the owner-row lock helper: it returns the live
+// credential_version and fails for a missing user. (The FOR UPDATE clause
+// itself only takes effect on MySQL/PostgreSQL — exercised by the dialect
+// matrix; SQLite serializes writers through its single-connection pool.)
+func TestLockUserRow(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	uid, err := db.ExecReturnID(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled, credential_version) VALUES (?, ?, 'x', 'user', 1, 7)`,
+		"lockrow", "lockrow@test.local",
+	)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104
+
+	version, err := tx.LockUserRow(ctx, uid)
+	if err != nil {
+		t.Fatalf("LockUserRow: %v", err)
+	}
+	if version != 7 {
+		t.Errorf("version = %d, want 7", version)
+	}
+	if _, err := tx.LockUserRow(ctx, 999999); err == nil {
+		t.Error("LockUserRow on a missing user must fail")
+	}
+}
+
 func TestNewInMemory(t *testing.T) {
 	cfg := &config.DatabaseConfig{
 		Driver: "sqlite3",
