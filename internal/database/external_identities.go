@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -72,17 +73,38 @@ func scanLinkedUser(row rowScanner) (*models.User, error) {
 	return &u, nil
 }
 
+// ErrIdentityLinkedElsewhere reports that the (issuer, subject) pair is
+// already tied to a DIFFERENT local user. The insert-ignore would silently
+// no-op on that conflict; the caller must know the link did not happen,
+// otherwise it keeps acting for a user the identity does not map to.
+var ErrIdentityLinkedElsewhere = errors.New("external identity already linked to another user")
+
 // LinkExternalIdentity links an external identity (issuer, subject) to a local
-// user. It is idempotent for an existing (issuer, subject) → user_id mapping
-// but rejects re-linking the same (issuer, subject) to a different user via the
-// UNIQUE constraint. Intended to run inside the provisioning transaction.
+// user. It is idempotent for an existing (issuer, subject) → user_id mapping.
+// When the pair is already tied to a DIFFERENT user the insert-ignore no-ops;
+// the existing owner is then read back and ErrIdentityLinkedElsewhere is
+// returned, so a conflicting login cannot be silently accepted (and the
+// session issued for a user the identity does not map to). Intended to run
+// inside the provisioning transaction.
 func (tx *Tx) LinkExternalIdentity(ctx context.Context, userID int64, issuer, subject string) error {
-	_, err := tx.InsertIgnore(ctx, "external_identities",
+	res, err := tx.InsertIgnore(ctx, "external_identities",
 		[]string{"user_id", "issuer", "subject"},
 		[]string{"issuer", "subject"},
 		userID, issuer, subject)
 	if err != nil {
 		return fmt.Errorf("link external identity: %w", err)
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		var owner int64
+		if err := tx.QueryRowContext(ctx,
+			"SELECT user_id FROM external_identities WHERE issuer = ? AND subject = ?",
+			issuer, subject,
+		).Scan(&owner); err != nil {
+			return fmt.Errorf("link external identity: read owner after conflict: %w", err)
+		}
+		if owner != userID {
+			return fmt.Errorf("%w (issuer %q, subject %q)", ErrIdentityLinkedElsewhere, issuer, subject)
+		}
 	}
 	return nil
 }

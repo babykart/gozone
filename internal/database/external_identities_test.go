@@ -259,6 +259,54 @@ func TestAddGroupMembershipIdempotent(t *testing.T) {
 	}
 }
 
+// TestLinkExternalIdentity_ConflictRejection is the silent-link regression:
+// an (issuer, subject) pair already tied to another user used to make the
+// insert-ignore no-op and report success, letting the caller keep acting for
+// a user the identity does not map to. The conflict must now surface as
+// ErrIdentityLinkedElsewhere, while re-linking the SAME user stays idempotent.
+func TestLinkExternalIdentity_ConflictRejection(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	a, err := db.CreateExternalUser(ctx, "user-a", "a@test.local", "", "", "user", "iss-a", "sub-a")
+	if err != nil {
+		t.Fatalf("CreateExternalUser A: %v", err)
+	}
+	b, err := db.CreateExternalUser(ctx, "user-b", "b@test.local", "", "", "user", "iss-b", "sub-b")
+	if err != nil {
+		t.Fatalf("CreateExternalUser B: %v", err)
+	}
+
+	link := func(userID int64, issuer, subject string) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		err = tx.LinkExternalIdentity(ctx, userID, issuer, subject)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return nil
+	}
+
+	// Same user, same pair: idempotent success (re-login path).
+	if err := link(a.ID, "iss-shared", "sub-shared"); err != nil {
+		t.Fatalf("first link: %v", err)
+	}
+	if err := link(a.ID, "iss-shared", "sub-shared"); err != nil {
+		t.Fatalf("idempotent re-link of the same user: %v", err)
+	}
+	// A different user claiming the same pair must be refused.
+	err = link(b.ID, "iss-shared", "sub-shared")
+	if !errors.Is(err, ErrIdentityLinkedElsewhere) {
+		t.Fatalf("a conflicting link must fail with ErrIdentityLinkedElsewhere, got %v", err)
+	}
+}
+
 func TestSetUserRole(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

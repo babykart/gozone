@@ -14,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/babykart/gozone/internal/constants"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/oidc"
@@ -415,6 +416,39 @@ func TestResolveSSOUser_EmailLinkWithoutAutoProvision(t *testing.T) {
 	}
 	if linked == nil || linked.ID != got.ID {
 		t.Errorf("identity not linked to user %d: %+v", got.ID, linked)
+	}
+}
+
+// TestLinkIdentity_ConflictRefused is the silent-takeover regression at the
+// linking primitive: linkIdentity used to treat an insert-ignore no-op as
+// success, so a conflicting (issuer, subject) — e.g. two first-logins racing
+// to claim the same identity — left the loser acting for a user the identity
+// does not map to. The conflict now fails the whole login.
+func TestLinkIdentity_ConflictRefused(t *testing.T) {
+	h := newTestHandler(t)
+	ctx := context.Background()
+
+	a, err := h.DB.CreateExternalUser(ctx, "holder", "holder@example.com", "", "", "user", "https://idp.example.com", "sub-conflict")
+	if err != nil {
+		t.Fatalf("CreateExternalUser A: %v", err)
+	}
+	b, err := h.DB.CreateExternalUser(ctx, "other", "other@example.com", "", "", "user", "https://idp.example.com", "sub-other")
+	if err != nil {
+		t.Fatalf("CreateExternalUser B: %v", err)
+	}
+
+	// Re-linking the owner is idempotent (re-login path).
+	if err := h.linkIdentity(ctx, a.ID, "https://idp.example.com", "sub-conflict"); err != nil {
+		t.Fatalf("idempotent re-link of the owner: %v", err)
+	}
+	// A different user claiming the pair must fail the login.
+	if err := h.linkIdentity(ctx, b.ID, "https://idp.example.com", "sub-conflict"); !errors.Is(err, database.ErrIdentityLinkedElsewhere) {
+		t.Fatalf("a conflicting link must fail with ErrIdentityLinkedElsewhere, got %v", err)
+	}
+	// The identity must still map to A.
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, "https://idp.example.com", "sub-conflict")
+	if err != nil || linked == nil || linked.ID != a.ID {
+		t.Errorf("the identity must stay with its original owner, got %+v (err %v)", linked, err)
 	}
 }
 
