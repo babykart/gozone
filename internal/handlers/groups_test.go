@@ -1563,10 +1563,10 @@ func TestEditGroupPage_PaginationBounds(t *testing.T) {
 		query string
 		want  string
 	}{
-		{"memberPage=-5", "MemberPage=1/2/15/10"},   // negative -> 1
-		{"memberPage=abc", "MemberPage=1/2/15/10"},  // invalid -> 1
-		{"memberPage=0", "MemberPage=1/2/15/10"},    // zero -> 1
-		{"memberPage=99", "MemberPage=2/2/15/10"},   // beyond last -> clamped
+		{"memberPage=-5", "MemberPage=1/2/15/10"},    // negative -> 1
+		{"memberPage=abc", "MemberPage=1/2/15/10"},   // invalid -> 1
+		{"memberPage=0", "MemberPage=1/2/15/10"},     // zero -> 1
+		{"memberPage=99", "MemberPage=2/2/15/10"},    // beyond last -> clamped
 		{"memberPerPage=-1", "MemberPage=1/2/15/10"}, // negative size rejected -> default 10
 	} {
 		w := getEditPage(t, h, groupID, tc.query)
