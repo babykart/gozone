@@ -13,21 +13,35 @@ import (
 // against the complexity policy and now verifies it was not used recently.
 // limit <= 0 disables the check (returns false, nil).
 //
-// Because every password (including the very first one set on an account) is
-// recorded via RecordPassword, the current password is part of the history —
-// so reusing the current password is rejected too.
-//
-// Every loaded hash is compared — the loop does NOT short-circuit on the
-// first match. The number of bcrypt comparisons therefore depends only on the
-// number of history rows (capped at limit), never on the position of a reuse.
-// Returning at the first match would let an authenticated user infer "how
-// recently this password was last used" from the response time. The extra cost
-// (comparing the remaining hashes after a match) is confined to the rejection
-// path; the happy (no-reuse) path already compares every hash.
+// The current password counts as "used" via an explicit comparison against
+// the live users row — it cannot be assumed to sit in password_history,
+// because accounts created before history was activated carry no record of
+// it. Every loaded hash is compared — the loop does NOT short-circuit on
+// the first match. The number of bcrypt comparisons therefore depends only
+// on the number of history rows (capped at limit) plus one constant, never
+// on the position of a reuse. Returning at the first match would let an
+// authenticated user infer "how recently this password was last used" from
+// the response time. The extra cost (comparing the remaining hashes after a
+// match) is confined to the rejection path; the happy (no-reuse) path
+// already compares every hash.
 func (tx *Tx) PasswordHistoryReused(ctx context.Context, userID int64, newPassword string, limit int) (bool, error) {
 	if limit <= 0 {
 		return false, nil
 	}
+	// The current password is compared explicitly against the live users
+	// row, NOT assumed to be present in password_history: accounts created
+	// before history was activated carry no record of the password they
+	// were using at that moment, and without this comparison a user could
+	// re-submit the current password the first time history applied to
+	// them. Every hash (current + history) is compared — no short-circuit —
+	// so timing reveals only the row count, not the rank of a reuse.
+	var current string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT password_hash FROM users WHERE id = ?", userID,
+	).Scan(&current); err != nil {
+		return false, fmt.Errorf("load current password hash: %w", err)
+	}
+	reused := bcrypt.CompareHashAndPassword([]byte(current), []byte(newPassword)) == nil
 	rows, err := tx.QueryContext(ctx,
 		`SELECT password_hash FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT ?`,
 		userID, limit,
@@ -36,9 +50,6 @@ func (tx *Tx) PasswordHistoryReused(ctx context.Context, userID int64, newPasswo
 		return false, fmt.Errorf("load password history: %w", err)
 	}
 	defer rows.Close()
-	// OR the result of every comparison so timing reveals only the row count,
-	// not the rank of a reuse.
-	reused := false
 	for rows.Next() {
 		var hash string
 		if err := rows.Scan(&hash); err != nil {

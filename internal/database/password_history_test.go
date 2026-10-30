@@ -65,6 +65,42 @@ func TestPasswordHistory_ReuseDetection(t *testing.T) {
 	}
 }
 
+// TestPasswordHistory_CurrentPasswordPredatingHistory is the gap regression:
+// an account created before history was activated has no password_history
+// row for the password in use. Submitting that current password must still
+// be caught — the reuse check compares against the live users row, not only
+// the history table. All three change paths (web self-service, admin update,
+// CLI reset) funnel through this function.
+func TestPasswordHistory_CurrentPasswordPredatingHistory(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// A user whose current password was never recorded (history was off
+	// when the account was created and when the password was set).
+	uid, err := db.ExecReturnID(ctx,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, 'user', 1)`,
+		"predating", "predating@test.local", mustHash(t, "currentpw"),
+	)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() // #nosec G104
+
+	// History is now enabled; the user submits the same password again.
+	if reused, err := tx.PasswordHistoryReused(ctx, uid, "currentpw", 3); err != nil || !reused {
+		t.Errorf("the current password of a pre-history account must count as reuse, got reused=%v err=%v", reused, err)
+	}
+	// A genuinely new password is not a reuse.
+	if reused, err := tx.PasswordHistoryReused(ctx, uid, "genuinely-new", 3); err != nil || reused {
+		t.Errorf("a new password must not count as reuse, got reused=%v err=%v", reused, err)
+	}
+}
+
 func TestPasswordHistory_DisabledByZeroLimit(t *testing.T) {
 	db, uid := newHistoryTestDB(t)
 	ctx := context.Background()
