@@ -1560,6 +1560,64 @@ func TestAPIKeyAuth_ManuallyLockedOwnerDenied(t *testing.T) {
 	}
 }
 
+// TestAPIKeyAuth_CredentialVersionRevokesSameSecondKey is the same-second
+// regression: the tokens_valid_after cutoff is truncated to the second, so a
+// key minted within the same second as a rotation used to survive the
+// created_at comparison. The monotonic credential_version recorded at key
+// creation now revokes it regardless of the clock.
+func TestAPIKeyAuth_CredentialVersionRevokesSameSecondKey(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "samesecond", "user", true)
+	seedTestAPIKey(t, db, userID, "same-second-key", nil) // credential_version 0
+
+	// Rotation landing in the same second as the key creation: bump the
+	// monotonic counter exactly like every rotation path does, with no
+	// clock movement — a timestamp comparison cannot observe this.
+	if _, err := db.Exec("UPDATE users SET credential_version = credential_version + 1 WHERE id = ?", userID); err != nil {
+		t.Fatalf("bump version: %v", err)
+	}
+
+	do := func(key string) *httptest.ResponseRecorder {
+		mw := APIKeyAuth(db, models.SurfaceAPI)
+		reached := false
+		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached = true
+		}))
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		r.Header.Set("X-API-Key", key)
+		handler.ServeHTTP(w, r)
+		if reached {
+			t.Fatalf("key %q must not reach the handler", key)
+		}
+		return w
+	}
+
+	w := do("same-second-key")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("a key minted before a same-second rotation must be refused, got %d", w.Code)
+	}
+
+	// Control: a key minted after the rotation carries the current version
+	// and authenticates.
+	seedTestAPIKey(t, db, userID, "fresh-after-rotation", nil)
+	if _, err := db.Exec("UPDATE api_keys SET credential_version = 1 WHERE key_hash = ?", hashAPIKey("fresh-after-rotation")); err != nil {
+		t.Fatalf("set key version: %v", err)
+	}
+	mw := APIKeyAuth(db, models.SurfaceAPI)
+	reached := false
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "fresh-after-rotation")
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !reached {
+		t.Errorf("a key minted after the rotation must authenticate: code=%d reached=%v", w.Code, reached)
+	}
+}
+
 // TestAPIKeyAuth_CredentialRotationCutoffDenied is the rotation-survival
 // regression: tokens_valid_after is bumped on every credential-changing event
 // (password change/reset, disable, manual lock) and already kills JWTs minted

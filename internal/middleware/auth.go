@@ -460,7 +460,8 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 // The incoming key is SHA-256 hashed before comparison against stored hashes.
 // Expired API keys return HTTP 401 with the message "api_key_expired"; keys
 // whose owner is under a manual admin lock, or that predate the owner's
-// tokens_valid_after credential-rotation cutoff, return 401 as well
+// credential rotation (monotonic credential_version recorded at creation, or
+// the tokens_valid_after cutoff as the legacy net), return 401 as well
 // ("api_key_invalidated" for the latter) — an API key must not outlive the
 // credential event that should have revoked it.
 // After those validity controls, the key's stored scope is checked: an
@@ -496,10 +497,11 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.
 			var userID int64
 			var scopeStr string
 			var createdAt, expiresAt sql.NullTime
+			var keyCredentialVersion int64
 			err := db.QueryRowContext(r.Context(),
-				"SELECT user_id, scope, created_at, expires_at FROM api_keys WHERE key_hash = ?",
+				"SELECT user_id, scope, created_at, expires_at, credential_version FROM api_keys WHERE key_hash = ?",
 				keyHash,
-			).Scan(&userID, &scopeStr, &createdAt, &expiresAt)
+			).Scan(&userID, &scopeStr, &createdAt, &expiresAt, &keyCredentialVersion)
 
 			if err != nil {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
@@ -526,14 +528,18 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.
 				return
 			}
 
-			// Credential-rotation cutoff: tokens_valid_after is bumped on
-			// every credential-changing event (password change or reset,
-			// account disable, manual lock). JWTs minted before the cutoff
-			// are already rejected by the Auth middleware; an API key
-			// created before it is now refused too, so a key issued before
-			// an admin reset or lock cannot outlive the rotation.
-			// created_at is second-granularity, so a key created within the
-			// same second as the cutoff stays valid.
+			// Credential-rotation guard, two layers:
+			//  - the key records the owner's credential_version at creation;
+			//    any rotation (password change/reset, manual lock, disable)
+			//    bumps the live value and a stale key is refused. The
+			//    monotonic counter has no second-granularity window — a key
+			//    minted in the same second as the rotation is revoked too.
+			//  - the created_at vs tokens_valid_after cutoff stays as the
+			//    defence-in-depth net for rows predating the version column.
+			if keyCredentialVersion < user.CredentialVersion {
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "API_KEY_INVALIDATED", "api_key_invalidated")
+				return
+			}
 			if createdAt.Valid && createdAt.Time.Before(user.TokensValidAfter) {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "API_KEY_INVALIDATED", "api_key_invalidated")
 				return

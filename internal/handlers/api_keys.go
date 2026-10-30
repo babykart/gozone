@@ -256,14 +256,23 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// expires_at is NULL for a non-expiring key; otherwise now + the chosen
-	// duration, in UTC per the project-wide DB timestamp convention.
+	// duration, in UTC per the project-wide DB timestamp convention. The
+	// key carries the owner's credential_version at creation so a rotation
+	// landing after minting — even in the same second — invalidates it.
 	var expiresAt any
 	if expiryDays > 0 {
 		expiresAt = time.Now().UTC().Add(time.Duration(expiryDays) * 24 * time.Hour)
 	}
+	var credentialVersion int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT credential_version FROM users WHERE id = ?", user.ID,
+	).Scan(&credentialVersion); err != nil {
+		h.renderInternalError(w, r, "Failed to read credential version", err)
+		return
+	}
 	_, err = tx.ExecContext(ctx,
-		"INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope) VALUES (?, ?, ?, ?, ?)",
-		user.ID, keyHash, description, expiresAt, scope,
+		"INSERT INTO api_keys (user_id, key_hash, description, expires_at, scope, credential_version) VALUES (?, ?, ?, ?, ?, ?)",
+		user.ID, keyHash, description, expiresAt, scope, credentialVersion,
 	)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to create API key", err)

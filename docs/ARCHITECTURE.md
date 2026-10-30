@@ -435,7 +435,8 @@ APIKeyAuth middleware
   ├── SELECT user_id, scope, created_at, expires_at FROM api_keys WHERE key_hash = SHA256(key)
   ├── Check expiration
   ├── loadUser(DB, UserID) → ensure enabled
-  ├── Check manual admin lock + tokens_valid_after credential-rotation cutoff
+  ├── Check manual admin lock + credential rotation (key's credential_version
+  │    stale vs the live user, or the legacy created_at/tokens_valid_after net)
   ├── ParseAPIKeyScope → unreadable scope: 401 (fail-closed)
   ├── scope.Surface() != mounted surface → 403 API_KEY_SCOPE_MISMATCH
   │    (SurfaceAPI on /api/v1, SurfaceMCP on /mcp)

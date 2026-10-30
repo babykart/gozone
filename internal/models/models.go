@@ -90,6 +90,11 @@ type APIKey struct {
 	LastUsedAt  *time.Time  `json:"last_used_at"`
 	CreatedAt   time.Time   `json:"created_at"`
 	ExpiresAt   *time.Time  `json:"expires_at"`
+	// CredentialVersion is the owner's credential_version at key creation.
+	// A rotation (password change/reset, manual lock, account disable) bumps
+	// the live value; a key carrying a stale one is refused, closing the
+	// same-second window a created_at comparison cannot.
+	CredentialVersion int64 `json:"-"`
 }
 
 // Setting represents a key-value application setting.

@@ -452,12 +452,17 @@ func (s *sqliteDialect) Migrations() []string {
 		// keys are no longer accepted on the MCP surface. No index: the auth
 		// lookup goes through the UNIQUE key_hash, never through scope.
 		`ALTER TABLE api_keys ADD COLUMN scope TEXT NOT NULL DEFAULT 'api:write'`,
-		// Monotonic credential counter: bumped on password rotation (every
-		// path), admin manual lock and account disable. Session JWTs record
-		// the value at issuance and the Auth middleware rejects stale ones,
-		// closing the second-granularity window of the tokens_valid_after/iat
-		// comparison (a rotation and a token minted in the same second were
-		// previously both accepted, in issuance order).
+		// Per-key copy of the owner's credential_version at creation: a key
+		// minted before a rotation (password change/reset, manual lock,
+		// disable) carries a stale value and is refused — the monotonic
+		// counter closes the same-second window a created_at comparison
+		// cannot (see users.credential_version).
+		`ALTER TABLE api_keys ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
+		// Monotonic credential counter: bumped on password rotation, manual
+		// lock and account disable. Session JWTs record the value at
+		// issuance and the Auth middleware rejects stale ones; API keys
+		// store it per key so a key minted before a rotation can be refused
+		// without the second-granularity window of a timestamp comparison.
 		`ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
 	}
 }
