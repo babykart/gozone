@@ -521,6 +521,53 @@ func TestCreateZone_NonAdminForbidden(t *testing.T) {
 	}
 }
 
+// TestCreateZone_SlaveRequiresMasters pins the Slave contract on the MCP
+// surface: the tool accepts masters and forwards them, refuses a Slave
+// without masters, and refuses a hostname as a master address.
+func TestCreateZone_SlaveRequiresMasters(t *testing.T) {
+	var sent models.ZoneCreateRequest
+	session, db := newMCPTestEnvAs(t, false, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			json.NewDecoder(r.Body).Decode(&sent)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(models.Zone{ID: sent.Name, Name: sent.Name, Kind: sent.Kind})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}, "admin")
+	_ = db
+
+	call := func(args map[string]any) *mcp.CallToolResult {
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_zone", Arguments: args})
+		if err != nil {
+			t.Fatalf("CallTool create_zone: %v", err)
+		}
+		return res
+	}
+
+	// Slave without masters is refused before any PowerDNS call.
+	res := call(map[string]any{"name": "slave.example.com", "kind": "Slave", "nameservers": []string{}})
+	if !res.IsError || !strings.HasPrefix(resultText(res), "VALIDATION_ERROR:") || !strings.Contains(resultText(res), "at least one master") {
+		t.Fatalf("Slave without masters must fail with VALIDATION_ERROR, got isError=%v text=%q", res.IsError, resultText(res))
+	}
+
+	// A hostname as master is refused.
+	res = call(map[string]any{"name": "slave.example.com", "kind": "Slave", "nameservers": []string{}, "masters": []string{"ns1.example.com."}})
+	if !res.IsError || !strings.Contains(resultText(res), "invalid master") {
+		t.Fatalf("a hostname as master must fail with VALIDATION_ERROR, got isError=%v text=%q", res.IsError, resultText(res))
+	}
+
+	// Slave with valid masters is created and they are forwarded.
+	res = call(map[string]any{"name": "slave.example.com", "kind": "Slave", "nameservers": []string{}, "masters": []string{"192.0.2.53"}})
+	if res.IsError {
+		t.Fatalf("Slave with a valid master must succeed, got %q", resultText(res))
+	}
+	if len(sent.Masters) != 1 || sent.Masters[0] != "192.0.2.53" {
+		t.Errorf("masters not forwarded to PowerDNS: %+v", sent.Masters)
+	}
+}
+
 func TestUnauthenticatedRequestRejected(t *testing.T) {
 	// A bare HTTP POST without an API key must be refused by the middleware
 	// before any MCP handling: 401 JSON envelope — the same gate as /api/v1.

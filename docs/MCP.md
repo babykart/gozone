@@ -83,7 +83,7 @@ Scope matrix — which tools a key sees:
 | `create_record` (`zone`, `name`, `type`, `ttl?`, `records[]`) | `POST …/records` | zone access | write, not idempotent |
 | `update_record` (`zone`, `name`, `type`, `ttl?`, `records[]`, `clear_comments?`) | `PUT …/records` | zone access | write, idempotent, **destructive** (REPLACE) |
 | `delete_record` (`zone`, `name`, `type`) | `DELETE …/records` | zone access | **destructive**, idempotent |
-| `create_zone` (`name`, `kind?`, `nameservers[]`) | `POST /api/v1/zones` | **admin** | write |
+| `create_zone` (`name`, `kind?`, `nameservers[]`, `masters[]?`) | `POST /api/v1/zones` | **admin** | write |
 | `delete_zone` (`zone`) | `DELETE /api/v1/zones/{id}` | **admin** | **destructive** |
 
 Conventions inherited from the REST API (repeated in every tool description,

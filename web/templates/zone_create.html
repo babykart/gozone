@@ -26,6 +26,11 @@
         <input type="text" id="nameservers" name="nameservers" placeholder="ns1.example.com,ns2.example.com">
         <small>Comma-separated list of nameservers (trailing dots are added automatically)</small>
     </div>
+    <div class="form-group">
+        <label for="masters">Masters</label>
+        <input type="text" id="masters" name="masters" placeholder="192.0.2.53,2001:db8::53">
+        <small>Comma-separated master server IPs (IPv4 or IPv6). Required for Slave/Consumer zones, ignored otherwise.</small>
+    </div>
 
     {{if .Templates}}
     <hr class="hr-lg">

@@ -318,6 +318,7 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
 	kind := strings.TrimSpace(r.FormValue("kind"))
 	nameservers := strings.TrimSpace(r.FormValue("nameservers"))
+	masters := strings.TrimSpace(r.FormValue("masters"))
 
 	if name == "" {
 		h.renderError(w, r, "Zone name is required")
@@ -355,6 +356,22 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 				req.Nameservers = append(req.Nameservers, normalizeZoneName(ns))
 			}
 		}
+	}
+
+	if masters != "" {
+		for _, m := range strings.Split(masters, ",") {
+			m = strings.TrimSpace(m)
+			if m != "" {
+				req.Masters = append(req.Masters, m)
+			}
+		}
+	}
+
+	// Master addresses and the Slave-needs-masters rule share the service
+	// layer's validation with REST and MCP.
+	if _, err := dnsops.ValidateZoneCreate(req); err != nil {
+		h.renderError(w, r, err.Error())
+		return
 	}
 
 	// Resolve and validate the template BEFORE creating the zone. A selected

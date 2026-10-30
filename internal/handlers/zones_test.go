@@ -271,6 +271,61 @@ func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
 	}
 }
 
+// TestCreateZone_SlaveRequiresMasters pins the Slave contract on the web
+// form: a Slave zone submitted without masters must be refused before any
+// PowerDNS call, and valid masters must be forwarded in the create request.
+func TestCreateZone_SlaveRequiresMasters(t *testing.T) {
+	var sent models.ZoneCreateRequest
+	var createCalls int
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		createCalls++
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(models.Zone{ID: sent.Name, Name: sent.Name, Kind: sent.Kind})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.CreateZone(w, r.WithContext(ctx))
+		return w
+	}
+
+	// Slave without masters: refused, no PowerDNS call.
+	w := post("name=slave.example.com&kind=Slave")
+	if w.Code == http.StatusSeeOther {
+		t.Fatal("Slave without masters must not redirect to success")
+	}
+	if createCalls != 0 {
+		t.Fatal("Slave without masters must be refused before any PowerDNS call")
+	}
+	if !strings.Contains(w.Body.String(), "at least one master") {
+		t.Errorf("expected the masters-required message, got: %s", w.Body.String())
+	}
+
+	// Slave with masters: created and forwarded.
+	w = post("name=slave.example.com&kind=Slave&masters=192.0.2.53,%202001:db8::53")
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent.Masters) != 2 || sent.Masters[0] != "192.0.2.53" || sent.Masters[1] != "2001:db8::53" {
+		t.Errorf("masters not forwarded to PowerDNS: %+v", sent.Masters)
+	}
+
+	// A hostname as master is refused.
+	w = post("name=slave.example.com&kind=Slave&masters=ns1.example.com.")
+	if w.Code == http.StatusSeeOther {
+		t.Fatal("a hostname as master must be refused")
+	}
+}
+
 func TestCreateZone_NonAdmin(t *testing.T) {
 	h := newTestHandler(t)
 

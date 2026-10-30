@@ -165,6 +165,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		Name        string   `json:"name" jsonschema:"zone name, e.g. \"example.com\" (canonicalised: lowercased, trailing dot added)"`
 		Kind        string   `json:"kind,omitempty" jsonschema:"Native (default), Master or Slave"`
 		Nameservers []string `json:"nameservers" jsonschema:"nameserver hostnames for the initial NS records (Master/Native)"`
+		Masters     []string `json:"masters,omitempty" jsonschema:"master server IPs (IPv4 or IPv6); at least one REQUIRED when kind is Slave or Consumer"`
 	}
 	type createZoneOut struct {
 		Zone    models.Zone `json:"zone"`
@@ -173,7 +174,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_zone",
 		Title:       "Create zone",
-		Description: "Create a new zone. ADMIN KEY REQUIRED. Name and nameservers are canonicalised (lowercase, trailing dot); omit kind for Native.",
+		Description: "Create a new zone. ADMIN KEY REQUIRED. Name and nameservers are canonicalised (lowercase, trailing dot); omit kind for Native. Slave/Consumer zones require at least one master IP (masters).",
 		Annotations: writeAnnotations(false, false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createZoneIn) (*mcp.CallToolResult, createZoneOut, error) {
 		if terr := requireWriteScope(ctx); terr != nil {
@@ -183,7 +184,7 @@ func registerWriteTools(srv *mcp.Server, ops *dnsops.Service) {
 		if terr != nil {
 			return nil, createZoneOut{}, terr
 		}
-		req, err := dnsops.ValidateZoneCreate(models.ZoneCreateRequest{Name: in.Name, Kind: in.Kind, Nameservers: in.Nameservers})
+		req, err := dnsops.ValidateZoneCreate(models.ZoneCreateRequest{Name: in.Name, Kind: in.Kind, Nameservers: in.Nameservers, Masters: in.Masters})
 		if err != nil {
 			return nil, createZoneOut{}, toolErrorf("VALIDATION_ERROR", "%s", err.Error())
 		}

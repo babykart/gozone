@@ -136,7 +136,10 @@ func RecordTypes() []string {
 // ValidateZoneCreate validates a zone-creation payload the way the REST
 // handler does, so transports that do not decode JSON (an MCP tool) can
 // run the exact same checks: domain-name syntax, default kind, kind
-// whitelist. Returns the request with the kind default applied.
+// whitelist, master addresses (each an IPv4 or IPv6 address, at least one
+// required for Slave/Consumer zones — they are fed by zone transfers and
+// cannot pull without a master). Returns the request with the kind default
+// applied.
 func ValidateZoneCreate(req models.ZoneCreateRequest) (models.ZoneCreateRequest, error) {
 	if err := validators.ValidateDomainName(req.Name); err != nil {
 		return req, err
@@ -146,6 +149,16 @@ func ValidateZoneCreate(req models.ZoneCreateRequest) (models.ZoneCreateRequest,
 	}
 	if err := validators.ValidateZoneKind(req.Kind); err != nil {
 		return req, err
+	}
+	for _, m := range req.Masters {
+		if validators.ValidateIPv4(m) != nil && validators.ValidateIPv6(m) != nil {
+			return req, fmt.Errorf("invalid master %q: must be an IPv4 or IPv6 address", m)
+		}
+	}
+	// Slave and Consumer zones are fed by zone transfers and need at least
+	// one master to pull from; a kind that cannot transfer accepts none.
+	if (req.Kind == "Slave" || req.Kind == "Consumer") && len(req.Masters) == 0 {
+		return req, fmt.Errorf("at least one master is required for %s zones", req.Kind)
 	}
 	return req, nil
 }

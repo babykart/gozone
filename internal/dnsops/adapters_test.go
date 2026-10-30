@@ -87,6 +87,31 @@ func TestValidateZoneCreate(t *testing.T) {
 	}
 }
 
+// TestValidateZoneCreate_Masters covers the Slave/masters contract: a Slave
+// zone needs at least one master, and every master must be a valid IPv4 or
+// IPv6 address (hostnames are not accepted — PowerDNS transfers from IPs).
+func TestValidateZoneCreate_Masters(t *testing.T) {
+	// Slave or Consumer without masters is rejected.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Kind: "Slave"}); err == nil {
+		t.Fatal("Slave without masters must be rejected")
+	}
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Kind: "Consumer"}); err == nil {
+		t.Fatal("Consumer without masters must be rejected")
+	}
+	// Slave with valid IPv4 masters passes.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Kind: "Slave", Masters: []string{"192.0.2.53"}}); err != nil {
+		t.Fatalf("Slave with an IPv4 master: %v", err)
+	}
+	// Slave with valid IPv6 masters passes.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Kind: "Slave", Masters: []string{"2001:db8::53"}}); err != nil {
+		t.Fatalf("Slave with an IPv6 master: %v", err)
+	}
+	// A hostname is not a valid master address.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Kind: "Slave", Masters: []string{"ns1.example.com."}}); err == nil {
+		t.Fatal("a hostname as master must be rejected")
+	}
+}
+
 func TestListRecords_NameFilterAndAuthz(t *testing.T) {
 	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
