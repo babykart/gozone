@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -405,6 +406,17 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 
 	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
 
+	// extra carries the dropdown searches (uq/zq) through pagination links as
+	// separate key/value pairs — see activity.go for why a pre-joined query
+	// string would be escaped as one opaque value and silently dropped.
+	extra := url.Values{}
+	if userSearch != "" {
+		extra.Set("uq", userSearch)
+	}
+	if zoneSearch != "" {
+		extra.Set("zq", zoneSearch)
+	}
+
 	data := map[string]interface{}{
 		"Title":          g.Name + " - " + h.Cfg.Server.AppName,
 		"User":           user,
@@ -419,6 +431,7 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		"ZoneSearch":     zoneSearch,
 		"MemberPageInfo": memberPageInfo,
 		"ZonePageInfo":   zonePageInfo,
+		"Extra":          extra,
 		"IsAdmin":        user.IsAdmin(),
 		"FormAction":     "/groups/" + groupIDStr + "/update",
 		"Flash":          flash,

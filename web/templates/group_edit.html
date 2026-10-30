@@ -86,6 +86,7 @@
     {{else}}
     <p class="empty-state text-left">No members in this group.</p>
     {{end}}
+    {{template "pagination.html" dict "PageInfo" .MemberPageInfo "Label" "members" "Prefix" "member" "HasOther" true "OtherPrefix" "zone" "OtherPage" .ZonePageInfo.Current "OtherPerPage" .ZonePageInfo.PerPage "Extra" .Extra}}
 
     <form method="GET" action="/groups/{{.Group.ID}}/edit" class="search-form mb-1">
         <input type="hidden" name="zq" value="{{.ZoneSearch}}">
@@ -136,6 +137,7 @@
     {{else}}
     <p class="empty-state text-left">No zones assigned to this group.</p>
     {{end}}
+    {{template "pagination.html" dict "PageInfo" .ZonePageInfo "Label" "zones" "Prefix" "zone" "HasOther" true "OtherPrefix" "member" "OtherPage" .MemberPageInfo.Current "OtherPerPage" .MemberPageInfo.PerPage "Extra" .Extra}}
 
     <form method="GET" action="/groups/{{.Group.ID}}/edit" class="search-form mb-1">
         <input type="hidden" name="uq" value="{{.UserSearch}}">
