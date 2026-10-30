@@ -185,12 +185,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var mustChange int
 	ensureDummyHash(h.Cfg.Auth.BcryptCost)
 	err := h.DB.QueryRowContext(ctx,
-		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password
+		`SELECT id, username, email, password_hash, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password, credential_version
 		 FROM users WHERE username_lc = ? AND enabled = 1`, username,
 	).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
+		&user.CredentialVersion,
 	)
 	user.Enabled = enabled == 1
 	user.MustChangePassword = mustChange == 1
@@ -279,6 +280,27 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		h.recordFailedAttempt(ctx, username, user.ID, clientIP, maxAttempts, lockoutDuration)
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
+		return
+	}
+
+	// Re-read the credential version after the (deliberately slow) bcrypt
+	// compare: an administrator may have rotated the password or locked the
+	// account while it ran. Issuing a token against pre-rotation state would
+	// hand out a session for credentials that no longer exist — and even
+	// though the middleware's version check would kill that token on its
+	// first request, the token must not be minted at all. A stale version is
+	// denied with the same generic response as a wrong password.
+	var currentVersion int64
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT credential_version FROM users WHERE id = ?", user.ID,
+	).Scan(&currentVersion); err != nil {
+		logger.Error("failed to re-check credential version; denying login (fail-closed)", "user_id", user.ID, "error", err)
+		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
+		return
+	}
+	if currentVersion != user.CredentialVersion {
+		logger.Warn("credentials rotated during login; denying token issuance", "user_id", user.ID)
 		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 		return
 	}

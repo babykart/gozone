@@ -467,12 +467,16 @@ func (tx *Tx) IncrementFailedLoginsInTx(ctx context.Context, userID int64, thres
 	return count, count >= threshold, nil
 }
 
-// ResetFailedLogins clears the failed-login counter and every lockout (both
-// the automatic brute-force lock and a manual admin lock) when the user
-// successfully authenticates. Safe to call when no counter is set.
+// ResetFailedLogins clears the failed-login counter and the automatic
+// brute-force lockout when the user successfully authenticates. Safe to call
+// when no counter is set. It deliberately does NOT clear manual_lock_until:
+// a manual admin lock must survive a successful login (the login path denies
+// locked accounts before this runs, but a lock landing while a login is
+// already in flight must not be erased by that login's counter reset) — only
+// AdminUnlockUser / the CLI unlock clear it.
 func (db *DB) ResetFailedLogins(ctx context.Context, userID int64) error {
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL, manual_lock_until = NULL WHERE id = ?",
+		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
 		userID,
 	)
 	return err
@@ -530,7 +534,7 @@ func (db *DB) AdminLockUser(ctx context.Context, userID int64, lockFor time.Dura
 	// keeps microseconds) or a non-UTC session offset (MySQL/PostgreSQL),
 	// either of which breaks the cutoff comparison.
 	_, err := db.ExecContext(ctx,
-		"UPDATE users SET locked_until = ?, manual_lock_until = ?, failed_login_attempts = 0, tokens_valid_after = ? WHERE id = ?",
+		"UPDATE users SET locked_until = ?, manual_lock_until = ?, failed_login_attempts = 0, tokens_valid_after = ?, credential_version = credential_version + 1 WHERE id = ?",
 		lockedUntil, lockedUntil, now.Truncate(time.Second), userID,
 	)
 	return err
@@ -553,10 +557,14 @@ func (db *DB) IsManualLock(ctx context.Context, userID int64) (bool, error) {
 	return manualUntil.Valid && manualUntil.Time.After(time.Now()), nil
 }
 
-// AdminUnlockUser clears the lockout and resets the failed-login counter. Safe
-// to call when the user is not currently locked.
+// AdminUnlockUser clears the lockout (automatic and manual) and resets the
+// failed-login counter. Safe to call when the user is not currently locked.
 func (db *DB) AdminUnlockUser(ctx context.Context, userID int64) error {
-	return db.ResetFailedLogins(ctx, userID)
+	_, err := db.ExecContext(ctx,
+		"UPDATE users SET failed_login_attempts = 0, locked_until = NULL, manual_lock_until = NULL WHERE id = ?",
+		userID,
+	)
+	return err
 }
 
 // Begin starts a transaction with automatic placeholder rebinding.

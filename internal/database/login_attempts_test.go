@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -272,6 +273,49 @@ func TestResetFailedLogins(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected counter reset to 0, got %d", count)
+	}
+}
+
+// TestResetFailedLogins_PreservesManualLock est la régression du verrou
+// manuel effacé: une simple connexion réussie (qui réinitialise le compteur)
+// ne doit jamais lever un verrou manuel posé par un administrateur — même
+// (surtout) un verrou posé pendant que le login était déjà en cours. Seul
+// AdminUnlockUser lève le verrou manuel.
+func TestResetFailedLogins_PreservesManualLock(t *testing.T) {
+	db := newLoginAttemptsTestDB(t)
+	ctx := context.Background()
+	uid := insertUserForLoginTests(t, db, "alice")
+
+	manualUntil := time.Now().Add(time.Hour).UTC()
+	if _, err := db.ExecContext(ctx,
+		"UPDATE users SET manual_lock_until = ?, failed_login_attempts = 3 WHERE id = ?",
+		manualUntil, uid); err != nil {
+		t.Fatalf("seed manual lock: %v", err)
+	}
+
+	if err := db.ResetFailedLogins(ctx, uid); err != nil {
+		t.Fatalf("ResetFailedLogins: %v", err)
+	}
+
+	var stored sql.NullTime
+	if err := db.QueryRowContext(ctx,
+		"SELECT manual_lock_until FROM users WHERE id = ?", uid).Scan(&stored); err != nil {
+		t.Fatalf("select manual_lock_until: %v", err)
+	}
+	if !stored.Valid || !stored.Time.After(time.Now()) {
+		t.Errorf("manual lock must survive ResetFailedLogins, got %v", stored)
+	}
+
+	// The admin unlock path clears it.
+	if err := db.AdminUnlockUser(ctx, uid); err != nil {
+		t.Fatalf("AdminUnlockUser: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		"SELECT manual_lock_until FROM users WHERE id = ?", uid).Scan(&stored); err != nil {
+		t.Fatalf("select manual_lock_until: %v", err)
+	}
+	if stored.Valid {
+		t.Errorf("AdminUnlockUser must clear the manual lock, got %v", stored)
 	}
 }
 

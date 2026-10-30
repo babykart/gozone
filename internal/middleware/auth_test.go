@@ -1222,6 +1222,124 @@ func TestAuth_TokensValidAfterRevokesStaleToken(t *testing.T) {
 	}
 }
 
+// TestAuth_CredentialVersionRevokesRotatedToken est la régression de rotation
+// concurrente: une rotation de credentials (mot de passe, verrou manuel,
+// désactivation) landing dans la même seconde que l'émission du jeton ne peut
+// pas être vue par la comparaison iat/tokens_valid_after (granularité
+// seconde) ; le compteur monotone credential_version, stocké dans le JWT et
+// relu à chaque requête, doit tuer la session.
+func TestAuth_CredentialVersionRevokesRotatedToken(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "rotcv", "user", true)
+
+	user := &models.User{ID: userID, Username: "rotcv", Role: "user"}
+	token, err := GenerateToken(user, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotation landing immediately after issuance (same second).
+	if _, err := db.Exec("UPDATE users SET credential_version = credential_version + 1 WHERE id = ?", userID); err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if reached {
+		t.Error("handler must not be reached for a token carrying a stale credential_version")
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+
+	// Control: a token minted with the bumped version authenticates.
+	freshUser, err := loadUser(context.Background(), db, userID)
+	if err != nil {
+		t.Fatalf("loadUser: %v", err)
+	}
+	freshToken, err := GenerateToken(freshUser, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: freshToken})
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !reached {
+		t.Errorf("token minted with the current version must authenticate: code=%d reached=%v", w.Code, reached)
+	}
+}
+
+// TestAuth_ManualLockFreezesSession vérifie que le verrou manuel est contrôlé
+// à chaque requête, pas seulement au login: un jeton émis avant le verrou (ou
+// dans la même seconde) ne doit pas garder le compte gelé utilisable.
+func TestAuth_ManualLockFreezesSession(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "frozen", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "frozen", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec("UPDATE users SET manual_lock_until = ? WHERE id = ?",
+		time.Now().Add(time.Hour).UTC(), userID); err != nil {
+		t.Fatal(err)
+	}
+
+	reached := false
+	mw := Auth(db, testSecret)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if reached {
+		t.Error("handler must not be reached while the account is manually locked")
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+}
+
+// TestLoadUser_PopulatesCredentialState vérifie que loadUser charge la
+// version monotone et le verrou manuel, dont dépendent les contrôles du
+// middleware Auth à chaque requête.
+func TestLoadUser_PopulatesCredentialState(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "credstate", "user", true)
+	lockUntil := time.Now().Add(time.Hour).UTC()
+	if _, err := db.Exec("UPDATE users SET credential_version = 7, manual_lock_until = ? WHERE id = ?", lockUntil, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	user, err := loadUser(context.Background(), db, userID)
+	if err != nil {
+		t.Fatalf("loadUser: %v", err)
+	}
+	if user.CredentialVersion != 7 {
+		t.Errorf("CredentialVersion = %d, want 7", user.CredentialVersion)
+	}
+	if !time.Now().Before(user.ManualLockUntil) {
+		t.Errorf("ManualLockUntil %v should be in the future (seeded %v)", user.ManualLockUntil, lockUntil)
+	}
+}
+
 // TestAuth_TokensValidAfterAllowsFreshToken complements the revocation test:
 // when tokens_valid_after lies in the past (the epoch default, or set before
 // the token was issued), a valid token still authenticates.

@@ -69,6 +69,11 @@ type Claims struct {
 	// stored server-side (see SessionID) because large IdP ID tokens (e.g.
 	// Keycloak with many realm roles) exceeded the ~4 KiB cookie limit.
 	IDTokenHint string `json:"id_token_hint,omitempty"`
+	// CredentialVersion is the user's credential_version at issuance. The Auth
+	// middleware rejects any token whose value is older than the live row:
+	// a password rotation or admin manual lock landing after the token was
+	// minted (even in the same second) kills the session on its next request.
+	CredentialVersion int64 `json:"cvv,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -122,11 +127,12 @@ func generateSessionToken(user *models.User, secret []byte, duration time.Durati
 	}
 
 	claims := Claims{
-		UserID:       user.ID,
-		Username:     user.Username,
-		Role:         user.Role,
-		AuthProvider: provider,
-		SessionID:    sessionID,
+		UserID:            user.ID,
+		Username:          user.Username,
+		Role:              user.Role,
+		AuthProvider:      provider,
+		SessionID:         sessionID,
+		CredentialVersion: user.CredentialVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
@@ -241,6 +247,29 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 			// Load full user from database
 			user, err := loadUser(r.Context(), db, claims.UserID)
 			if err != nil || !user.Enabled {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			// Credential rotation: any event that bumped the user's
+			// credential_version after this token was minted (password
+			// change/reset on any path, admin manual lock, account disable)
+			// invalidates the session immediately. The monotonic counter has
+			// no clock or second-granularity window, unlike the
+			// tokens_valid_after/iat check below, so a rotation racing a
+			// login already in flight cannot be defeated by issuance order.
+			if claims.CredentialVersion < user.CredentialVersion {
+				clearSessionCookie(w, r)
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			// Manual admin lock: enforced on every request, not only at
+			// login. A token issued earlier in the same second as the lock
+			// (or before the credential_version column existed) must not
+			// keep the frozen account usable until expiry.
+			if time.Now().Before(user.ManualLockUntil) {
+				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -635,17 +664,21 @@ func loadUser(ctx context.Context, db *database.DB, userID int64) (*models.User,
 	user := &models.User{}
 	var enabled int
 	var mustChange int
+	var manualLockUntil sql.NullTime
 	err := db.QueryRowContext(ctx,
-		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password, tokens_valid_after
+		`SELECT id, username, email, first_name, last_name, role, enabled, created_at, updated_at, password_changed_at, must_change_password, tokens_valid_after, credential_version, manual_lock_until
 		 FROM users WHERE id = ?`, userID,
 	).Scan(
 		&user.ID, &user.Username, &user.Email,
 		&user.FirstName, &user.LastName, &user.Role, &enabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.PasswordChangedAt, &mustChange,
-		&user.TokensValidAfter,
+		&user.TokensValidAfter, &user.CredentialVersion, &manualLockUntil,
 	)
 	user.Enabled = enabled == 1
 	user.MustChangePassword = mustChange == 1
+	if manualLockUntil.Valid {
+		user.ManualLockUntil = manualLockUntil.Time
+	}
 	if err != nil {
 		return nil, err
 	}

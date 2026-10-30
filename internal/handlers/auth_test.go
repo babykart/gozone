@@ -271,6 +271,54 @@ func TestLogin_FailedAttemptsRecorded(t *testing.T) {
 	}
 }
 
+// TestLogin_CredentialRotatedDuringBcryptDenied est la régression de la
+// rotation concurrente: une requête lit le hash, un administrateur réinitialise
+// le mot de passe (ou verrouille le compte) pendant le bcrypt, la comparaison
+// obsolète réussit — sans re-contrôle, un JWT valide serait émis après la
+// rotation. Le re-lecture de credential_version après bcrypt doit refuser
+// l'émission.
+func TestLogin_CredentialRotatedDuringBcryptDenied(t *testing.T) {
+	h := newTestHandler(t)
+
+	// The compare window is set by the HASH's bcrypt cost (not the config):
+	// seed at cost 12 so the rotation below lands while bcrypt runs.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 12)
+	uid := insertReturnID(t, h.DB,
+		`INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)`,
+		"midlogin", "mid@example.com", string(hash), "user",
+	)
+
+	// Pre-build the package-level dummy hash (global sync.Once) so its
+	// generation cost cannot delay the login goroutine's initial read past
+	// the rotation below.
+	ensureDummyHash(h.Cfg.Auth.BcryptCost)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=midlogin&password=goodpass"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.Login(w, r)
+		done <- w
+	}()
+
+	// The rotation lands while the bcrypt compare is running: the version
+	// bump and the iat cutoff move together, exactly as every real rotation
+	// path does it. (Cost-12 bcrypt takes a few hundred milliseconds, so a
+	// 100 ms sleep is comfortably inside the window.)
+	time.Sleep(100 * time.Millisecond)
+	if _, err := h.DB.ExecContext(context.Background(),
+		"UPDATE users SET credential_version = credential_version + 1, tokens_valid_after = ? WHERE id = ?",
+		time.Now().UTC().Add(time.Hour).Truncate(time.Second), uid); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	w := <-done
+	if loc := w.Header().Get("Location"); strings.Contains(loc, "/dashboard") {
+		t.Errorf("a token must not be issued for credentials rotated during login, redirected to %q", loc)
+	}
+}
+
 func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
 	h := newTestHandler(t)
 

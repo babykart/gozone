@@ -374,7 +374,10 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	tva := time.Now().UTC().Truncate(time.Second)
 	updateQuery := `UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP`
 	if disableRevokesSessions {
-		updateQuery += ", tokens_valid_after = ?"
+		// Disabling bumps the monotonic credential version alongside the
+		// iat cutoff so a session racing the disable (token minted in the
+		// same second) is rejected too.
+		updateQuery += ", tokens_valid_after = ?, credential_version = credential_version + 1"
 	}
 	updateQuery += " WHERE id = ?"
 	updateArgs := []any{email, firstName, lastName, requestedRole, enabledVal}
@@ -408,7 +411,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, passwordHashErrorMessage(err))
 			return
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ? WHERE id = ?", string(hash), tva, userID)
+		_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ?, credential_version = credential_version + 1 WHERE id = ?", string(hash), tva, userID)
 		if err != nil {
 			h.renderInternalError(w, r, "Failed to update password", err)
 			return

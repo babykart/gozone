@@ -308,9 +308,13 @@ LoginHandler
   │   │   └── redirect /login?error=invalid_credentials  ← SAME code as user-not-found
   │   │
   │   └── Correct password:
-  │       ├── GenerateToken (HS256, JWT key derived from server.secret_key via HKDF-SHA256)
+  │       ├── Re-read users.credential_version → changed (a rotation or
+  │       │   manual lock landed during bcrypt): deny, SAME generic redirect
+  │       ├── GenerateToken (HS256, JWT key derived from server.secret_key via HKDF-SHA256;
+  │       │   embeds the credential_version at issuance)
   │       ├── Set-Cookie: gozone_session=<JWT>; HttpOnly; SameSite=Strict
-  │       ├── ResetFailedLogins (failed_login_attempts=0, locked_until=NULL)
+  │       ├── ResetFailedLogins (failed_login_attempts=0, locked_until=NULL;
+  │       │   manual_lock_until is NOT cleared — only AdminUnlockUser lifts a manual lock)
   │       ├── INSERT activity_logs (action='login')
   │       └── INSERT login_attempts (success=1)
   │       └── redirect /dashboard
@@ -322,9 +326,13 @@ Subsequent Web UI requests:
 Auth middleware (on protected routes)
   ├── Extract from cookie "gozone_session"
   ├── Fallback: Authorization: Bearer <JWT>
-  ├── ParseToken → Claims{UserID, Username, Role, AuthProvider, SessionID, jti}
+  ├── ParseToken → Claims{UserID, Username, Role, AuthProvider, SessionID, credential_version, jti}
   ├── CheckTokenRevoked (SELECT COUNT FROM revoked_tokens WHERE jti = ?)
   ├── loadUser(DB, UserID) → ensure enabled
+  ├── Reject when the token's credential_version is stale (password rotated,
+  │   manual lock or disable landed after issuance — no clock/granularity race)
+  ├── Reject when manual_lock_until is in the future (admin freeze applies
+  │   immediately, even to a token issued earlier in the same second)
   ├── applySessionPolicy (when idle/absolute configured):
   │     ├── SessionTracker.Touch(sid) → idle check
   │     ├── absolute cap check (SessionID-keyed firstSeen)
@@ -485,6 +493,8 @@ users
 ├── password_changed_at   DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP  ← password age (expiry) + history anchor
 ├── must_change_password  INTEGER DEFAULT 0                     ← force-change gate (admin reset / expiry)
 ├── tokens_valid_after    DATETIME DEFAULT '1970-01-01 …'       ← session-revocation cutoff; JWT iat before this is rejected
+├── credential_version    INTEGER DEFAULT 0                     ← monotonic counter bumped on password rotation / manual lock / disable;
+│                                                                 JWTs embed the value at issuance; a stale one is rejected per request
 ├── created_at            DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 └── updated_at            DATETIME/ TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 

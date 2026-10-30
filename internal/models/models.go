@@ -38,6 +38,20 @@ type User struct {
 	// jtis. Defaults to the Unix epoch (no revocation) and is bumped to now at
 	// every credential-changing event.
 	TokensValidAfter time.Time `json:"-"`
+	// CredentialVersion is a monotonic counter bumped on every event that
+	// invalidates previously issued credentials or sessions: password
+	// change/reset (any path), admin manual lock, account disable. Every
+	// session JWT records the version at issuance and the Auth middleware
+	// rejects any token carrying a stale one. Unlike the
+	// tokens_valid_after/iat comparison it is not subject to clock or
+	// second-granularity races, so a rotation landing while a login is
+	// already in flight cannot be defeated by token issuance order.
+	CredentialVersion int64 `json:"-"`
+	// ManualLockUntil is the timestamp at which an admin-imposed manual lock
+	// expires (zero or past = not manually locked). Loaded per request so the
+	// Auth middleware can freeze a manually locked account immediately, even
+	// for a token issued earlier in the same second as the lock.
+	ManualLockUntil time.Time `json:"-"`
 }
 
 // IsAdmin returns true if the user has the admin role.

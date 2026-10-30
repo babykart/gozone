@@ -122,7 +122,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// either of which cuts off the token re-issued just below.
 	tva := time.Now().UTC().Truncate(time.Second)
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0, tokens_valid_after = ? WHERE id = ?",
+		"UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 0, tokens_valid_after = ?, credential_version = credential_version + 1 WHERE id = ?",
 		string(hash), tva, user.ID,
 	); err != nil {
 		h.renderInternalError(w, r, "Failed to update password", err)
@@ -151,11 +151,13 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Re-issue the current session so the user stays logged in:
-	// tokens_valid_after was just bumped to now, which invalidates every access
-	// token minted before this instant — including the cookie this request
-	// arrived with, and any session on another device / a stolen JWT. A fresh
-	// token carries an iat >= the cutoff and so survives the Auth middleware's
-	// check on the next request; the overwritten cookie drops the stale one.
+	// tokens_valid_after and credential_version were just bumped, which
+	// invalidates every access token minted before this instant — including
+	// the cookie this request arrived with, and any session on another
+	// device / a stolen JWT. A fresh token carries an iat >= the cutoff and
+	// the bumped version (mirror the UPDATE above so the middleware's check
+	// accepts it), and the overwritten cookie drops the stale one.
+	user.CredentialVersion++
 	duration := time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour
 	newToken, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, duration)
 	if err != nil {

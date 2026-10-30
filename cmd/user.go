@@ -247,7 +247,7 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 	// a non-UTC session offset (MySQL/PostgreSQL).
 	tva := time.Now().UTC().Truncate(time.Second)
 	res, err := tx.ExecContext(ctx,
-		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ? WHERE id = ?",
+		"UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP, password_changed_at = CURRENT_TIMESTAMP, must_change_password = 1, tokens_valid_after = ?, credential_version = credential_version + 1 WHERE id = ?",
 		string(hash), tva, userID,
 	)
 	if err != nil {

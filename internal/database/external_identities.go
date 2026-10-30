@@ -19,7 +19,7 @@ func (db *DB) FindUserByExternalIdentity(ctx context.Context, issuer, subject st
 	row := db.QueryRowContext(ctx,
 		`SELECT u.id, u.username, u.email, u.password_hash, u.first_name, u.last_name,
 		        u.role, u.enabled, u.created_at, u.updated_at,
-		        u.password_changed_at, u.must_change_password
+		        u.password_changed_at, u.must_change_password, u.credential_version
 		 FROM external_identities ei
 		 JOIN users u ON u.id = ei.user_id
 		 WHERE ei.issuer = ? AND ei.subject = ?`, issuer, subject)
@@ -42,7 +42,7 @@ func (db *DB) FindUserByEmail(ctx context.Context, email string) (*models.User, 
 	row := db.QueryRowContext(ctx,
 		`SELECT id, username, email, password_hash, first_name, last_name,
 		        role, enabled, created_at, updated_at,
-		        password_changed_at, must_change_password
+		        password_changed_at, must_change_password, credential_version
 		 FROM users WHERE email_lc = LOWER(?) AND enabled = 1`, email)
 	u, err := scanLinkedUser(row)
 	if isNoRows(err) {
@@ -63,7 +63,7 @@ func scanLinkedUser(row rowScanner) (*models.User, error) {
 	if err := row.Scan(
 		&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName,
 		&u.Role, &enabled, &u.CreatedAt, &u.UpdatedAt,
-		&u.PasswordChangedAt, &mustChange,
+		&u.PasswordChangedAt, &mustChange, &u.CredentialVersion,
 	); err != nil {
 		return nil, err
 	}
