@@ -50,6 +50,10 @@ type DB struct {
 // surface the driver error to logs or typed branches.
 var ErrUniqueViolation = errors.New("unique constraint violation")
 
+// pingTimeout bounds the startup connectivity check: an unreachable database
+// must fail boot within seconds, not hang on the driver's TCP timeout.
+const pingTimeout = 10 * time.Second
+
 // wrapUniqueViolation returns an error that wraps both ErrUniqueViolation and
 // the original driver error when the active dialect classifies the latter as
 // a UNIQUE-constraint violation. Returns nil for a nil err and returns err
@@ -160,7 +164,11 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	// pool (and its background machinery — the SQLite sweep goroutines, the
 	// pinned migration-lock connection) leaks for the lifetime of the
 	// process. Callers retrying New in a loop would compound the leak.
-	if err := conn.Ping(); err != nil {
+	// The ping is bounded: an unreachable server must fail startup instead
+	// of hanging the boot sequence on the driver's TCP timeout.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer pingCancel()
+	if err := conn.PingContext(pingCtx); err != nil {
 		if zoneLockPool != nil {
 			zoneLockPool.Close() // #nosec G104 -- best-effort cleanup on error path
 		}
@@ -276,9 +284,18 @@ func (db *DB) ExecReturnID(ctx context.Context, query string, args ...any) (int6
 	return id, nil
 }
 
-// Ping verifies a connection to the database.
+// PingContext verifies a connection to the database, aborting the check when
+// the context is done. Callers must pass a bounded context: an unbounded
+// Ping against an unreachable server can hang forever and, on the readiness
+// path, hold the HTTP handler (and its connection slot) with it.
+func (db *DB) PingContext(ctx context.Context) error {
+	return db.Conn.PingContext(ctx)
+}
+
+// Ping verifies a connection to the database without a context bound. Prefer
+// PingContext: startup and readiness both pass an explicit deadline.
 func (db *DB) Ping() error {
-	return db.Conn.Ping()
+	return db.PingContext(context.Background())
 }
 
 // LockZone acquires the cluster-wide lock guarding a zone's read-modify-write

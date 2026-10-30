@@ -20,6 +20,11 @@ services:
     volumes:
       - gozone_data:/app/data
     restart: unless-stopped
+    # The server drains in-flight requests for up to server.shutdown_timeout_seconds
+    # (default 30 s, see cmd/server.go) before exiting; Docker's default 10 s
+    # SIGTERM grace would SIGKILL the container mid-drain. 40 s leaves the
+    # full drain plus a margin for the deferred cleanup (DB close, caches).
+    stop_grace_period: 40s
     # No healthcheck override: the image carries its own (Dockerfile HEALTHCHECK
     # probing /health/live — liveness only, no dependency checks), inherited
     # here. Use an orchestrator-level readiness probe on /health/ready when

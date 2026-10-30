@@ -36,7 +36,10 @@ func (h *Handler) HealthReady(w http.ResponseWriter, r *http.Request) {
 		Checks: make(map[string]string),
 	}
 
-	if err := h.DB.Ping(); err != nil {
+	// Bound the check by the request context: a readiness probe whose
+	// caller went away (or an overloaded server whose ping queue stalled)
+	// must not hold the handler and its connection slot indefinitely.
+	if err := h.DB.PingContext(r.Context()); err != nil {
 		// Do not leak internal error details to unauthenticated callers (m32);
 		// log the cause server-side for operators instead.
 		logger.Error("health check: database ping failed", "error", err)

@@ -106,13 +106,18 @@ func (s *Service) addProvider(inst *ProviderInstance) {
 	s.order = append(s.order, inst)
 }
 
+// discoveryTimeout bounds each provider's discovery: an IdP that
+// black-holes connections must not stall startup — for its own provider or
+// for every provider queued after it — past a hard deadline.
+const discoveryTimeout = 15 * time.Second
+
 // NewService discovers and wires every provider declared in the configuration.
 //
 // Discovery is best-effort per provider: if an IdP is unreachable at startup,
 // that provider is skipped (logged at warn level) rather than aborting server
 // boot — the remaining providers and local login still work. Operators are
 // expected to fix the unreachable IdP; the provider can be made available by
-// restarting once it is back.
+// restarting once it is back. Each attempt is bounded by discoveryTimeout.
 func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Service {
 	svc := &Service{stateKey: stateKey}
 	if cfg == nil || !cfg.OIDC.Enabled || len(cfg.OIDC.Providers) == 0 {
@@ -125,7 +130,12 @@ func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Servi
 	svc.usedStates = newStateStore()
 	for i := range cfg.OIDC.Providers {
 		pc := &cfg.OIDC.Providers[i]
-		inst, keySet, err := discover(ctx, pc, cfg.OIDC.Scopes, jwksTTL)
+		// Bound every attempt individually: a caller-supplied context (or
+		// none) must not let one black-holing IdP stall the whole discovery
+		// loop.
+		discCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
+		inst, keySet, err := discover(discCtx, pc, cfg.OIDC.Scopes, jwksTTL)
+		cancel()
 		if err != nil {
 			logger.Warn("oidc provider discovery failed; skipping",
 				"provider", pc.Name, "issuer", pc.IssuerURL, "error", err)

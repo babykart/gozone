@@ -18,6 +18,21 @@ import (
 	"github.com/babykart/gozone/internal/logger"
 )
 
+// TestDBPingContextHonorsCancellation pins the context-bounded connectivity
+// checks: a cancelled context aborts the ping instead of waiting on the
+// driver, and the context-less Ping stays as the unbounded legacy form.
+func TestDBPingContextHonorsCancellation(t *testing.T) {
+	db := newTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := db.PingContext(ctx); err == nil {
+		t.Fatal("PingContext with a cancelled context must fail")
+	}
+	if err := db.Ping(); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
+
 func TestNewInMemory(t *testing.T) {
 	cfg := &config.DatabaseConfig{
 		Driver: "sqlite3",

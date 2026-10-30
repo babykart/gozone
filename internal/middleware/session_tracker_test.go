@@ -75,6 +75,40 @@ func TestSessionTracker_TouchIdleExceededDenies(t *testing.T) {
 	}
 }
 
+// TestSessionTracker_ZeroPolicyWritesNothing pins the maintenance/enforcement
+// split: with idle AND absolute disabled, Touch allows without seeding a
+// sessions row — a policy-less deployment must not pay per-session insert/
+// write traffic — while the background purge keeps maintaining retention.
+func TestSessionTracker_ZeroPolicyWritesNothing(t *testing.T) {
+	db := newTestAuthDB(t)
+	tr := NewSessionTracker(db, SessionPolicy{})
+	defer tr.Close()
+
+	if !tr.Touch(context.Background(), "s1", time.Now().UTC(), time.Now().UTC()) {
+		t.Fatal("zero policy must allow")
+	}
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&n); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("zero policy must not seed sessions rows, got %d", n)
+	}
+}
+
+// TestSessionTracker_CloseCancelsMaintenance verifies the purge context is
+// cancelled by Close: an in-flight purge aborts instead of making Close (and
+// the process drain behind it) wait on a slow database.
+func TestSessionTracker_CloseCancelsMaintenance(t *testing.T) {
+	db := newTestAuthDB(t)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Minute})
+	tr.Close()
+	if tr.ctx.Err() == nil {
+		t.Error("Close must cancel the maintenance context")
+	}
+	tr.Close() // must stay idempotent
+}
+
 func TestSessionTracker_TouchIdleZeroAlwaysAllows(t *testing.T) {
 	db := newTestAuthDB(t)
 	tr := NewSessionTracker(db, SessionPolicy{Idle: 0})

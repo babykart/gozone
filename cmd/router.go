@@ -122,22 +122,26 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 
 	// Session lifetime policy: idle inactivity timeout and/or an absolute
 	// refresh cap. Both default to 0 (disabled) → AuthWithPolicy behaves
-	// exactly like the legacy Auth middleware. When either is > 0 a
-	// SessionTracker is created to enforce idle/absolute limits and to
-	// transparently refresh the access JWT near expiry (sliding the session up
-	// to the absolute cap). The tracker state is persisted in the sessions table
-	// so multi-instance deployments share the same idle/absolute window; an
-	// in-memory cache coarsens writes to keep the hot path cheap.
+	// exactly like the legacy Auth middleware.
+	//
+	// Session lifetime tracking: the tracker enforces idle/absolute limits and
+	// transparently refreshes the access JWT near expiry (sliding the session
+	// up to the absolute cap); the tracker state is persisted in the sessions
+	// table so multi-instance deployments share the same idle/absolute window;
+	// an in-memory cache coarsens writes to keep the hot path cheap.
+	//
+	// The tracker is created whatever the policy: with idle/absolute disabled
+	// it enforces nothing and writes nothing (Touch short-circuits), but its
+	// periodic purge still deletes expired sessions rows left over from a
+	// previous configuration — retention maintenance is detached from the
+	// lifetime options.
 	accessTTL := time.Duration(cfg.Auth.SessionDurationHours) * time.Hour
 	sessionPolicy := middleware.SessionPolicy{
 		Idle:      time.Duration(cfg.Auth.IdleTimeoutMinutes) * time.Minute,
 		Absolute:  time.Duration(cfg.Auth.AbsoluteSessionTimeoutHours) * time.Hour,
 		AccessTTL: accessTTL,
 	}
-	var sessionTracker *middleware.SessionTracker
-	if sessionPolicy.Idle > 0 || sessionPolicy.Absolute > 0 {
-		sessionTracker = middleware.NewSessionTracker(db, sessionPolicy)
-	}
+	sessionTracker := middleware.NewSessionTracker(db, sessionPolicy)
 	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL)
 
 	// CSRF-protected web UI routes (login + authenticated)

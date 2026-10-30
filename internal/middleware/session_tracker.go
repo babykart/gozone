@@ -75,20 +75,30 @@ type SessionTracker struct {
 	stopCh   chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	// ctx carries the background maintenance (the periodic purge): Close
+	// cancels it so an in-flight purge aborts instead of making Close (and
+	// the process drain behind it) wait on a slow database.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewSessionTracker returns a tracker enforcing the given policy against db. It
 // starts a background goroutine that periodically evicts stale cache entries
 // and purges expired session rows; the goroutine is stopped by Close. When db is
 // nil the tracker is a no-op (every check passes) — used when idle/absolute are
-// disabled.
+// disabled. The maintenance runs whatever the policy: even with idle/absolute
+// disabled (nothing to enforce, no rows created — see Touch) the purge keeps
+// deleting rows left over from a previous configuration.
 func NewSessionTracker(db *database.DB, policy SessionPolicy) *SessionTracker {
+	ctx, cancel := context.WithCancel(context.Background())
 	t := &SessionTracker{
 		db:     db,
 		policy: policy,
 		cache:  make(map[string]*cacheEntry),
 		stopCh: make(chan struct{}),
 		done:   make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	if db != nil {
 		go t.cleanup()
@@ -110,6 +120,13 @@ func NewSessionTracker(db *database.DB, policy SessionPolicy) *SessionTracker {
 // not lock every user out. The error is logged.
 func (t *SessionTracker) Touch(ctx context.Context, sessionID string, iat, now time.Time) bool {
 	if t == nil || t.db == nil || sessionID == "" {
+		return true
+	}
+	// Nothing enforced (idle and absolute both disabled): allow without
+	// seeding. The maintenance goroutine still purges rows left over from a
+	// previous configuration, but a policy-less deployment must not pay the
+	// per-session insert/write traffic of tracking rows it never reads.
+	if t.policy.Idle <= 0 && t.policy.Absolute <= 0 {
 		return true
 	}
 	t.mu.Lock()
@@ -252,12 +269,14 @@ func (t *SessionTracker) remember(ctx context.Context, sessionID string, firstSe
 }
 
 // Close stops the background cleanup goroutine. Safe to call multiple times and
-// on a no-op tracker.
+// on a no-op tracker. The maintenance context is cancelled first so an
+// in-flight purge aborts instead of holding the drain.
 func (t *SessionTracker) Close() {
 	if t == nil || t.db == nil {
 		return
 	}
 	t.stopOnce.Do(func() {
+		t.cancel()
 		close(t.stopCh)
 		<-t.done
 	})
@@ -301,8 +320,11 @@ func (t *SessionTracker) cleanup() {
 			}
 			t.mu.Unlock()
 			// UTC cutoff feeds DELETE ... WHERE expires_at <= ?, matching how
-			// expires_at is written by SessionTouch/SessionInsert.
-			if n, err := t.db.SessionPurgeExpired(context.Background(), time.Now().UTC()); err != nil {
+			// expires_at is written by SessionTouch/SessionInsert. The
+			// maintenance context is cancelled by Close, so a purge aborted
+			// mid-flight surfaces as an error instead of blocking the drain;
+			// the ticker path just logs and retries next tick.
+			if n, err := t.db.SessionPurgeExpired(t.ctx, time.Now().UTC()); err != nil {
 				logger.Error("session tracker: purge expired failed", "error", err)
 			} else if n > 0 {
 				logger.Info("session tracker: purged expired sessions", "deleted", n)
