@@ -3636,6 +3636,49 @@ func TestRRSetSnapshot_IdempotentOnSplitInput(t *testing.T) {
 	}
 }
 
+// TestRRSetSnapshot_SRVReadPathPreservesWeight is the SRV regression: the
+// read-path form (priority already detached by ListRecords, content "weight
+// port target") must survive the snapshot untouched. The leading weight
+// used to be re-parsed as the priority, shifting the real priority and
+// dropping the weight from the before-image.
+func TestRRSetSnapshot_SRVReadPathPreservesWeight(t *testing.T) {
+	// Read-path form, as returned by ListRecords for the wire
+	// "10 20 5060 sip.example.com.".
+	rrset := &models.RRSet{
+		Name: "_sip._tcp.example.com.",
+		Type: "SRV",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "20 5060 sip.example.com.", Priority: 10, Disabled: false},
+		},
+	}
+	got := rrsetSnapshot(rrset)
+	if !strings.Contains(got, `"priority":10`) {
+		t.Errorf("expected priority 10 preserved, got %s", got)
+	}
+	if !strings.Contains(got, `"content":"20 5060 sip.example.com."`) {
+		t.Errorf("expected weight+port+target content preserved, got %s", got)
+	}
+
+	// Wire form (pre-PATCH in-memory RRSet) still splits: the embedded
+	// priority must land in the dedicated field.
+	wire := &models.RRSet{
+		Name: "_sip._tcp.example.com.",
+		Type: "SRV",
+		TTL:  3600,
+		Records: []models.RecordInfo{
+			{Content: "10 20 5060 sip.example.com.", Disabled: false},
+		},
+	}
+	got = rrsetSnapshot(wire)
+	if !strings.Contains(got, `"priority":10`) {
+		t.Errorf("expected embedded priority split out, got %s", got)
+	}
+	if !strings.Contains(got, `"content":"20 5060 sip.example.com."`) {
+		t.Errorf("expected weight+port+target after split, got %s", got)
+	}
+}
+
 // TestRRSetSnapshot_NonPriorityUntouched verifies non-priority types pass
 // through unchanged.
 func TestRRSetSnapshot_NonPriorityUntouched(t *testing.T) {

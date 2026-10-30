@@ -79,6 +79,18 @@ func TypeHasPriority(recordType string) bool {
 	return specFor(recordType).hasPriority
 }
 
+// TypeWireFields returns the number of space-separated fields the content of
+// a priority-bearing record type has once the priority is embedded in the
+// wire form (MX: 2 = "priority target", SRV: 4 = "priority weight port
+// target"). It is one more than the field count of the display/read form,
+// where the priority is detached into RecordInfo.Priority (MX: "target",
+// SRV: "weight port target"). Returns 0 for types without an embedded
+// priority. Callers use it to tell wire content (split it) from already
+// split content (leave it alone) before applying SplitPriority.
+func TypeWireFields(recordType string) int {
+	return specFor(recordType).wireFields
+}
+
 // TypeIsQuoted reports whether PowerDNS stores recordType content wrapped in
 // double quotes (TXT, SPF).
 func TypeIsQuoted(recordType string) bool {

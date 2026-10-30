@@ -126,9 +126,18 @@ func RRSetSnapshot(rrset *models.RRSet) string {
 	records := make([]models.RecordInfo, len(rrset.Records))
 	for i, r := range rrset.Records {
 		records[i] = r
-		if p, c, ok := models.SplitPriority(rrset.Type, r.Content); ok {
-			records[i].Content = c
-			records[i].Priority = p
+		// Only content that still carries the FULL wire field count has the
+		// priority embedded: MX wire "10 mail." has 2 fields vs 1 once
+		// split, SRV wire "10 20 5060 sip." has 4 vs 3. Records read back
+		// from PowerDNS through ListRecords already had their priority
+		// detached — re-splitting those shifts the SRV weight into the
+		// priority field and drops it from the content.
+		if wire := models.TypeWireFields(rrset.Type); wire > 0 &&
+			len(strings.Fields(r.Content)) >= wire {
+			if p, c, ok := models.SplitPriority(rrset.Type, r.Content); ok {
+				records[i].Content = c
+				records[i].Priority = p
+			}
 		}
 	}
 	snapshot := *rrset
