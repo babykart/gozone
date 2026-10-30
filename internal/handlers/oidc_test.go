@@ -1138,6 +1138,60 @@ func TestLogout_RPInitiated_LegacyHintInClaim(t *testing.T) {
 	}
 }
 
+// TestLogout_NoEndSessionEndpoint_StillDeletesHint is the retention
+// regression: the server-side id_token_hint is an assertion of the user's
+// identity and must be deleted when the session ends, whether or not the
+// provider advertises an end_session_endpoint to consume it.
+func TestLogout_NoEndSessionEndpoint_StillDeletesHint(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-no-endpoint!")
+	// Provider WITHOUT an end_session_endpoint.
+	h.OIDC = &fakeSSOService{
+		providers: []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
+	}
+	ctx := context.Background()
+	user, err := h.DB.CreateExternalUser(ctx, "noenduser", "noend@example.com", "", "", "user", "iss", "sub")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+
+	const idTokenHint = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJub2VuZCJ9.fake"
+	w0 := httptest.NewRecorder()
+	r0 := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := h.issueSSOSession(w0, r0, user, "gitea", idTokenHint); err != nil {
+		t.Fatalf("issueSSOSession: %v", err)
+	}
+	var sessionCookie *http.Cookie
+	for _, c := range w0.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected a session cookie")
+	}
+	sessionClaims, err := middleware.ParseToken(sessionCookie.Value, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("ParseToken session: %v", err)
+	}
+
+	// Logout ends the local session only (no IdP round-trip)…
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	r.AddCookie(sessionCookie)
+	r.Host = "gozone.test"
+	r = r.WithContext(context.WithValue(r.Context(), middleware.UserContextKey, user))
+	h.Logout(w, r)
+
+	if w.Code != http.StatusSeeOther || !strings.HasSuffix(w.Header().Get("Location"), "/login") {
+		t.Fatalf("expected a plain redirect to /login, got %d %q", w.Code, w.Header().Get("Location"))
+	}
+	// …but the stored hint must not survive the session it authenticated.
+	if stored, err := h.DB.FindSSOIDToken(ctx, sessionClaims.SessionID); err == nil && stored != "" {
+		t.Errorf("the stored id_token_hint must be deleted at logout even without an end_session_endpoint, got %q", stored)
+	}
+}
+
 // TestRPLogoutRedirect_EscapesTarget pins the interstitial contract: the
 // end-session URL must be HTML-escaped into both attribute contexts, and the
 // page carries no inline style or script (the strict CSP applies to it).

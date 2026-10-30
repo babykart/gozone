@@ -524,29 +524,34 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	// some providers, e.g. Keycloak). authProvider "" / "local" means a password
 	// login → no IdP round-trip.
 	if h.OIDC != nil && authProvider != "" && authProvider != "local" {
-		if endSession := h.OIDC.EndSessionURL(authProvider); endSession != "" {
-			// The hint is embedded in the JWT only for legacy (≤ v0.16.7)
-			// sessions; current sessions store it server-side keyed by sid
-			// (large IdP ID tokens would overflow the session cookie).
-			if idTokenHint == "" && sessionID != "" {
-				if stored, err := h.DB.FindSSOIDToken(ctx, sessionID); err != nil {
-					logger.Error("oidc logout: failed to load stored id_token_hint",
-						"provider", authProvider, "error", err)
-				} else {
-					idTokenHint = stored
-				}
+		// The hint is embedded in the JWT only for legacy (≤ v0.16.7)
+		// sessions; current sessions store it server-side keyed by sid
+		// (large IdP ID tokens would overflow the session cookie). Read it
+		// BEFORE the row goes away — and read/delete it whatever the
+		// provider advertises: the raw IdP token asserts the user's
+		// identity and must not be retained once the session it
+		// authenticated is over, even without an end_session_endpoint to
+		// consume it.
+		if idTokenHint == "" && sessionID != "" {
+			if stored, err := h.DB.FindSSOIDToken(ctx, sessionID); err != nil {
+				logger.Error("oidc logout: failed to load stored id_token_hint",
+					"provider", authProvider, "error", err)
+			} else {
+				idTokenHint = stored
 			}
+		}
+		// The hint is single-purpose: drop it once the session ends.
+		if sessionID != "" {
+			if err := h.DB.DeleteSSOIDToken(ctx, sessionID); err != nil {
+				logger.Error("oidc logout: failed to delete stored id_token_hint",
+					"provider", authProvider, "error", err)
+			}
+		}
+		if endSession := h.OIDC.EndSessionURL(authProvider); endSession != "" {
 			postLogout := oidcPostLogoutURL(h.Cfg.Server.ExternalURL, r)
 			target := appendQuery(endSession, "post_logout_redirect_uri", postLogout)
 			if idTokenHint != "" {
 				target = appendQuery(target, "id_token_hint", idTokenHint)
-				// The hint is single-purpose: drop it once consumed.
-				if sessionID != "" {
-					if err := h.DB.DeleteSSOIDToken(ctx, sessionID); err != nil {
-						logger.Error("oidc logout: failed to delete stored id_token_hint",
-							"provider", authProvider, "error", err)
-					}
-				}
 			} else {
 				// No id_token_hint available: either the session predates hint
 				// storage, or the server-side write failed at login (see the
@@ -570,6 +575,11 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 			}
 			logger.Warn("oidc logout: end_session_endpoint is not absolute; skipping RP logout",
 				"provider", authProvider, "url", endSession)
+		} else {
+			// No RP-initiated logout without an end_session_endpoint; the
+			// local session (and the stored hint above) still end here.
+			logger.Info("oidc logout: provider has no end_session_endpoint; local session ended",
+				"provider", authProvider)
 		}
 	}
 
