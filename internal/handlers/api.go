@@ -126,6 +126,13 @@ func (h *Handler) APIListZones(w http.ResponseWriter, r *http.Request) {
 		if h.writeServiceAuthzError(w, r, err, "failed to load zone access") {
 			return
 		}
+		// A GoZone→PowerDNS 401/403 here means GoZone's own upstream
+		// credential is broken, not the client's key: surface it as the
+		// same 502 UPSTREAM_AUTH_ERROR the zone-scoped endpoints use.
+		if errors.Is(err, pdns.ErrUnauthorized) {
+			h.writeAPIErrorWithCause(w, r, http.StatusBadGateway, ErrCodeUpstreamAuthError, "PowerDNS rejected GoZone's API credentials", err)
+			return
+		}
 		h.writeAPIErrorWithCause(w, r, http.StatusInternalServerError, ErrCodeInternalError, "failed to list zones", err)
 		return
 	}

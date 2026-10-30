@@ -31,7 +31,8 @@ func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
-		h.renderErrorStatus(w, r, http.StatusNotFound, "Zone not found")
+		status, msg := pdnsPageStatus(err, "Zone not found")
+		h.renderErrorStatus(w, r, status, msg)
 		return
 	}
 
@@ -215,13 +216,15 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
-		h.renderErrorStatus(w, r, http.StatusNotFound, "Zone not found")
+		status, msg := pdnsPageStatus(err, "Zone not found")
+		h.renderErrorStatus(w, r, status, msg)
 		return
 	}
 
 	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
-		h.renderInternalError(w, r, "Failed to fetch records", err)
+		status, msg := pdnsPageStatus(err, "Record not found")
+		h.renderErrorStatus(w, r, status, msg)
 		return
 	}
 

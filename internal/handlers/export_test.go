@@ -466,6 +466,26 @@ func TestExportZone_GetZoneError_Returns500(t *testing.T) {
 	}
 }
 
+// TestExportZone_GetZoneNotFound_Returns404 is the status-contract
+// regression: a vanished zone is a 404, not a blanket 500 — the operator
+// can tell "zone gone" from "server broken".
+func TestExportZone_GetZoneNotFound_Returns404(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=bind", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("a missing zone must be 404, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
 // TestExportZone_ListRecordsError_Returns500 verifies the second PDNS call
 // (ListRecords) also surfaces as 500 via renderErrorStatus, not 400. GetZone
 // and ListRecords both hit GET /zones/{id}; the first call (GetZone) succeeds

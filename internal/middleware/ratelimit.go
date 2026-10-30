@@ -132,10 +132,10 @@ func (rl *RateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 
 			if !rl.allow(key) {
 				logger.Warn("rate limit exceeded", "key", maskKey(key))
-				w.Header().Set("Content-Type", "application/json")
+				// Same envelope as every other API error: a 429 without a
+				// code would break clients that switch on it.
 				w.Header().Set("Retry-After", "60")
-				w.WriteHeader(http.StatusTooManyRequests)
-				w.Write([]byte(`{"error":"rate_limit_exceeded","message":"too many requests, retry after 60 seconds"}`)) // #nosec G104
+				writeAPIErrorEnvelope(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many requests, retry after 60 seconds")
 				return
 			}
 

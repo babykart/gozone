@@ -24,15 +24,16 @@ func (h *Handler) ExportZone(w http.ResponseWriter, r *http.Request) {
 
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
+		status, msg := pdnsPageStatus(err, "Zone not found")
 		logger.Error("ExportZone: GetZone failed", "zone", zoneID, "error", err)
-		h.renderErrorStatus(w, r, http.StatusInternalServerError, "Failed to get zone")
+		h.renderErrorStatus(w, r, status, msg)
 		return
 	}
 
 	records, err := h.PDNS.ListRecords(r.Context(), zoneID)
 	if err != nil {
 		logger.Error("ExportZone: ListRecords failed", "zone", zoneID, "error", err)
-		h.renderErrorStatus(w, r, http.StatusInternalServerError, "Failed to list records")
+		h.renderInternalError(w, r, "Failed to list records", err)
 		return
 	}
 

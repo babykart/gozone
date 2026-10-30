@@ -57,6 +57,32 @@ func TestCreateRecordPage_ZoneNotFound(t *testing.T) {
 	}
 }
 
+// TestCreateRecordPage_PDNSServerError_Not404 is the status-contract
+// regression: a PowerDNS backend failure on the creation page is a 500 with
+// the generic message, not a misleading "Zone not found".
+func TestCreateRecordPage_PDNSServerError_Not404(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./records/new", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = r.WithContext(ctx)
+	h.CreateRecordPage(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("a backend failure must be 500, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "The request failed") {
+		t.Errorf("expected the generic error message, got: %s", w.Body.String())
+	}
+}
+
 func TestCreateRecord_Success(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -691,8 +717,10 @@ func TestEditRecordPage_RecordRetrievalError(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d (PowerDNS failure is a server error, not 400)", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "Failed to fetch records") {
-		t.Errorf("expected 'Failed to fetch records' error message, got: %s", w.Body.String())
+	// A backend failure renders the generic, category-level message — the
+	// raw upstream error (which may quote internals) never reaches the page.
+	if !strings.Contains(w.Body.String(), "The request failed") {
+		t.Errorf("expected the generic error message, got: %s", w.Body.String())
 	}
 }
 

@@ -60,8 +60,8 @@ func TestRateLimiter_BlocksAfterBurst(t *testing.T) {
 	}
 	var body map[string]string
 	json.NewDecoder(w.Body).Decode(&body)
-	if body["error"] != "rate_limit_exceeded" {
-		t.Errorf("expected rate_limit_exceeded, got %q", body["error"])
+	if body["code"] != "RATE_LIMITED" {
+		t.Errorf("expected the RATE_LIMITED envelope, got %q", body["code"])
 	}
 }
 

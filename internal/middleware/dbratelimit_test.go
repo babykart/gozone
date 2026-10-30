@@ -149,7 +149,7 @@ func TestDBRateLimiter_429BodyAndRetryAfter(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("Content-Type: got %q, want application/json", ct)
 	}
-	if !strings.Contains(w.Body.String(), "rate_limit_exceeded") {
+	if !strings.Contains(w.Body.String(), `"code":"RATE_LIMITED"`) {
 		t.Errorf("body missing the error code: %s", w.Body.String())
 	}
 }

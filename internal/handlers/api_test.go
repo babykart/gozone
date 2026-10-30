@@ -1716,6 +1716,29 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 	}
 }
 
+// TestAPIListZones_UpstreamAuthError verifies a GoZone→PowerDNS 401/403 maps
+// to 502 UPSTREAM_AUTH_ERROR on the list endpoint too — the client's key is
+// valid; GoZone's own upstream credential is broken.
+func TestAPIListZones_UpstreamAuthError(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	defer pdnsSrv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	h.APIListZones(w, r)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
+	}
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeUpstreamAuthError {
+		t.Errorf("expected code %s, got %s", ErrCodeUpstreamAuthError, resp.Code)
+	}
+}
+
 // TestAPIListZones_FilterErrorFailClosed is a fail-closed regression: when
 // filterZonesForUser fails (DB error in the zone-group lookup), the endpoint
 // must stay fail-closed — never return the unfiltered zones. It now surfaces

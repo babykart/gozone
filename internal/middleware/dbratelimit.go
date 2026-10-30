@@ -72,10 +72,10 @@ func (d *DBRateLimiter) Limit(keyFn KeyFunc) func(http.Handler) http.Handler {
 			if !allowed {
 				retryAfter := int(time.Until(window.Add(dbRateLimitWindow)).Seconds()) + 1
 				logger.Warn("cluster-wide rate limit exceeded", "key", maskKey(key))
-				w.Header().Set("Content-Type", "application/json")
+				// Same envelope as every other API error: a 429 without a
+				// code would break clients that switch on it.
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				w.WriteHeader(http.StatusTooManyRequests)
-				w.Write([]byte(`{"error":"rate_limit_exceeded","message":"too many requests"}`)) // #nosec G104
+				writeAPIErrorEnvelope(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many requests")
 				return
 			}
 

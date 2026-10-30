@@ -43,7 +43,7 @@ The default for keys created before scopes existed is `api:write`.
 
 ## Rate Limiting
 
-API requests are rate-limited to **100 requests per minute** per API key. Exceeding the limit returns HTTP 429 with a `Retry-After` header.
+API requests are rate-limited to **100 requests per minute** per API key. Exceeding the limit returns HTTP 429 with a `Retry-After` header and the standard error envelope (`code: RATE_LIMITED`).
 
 ## Zone Identifiers
 
@@ -76,10 +76,16 @@ All errors return a JSON body:
 | `CONFLICT` | 409 | Resource already exists |
 | `UNAUTHORIZED` | 401 | Invalid or missing API key, the key's user is disabled, or the key's stored scope is unreadable |
 | `API_KEY_EXPIRED` | 401 | The API key passed its expiry date |
-| `API_KEY_INVALIDATED` | 401 | The API key was created before the owner's credential-rotation cutoff (password change/reset, account disable, manual lock) |
+| `API_KEY_INVALIDATED` | 401 | The key predates the owner's credential rotation (monotonic `credential_version`, or the legacy `tokens_valid_after` cutoff) |
 | `FORBIDDEN` | 403 | Authenticated as a non-admin on an admin-only endpoint, or no zone-group grants access to the zone |
 | `API_KEY_SCOPE_MISMATCH` | 403 | The key's scope belongs to another surface: an `mcp:*` key on `/api/v1`, or an `api:*` key on `/mcp` |
 | `INSUFFICIENT_SCOPE` | 403 | An `api:read` key attempted a write method (POST/PUT/DELETE) on `/api/v1` |
+| `RATE_LIMITED` | 429 | Per-key or per-IP rate limit exceeded; the response carries `Retry-After` |
+| `ZONE_CREATE_ERROR` | 500 | PowerDNS rejected the zone creation (generic label; see `message`) |
+| `ZONE_DELETE_ERROR` | 500 | PowerDNS rejected the zone deletion (generic label; see `message`) |
+| `RECORD_ERROR` | 500 | A record operation failed upstream (generic label; see `message`) |
+| `STATS_ERROR` | 500 | The PowerDNS statistics call failed (generic label; see `message`) |
+| `LUA_UPDATES_DISABLED` | 400 | LUA record updates are disabled on the PowerDNS server |
 | `UPSTREAM_AUTH_ERROR` | 502 | PowerDNS rejected GoZone's own API credentials — a server-side configuration problem; the client's API key is valid |
 | `INTERNAL_ERROR` | 500 | Unexpected server error (also used when the zone-access lookup itself fails) |
 
@@ -299,10 +305,10 @@ curl -X POST \
 | `records[].disabled` | bool | no | Default `false` |
 | `comments` | array | no | Array of RRSet comments (see below) |
 | `comments[].content` | string | **yes** | Comment text |
-| `comments[].account` | string | no | Account name that added the comment; omitted from the request if not set (PowerDNS defaults it server-side) |
+| `comments[].account` | string | no | Account name that added the comment. **Always emitted, as `""` when unset** — PowerDNS rejects comment items missing the `account` key on PATCH; on read an absent key is accepted and normalised to `""` |
 | `comments[].modified_at` | int | no | Unix timestamp; omitted from the request if not set (PowerDNS defaults it server-side) |
 
-The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep. GoZone does not set a default `account` or `modified_at` — both fields are optional and PowerDNS fills in the server-side defaults when omitted.
+The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep. Every comment item carries an `account` field — PowerDNS rejects items missing the key on PATCH — emitted as `""` when no account was set; `modified_at` stays optional and PowerDNS fills in the server-side default when omitted.
 
 > The REST API is a pass-through for the `comments` field: the array is forwarded to PowerDNS exactly as the client sent it, with no implicit deduplication, padding, or clearing. If you want to **add** a comment to an existing list, GET the RRSet first (returns the current `comments`), merge your additions client-side, and PUT the combined list back. The web UI's textarea + "Clear all comments" checkbox builds the patch for you on the form path; the API path leaves that work to the caller.
 >
