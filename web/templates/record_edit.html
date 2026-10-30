@@ -26,7 +26,7 @@
     </div>
     <div class="form-group">
         <label for="content">Content</label>
-        {{with index .Record.Records 0}}
+        {{with .Target}}
         <input type="hidden" name="original_content" value="{{.Content}}">
         <input type="hidden" name="original_priority" value="{{.Priority}}">
         <input type="text" id="content" name="content" value="{{.Content}}" class="form-control" required>
@@ -39,12 +39,12 @@
         </div>
         <div class="form-group">
             <label for="priority">Priority</label>
-            {{with index .Record.Records 0}}
+            {{with .Target}}
             <input type="number" id="priority" name="priority" value="{{.Priority}}" min="0">
             {{end}}
         </div>
     </div>
-    {{with index .Record.Records 0}}
+    {{with .Target}}
     <div class="form-group">
         <label>
             <input type="checkbox" name="disabled" {{if .Disabled}}checked{{end}}>

@@ -68,7 +68,7 @@ func testTemplateSet() *template.Template {
 		{{define "zone_create.html"}}Create Zone{{end}}
 		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{.Record.Content}} {{end}}{{if .RecordPageInfo}} PageInfo={{.RecordPageInfo.Current}}/{{.RecordPageInfo.TotalPages}} PerPage={{.RecordPageInfo.PerPage}} Total={{.RecordPageInfo.Total}}{{end}}{{end}}
 		{{define "record_create.html"}}Create Record{{end}}
-		{{define "record_edit.html"}}Edit Record{{end}}
+		{{define "record_edit.html"}}Edit Record{{with .Target}} Target={{.Content}}/{{.Priority}}{{end}}{{end}}
 		{{define "users.html"}}Users{{range .Users}} {{.Username}}{{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "user_create.html"}}Create User{{end}}
 		{{define "user_edit.html"}}Edit User{{end}}

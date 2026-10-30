@@ -195,9 +195,14 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
 }
 
-// EditRecordPage renders the record edit form (GET /zones/{zone_id}/records/edit?name=...&type=...).
+// EditRecordPage renders the record edit form (GET /zones/{zone_id}/records/edit?name=...&type=...&content=...&priority=...).
 //
-// The record to edit is identified by the "name" and "type" query parameters.
+// The RRSet to edit is identified by the "name" and "type" query parameters;
+// "content" and "priority" pick the specific record within a multi-record
+// RRSet (they are what the per-row "Edit page" link on the zone view carries,
+// so the dedicated page works without JavaScript and edits the row the user
+// clicked, not the first record of the set). Without "content" the first
+// record is edited, matching the historical behaviour.
 func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
@@ -205,6 +210,8 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	recordName := recordQuery.Get("name")
 	recordType := canonicalRecordType(recordQuery.Get("type"))
+	recordContent := recordQuery.Get("content")
+	recordPriority, _ := strconv.Atoi(recordQuery.Get("priority"))
 
 	zone, err := h.PDNS.GetZone(r.Context(), zoneID)
 	if err != nil {
@@ -231,11 +238,32 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pick the record within the RRSet. The identity is the displayed
+	// content + priority (what the zone-view row link submits); a content
+	// parameter that matches nothing means the link is stale (the record
+	// changed since the page was rendered) — refuse rather than silently
+	// editing another member of the set.
+	targetIdx := 0
+	if recordContent != "" {
+		targetIdx = -1
+		for i, rec := range targetRRSet.Records {
+			if rec.Content == recordContent && rec.Priority == recordPriority {
+				targetIdx = i
+				break
+			}
+		}
+		if targetIdx < 0 {
+			h.renderErrorStatus(w, r, http.StatusNotFound, "Record not found")
+			return
+		}
+	}
+
 	data := map[string]interface{}{
 		"Title":       "Edit Record - " + zone.Name + " - " + h.Cfg.Server.AppName,
 		"User":        user,
 		"Zone":        zone,
 		"Record":      targetRRSet,
+		"Target":      targetRRSet.Records[targetIdx],
 		"RecordTypes": GetRecordTypes(),
 	}
 	h.render(w, r, "record_edit.html", data)

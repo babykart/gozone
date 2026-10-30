@@ -84,7 +84,8 @@
                     <label class="ev ev-status hidden"><input type="checkbox" class="ev-disabled" {{if .Record.Disabled}}checked{{end}}> Disabled</label>
                 </td>
                 <td class="actions-cell">
-                    <span class="rv"><button type="button" class="btn btn-sm btn-secondary" data-action="edit-record">Edit</button></span>
+                    <span class="rv"><button type="button" class="btn btn-sm btn-secondary" data-action="edit-record">Edit</button>
+                    <a class="btn btn-sm btn-secondary" href="/zones/{{$zoneID}}/records/edit?name={{urlquery .Name}}&amp;type={{urlquery .Type}}&amp;content={{urlquery .Record.Content}}&amp;priority={{if .Record.Priority}}{{.Record.Priority}}{{else}}0{{end}}">Edit page</a></span>
                     <span class="ev hidden">
                         <button type="button" class="btn btn-sm btn-primary" data-action="save-record">Save</button>
                         <button type="button" class="btn btn-sm btn-secondary" data-action="cancel-edit">Cancel</button>

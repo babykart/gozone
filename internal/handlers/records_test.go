@@ -522,6 +522,92 @@ func TestEditRecordPage_Success(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "Edit Record") {
 		t.Errorf("expected 'Edit Record' in rendered page, got: %s", w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), "Target=1.2.3.4/0") {
+		t.Errorf("expected the first record as the default edit target, got: %s", w.Body.String())
+	}
+}
+
+// TestEditRecordPage_SelectsRecordByContentAndPriority verifies that the
+// per-row link on the zone view (name+type+content+priority) reaches the
+// right member of a multi-record RRSet — without JavaScript and without
+// silently editing the first record of the set.
+func TestEditRecordPage_SelectsRecordByContentAndPriority(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+			RRSets: []models.RRSet{
+				{
+					Name: "www.example.com",
+					Type: "A",
+					TTL:  300,
+					Records: []models.RecordInfo{
+						{Content: "1.2.3.4", Disabled: false},
+						{Content: "5.6.7.8", Disabled: false},
+					},
+				},
+			},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com/records/edit?name=www.example.com&type=A&content=5.6.7.8&priority=0", nil)
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.EditRecordPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Target=5.6.7.8/0") {
+		t.Errorf("expected the record identified by content+priority, got: %s", w.Body.String())
+	}
+}
+
+// TestEditRecordPage_StaleIdentityNotFound: an identity (content+priority)
+// that no longer matches any record — the zone changed since the page was
+// rendered — must be refused (404), not edit another member of the set.
+func TestEditRecordPage_StaleIdentityNotFound(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+			RRSets: []models.RRSet{
+				{
+					Name: "www.example.com",
+					Type: "A",
+					TTL:  300,
+					Records: []models.RecordInfo{
+						{Content: "1.2.3.4", Disabled: false},
+					},
+				},
+			},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com/records/edit?name=www.example.com&type=A&content=9.9.9.9&priority=0", nil)
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.EditRecordPage(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for a stale record identity, got %d", w.Code)
+	}
 }
 
 func TestEditRecordPage_ZoneNotFound(t *testing.T) {
