@@ -354,6 +354,12 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Two independent paginations, keyed memberPage/memberPerPage and
+	// zonePage/zonePerPage so each table pages without disturbing the other
+	// (same scheme as Page/PerPage and logPage/logPerPage elsewhere).
+	memberPage, memberPerPage := parsePaginationParamsPrefixed(r, "member", 10)
+	zonePage, zonePerPage := parsePaginationParamsPrefixed(r, "zone", 10)
+
 	members := h.getGroupMembers(r.Context(), groupID)
 	zones := h.getGroupZones(r.Context(), groupID)
 
@@ -390,6 +396,13 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 
 	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
 
+	// Totals come from the full-list lengths here; the page content itself is
+	// paginated in SQL once getGroupMembers/getGroupZones accept page bounds.
+	// Zone totals are computed after the reconciliation re-read above so they
+	// reflect the kept grants.
+	memberPageInfo := pageInfoFromTotal(len(members), memberPage, memberPerPage)
+	zonePageInfo := pageInfoFromTotal(len(zones), zonePage, zonePerPage)
+
 	data := map[string]interface{}{
 		"Title":          g.Name + " - " + h.Cfg.Server.AppName,
 		"User":           user,
@@ -402,6 +415,8 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		"ZonesTruncated": zonesTruncated,
 		"UserSearch":     userSearch,
 		"ZoneSearch":     zoneSearch,
+		"MemberPageInfo": memberPageInfo,
+		"ZonePageInfo":   zonePageInfo,
 		"IsAdmin":        user.IsAdmin(),
 		"FormAction":     "/groups/" + groupIDStr + "/update",
 		"Flash":          flash,

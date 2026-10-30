@@ -119,17 +119,25 @@ func paginate[T any](items []T, page, perPage int) ([]T, PageInfo) {
 }
 
 // parsePaginationParams extracts the Page and PerPage query parameters.
-// Page defaults to 1 if missing or invalid; PerPage uses the provided default
-// unless a valid non-negative value is supplied. The names match the
-// "<prefix>Page"/"<prefix>PerPage" scheme emitted by pagination.html (with an
-// empty prefix here), consistent with logPage/logPerPage for the activity log.
+// It is the empty-prefix adapter of parsePaginationParamsPrefixed, kept so the
+// unprefixed call sites stay untouched.
 func parsePaginationParams(r *http.Request, defaultPerPage int) (page, perPage int) {
-	page, _ = strconv.Atoi(r.URL.Query().Get("Page"))
+	return parsePaginationParamsPrefixed(r, "", defaultPerPage)
+}
+
+// parsePaginationParamsPrefixed extracts the "<prefix>Page" and
+// "<prefix>PerPage" query parameters. Page defaults to 1 if missing or
+// invalid; PerPage uses the provided default unless a valid non-negative value
+// is supplied. The names match the scheme emitted by pagination.html (with an
+// empty prefix here, member/zone on the group edit page,
+// logPage/logPerPage for the activity log).
+func parsePaginationParamsPrefixed(r *http.Request, prefix string, defaultPerPage int) (page, perPage int) {
+	page, _ = strconv.Atoi(r.URL.Query().Get(prefix + "Page"))
 	if page < 1 {
 		page = 1
 	}
 	perPage = defaultPerPage
-	if pp := r.URL.Query().Get("PerPage"); pp != "" {
+	if pp := r.URL.Query().Get(prefix + "PerPage"); pp != "" {
 		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
 			perPage = n
 		}
@@ -140,17 +148,7 @@ func parsePaginationParams(r *http.Request, defaultPerPage int) (page, perPage i
 // parseLogPaginationParams extracts the logPage and logPerPage query parameters
 // for activity log pagination, independent of record pagination.
 func parseLogPaginationParams(r *http.Request, defaultPerPage int) (page, perPage int) {
-	page, _ = strconv.Atoi(r.URL.Query().Get("logPage"))
-	if page < 1 {
-		page = 1
-	}
-	perPage = defaultPerPage
-	if pp := r.URL.Query().Get("logPerPage"); pp != "" {
-		if n, err := strconv.Atoi(pp); err == nil && n >= 0 {
-			perPage = n
-		}
-	}
-	return page, perPage
+	return parsePaginationParamsPrefixed(r, "log", defaultPerPage)
 }
 
 // clampPageToTotal bounds page to the page count implied by total and
