@@ -16,16 +16,14 @@ func newLoginAttemptsTestDB(t *testing.T) *DB {
 
 func insertUserForLoginTests(t *testing.T, db *DB, username string) int64 {
 	t.Helper()
-	res, err := db.ExecContext(context.Background(),
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it,
+	// and these seeds must run on the PostgreSQL dialect matrix.
+	id, err := db.ExecReturnID(context.Background(),
 		"INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, 'hash', 'user')",
 		username, username+"@example.com",
 	)
 	if err != nil {
 		t.Fatalf("insert user: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("LastInsertId: %v", err)
 	}
 	return id
 }

@@ -193,12 +193,12 @@ func TestCreateExternalUserUsernameCollision(t *testing.T) {
 func TestZoneGroupIDByNameTx(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
-	res, err := db.ExecContext(ctx,
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it.
+	gid, err := db.ExecReturnID(ctx,
 		"INSERT INTO zone_groups (name, description) VALUES (?, ?)", "developers", "")
 	if err != nil {
 		t.Fatalf("insert group: %v", err)
 	}
-	gid, _ := res.LastInsertId()
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -230,8 +230,11 @@ func TestAddGroupMembershipIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateExternalUser: %v", err)
 	}
-	res, _ := db.ExecContext(ctx, "INSERT INTO zone_groups (name, description) VALUES (?, ?)", "devs", "")
-	gid, _ := res.LastInsertId()
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it.
+	gid, err := db.ExecReturnID(ctx, "INSERT INTO zone_groups (name, description) VALUES (?, ?)", "devs", "")
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
 
 	// Add twice in two transactions; the second must not error (idempotent).
 	for i := 0; i < 2; i++ {

@@ -318,14 +318,15 @@ func seedTestUser(t *testing.T, db *database.DB, username, role string, enabled 
 	if enabled {
 		enabledVal = 1
 	}
-	result, err := db.Exec(
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it,
+	// and these seeds must run on the PostgreSQL dialect matrix.
+	id, err := db.ExecReturnID(context.Background(),
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
 		username, username+"@test.local", "$2a$12$test", role, enabledVal,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := result.LastInsertId()
 	return id
 }
 

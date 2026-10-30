@@ -15,11 +15,12 @@ import (
 // to construct the membership row the middleware probes.
 func seedZoneAccess(t *testing.T, db *database.DB, userID int64, zoneID string) {
 	t.Helper()
-	res, err := db.Exec(`INSERT INTO zone_groups (name, description) VALUES (?, '')`, "g-"+zoneID)
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it,
+	// and these seeds must run on the PostgreSQL dialect matrix.
+	groupID, err := db.ExecReturnID(context.Background(), `INSERT INTO zone_groups (name, description) VALUES (?, '')`, "g-"+zoneID)
 	if err != nil {
 		t.Fatalf("seed zone_group: %v", err)
 	}
-	groupID, _ := res.LastInsertId()
 	if _, err := db.Exec(
 		`INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)`, groupID, userID,
 	); err != nil {

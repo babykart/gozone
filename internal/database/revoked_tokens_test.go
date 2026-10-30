@@ -16,14 +16,15 @@ func newRevokedTokensTestDB(t *testing.T) *DB {
 // CASCADE, so a valid user must exist before a token can be revoked for them.
 func seedUser(t *testing.T, db *DB, username string) int64 {
 	t.Helper()
-	res, err := db.ExecContext(context.Background(),
+	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it,
+	// and these seeds must run on the PostgreSQL dialect matrix.
+	id, err := db.ExecReturnID(context.Background(),
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, 'x', 'user', 1)`,
 		username, username+"@test.local",
 	)
 	if err != nil {
 		t.Fatalf("seed user %s: %v", username, err)
 	}
-	id, _ := res.LastInsertId()
 	return id
 }
 
@@ -102,15 +103,15 @@ func TestRevokedTokens_CascadeOnUserDelete(t *testing.T) {
 	db := newRevokedTokensTestDB(t)
 	ctx := context.Background()
 
-	// Seed a user (FK target) and revoke a token for them.
-	res, err := db.ExecContext(ctx,
+	// Seed a user (FK target) and revoke a token for them. ExecReturnID,
+	// never a raw LastInsertId: lib/pq does not implement it.
+	uid, err := db.ExecReturnID(ctx,
 		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, 'x', 'user', 1)`,
 		"tokuser", "tok@test.local",
 	)
 	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	uid, _ := res.LastInsertId()
 
 	if err := db.RevokeToken(ctx, "jti-cascade", uid, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
