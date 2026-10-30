@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -120,8 +119,12 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	}
 
 	if cfg.Driver == "sqlite3" {
-		dir := filepath.Dir(cfg.DSN)
-		if dir != "." {
+		// Create the target directory of the database file. For "file:"
+		// URI DSNs the directory is computed from the URI's path component
+		// only — the query/fragment stay with the driver, and no bogus
+		// "file:..." tree is created in the working directory.
+		dir := sqliteDSNDir(cfg.DSN)
+		if dir != "" && dir != "." {
 			if err := os.MkdirAll(dir, 0750); err != nil {
 				return nil, fmt.Errorf("create database directory: %w", err)
 			}

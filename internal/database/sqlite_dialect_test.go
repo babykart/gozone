@@ -4,16 +4,111 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/babykart/gozone/internal/config"
 )
 
 func TestSQLiteDialect_DriverName(t *testing.T) {
 	d := &sqliteDialect{}
 	if got := d.DriverName(); got != "sqlite3" {
 		t.Errorf("expected driver sqlite3, got %s", got)
+	}
+}
+
+// TestSQLiteDSNDir covers the directory resolution for plain paths and
+// "file:" URI DSNs: only the path component may feed filepath.Dir — the
+// scheme, query and fragment must not create bogus directory trees.
+func TestSQLiteDSNDir(t *testing.T) {
+	tests := []struct {
+		dsn  string
+		want string
+	}{
+		{"/var/lib/gozone/gozone.db", "/var/lib/gozone"},
+		{"data/gozone.db", "data"},
+		{"./gozone.db", "."},
+		{":memory:", "."},
+		{"gozone.db", "."},
+		// URI forms: scheme, query and fragment are stripped; only the
+		// real target directory remains.
+		{"file:/var/lib/gozone/gozone.db", "/var/lib/gozone"},
+		{"file:///var/lib/gozone/gozone.db", "/var/lib/gozone"},
+		{"file://localhost/var/lib/gozone/gozone.db", "/var/lib/gozone"},
+		{"file:data/gozone.db?cache=shared", "data"},
+		{"file:/var/lib/gozone/gozone.db?_journal_mode=WAL&_busy_timeout=5000", "/var/lib/gozone"},
+		{"file:/var/lib/gozone/go zone.db#fragment", "/var/lib/gozone"},
+		// Non-local authority and a bare "file:" name nothing to create.
+		{"file://dbserver.example/var/gozone.db", ""},
+		{"file:", "."},
+	}
+	for _, tc := range tests {
+		if got := sqliteDSNDir(tc.dsn); got != tc.want {
+			t.Errorf("sqliteDSNDir(%q) = %q, want %q", tc.dsn, got, tc.want)
+		}
+	}
+}
+
+// TestNew_SQLiteFileURICreatesTargetDirectory is the URI-directory
+// regression: a "file:" URI DSN must have its real target directory created
+// (not a bogus "file:..." tree in the working directory), even from a
+// non-writable working directory.
+func TestNew_SQLiteFileURICreatesTargetDirectory(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "nested", "dir", "gozone.db")
+
+	// Non-writable working directory: the old filepath.Dir(DSN) behaviour
+	// tried to create the "file:" tree here and failed startup.
+	cwd := t.TempDir()
+	if err := os.Chmod(cwd, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(prev) // #nosec G104 -- test cleanup
+
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: "file:" + target})
+	if err != nil {
+		t.Fatalf("New with a file: URI DSN from a non-writable cwd: %v", err)
+	}
+	db.Close()
+
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("database file must exist at the URI target: %v", err)
+	}
+	// No bogus "file:" tree in the working directory.
+	if entries, _ := os.ReadDir(cwd); len(entries) != 0 {
+		t.Errorf("working directory must stay empty, got %d entries", len(entries))
+	}
+}
+
+// TestNew_SQLitePlainPathStillCreatesDirectory is the positive control for
+// plain relative paths: the target directory is still created.
+func TestNew_SQLitePlainPathStillCreatesDirectory(t *testing.T) {
+	base := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(prev) // #nosec G104 -- test cleanup
+
+	db, err := New(&config.DatabaseConfig{Driver: "sqlite3", DSN: "data/gozone.db"})
+	if err != nil {
+		t.Fatalf("New with a plain relative path: %v", err)
+	}
+	db.Close()
+	if _, err := os.Stat(filepath.Join(base, "data", "gozone.db")); err != nil {
+		t.Errorf("database file must exist under the created directory: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,38 @@ func (s *sqliteDialect) TimestampType() string { return "DATETIME" }
 //     writer/writer contention between the server process and a CLI run (or
 //     any second process) resolves itself instead of surfacing as an error.
 //
+// sqliteDSNDir returns the directory of the database file a SQLite DSN
+// points at, so newWithOpener can create it before opening. Plain paths are
+// used as-is. "file:" URIs (SQLite URI filenames) keep their query string
+// and fragment OUT of the path: filepath.Dir("file:data/gozone.db?cache=shared")
+// would treat the query as part of the filename and create a nonsense
+// "file:data" tree in the working directory, while the real target
+// directory is never created. The returned path is only ever used for
+// directory creation — the driver still receives the original DSN
+// (sqliteDialect.DSN keeps it byte-identical before the pragma split).
+// A non-local authority (file://host/...) yields "" (nothing to create).
+func sqliteDSNDir(dsn string) string {
+	path := dsn
+	if strings.HasPrefix(path, "file:") {
+		path = strings.TrimPrefix(path, "file:")
+		if strings.HasPrefix(path, "//") {
+			rest := strings.TrimPrefix(path, "//")
+			i := strings.IndexByte(rest, '/')
+			if i < 0 {
+				return ""
+			}
+			if host := rest[:i]; host != "" && !strings.EqualFold(host, "localhost") {
+				return ""
+			}
+			path = rest[i:]
+		}
+		if i := strings.IndexAny(path, "?#"); i >= 0 {
+			path = path[:i]
+		}
+	}
+	return filepath.Dir(path)
+}
+
 // An existing value for any of these keys in the caller's DSN is overwritten:
 // they are correctness settings, not tuning knobs.
 //
