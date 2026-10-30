@@ -201,12 +201,12 @@
                     {{end}}
                 </td>
                 <td class="actions-cell">
+                    {{if $.IsAdmin}}
                     <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/toggle" class="inline">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <input type="hidden" name="active" value="{{if .Active}}false{{else}}true{{end}}">
                         <button type="submit" class="btn btn-sm {{if .Active}}btn-secondary{{else}}btn-primary{{end}}">{{if .Active}}Deactivate{{else}}Activate{{end}}</button>
                     </form>
-                    {{if $.IsAdmin}}
                     <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/delete" class="inline" data-confirm="Delete key {{.ID}}?">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
