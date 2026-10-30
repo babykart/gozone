@@ -360,8 +360,11 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	memberPage, memberPerPage := parsePaginationParamsPrefixed(r, "member", 10)
 	zonePage, zonePerPage := parsePaginationParamsPrefixed(r, "zone", 10)
 
-	members := h.getGroupMembers(r.Context(), groupID)
-	zones := h.getGroupZones(r.Context(), groupID)
+	members, memberPageInfo, err := h.getGroupMembers(r.Context(), groupID, memberPage, memberPerPage)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch group members", err)
+		return
+	}
 
 	// Server-side search for the incremental add dropdowns. Unlike the create
 	// form (whose multi-select carries the pending selection in the DOM and
@@ -372,10 +375,15 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 	allUsers, usersTruncated, _ := h.getAllUsers(r.Context(), userSearch)
 	zonesAll, zonesErr := h.PDNS.ListZonesWithInfo(r.Context())
 	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, zoneSearch)
+
+	// The assigned-zones table is fetched AFTER the reconciliation attempt
+	// below: the page bounds and the total must both reflect the grants
+	// actually kept, not rows the reconciliation is about to delete.
 	if zonesErr != nil {
 		// PowerDNS is unreachable: the dropdown renders empty (previous
-		// behaviour) and the grant reconciliation below is skipped — a failed
-		// zone list must never look like "all zones gone".
+		// behaviour) and the grant reconciliation is skipped — a failed zone
+		// list must never look like "all zones gone". The existing
+		// associations still render below, paginated as usual.
 		logger.Error("failed to list zones for group edit", "group_id", groupID, "error", zonesErr)
 	} else {
 		// Opportunistic garbage collection: an admin opening the group page
@@ -388,20 +396,14 @@ func (h *Handler) EditGroupPage(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.ReconcileGroupZones(r.Context()); err != nil {
 			logger.Error("group zone grant reconciliation failed", "group_id", groupID, "error", err)
 		}
-		// The reconciliation above may have removed rows the zones slice
-		// fetched earlier still holds; re-read so the assigned-zones table
-		// matches the database.
-		zones = h.getGroupZones(r.Context(), groupID)
+	}
+	zones, zonePageInfo, err := h.getGroupZones(r.Context(), groupID, zonePage, zonePerPage)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch group zones", err)
+		return
 	}
 
 	flash := allowListedCode(r.URL.Query().Get("flash"), groupValidFlashCodes)
-
-	// Totals come from the full-list lengths here; the page content itself is
-	// paginated in SQL once getGroupMembers/getGroupZones accept page bounds.
-	// Zone totals are computed after the reconciliation re-read above so they
-	// reflect the kept grants.
-	memberPageInfo := pageInfoFromTotal(len(members), memberPage, memberPerPage)
-	zonePageInfo := pageInfoFromTotal(len(zones), zonePage, zonePerPage)
 
 	data := map[string]interface{}{
 		"Title":          g.Name + " - " + h.Cfg.Server.AppName,
@@ -700,19 +702,40 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
 }
 
-// getGroupMembers returns the group's members, ordered by username. ctx
+// getGroupMembers returns one page of the group's members, ordered by
+// username, together with the PageInfo derived from a COUNT(*) over the
+// group's associations (so the total is exact even when a page is requested
+// beyond the last one). perPage <= 0 disables the LIMIT and returns every
+// member as a single page. A count or read error is returned to the caller:
+// the handler must surface a server error, not a falsely empty list. ctx
 // propagates cancellation: a client that gives up aborts the query instead of
 // holding the (serialised, on SQLite) connection.
-func (h *Handler) getGroupMembers(ctx context.Context, groupID int64) []models.User {
-	rows, err := h.DB.QueryContext(ctx,
-		`SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role, u.enabled
+func (h *Handler) getGroupMembers(ctx context.Context, groupID int64, page, perPage int) ([]models.User, PageInfo, error) {
+	var total int
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", groupID,
+	).Scan(&total); err != nil {
+		return nil, PageInfo{}, err
+	}
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	q := `SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role, u.enabled
 		 FROM zone_group_members m
 		 JOIN users u ON m.user_id = u.id
 		 WHERE m.group_id = ?
-		 ORDER BY u.username`, groupID,
-	)
+		 ORDER BY u.username`
+	args := []any{groupID}
+	if perPage > 0 {
+		// pageInfo.Current is clamped to the page count, so the offset can
+		// never exceed total — the same guarantee clampPageToTotal documents.
+		offset := (pageInfo.Current - 1) * perPage
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, perPage, offset)
+	}
+
+	rows, err := h.DB.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil
+		return nil, PageInfo{}, err
 	}
 	defer rows.Close()
 
@@ -728,19 +751,35 @@ func (h *Handler) getGroupMembers(ctx context.Context, groupID int64) []models.U
 		members = append(members, u)
 	}
 	if err := rows.Err(); err != nil {
-		logger.Error("rows iteration error for group members", "group_id", groupID, "error", err)
+		return nil, PageInfo{}, err
 	}
-	return members
+	return members, pageInfo, nil
 }
 
-// getGroupZones returns the zone IDs assigned to the group, ordered. See
-// getGroupMembers for the ctx rationale.
-func (h *Handler) getGroupZones(ctx context.Context, groupID int64) []string {
-	rows, err := h.DB.QueryContext(ctx,
-		"SELECT zone_id FROM zone_group_zones WHERE group_id = ? ORDER BY zone_id", groupID,
-	)
+// getGroupZones returns one page of the zone IDs assigned to the group,
+// ordered, together with the PageInfo derived from a COUNT(*) over the
+// group's grants. See getGroupMembers for the pagination and error
+// semantics; the ctx rationale is the same.
+func (h *Handler) getGroupZones(ctx context.Context, groupID int64, page, perPage int) ([]string, PageInfo, error) {
+	var total int
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM zone_group_zones WHERE group_id = ?", groupID,
+	).Scan(&total); err != nil {
+		return nil, PageInfo{}, err
+	}
+	pageInfo := pageInfoFromTotal(total, page, perPage)
+
+	q := "SELECT zone_id FROM zone_group_zones WHERE group_id = ? ORDER BY zone_id"
+	args := []any{groupID}
+	if perPage > 0 {
+		offset := (pageInfo.Current - 1) * perPage
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, perPage, offset)
+	}
+
+	rows, err := h.DB.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil
+		return nil, PageInfo{}, err
 	}
 	defer rows.Close()
 
@@ -754,9 +793,9 @@ func (h *Handler) getGroupZones(ctx context.Context, groupID int64) []string {
 		zones = append(zones, z)
 	}
 	if err := rows.Err(); err != nil {
-		logger.Error("rows iteration error for group zones", "group_id", groupID, "error", err)
+		return nil, PageInfo{}, err
 	}
-	return zones
+	return zones, pageInfo, nil
 }
 
 // getAllUsers returns the users for the group-form dropdowns: ordered by
