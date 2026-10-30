@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
@@ -559,7 +560,9 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 
 		name := getCSVField(row, headers, "name")
 		rtype := strings.ToUpper(getCSVField(row, headers, "type"))
-		content := getCSVField(row, headers, "content")
+		// Reverse the export's formula-injection escaping so the stored
+		// value is the operator's original text (see dnsops.SanitizeCSVField).
+		content := dnsops.RestoreCSVField(getCSVField(row, headers, "content"))
 		ttl := 3600
 		if v, err := strconv.Atoi(getCSVField(row, headers, "ttl")); err == nil && v > 0 {
 			ttl = v
@@ -609,7 +612,7 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 			Priority: csvPriority,
 		})
 
-		if comment := getCSVField(row, headers, "comment"); comment != "" {
+		if comment := dnsops.RestoreCSVField(getCSVField(row, headers, "comment")); comment != "" {
 			groupComments[k] = appendIfMissing(groupComments[k], comment)
 		}
 	}

@@ -181,7 +181,11 @@ func RenderZoneFile(zone *models.Zone, records []models.RRSet) string {
 // unquoted so encoding/csv applies its own quoting (see UnquoteContent).
 //
 // The rendering is shared by the web export (handlers.ExportZone) and the
-// MCP export_zone tool so both produce byte-identical output.
+// MCP export_zone tool so both produce byte-identical output. Free-text
+// cells (content, comments) pass through SanitizeCSVField: lines starting
+// with a spreadsheet formula trigger (= + - @) gain an escape prefix the
+// CSV importer reverses, so opening an export in Excel or LibreOffice can
+// never evaluate a record or comment as a formula.
 func RenderZoneCSV(zone *models.Zone, records []models.RRSet) string {
 	var b strings.Builder
 	writer := csv.NewWriter(&b)
@@ -220,15 +224,20 @@ func RenderZoneCSV(zone *models.Zone, records []models.RRSet) string {
 			// outer quotes are string delimiters, and stripping them would
 			// corrupt the round trip.
 			content := models.UnquoteContent(rr.Type, rec.Content)
+			// Neutralize spreadsheet formula triggers in the free-text
+			// cells: a value whose line begins with = + - or @ would be
+			// evaluated when an operator opens the export in Excel or
+			// LibreOffice. The importer reverses the escaping (see
+			// SanitizeCSVField), so the round trip stays lossless.
 			// #nosec G104 — writing into a strings.Builder cannot fail
 			_ = writer.Write([]string{
 				rr.Name,
 				rr.Type,
-				content,
+				SanitizeCSVField(content),
 				fmt.Sprintf("%d", ttl),
 				fmt.Sprintf("%d", priority),
 				disabled,
-				commentCell,
+				SanitizeCSVField(commentCell),
 			})
 		}
 	}

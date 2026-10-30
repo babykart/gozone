@@ -124,6 +124,8 @@ curl -H "X-API-Key: gozone_yourkey" \
 
 Response `200`: single zone object (same format as list items).
 
+> **CSV formula safety:** record contents and comments are free text, and spreadsheet applications evaluate a cell starting with `=`, `+`, `-` or `@` as a formula even inside CSV quoting. The CSV export (web, REST and MCP share one renderer) therefore prefixes such lines with a single quote; the CSV import strips that prefix back off, so the export→import round trip is lossless. When authoring a CSV by hand for import, a literal leading apostrophe is written doubled (`''`) and a leading apostrophe before `= + - @` is treated as the escape marker.
+
 ### Export zone
 
 ```bash

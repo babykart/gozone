@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
@@ -761,6 +762,57 @@ func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
 	}
 	if len(skipped) != 2 {
 		t.Fatalf("expected 2 skipped lines, got %d", len(skipped))
+	}
+}
+
+// TestCSVFormulaNeutralizationRoundTrip pins the spreadsheet-formula
+// defence across the full export→import cycle: dangerous prefixes in record
+// content and comments are escaped by the shared renderer (web, REST and
+// MCP) and restored byte-identically by the importer, including multiline
+// comment cells and literal leading apostrophes.
+func TestCSVFormulaNeutralizationRoundTrip(t *testing.T) {
+	zone := &models.Zone{ID: "example.com.", Name: "example.com."}
+	records := []models.RRSet{
+		{
+			Name: "txt.example.com.", Type: "TXT", TTL: 3600,
+			Records: []models.RecordInfo{{Content: `"=cmd|'/c calc'!A1"`, Disabled: false}},
+			Comments: &models.CommentPatch{Items: []models.Comment{
+				{Content: "=2+5"},
+				{Content: "second line\n=3+4"},
+				{Content: "'literal apostrophe"},
+			}},
+		},
+	}
+
+	csvText := dnsops.RenderZoneCSV(zone, records)
+	// The rendered cell must carry the escape prefix.
+	if !strings.Contains(csvText, "'=cmd|") {
+		t.Fatalf("exported content cell must be neutralized, got:\n%s", csvText)
+	}
+
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(csvText)), "example.com.")
+	if err != nil {
+		t.Fatalf("parseCSVZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no row should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	// Content comes back byte-identical (wire form).
+	if got := rrsets[0].Records[0].Content; got != `"=cmd|'/c calc'!A1"` {
+		t.Errorf("content round trip: got %q", got)
+	}
+	// Comments: each line restored, dangerous second line included.
+	want := []string{"=2+5", "second line", "=3+4", "'literal apostrophe"}
+	if rrsets[0].Comments == nil || len(rrsets[0].Comments.Items) != len(want) {
+		t.Fatalf("comments: want %d items, got %+v", len(want), rrsets[0].Comments)
+	}
+	for i, c := range rrsets[0].Comments.Items {
+		if c.Content != want[i] {
+			t.Errorf("comment[%d] = %q, want %q", i, c.Content, want[i])
+		}
 	}
 }
 
