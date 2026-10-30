@@ -244,6 +244,10 @@ function saveRecordRow(btn) {
         }
         updateRowComments(row, comment, commentClear);
         applyRecordUpdate(row, data.updated, data.record.ttl);
+        // TTL and comments are RRSet-wide: the other rows of the same
+        // name+type must follow, or a later edit of a sibling submits the
+        // stale TTL/comment for the whole set.
+        syncSiblingRows(row, data.record, comment, commentClear);
         toggleEditMode(row, false);
         showNotification('Record updated', 'success');
     })
@@ -300,6 +304,41 @@ function applyRecordUpdate(row, rec, ttl) {
     }
 }
 
+// syncSiblingRows propagates an inline save to the other rows of the same
+// RRSet. TTL and comments are RRSet-wide in PowerDNS, but the zone view
+// renders one row per record: after editing one row, sibling rows still
+// display the old TTL and hold the old comment text in their textarea,
+// which the next sibling edit would silently resubmit for the whole set.
+// A purge must also empty every textarea, or the old text is resubmitted
+// and the purged comment resurrected.
+function syncSiblingRows(row, rrset, comment, commentClear) {
+    var container = document.getElementById('record-rows');
+    if (!container) return;
+    var name = row.getAttribute('data-name');
+    var type = row.getAttribute('data-type');
+    var trimmedComment = comment.replace(/^\s+|\s+$/g, '');
+    var rows = container.querySelectorAll('.record-row');
+    for (var i = 0; i < rows.length; i++) {
+        var sib = rows[i];
+        if (sib === row) continue;
+        if (sib.getAttribute('data-name') !== name || sib.getAttribute('data-type') !== type) continue;
+        var rvTTL = sib.querySelector('.rv-ttl');
+        if (rvTTL) rvTTL.textContent = rrset.ttl;
+        var evTTL = sib.querySelector('.ev-ttl');
+        if (evTTL) evTTL.value = rrset.ttl;
+        // An empty comment without the clear flag means "leave unchanged" on
+        // the server: sibling comment state must be left alone too, or the
+        // display would desynchronise from what is stored.
+        if (commentClear || trimmedComment) {
+            updateRowComments(sib, comment, commentClear);
+            // Mirror the RRSet comment into the sibling textarea: it edits the
+            // RRSet, so its textarea must start from what is actually stored.
+            var evComments = sib.querySelector('.ev-comments');
+            if (evComments) evComments.value = commentClear ? '' : trimmedComment;
+        }
+    }
+}
+
 // updateRowComments refreshes the read-only comment block of an inline row
 // after a save, from the comment text the user just submitted.
 function updateRowComments(row, comment, commentClear) {
@@ -334,6 +373,12 @@ function updateRowComments(row, comment, commentClear) {
     }
     var clearCb = row.querySelector('.ev-comment-clear-cb');
     if (clearCb) clearCb.checked = false;
+    // A purge must not leave the old text in the textarea: the next save
+    // would resubmit it and resurrect the comment that was just purged.
+    if (commentClear) {
+        var evComments = row.querySelector('.ev-comments');
+        if (evComments) evComments.value = '';
+    }
 }
 
 // syncCommentClearValue mirrors the state of the unnamed "Clear all
@@ -1012,6 +1057,7 @@ if (typeof module !== 'undefined' && module.exports) {
         storageGet: storageGet,
         storageSet: storageSet,
         syncCommentClearValue: syncCommentClearValue,
+        syncSiblingRows: syncSiblingRows,
         updateRowComments: updateRowComments
     };
 }

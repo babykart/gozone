@@ -791,3 +791,146 @@ test('saveRecordRow posts the row identity and resyncs from the response', async
     assert.ok(row.els['.rv-status'].innerHTML.indexOf('badge-disabled') !== -1, 'badge from updated.disabled, not records[0].disabled');
     assert.strictEqual(row.deleteForm.querySelector('input[name=content]').value, 'backup.example.com.');
 });
+
+// --- RRSet-wide sync (syncSiblingRows / comment purge) -----------------------
+//
+// TTL and comments are RRSet-wide, but the zone view renders one row per
+// record. These tests pin the sync: after an inline save, every sibling row
+// of the same name+type must follow the saved TTL and comment state, and a
+// purge must empty the textareas — a stale sibling textarea resubmits the old
+// comment for the whole RRSet on the next edit.
+
+function stubContainerWith(rows) {
+    return { querySelectorAll(sel) { return sel === '.record-row' ? rows : []; } };
+}
+
+test('updateRowComments empties the textarea after a purge', () => {
+    const row = stubInlineRow();
+    row.els['.ev-comments'].value = 'stale comment';
+    row.els['.rv-comments'] = {
+        textContent: 'stale comment\n',
+        parentNode: { removeChild() { row.els['.rv-comments'] = null; } }
+    };
+    app.updateRowComments(row, 'stale comment', true);
+    assert.strictEqual(row.els['.ev-comments'].value, '', 'purge must empty the textarea or the next save resurrects the comment');
+    assert.strictEqual(row.els['.ev-comment-clear-cb'].checked, false);
+});
+
+test('syncSiblingRows syncs TTL and comments across the RRSet rows', () => {
+    const edited = stubInlineRow();
+    const sib = stubInlineRow();
+    sib.els['.rv-ttl'].textContent = '300';
+    sib.els['.ev-ttl'].value = '300';
+    sib.els['.ev-comments'].value = 'old rset comment';
+    sib.els['.rv-comments'] = {
+        textContent: 'old rset comment\n',
+        parentNode: { removeChild() { sib.els['.rv-comments'] = null; } }
+    };
+    sib.els['.ev-comment-clear-cb'].checked = true;
+    const other = stubInlineRow();
+    other.attrs['data-type'] = 'A';
+    other.els['.rv-ttl'].textContent = '300';
+
+    const doc = stubDocument();
+    doc.setElement('record-rows', stubContainerWith([edited, sib, other]));
+    withDocument(doc, function() {
+        app.syncSiblingRows(edited, { ttl: 60 }, 'new rset comment', false);
+    });
+
+    assert.strictEqual(sib.els['.rv-ttl'].textContent, 60, 'sibling TTL cell follows the saved RRSet');
+    assert.strictEqual(sib.els['.ev-ttl'].value, 60, 'sibling edit widget follows the saved RRSet');
+    assert.strictEqual(sib.els['.ev-comments'].value, 'new rset comment', 'sibling textarea mirrors the saved comment');
+    assert.strictEqual(sib.els['.rv-comments'].textContent, 'new rset comment\n');
+    assert.strictEqual(sib.els['.ev-comment-clear-cb'].checked, false);
+    assert.strictEqual(other.els['.rv-ttl'].textContent, '300', 'a different RRSet must not be touched');
+});
+
+test('syncSiblingRows purge clears sibling comments and textareas', () => {
+    const edited = stubInlineRow();
+    const sib = stubInlineRow();
+    sib.els['.ev-comments'].value = 'old rset comment';
+    sib.els['.rv-comments'] = {
+        textContent: 'old rset comment\n',
+        parentNode: { removeChild() { sib.els['.rv-comments'] = null; } }
+    };
+
+    const doc = stubDocument();
+    doc.setElement('record-rows', stubContainerWith([edited, sib]));
+    withDocument(doc, function() {
+        app.syncSiblingRows(edited, { ttl: 60 }, 'old rset comment', true);
+    });
+
+    assert.strictEqual(sib.els['.rv-comments'], null, 'purge removes the sibling read-only comment block');
+    assert.strictEqual(sib.els['.ev-comments'].value, '', 'purge empties the sibling textarea');
+});
+
+test('syncSiblingRows leaves comments untouched on an empty non-clear save', () => {
+    const edited = stubInlineRow();
+    const sib = stubInlineRow();
+    sib.els['.ev-comments'].value = 'kept comment';
+    sib.els['.rv-comments'] = { textContent: 'kept comment\n', parentNode: { removeChild() { sib.els['.rv-comments'] = null; } } };
+
+    const doc = stubDocument();
+    doc.setElement('record-rows', stubContainerWith([edited, sib]));
+    withDocument(doc, function() {
+        // Empty comment without the clear flag means "leave unchanged" on
+        // the server — the sibling comment state must stay as stored.
+        app.syncSiblingRows(edited, { ttl: 60 }, '', false);
+    });
+
+    assert.strictEqual(sib.els['.rv-ttl'].textContent, 60, 'TTL still syncs');
+    assert.strictEqual(sib.els['.rv-comments'].textContent, 'kept comment\n', 'comment display must not desynchronise');
+    assert.strictEqual(sib.els['.ev-comments'].value, 'kept comment', 'textarea keeps the stored comment');
+});
+
+test('saveRecordRow syncs sibling rows of a multi-record RRSet', async () => {
+    const row = stubInlineRow();
+    const sib = stubInlineRow();
+    sib.els['.rv-ttl'].textContent = '300';
+    sib.els['.ev-ttl'].value = '300';
+    sib.els['.ev-comments'].value = 'old rset comment';
+    sib.els['.rv-comments'] = {
+        textContent: 'old rset comment\n',
+        parentNode: { removeChild() { sib.els['.rv-comments'] = null; } }
+    };
+    const btn = { closest(sel) { return sel === 'tr' ? row : null; } };
+
+    const payload = {
+        success: true,
+        record: {
+            name: 'www.example.com', type: 'CNAME', ttl: 60,
+            records: [
+                { content: 'backup.example.com.', priority: 0, disabled: false },
+                { content: 'other.example.com.', priority: 0, disabled: false }
+            ]
+        },
+        updated: { content: 'backup.example.com.', priority: 0, disabled: false }
+    };
+    const doc = stubDocument();
+    doc.setElement('notification', withClassList({ textContent: '', className: 'notification hidden' }));
+    doc.setElement('record-rows', stubContainerWith([row, sib]));
+    const prevDocument = global.document;
+    const prevFetch = global.fetch;
+
+    global.fetch = function() {
+        return Promise.resolve({
+            ok: true,
+            redirected: false,
+            headers: { get: function() { return 'application/json'; } },
+            json: function() { return Promise.resolve(payload); }
+        });
+    };
+    global.document = doc;
+
+    try {
+        app.saveRecordRow(btn);
+        await new Promise(function(res) { setTimeout(res, 10); });
+    } finally {
+        global.fetch = prevFetch;
+        global.document = prevDocument;
+    }
+
+    assert.strictEqual(row.els['.rv-ttl'].textContent, 60, 'edited row shows the saved TTL');
+    assert.strictEqual(sib.els['.rv-ttl'].textContent, 60, 'sibling row follows the RRSet-wide TTL');
+    assert.strictEqual(sib.els['.ev-comments'].value, 'old rset comment', 'empty non-clear save preserves the stored comment in the sibling textarea');
+});
