@@ -656,6 +656,37 @@ func TestAddZoneToGroup(t *testing.T) {
 	}
 }
 
+// TestAddZoneToGroup_CanonicalizesZoneID verifies that the grant is stored
+// under the canonical form (lowercase, trailing dot): the access probe
+// compares the canonical form of the path value, so a grant stored dotless
+// would never match — and two spellings of one zone would fragment rights,
+// locks and audit.
+func TestAddZoneToGroup_CanonicalizesZoneID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "zone_id=Example.COM"
+	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-zone", strings.NewReader(body))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddZoneToGroup(w, r)
+
+	var stored string
+	if err := h.DB.QueryRow(
+		"SELECT zone_id FROM zone_group_zones WHERE group_id = ?", groupID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("select grant: %v", err)
+	}
+	if stored != "example.com." {
+		t.Errorf("grant must be stored canonical, got %q", stored)
+	}
+}
+
 func TestAddZoneToGroup_EmptyZoneID(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()

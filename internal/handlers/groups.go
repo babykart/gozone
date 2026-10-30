@@ -306,7 +306,10 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) groupSel
 
 	seenZones := make(map[string]struct{})
 	for _, raw := range r.PostForm["zone_ids"] {
-		zoneID := strings.TrimSpace(raw)
+		// Grants key on the canonical zone ID: the access probe compares
+		// against the canonical form of the URL path value, so a grant
+		// stored dotless (or mixed-case) would never match.
+		zoneID := dnsops.NormalizeZoneName(strings.TrimSpace(raw))
 		if zoneID == "" {
 			continue
 		}
@@ -632,7 +635,7 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid group ID")
 		return
 	}
-	zoneID := strings.TrimSpace(r.FormValue("zone_id"))
+	zoneID := dnsops.NormalizeZoneName(strings.TrimSpace(r.FormValue("zone_id")))
 
 	if zoneID != "" {
 		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_zones",
@@ -661,7 +664,9 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid group ID")
 		return
 	}
-	zoneID := r.FormValue("zone_id")
+	// Grants are stored canonical, so the removal must canonicalise too or
+	// a dotless form would delete nothing.
+	zoneID := dnsops.NormalizeZoneName(r.FormValue("zone_id"))
 
 	if _, err := h.DB.ExecContext(r.Context(),
 		"DELETE FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",

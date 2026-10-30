@@ -279,6 +279,10 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAdmin)
+			// Zone-scoped admin routes skip CheckZoneAccess, so the
+			// canonicalization it normally performs must be mounted
+			// explicitly: locks and audit key on the canonical zone ID.
+			r.Use(middleware.CanonicalizeZoneID())
 
 			r.Post("/zones", h.APICreateZone)
 			r.Delete("/zones/{zone_id}", h.APIDeleteZone)

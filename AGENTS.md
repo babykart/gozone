@@ -82,7 +82,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 |-------|-------------|
 | Web session | JWT cookie validated against DB on every request |
 | API | API key SHA-256 hash in `Authorization: Bearer <key>` or `X-API-Key` header |
-| Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` |
+| Zone access | Fail-closed zone authorization via `internal/middleware/zoneauth.go` — `{zone_id}` path values are canonicalised (lowercase + trailing dot) at the route entry (`CanonicalizeZoneID` on admin-only zone routes), so authorization, the per-zone lock, PowerDNS calls and audit all key on the same canonical ID; group grants are stored canonical too |
 
 - **Credential versioning**: `users.credential_version` is a monotonic counter bumped on every password set (Web self-service, admin update, `gozone user reset-password`), admin manual lock and account disable. Session JWTs embed it at issuance (`Claims.CredentialVersion`); the Auth middleware rejects any token older than the live row, and `Login` re-reads it after bcrypt before minting a token. `ResetFailedLogins` never clears `manual_lock_until` — only `AdminUnlockUser` (admin UI or `gozone user unlock`) lifts a manual lock. Any new credential-invalidating event must bump the counter or the rotation can be raced by an in-flight login.
 

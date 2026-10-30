@@ -25,7 +25,7 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 				return
 			}
 
-			zoneID := r.PathValue("zone_id")
+			zoneID := canonicalizeZonePathValue(r)
 			// Routes without a {zone_id} parameter (e.g. /zones list, /api/v1/stats)
 			// are handled by handler-level filtering (dnsops.FilterZonesForUser).
 			// This middleware only guards routes that carry a specific zone in the URL.
@@ -66,4 +66,38 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 			}
 		})
 	}
+}
+
+// CanonicalizeZoneID rewrites the {zone_id} path value to its canonical form
+// (lowercase, trailing dot) so every downstream consumer — authorization,
+// per-zone write lock, PowerDNS calls, audit trail — keys on the same ID
+// whatever spelling the client used ("example.com", "Example.COM.",
+// "example.com."), exactly like MCP canonicalises its tool argument at entry.
+// Zone-scoped routes that do NOT go through CheckZoneAccess (admin-only
+// routes where the access probe is skipped) mount this middleware instead, so
+// no path can reach a handler with a non-canonical zone ID. It is a no-op for
+// routes without a {zone_id} parameter.
+func CanonicalizeZoneID() func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			canonicalizeZonePathValue(r)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// canonicalizeZonePathValue normalises the {zone_id} path value in place and
+// returns it ("" when the route carries no zone). Without this, two spellings
+// of one zone take different mutexes and different audit keys, and an alias
+// write can silently drop a concurrent one.
+func canonicalizeZonePathValue(r *http.Request) string {
+	zoneID := r.PathValue("zone_id")
+	if zoneID == "" {
+		return ""
+	}
+	if canonical := dnsops.NormalizeZoneName(zoneID); canonical != zoneID {
+		r.SetPathValue("zone_id", canonical)
+		zoneID = canonical
+	}
+	return zoneID
 }

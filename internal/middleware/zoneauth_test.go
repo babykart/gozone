@@ -125,6 +125,43 @@ func TestCheckZoneAccess_UserWithAccess_Allowed(t *testing.T) {
 	}
 }
 
+// TestCheckZoneAccess_CanonicalizesZoneID is the single-canonicalization
+// regression: grants, locks, PowerDNS calls and the audit trail all key on
+// the canonical form (lowercase, trailing dot). A user granted
+// "example.com." must no longer receive a 403 for "example.com" or
+// "Example.COM.", and the downstream handler must observe the canonical
+// value (it determines the zone-lock key).
+func TestCheckZoneAccess_CanonicalizesZoneID(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "member", "user", true)
+	seedZoneAccess(t, db, userID, "example.com.")
+
+	user := &models.User{ID: userID, Username: "member", Role: "user"}
+
+	serve := func(raw string) (*httptest.ResponseRecorder, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/"+raw, nil)
+		r.SetPathValue("zone_id", raw)
+		r = withTestUser(r, user)
+		var seen string
+		CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr, seen
+	}
+
+	for _, variant := range []string{"example.com", "Example.COM.", "example.com."} {
+		rr, seen := serve(variant)
+		if rr.Code != http.StatusOK {
+			t.Errorf("variant %q: expected 200 for member granted the canonical zone, got %d", variant, rr.Code)
+		}
+		if seen != "example.com." {
+			t.Errorf("variant %q: downstream handler must observe the canonical zone ID, got %q", variant, seen)
+		}
+	}
+}
+
 func TestCheckZoneAccess_UserWithoutAccess_Forbidden(t *testing.T) {
 	db := newTestAuthDB(t)
 	// Seed access for user 5, then log in as user 6 — no shared group.

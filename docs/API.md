@@ -45,6 +45,16 @@ The default for keys created before scopes existed is `api:write`.
 
 API requests are rate-limited to **100 requests per minute** per API key. Exceeding the limit returns HTTP 429 with a `Retry-After` header.
 
+## Zone Identifiers
+
+Zone identifiers in URLs are canonicalised at the API boundary: whatever
+spelling the client uses (`example.com`, `Example.COM.`, `example.com.`), the
+value is lowercased and given a trailing dot before authorization, the
+per-zone write lock, the PowerDNS calls and the audit trail key on it — the
+same canonical form the MCP transport uses for its zone arguments, and the
+same form group grants are stored under. Both spellings are therefore fully
+interchangeable and serialize against each other.
+
 ## Error Responses
 
 All errors return a JSON body:
