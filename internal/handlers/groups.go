@@ -578,6 +578,24 @@ func (h *Handler) BulkDeleteGroups(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// groupEditReturnQuery rebuilds the edit-page query string (dropdown searches
+// uq/zq plus both paginations) from the submitted form values, so an
+// add/remove action redirects back to the same view instead of dropping the
+// operator's list state. Invalid or absent values are simply not carried over
+// — the edit page re-clamps anything out of range on the next render.
+func groupEditReturnQuery(r *http.Request) string {
+	q := url.Values{}
+	for _, key := range []string{"uq", "zq", "memberPage", "memberPerPage", "zonePage", "zonePerPage"} {
+		if v := strings.TrimSpace(r.FormValue(key)); v != "" {
+			q.Set(key, v)
+		}
+	}
+	if len(q) == 0 {
+		return ""
+	}
+	return "?" + q.Encode()
+}
+
 // AddMemberToGroup adds a user to a group (POST /groups/{group_id}/add-member).
 func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	groupIDStr := r.PathValue("group_id")
@@ -622,7 +640,7 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		logger.Error("failed to log add_group_member activity", "group_id", groupID, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
 
 // RemoveMemberFromGroup removes a user from a group (POST /groups/{group_id}/remove-member).
@@ -654,7 +672,7 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 	}); err != nil {
 		logger.Error("failed to log remove_group_member activity", "group_id", groupID, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
 
 // AddZoneToGroup assigns a zone to a group (POST /groups/{group_id}/add-zone).
@@ -683,7 +701,7 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 			logger.Error("failed to log add_group_zone activity", "group_id", groupID, "error", err)
 		}
 	}
-	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
 
 // RemoveZoneFromGroup removes a zone from a group (POST /groups/{group_id}/remove-zone).
@@ -712,7 +730,7 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		logger.Error("failed to log remove_group_zone activity", "group_id", groupID, "error", err)
 	}
-	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
 
 // getGroupMembers returns one page of the group's members, ordered by
