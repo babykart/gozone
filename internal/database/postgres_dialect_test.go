@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -34,13 +35,41 @@ func TestPostgresDialect_DSN_ForcesUTC(t *testing.T) {
 	}
 
 	url := "postgres://gozone:secret@localhost:5432/gozone?sslmode=disable"
-	if got := d.DSN(url); got != url+"&TimeZone=UTC" {
-		t.Errorf("URL DSN must gain &TimeZone=UTC\nwant: %s&TimeZone=UTC\ngot:  %s", url, got)
+	got := d.DSN(url)
+	if !strings.Contains(got, "TimeZone=UTC") || !strings.Contains(got, "sslmode=disable") {
+		t.Errorf("URL DSN must carry TimeZone=UTC and keep sslmode, got: %s", got)
 	}
 
 	bare := "postgres://gozone:secret@localhost:5432/gozone"
-	if got := d.DSN(bare); got != bare+"?TimeZone=UTC" {
-		t.Errorf("bare URL DSN must gain ?TimeZone=UTC\nwant: %s?TimeZone=UTC\ngot:  %s", bare, got)
+	if got := d.DSN(bare); !strings.Contains(got, "?TimeZone=UTC") {
+		t.Errorf("bare URL DSN must gain ?TimeZone=UTC, got: %s", got)
+	}
+}
+
+// TestPostgresDialect_DSN_OverridesExistingTimeZone is the timezone-override
+// regression: lib/pq reads URL query parameters with q.Get (the FIRST value
+// wins), so a DSN that already carries TimeZone=Europe/Paris must have its
+// value REPLACED — an appended parameter would be ignored by the driver and
+// the operator's zone would stay in effect.
+func TestPostgresDialect_DSN_OverridesExistingTimeZone(t *testing.T) {
+	d := &postgresDialect{}
+	dsn := "postgres://gozone:secret@localhost:5432/gozone?sslmode=disable&TimeZone=Europe%2FParis"
+	got := d.DSN(dsn)
+
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("rewritten DSN must stay URL-parseable: %v (%q)", err, got)
+	}
+	values := u.Query()["TimeZone"]
+	if len(values) != 1 || values[0] != "UTC" {
+		t.Errorf("TimeZone must be replaced by exactly one UTC value, got %v (full query %q)", u.Query()["TimeZone"], u.RawQuery)
+	}
+	if u.Query().Get("sslmode") != "disable" {
+		t.Errorf("sslmode must survive the rewrite, got %q", u.RawQuery)
+	}
+	// The host/userinfo must be untouched.
+	if u.Host != "localhost:5432" || u.User.Username() != "gozone" {
+		t.Errorf("authority changed by the rewrite: %s", u.Host)
 	}
 }
 
@@ -377,6 +406,35 @@ func TestPostgresIntegration_Migrations(t *testing.T) {
 	}
 	if dataType != "timestamp without time zone" && dataType != "timestamp" {
 		t.Errorf("expected TIMESTAMP for applied_at, got %s", dataType)
+	}
+}
+
+// TestPostgresIntegration_TimeZoneForcedUTC verifies on a live server that
+// the dialect's DSN rewrite overrides an operator-supplied TimeZone: a DSN
+// carrying TimeZone=Europe/Paris must still open a UTC session (naive
+// timestamps and every expires_at-style comparison depend on it).
+func TestPostgresIntegration_TimeZoneForcedUTC(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		t.Skip("test DSN is not URL-form; the keyword-form append path is covered by unit tests")
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	tzDSN := (&postgresDialect{}).DSN(dsn + sep + "TimeZone=Europe%2FParis")
+
+	conn, err := sql.Open("postgres", tzDSN)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer conn.Close()
+	var tz string
+	if err := conn.QueryRow("SHOW TIME ZONE").Scan(&tz); err != nil {
+		t.Fatalf("SHOW TIME ZONE: %v", err)
+	}
+	if tz != "UTC" {
+		t.Errorf("session timezone = %q, want UTC (operator TimeZone must be overridden)", tz)
 	}
 }
 

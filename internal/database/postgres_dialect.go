@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,20 +21,28 @@ func (p *postgresDialect) DriverName() string { return "postgres" }
 
 func (p *postgresDialect) TimestampType() string { return "TIMESTAMP" }
 
-// DSN appends TimeZone=UTC to the connection string: lib/pq sends unrecognized
-// keys to the server as runtime parameters, so the session (and therefore
-// CURRENT_TIMESTAMP) runs on UTC, and the driver parses the naive `timestamp
-// without time zone` columns in the zone the server reports — UTC as well.
-// Like the SQLite pragmas, this is a correctness setting, not a tuning knob:
-// an existing value is overridden by the appended one (the server keeps the
-// last occurrence).
+// DSN forces TimeZone=UTC on the connection string: lib/pq sends
+// unrecognized keys to the server as runtime parameters, so the session (and
+// therefore CURRENT_TIMESTAMP) runs on UTC, and the driver parses the naive
+// `timestamp without time zone` columns in the zone the server reports — UTC
+// as well. Like the SQLite pragmas, this is a correctness setting, not a
+// tuning knob. URL-form DSNs are parsed and rewritten (q.Set) rather than
+// appended to: lib/pq reads URL parameters with q.Get, where the FIRST value
+// wins, so appending TimeZone=UTC to a URL that already carries a TimeZone
+// would leave the operator's zone (e.g. Europe/Paris) in effect and skew
+// every naive-timestamp comparison.
 func (p *postgresDialect) DSN(dsn string) string {
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		sep := "?"
-		if strings.Contains(dsn, "?") {
-			sep = "&"
+		u, err := url.Parse(dsn)
+		if err != nil {
+			// Unparseable here means unparseable for the driver too; pass
+			// it through untouched so the driver reports the error.
+			return dsn
 		}
-		return dsn + sep + "TimeZone=UTC"
+		q := u.Query()
+		q.Set("TimeZone", "UTC")
+		u.RawQuery = q.Encode()
+		return u.String()
 	}
 	return dsn + " TimeZone=UTC"
 }
