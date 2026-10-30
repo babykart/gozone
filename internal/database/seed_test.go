@@ -37,6 +37,37 @@ func captureLog(t *testing.T, fn func()) string {
 	return string(out)
 }
 
+// TestSeedAdminUser_RefusesDefaultPasswordInHardenedMode pins the
+// production bootstrap contract: a deployment that declared itself
+// production-grade (server.require_secret_key) must not seed the publicly
+// known default admin password — a unique initial password is mandatory
+// there, while the development default keeps the warning-only behaviour.
+func TestSeedAdminUser_RefusesDefaultPasswordInHardenedMode(t *testing.T) {
+	db := newTestDB(t)
+
+	cfg := config.DefaultConfig()
+	cfg.Auth.BcryptCost = 4
+	cfg.Server.RequireSecretKey = true
+
+	err := SeedAdminUser(context.Background(), db, cfg)
+	if err == nil || !strings.Contains(err.Error(), "refusing the built-in default admin password") {
+		t.Fatalf("hardened mode must refuse the default admin password, got %v", err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("no admin may be seeded when the default password is refused, got %d users", count)
+	}
+
+	// A unique initial password satisfies hardened mode.
+	cfg.Admin.Password = "unique-initial-password"
+	if err := SeedAdminUser(context.Background(), db, cfg); err != nil {
+		t.Fatalf("hardened mode with a unique password: %v", err)
+	}
+}
+
 func TestSeedAdminUser_DefaultPasswordWarning(t *testing.T) {
 	db := newTestDB(t)
 

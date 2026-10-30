@@ -45,13 +45,9 @@ func newServerCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(c *cobra.Command, args []string) error {
-			configPath, err := c.Flags().GetString("config")
+			cfg, err := loadConfig(c)
 			if err != nil {
-				return fmt.Errorf("read --config flag: %w", err)
-			}
-			cfg, err := config.Load(configPath)
-			if err != nil {
-				return fmt.Errorf("load configuration: %w", err)
+				return err
 			}
 			return runServer(cfg)
 		},

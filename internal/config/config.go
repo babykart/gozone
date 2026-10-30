@@ -155,7 +155,11 @@ type ServerConfig struct {
 	// that behaviour is broken — each instance derives a different key and
 	// every request answered by another replica fails JWT/CSRF validation —
 	// so multi-replica deployments should set this to true and configure a
-	// persistent secret. Default: false.
+	// persistent secret. The flag also declares the deployment
+	// production-grade for the bootstrap: seeding then refuses the built-in
+	// default admin password (a publicly known credential on a production
+	// listener), so a unique initial password must be configured. Default:
+	// false.
 	RequireSecretKey bool `yaml:"require_secret_key"`
 }
 

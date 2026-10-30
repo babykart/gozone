@@ -58,13 +58,9 @@ func newUnlockCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configPath, err := cmd.Flags().GetString("config")
+			cfg, err := loadConfig(cmd)
 			if err != nil {
-				return fmt.Errorf("read --config flag: %w", err)
-			}
-			cfg, err := config.Load(configPath)
-			if err != nil {
-				return fmt.Errorf("load configuration: %w", err)
+				return err
 			}
 			return unlockUser(cfg, args[0])
 		},
@@ -84,17 +80,13 @@ func newResetPasswordCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configPath, err := cmd.Flags().GetString("config")
-			if err != nil {
-				return fmt.Errorf("read --config flag: %w", err)
-			}
 			pwFlag, err := cmd.Flags().GetString("password")
 			if err != nil {
 				return fmt.Errorf("read --password flag: %w", err)
 			}
-			cfg, err := config.Load(configPath)
+			cfg, err := loadConfig(cmd)
 			if err != nil {
-				return fmt.Errorf("load configuration: %w", err)
+				return err
 			}
 			password, err := readPassword(pwFlag)
 			if err != nil {

@@ -46,6 +46,15 @@ import (
 //
 // Returns an error if the database query or user insertion fails.
 func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
+	// A deployment that declares itself production-grade (require_secret_key)
+	// must not bootstrap with the publicly known default password: a typo'd
+	// --config or a skipped env var would otherwise expose a 0.0.0.0
+	// listener with admin/admin. The development default (flag default,
+	// no config file) keeps the documented quickstart behaviour and only
+	// gets the loud CHANGE-password warning below.
+	if cfg.Server.RequireSecretKey && cfg.Admin.Password == config.DefaultAdminPassword {
+		return fmt.Errorf("seed admin: refusing the built-in default admin password while server.require_secret_key is set: choose a unique initial password (admin.password in config.yaml or GOZONE_ADMIN_PASSWORD)")
+	}
 	// Usernames and emails are stored lowercase (the schema's lowercased
 	// generated columns carry UNIQUE indexes). Fold the configured bootstrap
 	// values the same way so the seed insert and the username lookups below
