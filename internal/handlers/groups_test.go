@@ -1406,3 +1406,351 @@ func TestGroupMutationsLogged(t *testing.T) {
 		t.Errorf("delete_group must be attributed to the acting admin (user_id=%d), got %v", admin, actor)
 	}
 }
+
+// --- Group edit pagination ---------------------------------------------------
+//
+// The members and zones tables of /groups/{id}/edit paginate independently in
+// SQL (memberPage/memberPerPage vs zonePage/zonePerPage), each total coming
+// from a COUNT(*) over the group's associations. These tests pin the page
+// contents, totals, clamping, per-section independence, and the preservation
+// of the dropdown searches (uq/zq) across pagination and add/remove actions.
+
+// attachGroupMember links an existing user to a group.
+func attachGroupMember(t *testing.T, h *Handler, groupID, userID int64) {
+	t.Helper()
+	if _, err := h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID); err != nil {
+		t.Fatalf("attach member: %v", err)
+	}
+}
+
+// seedPaginatedGroupFixture creates a group with n members (named
+// prefix-000..) and n zone grants (prefix-00.example...), returning the
+// group id. PDNS serves nothing: the empty zone list trips the
+// reconciliation circuit breaker, which keeps the grants.
+func seedPaginatedGroupFixture(t *testing.T, h *Handler, prefix string, n int) int64 {
+	t.Helper()
+	groupID := seedGroup(t, h, prefix+"-group", "")
+	for i := 0; i < n; i++ {
+		uid := testutil.SeedTestUser(t, h.DB, fmt.Sprintf("%s-%03d", prefix, i), "pass", "user", true)
+		attachGroupMember(t, h, groupID, uid)
+	}
+	for i := 0; i < n; i++ {
+		seedGroupZoneGrant(t, h, groupID, fmt.Sprintf("%s-%02d.example.", prefix, i))
+	}
+	return groupID
+}
+
+// getEditPage is a small helper driving EditGroupPage for the given group and
+// query string.
+func getEditPage(t *testing.T, h *Handler, groupID int64, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	path := "/groups/" + strconv.FormatInt(groupID, 10) + "/edit"
+	if query != "" {
+		path += "?" + query
+	}
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r = withUserContext(r, user)
+	w := httptest.NewRecorder()
+	h.EditGroupPage(w, r)
+	return w
+}
+
+// membersSection isolates the rendered members table from the rest of the
+// stub body: the AllUsers dropdown ALSO lists every user, so assertions like
+// "page 1 must not contain member 11" must not see the dropdown.
+func membersSection(body string) string {
+	start := strings.Index(body, "GroupEdit:")
+	end := strings.Index(body, "Zones:")
+	if start < 0 || end < 0 || end < start {
+		return body
+	}
+	return body[start:end]
+}
+
+// zonesSection isolates the rendered zones table (before the AllZones
+// dropdown), same rationale as membersSection.
+func zonesSection(body string) string {
+	start := strings.Index(body, "Zones:")
+	end := strings.Index(body, "AllUsers:")
+	if start < 0 || end < 0 || end < start {
+		return body
+	}
+	return body[start:end]
+}
+
+func TestEditGroupPage_MemberPagination(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgm", 15)
+
+	w := getEditPage(t, h, groupID, "")
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, body)
+	}
+	if !strings.Contains(body, "MemberPage=1/2/15/10") {
+		t.Errorf("default view must be page 1 of 2 (15 members, 10 per page), got: %s", body)
+	}
+	members := membersSection(body)
+	if !strings.Contains(members, "pgm-000") || !strings.Contains(members, "pgm-009") {
+		t.Errorf("page 1 must carry the first 10 members, got: %s", members)
+	}
+	if strings.Contains(members, "pgm-010") {
+		t.Errorf("page 1 must not spill into page 2, got: %s", members)
+	}
+
+	w = getEditPage(t, h, groupID, "memberPage=2")
+	body = w.Body.String()
+	if !strings.Contains(body, "MemberPage=2/2/15/10") {
+		t.Errorf("memberPage=2 must render page 2 of 2, got: %s", body)
+	}
+	members = membersSection(body)
+	if !strings.Contains(members, "pgm-014") || strings.Contains(members, "pgm-000") {
+		t.Errorf("page 2 must carry exactly members 11-15, got: %s", members)
+	}
+}
+
+func TestEditGroupPage_ZonePagination(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgz", 15)
+
+	w := getEditPage(t, h, groupID, "zonePage=2&zonePerPage=10")
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, body)
+	}
+	if !strings.Contains(body, "ZonePage=2/2/15/10") {
+		t.Errorf("zonePage=2 must render page 2 of 2, got: %s", body)
+	}
+	zones := zonesSection(body)
+	if !strings.Contains(zones, "pgz-14.example.") || strings.Contains(zones, "pgz-00.example.") {
+		t.Errorf("page 2 must carry exactly zones 11-15, got: %s", zones)
+	}
+}
+
+func TestEditGroupPage_PerPageAll(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pga", 15)
+
+	// memberPerPage=0 / zonePerPage=0 mean "all": one page, no LIMIT.
+	w := getEditPage(t, h, groupID, "memberPerPage=0&zonePerPage=0&memberPage=3&zonePage=2")
+	body := w.Body.String()
+	if !strings.Contains(body, "MemberPage=1/1/15/0") {
+		t.Errorf("memberPerPage=0 collapses to a single page (Current always 1), got: %s", body)
+	}
+	if !strings.Contains(body, "ZonePage=1/1/15/0") {
+		t.Errorf("zonePerPage=0 collapses to a single page, got: %s", body)
+	}
+	if !strings.Contains(body, "pga-014") || !strings.Contains(body, "pga-14.example.") {
+		t.Errorf("all members and zones must render on the single page, got: %s", body)
+	}
+}
+
+func TestEditGroupPage_PaginationBounds(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgb", 15)
+
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{
+		{"memberPage=-5", "MemberPage=1/2/15/10"},   // negative -> 1
+		{"memberPage=abc", "MemberPage=1/2/15/10"},  // invalid -> 1
+		{"memberPage=0", "MemberPage=1/2/15/10"},    // zero -> 1
+		{"memberPage=99", "MemberPage=2/2/15/10"},   // beyond last -> clamped
+		{"memberPerPage=-1", "MemberPage=1/2/15/10"}, // negative size rejected -> default 10
+	} {
+		w := getEditPage(t, h, groupID, tc.query)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", tc.query, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), tc.want) {
+			t.Errorf("%s: expected %q, got: %s", tc.query, tc.want, w.Body.String())
+		}
+	}
+}
+
+func TestEditGroupPage_PaginationIndependent(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgi", 15)
+
+	// Page 2 of members, page 1 of zones: each section follows its own params.
+	w := getEditPage(t, h, groupID, "memberPage=2&zonePage=1&memberPerPage=10&zonePerPage=10")
+	body := w.Body.String()
+	if !strings.Contains(body, "MemberPage=2/2/15/10") || !strings.Contains(body, "ZonePage=1/2/15/10") {
+		t.Errorf("sections must paginate independently, got: %s", body)
+	}
+	if !strings.Contains(membersSection(body), "pgi-010") || strings.Contains(membersSection(body), "pgi-009") {
+		t.Errorf("members must be on page 2, got: %s", membersSection(body))
+	}
+	if !strings.Contains(zonesSection(body), "pgi-00.example.") || strings.Contains(zonesSection(body), "pgi-10.example.") {
+		t.Errorf("zones must be on page 1, got: %s", zonesSection(body))
+	}
+}
+
+func TestEditGroupPage_PaginationPreservesSearches(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones") {
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "beta.example.", Name: "beta.example.", Kind: "Native"},
+			})
+			return
+		}
+		w.Write([]byte(`[]`))
+	})
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgs", 15)
+
+	w := getEditPage(t, h, groupID, "uq=ali&zq=bet&memberPage=2&zonePerPage=10")
+	body := w.Body.String()
+	if !strings.Contains(body, "UserSearch=ali") || !strings.Contains(body, "ZoneSearch=bet") {
+		t.Errorf("the dropdown searches must survive the paginated view, got: %s", body)
+	}
+	if !strings.Contains(body, "MemberPage=2/2/15/10") {
+		t.Errorf("member pagination must still apply alongside the searches, got: %s", body)
+	}
+}
+
+// TestEditGroupPage_ActionRedirectsPreserveState pins the return query of the
+// add/remove actions: the dropdown searches and both paginations ride along in
+// the redirect so the operator lands back on the same view.
+func TestEditGroupPage_ActionRedirectsPreserveState(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgr", 12)
+	userID := testutil.SeedTestUser(t, h.DB, "pgr-new", "pass", "user", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	post := func(path, body string) string {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = withUserContext(r, user)
+		w := httptest.NewRecorder()
+		switch {
+		case strings.HasSuffix(path, "/add-member"):
+			h.AddMemberToGroup(w, r)
+		case strings.HasSuffix(path, "/remove-member"):
+			h.RemoveMemberFromGroup(w, r)
+		case strings.HasSuffix(path, "/add-zone"):
+			h.AddZoneToGroup(w, r)
+		case strings.HasSuffix(path, "/remove-zone"):
+			h.RemoveZoneFromGroup(w, r)
+		default:
+			t.Fatalf("unknown action path %q", path)
+		}
+		if w.Code != http.StatusSeeOther {
+			t.Fatalf("%s: expected 303, got %d: %s", path, w.Code, w.Body.String())
+		}
+		return w.Header().Get("Location")
+	}
+
+	base := "/groups/" + strconv.FormatInt(groupID, 10)
+
+	loc := post(base+"/add-member", "user_id="+strconv.FormatInt(userID, 10)+"&uq=ali&memberPage=2")
+	if !strings.Contains(loc, "uq=ali") || !strings.Contains(loc, "memberPage=2") {
+		t.Errorf("add-member must carry uq and the member page back, got %s", loc)
+	}
+
+	loc = post(base+"/remove-member", "user_id="+strconv.FormatInt(userID, 10)+"&memberPage=2&zonePage=3&zq=bet")
+	if !strings.Contains(loc, "memberPage=2") || !strings.Contains(loc, "zonePage=3") || !strings.Contains(loc, "zq=bet") {
+		t.Errorf("remove-member must carry both paginations and zq back, got %s", loc)
+	}
+
+	loc = post(base+"/add-zone", "zone_id=new.example.&zq=bet&zonePage=3")
+	if !strings.Contains(loc, "zq=bet") || !strings.Contains(loc, "zonePage=3") {
+		t.Errorf("add-zone must carry zq and the zone page back, got %s", loc)
+	}
+
+	loc = post(base+"/remove-zone", "zone_id=pgr-00.example.&uq=ali")
+	if !strings.Contains(loc, "uq=ali") {
+		t.Errorf("remove-zone must carry uq back, got %s", loc)
+	}
+}
+
+// TestEditGroupPage_RemoveLastItemOnPageClamps verifies the follow-up render
+// after deleting the only element of the last page: the redirect still points
+// at the stale page number, and the page clamping brings the view back to the
+// last page that actually has rows.
+func TestEditGroupPage_RemoveLastItemOnPageClamps(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedPaginatedGroupFixture(t, h, "pgc", 11)
+
+	// Page 2 holds exactly one member (pgc-010). Remove it while "on" page 2.
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	var lastUserID int64
+	if err := h.DB.QueryRow("SELECT user_id FROM zone_group_members ORDER BY user_id DESC LIMIT 1").Scan(&lastUserID); err != nil {
+		t.Fatalf("lookup last member: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost,
+		"/groups/"+strconv.FormatInt(groupID, 10)+"/remove-member",
+		strings.NewReader("user_id="+strconv.FormatInt(lastUserID, 10)+"&memberPage=2&memberPerPage=10"))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	w := httptest.NewRecorder()
+	h.RemoveMemberFromGroup(w, r)
+	loc := w.Header().Get("Location")
+	if !strings.Contains(loc, "memberPage=2") {
+		t.Fatalf("redirect must keep the current page number, got %s", loc)
+	}
+
+	// Following the redirect: 10 members remain on one page, so the view must
+	// clamp from the stale page 2 to page 1 instead of rendering an empty table.
+	query := strings.TrimPrefix(loc, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit?")
+	w = getEditPage(t, h, groupID, query)
+	body := w.Body.String()
+	if !strings.Contains(body, "MemberPage=1/1/10/10") {
+		t.Errorf("the stale page must clamp to the last valid page, got: %s", body)
+	}
+	if strings.Contains(membersSection(body), "pgc-010") {
+		t.Errorf("the removed member must not render, got: %s", membersSection(body))
+	}
+}
+
+// TestEditGroupPage_ZoneTotalAfterReconciliation pins the ordering guarantee
+// of the zone table: it is fetched AFTER the PowerDNS reconciliation, so the
+// total and the page contents reflect the grants actually kept — an orphaned
+// grant (zone absent from PowerDNS) must be gone from both.
+func TestEditGroupPage_ZoneTotalAfterReconciliation(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("kept.example."))
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "rec-group", "")
+	seedGroupZoneGrant(t, h, groupID, "kept.example.")
+	seedGroupZoneGrant(t, h, groupID, "gone.example.")
+
+	w := getEditPage(t, h, groupID, "")
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, body)
+	}
+	if !strings.Contains(body, "ZonePage=1/1/1/10") {
+		t.Errorf("the zone total must reflect the reconciled grants (1, not 2), got: %s", body)
+	}
+	if !strings.Contains(body, "kept.example.") {
+		t.Errorf("the surviving grant must render, got: %s", body)
+	}
+	if strings.Contains(body, "gone.example.") {
+		t.Errorf("the orphaned grant must not render after reconciliation, got: %s", body)
+	}
+}

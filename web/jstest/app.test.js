@@ -614,6 +614,40 @@ test('applyPerPage drops an emptied search and works with no prefix', () => {
     assert.strictEqual(params.has('search'), false, 'an emptied search is dropped');
 });
 
+test('applyPerPage with a member prefix keeps the zone section and the searches', () => {
+    const select = { attrs: { 'data-prefix': 'member' }, value: '20' };
+    select.getAttribute = function(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; };
+    const searchInput = { value: '' };
+
+    const doc = stubDocument();
+    doc.querySelector = () => searchInput;
+
+    const prevDocument = global.document;
+    const prevWindow = global.window;
+    let captured = '';
+    global.document = doc;
+    global.window = {
+        location: {
+            search: '?memberPage=2&memberPerPage=10&zonePage=3&zonePerPage=50&uq=ali&zq=bet',
+            set href(v) { captured = v; }
+        }
+    };
+    try {
+        app.applyPerPage(select);
+    } finally {
+        global.document = prevDocument;
+        global.window = prevWindow;
+    }
+
+    const params = new URLSearchParams(captured.replace(/^\?/, ''));
+    assert.strictEqual(params.get('memberPerPage'), '20', 'this section size changes');
+    assert.strictEqual(params.has('memberPage'), false, 'this section page resets');
+    assert.strictEqual(params.get('zonePage'), '3', 'the other section page is preserved');
+    assert.strictEqual(params.get('zonePerPage'), '50', 'the other section size is preserved');
+    assert.strictEqual(params.get('uq'), 'ali', 'the user search is preserved');
+    assert.strictEqual(params.get('zq'), 'bet', 'the zone search is preserved');
+});
+
 // --- Blocked-storage safety (storageGet/storageSet) -------------------------
 //
 // localStorage can be unavailable or throw on every access (Safari private

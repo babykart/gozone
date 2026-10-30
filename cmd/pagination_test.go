@@ -81,4 +81,30 @@ func TestPaginationPartial(t *testing.T) {
 	if strings.Contains(out, "%3d") || strings.Contains(out, "%26") {
 		t.Errorf("filters must not be escaped into one opaque query value:\n%s", out)
 	}
+
+	// Two-section group edit case (member pager): must carry the zone section
+	// AND the dropdown searches (uq/zq) as separate, readable parameters.
+	buf.Reset()
+	groupData := map[string]interface{}{
+		"PageInfo":     handlers.PageInfo{Current: 2, PerPage: 10, TotalPages: 3, Total: 25},
+		"Label":        "members",
+		"Prefix":       "member",
+		"HasOther":     true,
+		"OtherPrefix":  "zone",
+		"OtherPage":    1,
+		"OtherPerPage": 50,
+		"Extra":        url.Values{"uq": []string{"ali"}, "zq": []string{"bet"}},
+	}
+	if err := tmpl.ExecuteTemplate(&buf, "pagination.html", groupData); err != nil {
+		t.Fatalf("execute group pagination: %v", err)
+	}
+	out = buf.String()
+	for _, want := range []string{"memberPage=1", "memberPage=3", "memberPerPage=10", "zonePage=1", "zonePerPage=50", "uq=ali", "zq=bet"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("group pagination output missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "%3d") || strings.Contains(out, "%26") {
+		t.Errorf("dropdown searches must not be escaped into one opaque query value:\n%s", out)
+	}
 }
