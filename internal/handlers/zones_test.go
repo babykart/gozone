@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -154,6 +155,119 @@ func TestCreateZone_NormalizesNameAndNameservers(t *testing.T) {
 	}
 	if sent.Nameservers[1] != "ns2.example.com." {
 		t.Errorf("PDNS received ns[1]=%q, want %q", sent.Nameservers[1], "ns2.example.com.")
+	}
+}
+
+// TestCreateZone_RejectsInvalidTemplateBeforeCreation pins the template
+// validation order: a selected template that is not a valid ID, no longer
+// exists, or has no records must fail BEFORE the zone is created — not
+// leave a zone without the expected records and redirect to success.
+func TestCreateZone_RejectsInvalidTemplateBeforeCreation(t *testing.T) {
+	tests := []struct {
+		name        string
+		templateID  string
+		seedRecords bool
+		wantMessage string
+	}{
+		{
+			name:        "non-numeric template id",
+			templateID:  "abc",
+			wantMessage: "Invalid template selection",
+		},
+		{
+			name:        "template deleted between render and submit",
+			templateID:  "99999",
+			wantMessage: "no longer exists",
+		},
+		{
+			name:        "template without records",
+			templateID:  "", // filled with the seeded empty template below
+			wantMessage: "has no records",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			created := false
+			h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+				created = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				json.NewEncoder(w).Encode(models.Zone{ID: "newzone.com.", Name: "newzone.com.", Kind: "Native"})
+			})
+			defer pdnsSrv.Close()
+
+			testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+			templateID := tc.templateID
+			if tc.name == "template without records" {
+				templateID = strconv.FormatInt(seedTemplate(t, h, "empty-tmpl", ""), 10)
+			}
+
+			user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+			ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+			body := "name=newzone.com&kind=Native&template_id=" + templateID
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r = r.WithContext(ctx)
+			h.CreateZone(w, r)
+
+			if created {
+				t.Error("the zone must not be created when the selected template is invalid")
+			}
+			if !strings.Contains(w.Body.String(), tc.wantMessage) {
+				t.Errorf("expected message %q, got: %s", tc.wantMessage, w.Body.String())
+			}
+			var count int
+			h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_zone'").Scan(&count)
+			if count != 0 {
+				t.Errorf("an invalid template selection must not log create_zone, got %d rows", count)
+			}
+		})
+	}
+}
+
+// TestCreateZone_WithTemplateAppliesRecords is the positive control: a valid
+// template still applies its records after the zone is created.
+func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
+	var patched bool
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(models.Zone{ID: "newzone.com.", Name: "newzone.com.", Kind: "Native"})
+		case http.MethodPatch:
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	templateID := seedTemplate(t, h, "apply-on-create", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "192.0.2.1", 3600)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=newzone.com&kind=Native&template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateZone(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !patched {
+		t.Error("expected the template records to be applied (PATCH) after zone creation")
 	}
 }
 

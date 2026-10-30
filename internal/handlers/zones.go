@@ -357,6 +357,30 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve and validate the template BEFORE creating the zone. A selected
+	// template that is not a valid ID, no longer exists, or has no records
+	// must fail here — not leave a zone without the records the operator
+	// expected and redirect to success.
+	var templateRecords []models.ZoneTemplateRecord
+	var templateLabel string
+	if templateIDStr := strings.TrimSpace(r.FormValue("template_id")); templateIDStr != "" {
+		templateID, err := strconv.ParseInt(templateIDStr, 10, 64)
+		if err != nil {
+			h.renderError(w, r, "Invalid template selection: "+templateIDStr)
+			return
+		}
+		templateLabel = h.getTemplateName(r.Context(), templateID)
+		if templateLabel == "" {
+			h.renderError(w, r, "Selected template no longer exists. Choose another template and retry.")
+			return
+		}
+		templateRecords = h.getTemplateRecords(r.Context(), templateID)
+		if len(templateRecords) == 0 {
+			h.renderError(w, r, fmt.Sprintf("Template %q has no records. Add records to it or choose another template.", templateLabel))
+			return
+		}
+	}
+
 	zone, err := h.PDNS.CreateZone(r.Context(), req)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to create zone", err)
@@ -367,28 +391,23 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to log create_zone activity", "zone_id", zone.ID, "error", err)
 	}
 
-	// Apply template if selected
-	if templateIDStr := strings.TrimSpace(r.FormValue("template_id")); templateIDStr != "" {
-		if templateID, err := strconv.ParseInt(templateIDStr, 10, 64); err == nil {
-			records := h.getTemplateRecords(r.Context(), templateID)
-			if len(records) > 0 {
-				vars := h.collectTemplateVars(r)
-				if vars["ZONE"] == "" {
-					vars["ZONE"] = zone.Name
-				}
-				rrsets, err := h.substituteTemplateRecords(zone.ID, h.templateLabelFor(r.Context(), templateID, templateIDStr), records, vars)
-				if err == nil {
-					err = h.PDNS.CreateRecords(r.Context(), zone.ID, rrsets)
-				}
-				if err != nil {
-					// The zone was created; only the template could not be
-					// applied. Surface it instead of redirecting to success.
-					h.renderInternalError(w, r,
-						fmt.Sprintf("Zone %s was created, but applying the template failed. Add records manually.", zone.Name),
-						err)
-					return
-				}
-			}
+	// Apply the pre-resolved template records.
+	if len(templateRecords) > 0 {
+		vars := h.collectTemplateVars(r)
+		if vars["ZONE"] == "" {
+			vars["ZONE"] = zone.Name
+		}
+		rrsets, err := h.substituteTemplateRecords(zone.ID, templateLabel, templateRecords, vars)
+		if err == nil {
+			err = h.PDNS.CreateRecords(r.Context(), zone.ID, rrsets)
+		}
+		if err != nil {
+			// The zone was created; only the template could not be
+			// applied. Surface it instead of redirecting to success.
+			h.renderInternalError(w, r,
+				fmt.Sprintf("Zone %s was created, but applying the template failed. Add records manually.", zone.Name),
+				err)
+			return
 		}
 	}
 
