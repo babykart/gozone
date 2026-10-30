@@ -225,6 +225,19 @@ func (h *Handler) UpdateTSIGKey(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "Invalid algorithm: "+err.Error())
 		return
 	}
+	// Serialize the fetch→PUT sequence per key. A blank-key update re-reads
+	// the current material and forwards it in a full-resource PUT: without
+	// the lock, a concurrent rotation can land between the re-read and the
+	// PUT, and the stale echo silently revokes the fresh secret (peers
+	// configured with it can no longer authenticate). The locker keys on
+	// arbitrary strings; the "tsigkey:" prefix keeps TSIG keys distinct from
+	// zone IDs and coordinates instances sharing the database.
+	release, ok := h.lockZone(w, r, "tsigkey:"+keyID)
+	if !ok {
+		return
+	}
+	defer release()
+
 	if key == "" {
 		// I-1: blank key material = keep current secret. PowerDNS's PUT replaces
 		// the resource, so re-fetch the existing material and forward it back.

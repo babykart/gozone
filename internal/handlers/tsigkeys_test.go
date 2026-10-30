@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/middleware"
@@ -374,6 +376,95 @@ func TestUpdateTSIGKey_BlankKeyKeepsCurrent(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='update_tsigkey'").Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 activity log, got %d", count)
+	}
+}
+
+// TestUpdateTSIGKey_ConcurrentKeepAndRotateSerialized is the lost-rotation
+// regression: update A keeps the current secret (blank key, re-read then
+// full-resource PUT) while update B rotates it. Without serialization B's
+// rotation lands between A's re-read and A's PUT, and A's stale echo
+// silently revokes the fresh secret. The mock gates A's re-read so the
+// interleave is deterministic: without the lock B's PUT is observed first
+// and unblocks A (rotation lost); with the lock B waits on the per-key
+// lock, the timeout path unblocks A, and B's rotation lands last.
+func TestUpdateTSIGKey_ConcurrentKeepAndRotateSerialized(t *testing.T) {
+	var mu sync.Mutex
+	stored := models.TSIGKey{
+		Name: "my-key.", ID: "my-key.", Algorithm: "hmac-sha256",
+		Key: "original-secret", Type: "TSIGKey",
+	}
+	getStarted := make(chan struct{})
+	unblock := make(chan struct{})
+	bPut := make(chan struct{})
+	var getOnce, putOnce sync.Once
+
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getOnce.Do(func() { close(getStarted) })
+			<-unblock
+			mu.Lock()
+			key := stored
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(key) // #nosec G104 -- test helper
+		case http.MethodPut:
+			var k models.TSIGKey
+			json.NewDecoder(r.Body).Decode(&k) // #nosec G104 -- test helper
+			mu.Lock()
+			stored = k
+			mu.Unlock()
+			putOnce.Do(func() { close(bPut) })
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	post := func(body string, done chan<- *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/tsigkeys/my-key./update", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("key_id", "my-key.")
+		h.UpdateTSIGKey(w, r.WithContext(ctx))
+		done <- w
+	}
+
+	doneA := make(chan *httptest.ResponseRecorder, 1)
+	doneB := make(chan *httptest.ResponseRecorder, 1)
+	go post("algorithm=hmac-sha256&key=", doneA)
+	<-getStarted
+	go post("algorithm=hmac-sha512&key=new-secret", doneB)
+
+	select {
+	case <-bPut:
+		// B's rotation is already stored: without the per-key lock A's
+		// stale echo PUTs last and revokes it (the test fails below).
+		close(unblock)
+	case <-time.After(300 * time.Millisecond):
+		// B is waiting on the per-key lock held by A: let A finish first
+		// so B's rotation lands last.
+		close(unblock)
+	}
+
+	wA, wB := <-doneA, <-doneB
+	if wA.Code != http.StatusSeeOther || wB.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 from both updates, got %d and %d", wA.Code, wB.Code)
+	}
+
+	mu.Lock()
+	final := stored
+	mu.Unlock()
+	if final.Key != "new-secret" {
+		t.Errorf("rotation was lost: final secret %q, want %q", final.Key, "new-secret")
+	}
+	if final.Algorithm != "hmac-sha512" {
+		t.Errorf("final algorithm = %q, want %q (B's update must land last)", final.Algorithm, "hmac-sha512")
 	}
 }
 
