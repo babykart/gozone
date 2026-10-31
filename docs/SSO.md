@@ -83,7 +83,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 | `oidc.allowed_email_domains` | `GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS` | *(empty)* | Restrict which e-mail domains may establish a **new** SSO association: both the e-mail link to an existing local account (admins included) and auto-provisioning require the claim's e-mail domain to be listed (exact, case-insensitive). When set, provisioning without an e-mail claim is refused. Existing `(issuer, subject)` links keep working. Empty accepts every domain — with public presets (Google, GitHub) that means any IdP account can link or be provisioned. |
 | `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. Gates only NEW account creation. When `false`, login still succeeds for a pre-existing external-identity link, or for an existing local account whose email matches a *verified* IdP email (`email_verified: true`). |
 | `oidc.require_verified_email` | `GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL` | `true` | Require `email_verified: true` to link an existing local account by email. Set to `false` for a trusted IdP whose emails are authoritative but not marked verified (e.g. a Keycloak realm that does not emit `email_verified`); linking then keys on the email alone. Only affects email linking, never provisioning. |
-| `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` | Role for auto-provisioned users (`admin` or `user`). |
+| `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` | Role for auto-provisioned users (`admin`, `operator` or `user`). |
 | `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` | Global fallback scopes (`openid` is always added). |
 | `oidc.role_claim` | `GOZONE_OIDC_ROLE_CLAIM` | *(none)* | Dotted claim path inspected for role mapping (e.g. `groups`, `realm_access.roles`). Empty disables role mapping. |
 | `oidc.admin_role_values` | `GOZONE_OIDC_ADMIN_ROLE_VALUES` | `[]` | Claim values (at `role_claim`) that grant the GoZone `admin` role. |
@@ -352,9 +352,15 @@ oidc:
 
 - Works with nested claims (Keycloak `realm_access.roles`) and top-level arrays
   (`groups`).
-- A demotion `admin → user` that would remove the **last enabled admin** is
-  refused (the user keeps `admin` and a warning is logged), so SSO role sync
-  can never lock the instance out.
+- Claim mapping can mint `admin` (via `admin_role_values`) or fall back to
+  `default_role` — including `operator`. It never mints `operator` from a
+  dedicated claim value: set `default_role: "operator"` to provision
+  operators, or manage the role locally in the admin UI.
+- A demotion `admin → operator`/`admin → user` that would remove the **last
+  enabled admin** is refused (the user keeps `admin` and a warning is logged),
+  so SSO role sync can never lock the instance out. Note that with
+  `default_role: "operator"`, an admin whose claim stops matching demotes to
+  `operator`, not `user`.
 
 When `role_claim` is empty, role mapping is disabled and `default_role` alone
 governs provisioning.

@@ -156,7 +156,7 @@ and never on a concrete cache implementation.
    - Each job receives a context derived from the parent; the returned `stop` function cancels it on shutdown
 8. **`parseTemplates()`** — load `web/templates/*.html` via `template.ParseFS` from embedded filesystem (`web/embed.go`)
 9. **`handlers.New(db, pdnsClient, cfg, tmpl)`** — wire handler with all dependencies
-10. **Register routes** on chi router with global middleware chain (`RequestID → ClientIPFrom* → requestLogger → Compress → HTTPSResolver → SecurityHeaders → BodyLimit → ErrorHandler`) plus per-group chains (CSRF + Auth on the Web UI group, APIKey + rate limiters on the API group, RequireAdmin on admin routes)
+10. **Register routes** on chi router with global middleware chain (`RequestID → ClientIPFrom* → requestLogger → Compress → HTTPSResolver → SecurityHeaders → BodyLimit → ErrorHandler`) plus per-group chains (CSRF + Auth on the Web UI group, APIKey + rate limiters on the API group, RequireDNSAdmin (admins and operators) on DNS-admin routes, RequireAdmin (admins only) on user/group management routes)
 11. **`http.ListenAndServe(addr, r)`** with **graceful shutdown** on SIGINT/SIGTERM:
     - `srv.Shutdown(ctx)` stops accepting new connections
     - Goroutine waits on `<-shutdownDone` before returning

@@ -114,7 +114,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - **Real pagination partial**: `TestPaginationPartial` (`cmd/pagination_test.go`) renders the **real** `pagination.html` via `parseTemplates()` — unlike the stubbed handler tests. Changing the partial's expected data shape (e.g. `PageInfo`/`Prefix`/other-section params) breaks this cmd-package test, an easy place to forget to look.
 - **`captureRRSets(t, &sent)`**: helper in `api_test.go` that decodes the PATCH body sent to the mock PDNS, so tests can assert exactly what PowerDNS received. Use this for content-normalization regression tests.
 - **`relativeName`** lives in `cmd/templates.go` (package cmd), so handler tests stub it out — the test FuncMap maps it to a no-op.
-- **Admin routes**: every admin web route is registered in one place — `mountAdminRoutes` in `cmd/routes.go` — and `TestAdminRoutesProtectedByRequireAdmin` (in `cmd/routes_test.go`) walks that table to assert none escapes `middleware.RequireAdmin`. Add new admin routes to `mountAdminRoutes` so the invariant stays green.
+- **Admin routes**: every admin web route is registered in one place — `mountAdminRoutes` in `cmd/routes.go` — and `TestAdminRoutesProtectedByRequireAdmin` (in `cmd/routes_test.go`) walks that table against a hard-coded expectation: DNS-plane routes (zones, per-zone ops, TSIG keys, templates) must carry `middleware.RequireDNSAdmin` (admins and operators), user/group management routes must carry `middleware.RequireAdmin` (admins only). Add new admin routes to `mountAdminRoutes` and classify them in the test table so the invariant stays green.
 
 ## Key Constraints
 

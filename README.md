@@ -15,7 +15,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **Zone Metadata**: Manage per-zone metadata (ALLOW-AXFR-FROM, ALSO-NOTIFY, SOA-EDIT, NSEC3PARAM, PRESIGNED, etc.)
 - **TSIG Keys**: Create, edit, and delete TSIG keys for secured zone transfers and dynamic updates
 - **Group-based Authorization**: Assign zones to groups, add users to groups — non-admin users see only their authorized zones
-- **User Management**: Admin and user roles with access control
+- **User Management**: Admin, operator and user roles with access control — operators manage all DNS (zones, records, DNSSEC, TSIG keys, templates) but not users or groups
 - **API Keys**: Generate and manage API keys for REST API access (SHA-256 hashed)
 - **Activity Logging**: Track all zone, metadata, TSIG key, and user operations
 - **REST API**: JSON API for zone, record, and statistics automation

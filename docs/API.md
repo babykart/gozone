@@ -77,7 +77,7 @@ All errors return a JSON body:
 | `UNAUTHORIZED` | 401 | Invalid or missing API key, the key's user is disabled, or the key's stored scope is unreadable |
 | `API_KEY_EXPIRED` | 401 | The API key passed its expiry date |
 | `API_KEY_INVALIDATED` | 401 | The key predates the owner's credential rotation (monotonic `credential_version`, or the legacy `tokens_valid_after` cutoff) |
-| `FORBIDDEN` | 403 | Authenticated as a non-admin on an admin-only endpoint, or no zone-group grants access to the zone |
+| `FORBIDDEN` | 403 | Authenticated without the required role: user/group management is admin-only; DNS administration (zone create/delete) accepts admins and operators; or no zone-group grants access to the zone |
 | `API_KEY_SCOPE_MISMATCH` | 403 | The key's scope belongs to another surface: an `mcp:*` key on `/api/v1`, or an `api:*` key on `/mcp` |
 | `INSUFFICIENT_SCOPE` | 403 | An `api:read` key attempted a write method (POST/PUT/DELETE) on `/api/v1` |
 | `RATE_LIMITED` | 429 | Per-key or per-IP rate limit exceeded; the response carries `Retry-After` |
@@ -119,7 +119,8 @@ Response `200`:
 ]
 ```
 
-Non-admin users only see zones assigned to their groups.
+Users without DNS-admin rights (plain `user` role) only see zones assigned to
+their groups; admins and operators see every zone.
 
 ### Get zone details
 
