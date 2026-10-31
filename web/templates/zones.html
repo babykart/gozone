@@ -6,14 +6,14 @@
         <form method="GET" action="/zones" class="search-form">
             <input type="search" name="search" value="{{.Search}}" placeholder="Filter zones..." class="search-input" aria-label="Filter zones">
         </form>
-        {{if .IsAdmin}}
+        {{if .CanManageDNS}}
         <a href="/zones/new" class="btn btn-primary">Create Zone</a>
         {{end}}
     </div>
 </div>
 
 {{if .Zones}}
-{{if .IsAdmin}}
+{{if .CanManageDNS}}
 <div class="bulk-actions" id="bulk-zones-bar" data-csrf="{{.CSRFToken}}">
     <span id="bulk-zones-count" class="bulk-selected-count">0 zones selected</span>
     <span class="bulk-actions-buttons">
@@ -26,7 +26,7 @@
     <caption class="visually-hidden">DNS zones</caption>
     <thead>
         <tr>
-            {{if .IsAdmin}}<th class="col-select"><input type="checkbox" data-action="select-all-zones" aria-label="Select all zones"></th>{{end}}
+            {{if .CanManageDNS}}<th class="col-select"><input type="checkbox" data-action="select-all-zones" aria-label="Select all zones"></th>{{end}}
             <th>Name</th>
             <th>Type</th>
             <th>Serial</th>
@@ -39,7 +39,7 @@
         {{$csrf := .CSRFToken}}
         {{range .Zones}}
         <tr data-zone-id="{{.Zone.ID}}">
-            {{if $.IsAdmin}}<td class="col-select"><input type="checkbox" class="zone-select" aria-label="Select zone {{.Zone.Name}}"></td>{{end}}
+            {{if $.CanManageDNS}}<td class="col-select"><input type="checkbox" class="zone-select" aria-label="Select zone {{.Zone.Name}}"></td>{{end}}
             <td><a href="/zones/{{.Zone.ID}}"><strong>{{.Zone.Name}}</strong></a></td>
             <td><span class="badge badge-kind-{{.Zone.Kind}}">{{.Zone.Kind}}</span></td>
             <td>{{.Zone.Serial}}</td>
@@ -47,7 +47,7 @@
             <td>{{if .Zone.DNSSEC}}<span class="badge badge-active">Yes</span>{{else}}<span class="badge badge-disabled">No</span>{{end}}</td>
             <td>
                 <a href="/zones/{{.Zone.ID}}" class="btn btn-sm btn-secondary">View</a>
-                {{if $.IsAdmin}}
+                {{if $.CanManageDNS}}
                 <form method="POST" action="/zones/delete" class="inline" data-confirm="Delete zone {{.Zone.Name}}? This cannot be undone.">
                     <input type="hidden" name="gorilla.csrf.Token" value="{{$csrf}}">
                     <input type="hidden" name="zone_id" value="{{.Zone.ID}}">
@@ -67,7 +67,7 @@
 <div class="empty-state">
     <h3>No zones found</h3>
     <p>{{if .Search}}No zones match your search.{{else}}Create your first DNS zone to get started.{{end}}</p>
-    {{if .IsAdmin}}<a href="/zones/new" class="btn btn-primary">Create Zone</a>{{end}}
+    {{if .CanManageDNS}}<a href="/zones/new" class="btn btn-primary">Create Zone</a>{{end}}
 </div>
 {{end}}
 {{template "app_layout_end" .}}

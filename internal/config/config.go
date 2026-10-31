@@ -234,8 +234,8 @@ type OIDCConfig struct {
 	// realm where email_verified is not emitted); linking then keys on the email
 	// alone. Has no effect when no local account matches the email.
 	RequireVerifiedEmail bool `yaml:"require_verified_email"`
-	// DefaultRole is the role assigned to auto-provisioned users ("admin" or
-	// "user"). Default "user".
+	// DefaultRole is the role assigned to auto-provisioned users ("admin",
+	// "operator" or "user"). Default "user".
 	DefaultRole string `yaml:"default_role"`
 	// Scopes is the global fallback scope list requested when a provider does
 	// not specify its own. "openid" is always added. Default [openid, profile,

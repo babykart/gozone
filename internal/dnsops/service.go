@@ -85,33 +85,36 @@ func userIDOf(user *models.User) int64 {
 	return 0
 }
 
-// requireAdmin enforces the service-level admin gate for operations that are
-// admin-only regardless of transport (zone create/delete). The REST routes
-// additionally sit behind middleware.RequireAdmin; this check is the
-// defence-in-depth that a future MCP caller cannot skip.
+// requireAdmin enforces the service-level DNS administration gate for
+// operations that are admin-only regardless of transport (zone
+// create/delete); both DNS-admin roles pass (admins and operators —
+// CanManageDNS). The name is historical and kept to avoid call-site churn.
+// The REST routes additionally sit behind middleware.RequireDNSAdmin; this
+// check is the defence-in-depth that a future MCP caller cannot skip.
 //
 // A nil user designates an in-process caller that bypassed the transport
 // middlewares (tests): it preserves the historical handler behaviour (no
 // in-handler admin check) rather than inventing a new failure mode. Every
 // real transport authenticates before the handler runs.
 func requireAdmin(user *models.User) error {
-	if user == nil || user.IsAdmin() {
+	if user == nil || user.CanManageDNS() {
 		return nil
 	}
 	return ErrForbidden
 }
 
 // authorizeZone enforces zone-scoped authorization for a service call on
-// zoneID. Admins pass; an authenticated non-admin must hold a group grant on
-// the zone (CanAccessZone — fail-closed). A nil user designates an in-process
-// caller (see requireAdmin); the REST middleware stack and the MCP transport
-// both authenticate and authorize before handlers run.
+// zoneID. DNS admins (admins and operators) pass; any other authenticated
+// user must hold a group grant on the zone (CanAccessZone — fail-closed).
+// A nil user designates an in-process caller (see requireAdmin); the REST
+// middleware stack and the MCP transport both authenticate and authorize
+// before handlers run.
 //
 // A failed lookup returns a StageError(StageZoneAccess) so callers can
 // distinguish a database fault (HTTP 500) from a genuine denial
 // (ErrForbidden → HTTP 403).
 func (s *Service) authorizeZone(ctx context.Context, user *models.User, zoneID string) error {
-	if user == nil || user.IsAdmin() {
+	if user == nil || user.CanManageDNS() {
 		return nil
 	}
 	ok, err := CanAccessZone(ctx, s.DB, user, zoneID)

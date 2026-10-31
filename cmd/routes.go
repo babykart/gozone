@@ -11,18 +11,23 @@ import (
 	"github.com/babykart/gozone/internal/models"
 )
 
-// mountAdminRoutes registers the admin-only web UI routes on r, every one
-// guarded by middleware.RequireAdmin. It is the single source of truth for the
-// admin routing table so TestAdminRoutesProtectedByRequireAdmin can walk it and
-// lock the property "no admin route escapes RequireAdmin" — a defence-in-depth
-// guard against a routing refactor accidentally exposing an admin handler.
+// mountAdminRoutes registers the privileged web UI routes on r, split into two
+// sibling role groups: the DNS administration plane (zone create/delete,
+// per-zone operations, TSIG keys, templates) is guarded by
+// middleware.RequireDNSAdmin — admins and operators — while user and group
+// administration stays admin-only via middleware.RequireAdmin. It is the
+// single source of truth for the admin routing table so
+// TestAdminRoutesProtectedByRequireAdmin can walk it and lock the property
+// "every route sits behind its agreed role guard" — a defence-in-depth guard
+// against a routing refactor accidentally exposing a privileged handler.
 //
 // Callers MUST already have applied authentication middleware on r: this
-// function adds the admin role check on top of the authenticated user, it does
-// not establish identity.
+// function adds the role checks on top of the authenticated user, it does not
+// establish identity.
 func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
+	// DNS administration: admins and operators.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireAdmin)
+		r.Use(middleware.RequireDNSAdmin)
 
 		r.Get("/zones/new", h.CreateZonePage)
 		r.Post("/zones/create", h.CreateZone)
@@ -34,10 +39,11 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 
 			r.Post("/zones/{zone_id}/rectify", h.RectifyZone)
 			r.Post("/zones/{zone_id}/notify", h.NotifyZone)
-			// Admin-only: the cache flush clears the GLOBAL zone-list caches
-			// (the lists are not per-zone), so a user with access to a single
-			// zone must not be able to trigger it — repeated calls would push
-			// every read of every zone back onto PowerDNS.
+			// Admin/operator-only: the cache flush clears the GLOBAL
+			// zone-list caches (the lists are not per-zone), so a user with
+			// access to a single zone must not be able to trigger it —
+			// repeated calls would push every read of every zone back onto
+			// PowerDNS.
 			r.Post("/zones/{zone_id}/cache/clear", h.ClearZoneCache)
 			r.Post("/zones/{zone_id}/metadata/create", h.CreateMetadata)
 			r.Post("/zones/{zone_id}/metadata/delete", h.DeleteMetadata)
@@ -45,6 +51,29 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 			r.Post("/zones/{zone_id}/cryptokeys/{key_id}/toggle", h.ToggleCryptokey)
 			r.Post("/zones/{zone_id}/cryptokeys/{key_id}/delete", h.DeleteCryptokey)
 		})
+
+		r.Get("/tsigkeys", h.ListTSIGKeys)
+		r.Get("/tsigkeys/new", h.CreateTSIGKeyPage)
+		r.Post("/tsigkeys/create", h.CreateTSIGKey)
+		r.Get("/tsigkeys/{key_id}/edit", h.EditTSIGKeyPage)
+		r.Post("/tsigkeys/{key_id}/update", h.UpdateTSIGKey)
+		r.Post("/tsigkeys/delete", h.DeleteTSIGKey)
+		r.Post("/tsigkeys/bulk-delete", h.BulkDeleteTSIGKeys)
+
+		r.Get("/templates", h.ListTemplates)
+		r.Get("/templates/new", h.CreateTemplatePage)
+		r.Post("/templates/create", h.CreateTemplate)
+		r.Get("/templates/{template_id}/edit", h.EditTemplatePage)
+		r.Post("/templates/{template_id}/update", h.UpdateTemplate)
+		r.Post("/templates/{template_id}/delete", h.DeleteTemplate)
+		r.Post("/templates/bulk-delete", h.BulkDeleteTemplates)
+		r.Post("/templates/{template_id}/records/add", h.AddTemplateRecord)
+		r.Post("/templates/{template_id}/records/{record_id}/delete", h.DeleteTemplateRecord)
+	})
+
+	// Identity administration: admins only.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.RequireAdmin)
 
 		r.Get("/users", h.ListUsers)
 		r.Get("/users/new", h.CreateUserPage)
@@ -67,24 +96,6 @@ func mountAdminRoutes(r chi.Router, h *handlers.Handler, db *database.DB) {
 		r.Post("/groups/{group_id}/remove-member", h.RemoveMemberFromGroup)
 		r.Post("/groups/{group_id}/add-zone", h.AddZoneToGroup)
 		r.Post("/groups/{group_id}/remove-zone", h.RemoveZoneFromGroup)
-
-		r.Get("/tsigkeys", h.ListTSIGKeys)
-		r.Get("/tsigkeys/new", h.CreateTSIGKeyPage)
-		r.Post("/tsigkeys/create", h.CreateTSIGKey)
-		r.Get("/tsigkeys/{key_id}/edit", h.EditTSIGKeyPage)
-		r.Post("/tsigkeys/{key_id}/update", h.UpdateTSIGKey)
-		r.Post("/tsigkeys/delete", h.DeleteTSIGKey)
-		r.Post("/tsigkeys/bulk-delete", h.BulkDeleteTSIGKeys)
-
-		r.Get("/templates", h.ListTemplates)
-		r.Get("/templates/new", h.CreateTemplatePage)
-		r.Post("/templates/create", h.CreateTemplate)
-		r.Get("/templates/{template_id}/edit", h.EditTemplatePage)
-		r.Post("/templates/{template_id}/update", h.UpdateTemplate)
-		r.Post("/templates/{template_id}/delete", h.DeleteTemplate)
-		r.Post("/templates/bulk-delete", h.BulkDeleteTemplates)
-		r.Post("/templates/{template_id}/records/add", h.AddTemplateRecord)
-		r.Post("/templates/{template_id}/records/{record_id}/delete", h.DeleteTemplateRecord)
 	})
 }
 

@@ -116,7 +116,7 @@
 </div>
 {{end}}
 
-{{if .IsAdmin}}
+{{if .CanManageDNS}}
 <div class="card mt-2">
     <h3>Zone Metadata</h3>
     {{if .MetaData}}
@@ -201,7 +201,7 @@
                     {{end}}
                 </td>
                 <td class="actions-cell">
-                    {{if $.IsAdmin}}
+                    {{if $.CanManageDNS}}
                     <form method="POST" action="/zones/{{$zoneID}}/cryptokeys/{{.ID}}/toggle" class="inline">
                         <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
                         <input type="hidden" name="active" value="{{if .Active}}false{{else}}true{{end}}">
@@ -222,7 +222,7 @@
     <p class="empty-state text-left">No DNSSEC keys for this zone.</p>
     {{end}}
 
-    {{if $.IsAdmin}}
+    {{if $.CanManageDNS}}
     <details class="mt-1">
         <summary class="summary-toggle">Create Key</summary>
         <form method="POST" action="/zones/{{.Zone.ID}}/cryptokeys/create" class="mt-0-75">
@@ -303,7 +303,7 @@
 <div class="card mt-2">
     <h3>Danger Zone</h3>
     <div class="action-bar">
-        {{if .IsAdmin}}
+        {{if .CanManageDNS}}
         <form method="POST" action="/zones/{{.Zone.ID}}/cache/clear" class="inline">
             <input type="hidden" name="gorilla.csrf.Token" value="{{ $.CSRFToken }}">
             <button type="submit" class="btn btn-secondary">Clear Cache</button>
@@ -318,7 +318,7 @@
         </form>
         {{end}}
     </div>
-    {{if .IsAdmin}}
+    {{if .CanManageDNS}}
     <hr class="my-1">
     <form method="POST" action="/zones/delete" data-confirm="Delete zone {{.Zone.Name}}? This action cannot be undone.">
         <input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}">

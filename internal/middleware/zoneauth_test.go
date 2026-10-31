@@ -325,3 +325,33 @@ func TestCheckZoneAccess_APIRequestsUseJSONEnvelope(t *testing.T) {
 	}
 	assertAPIErrorEnvelope(t, w, "INTERNAL_ERROR")
 }
+
+// TestCheckZoneAccess_OperatorWithoutGrant_Passes is the operator fast-path
+// contract: the DNS operator role may manage every zone, so a zone-scoped
+// route must pass the operator through WITHOUT a group grant — exactly like
+// the admin skip-probe, and unlike a plain user, who still needs the grant
+// (covered by TestCheckZoneAccess_UserWithoutAccess_Forbidden).
+func TestCheckZoneAccess_OperatorWithoutGrant_Passes(t *testing.T) {
+	db := newTestAuthDB(t)
+	// Deliberately no seedZoneAccess for this user: the pass must not depend
+	// on a zone_group membership row.
+	operator := &models.User{ID: 3, Username: "operator", Role: "operator"}
+
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com.", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withTestUser(r, operator)
+
+	called := false
+	CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for operator on a zone route without a grant, got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+	if !called {
+		t.Error("operator must pass the zone-access gate without a group grant")
+	}
+}

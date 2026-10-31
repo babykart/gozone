@@ -11,9 +11,10 @@ import (
 	"github.com/babykart/gozone/internal/models"
 )
 
-// CanAccessZone reports whether user may operate on zoneID: admins always
-// pass; other users need a group grant covering the zone (zone_group_members
-// × zone_group_zones).
+// CanAccessZone reports whether user may operate on zoneID: callers fast-path
+// DNS admins (see models.User.CanManageDNS) before calling; for everyone else
+// a group grant covering the zone is required (zone_group_members ×
+// zone_group_zones).
 //
 // This is the single source of truth for zone authorization. The HTTP
 // middleware (middleware.CheckZoneAccess) calls it for routes that carry a
@@ -98,7 +99,7 @@ func FilterZonesForUser(ctx context.Context, db *database.DB, user *models.User,
 		logger.Error("filterZonesForUser reached without an authenticated user; failing closed")
 		return []models.Zone{}, nil
 	}
-	if user.IsAdmin() {
+	if user.CanManageDNS() {
 		return zones, nil
 	}
 
@@ -124,7 +125,7 @@ func FilterZonesWithInfoForUser(ctx context.Context, db *database.DB, user *mode
 		logger.Error("filterZonesWithInfoForUser reached without an authenticated user; failing closed")
 		return []models.ZoneWithInfo{}, nil
 	}
-	if user.IsAdmin() {
+	if user.CanManageDNS() {
 		return zones, nil
 	}
 

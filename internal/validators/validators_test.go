@@ -566,9 +566,11 @@ func TestValidateRole(t *testing.T) {
 	}{
 		{"admin", "admin", false},
 		{"user", "user", false},
+		{"operator", "operator", false},
 		{"empty", "", true},
 		{"invalid", "superadmin", true},
 		{"uppercase", "Admin", true},
+		{"operator-uppercase", "Operator", true},
 		{"whitespace", " user ", true},
 		{"sql-ish", "user;--", true},
 	}

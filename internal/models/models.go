@@ -59,6 +59,13 @@ func (u *User) IsAdmin() bool {
 	return u.Role == "admin"
 }
 
+// CanManageDNS reports whether the user may perform DNS administration:
+// zones, records, DNSSEC, TSIG keys and templates. Admins and operators
+// pass; operators deliberately cannot manage users or groups.
+func (u *User) CanManageDNS() bool {
+	return u.Role == "admin" || u.Role == "operator"
+}
+
 // IsLocked reports whether the account is currently locked, either by an
 // admin manual lock or by the automatic failed-login threshold. It is used by
 // the users list template (web/templates/users.html), so keep it even though

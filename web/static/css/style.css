@@ -713,6 +713,11 @@ details summary {
     color: var(--primary);
 }
 
+.badge-operator {
+    background: #dcfce7;
+    color: #166534;
+}
+
 .badge-user {
     background: var(--bg);
     color: var(--text-muted);

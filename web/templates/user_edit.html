@@ -36,6 +36,7 @@
         <label for="role">Role</label>
         <select id="role" name="role" {{if .IsSelf}}disabled{{end}}>
             <option value="user" {{if eq .TargetUser.Role "user"}}selected{{end}}>User</option>
+            <option value="operator" {{if eq .TargetUser.Role "operator"}}selected{{end}}>Operator</option>
             <option value="admin" {{if eq .TargetUser.Role "admin"}}selected{{end}}>Admin</option>
         </select>
         {{if .IsSelf}}<input type="hidden" name="role" value="{{.TargetUser.Role}}">{{end}}

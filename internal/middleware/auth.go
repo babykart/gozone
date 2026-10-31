@@ -603,26 +603,45 @@ func hashAPIKey(rawKey string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// requireRole is the shared implementation behind the role-gating middlewares:
+// it admits the request only when the context user is non-nil and the allowed
+// predicate accepts it (the predicate therefore never sees a nil user).
+//
+// It must be placed after Auth or APIKeyAuth in the middleware chain so that
+// a user is available in the request context. Returns HTTP 403 if the user is
+// not authenticated or is refused by the predicate.
+func requireRole(allowed func(*models.User) bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user := GetUser(r)
+			if user == nil || !allowed(user) {
+				// The API mount of this middleware must answer with the JSON
+				// envelope like every other /api/v1 endpoint, not text/plain.
+				if isAPIRequest(r) {
+					writeAPIErrorEnvelope(w, http.StatusForbidden, "FORBIDDEN", "forbidden")
+				} else {
+					http.Error(w, "Forbidden", http.StatusForbidden)
+				}
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RequireAdmin is a middleware that restricts access to users with the admin role.
 //
 // It must be placed after Auth or APIKeyAuth in the middleware chain so that
 // a user is available in the request context. Returns HTTP 403 if the user is
 // not authenticated or does not have the "admin" role.
 func RequireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := GetUser(r)
-		if user == nil || !user.IsAdmin() {
-			// The API mount of this middleware must answer with the JSON
-			// envelope like every other /api/v1 endpoint, not text/plain.
-			if isAPIRequest(r) {
-				writeAPIErrorEnvelope(w, http.StatusForbidden, "FORBIDDEN", "forbidden")
-			} else {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-			}
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return requireRole((*models.User).IsAdmin)(next)
+}
+
+// RequireDNSAdmin restricts access to users who may administer DNS (admins
+// and operators). Same chain position and error behavior as RequireAdmin.
+func RequireDNSAdmin(next http.Handler) http.Handler {
+	return requireRole((*models.User).CanManageDNS)(next)
 }
 
 // mustChangeAllowedPath reports the paths a forced-change user may reach

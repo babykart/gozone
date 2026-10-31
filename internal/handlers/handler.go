@@ -152,7 +152,8 @@ func pdnsUserFacingStatus(err error) (int, string) {
 }
 
 // render executes a template and automatically injects the CSRF token,
-// authenticated user, admin flag, and active section into the data map.
+// authenticated user, admin and DNS-management flags, and active section into
+// the data map.
 //
 // Every rendered page is dynamic and user-scoped — several embed secrets or
 // security-sensitive state (the plaintext API key on the keys page, CSRF
@@ -173,6 +174,10 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 	if _, ok := data["IsAdmin"]; !ok {
 		user, _ := data["User"].(*models.User)
 		data["IsAdmin"] = user != nil && user.IsAdmin()
+	}
+	if _, ok := data["CanManageDNS"]; !ok {
+		user, _ := data["User"].(*models.User)
+		data["CanManageDNS"] = user != nil && user.CanManageDNS()
 	}
 	if _, ok := data["AppName"]; !ok {
 		data["AppName"] = h.Cfg.Server.AppName

@@ -219,8 +219,9 @@ func (tx *Tx) AddGroupMembership(ctx context.Context, groupID, userID int64) err
 	return nil
 }
 
-// SetUserRole updates a user's role. role MUST be validated ("admin"/"user") by
-// the caller. The last-enabled-admin guard is NOT applied here — the caller is
+// SetUserRole updates a user's role. role MUST be validated
+// ("admin"/"operator"/"user") by the caller. The last-enabled-admin guard is
+// NOT applied here — the caller is
 // responsible for refusing a demotion that would leave the instance without an
 // enabled admin (see handlers.UpdateUser and the SSO role-sync path).
 func (tx *Tx) SetUserRole(ctx context.Context, userID int64, role string) error {

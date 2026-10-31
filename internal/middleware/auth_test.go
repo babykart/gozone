@@ -250,6 +250,7 @@ func TestRequireAdmin(t *testing.T) {
 		wantStatus int
 	}{
 		{"admin allowed", admin, http.StatusOK},
+		{"operator forbidden", &models.User{ID: 3, Username: "operator", Role: "operator"}, http.StatusForbidden},
 		{"user forbidden", regular, http.StatusForbidden},
 		{"nil user", nil, http.StatusForbidden},
 	}
@@ -1855,5 +1856,51 @@ func TestRequireWriteScope(t *testing.T) {
 		if reached || w.Code != http.StatusForbidden {
 			t.Errorf("%s without scope: expected 403 fail-closed, got %d reached=%v", method, w.Code, reached)
 		}
+	}
+}
+
+// TestRequireDNSAdmin walks the role matrix for the DNS-admin gate: it must
+// admit admin AND operator roles (the DNS operator role may manage zones,
+// records, templates and TSIG keys) while refusing plain users and
+// unauthenticated requests, mirroring RequireAdmin's table.
+func TestRequireDNSAdmin(t *testing.T) {
+	admin := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	operator := &models.User{ID: 3, Username: "operator", Role: "operator"}
+	regular := &models.User{ID: 2, Username: "user", Role: "user"}
+
+	tests := []struct {
+		name       string
+		user       *models.User
+		wantStatus int
+	}{
+		{"admin allowed", admin, http.StatusOK},
+		{"operator allowed", operator, http.StatusOK},
+		{"user forbidden", regular, http.StatusForbidden},
+		{"nil user", nil, http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/zones", nil)
+			if tt.user != nil {
+				ctx := context.WithValue(r.Context(), UserContextKey, tt.user)
+				r = r.WithContext(ctx)
+			}
+
+			reached := false
+			handler := RequireDNSAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			handler.ServeHTTP(w, r)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("expected status %d, got %d", tt.wantStatus, w.Code)
+			}
+			if reached != (tt.wantStatus == http.StatusOK) {
+				t.Errorf("reached = %v, want %v for status %d", reached, tt.wantStatus == http.StatusOK, tt.wantStatus)
+			}
+		})
 	}
 }

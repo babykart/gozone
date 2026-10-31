@@ -20,7 +20,9 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 				}
 				return
 			}
-			if user.IsAdmin() {
+			// Admins and operators manage every zone: both skip the
+			// per-zone grant probe (see models.User.CanManageDNS).
+			if user.CanManageDNS() {
 				next.ServeHTTP(w, r)
 				return
 			}

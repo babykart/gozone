@@ -237,9 +237,11 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 				r.Post("/zones/{zone_id}/import", h.ImportZone)
 			})
 
-			// Admin-only routes — mounted via mountAdminRoutes so the admin
-			// routing table has a single source of truth that a test can walk
-			// and lock (every admin route must stay inside RequireAdmin).
+			// Privileged routes — mounted via mountAdminRoutes so the admin
+			// routing table has a single source of truth that a test can
+			// walk and lock (every route stays behind its agreed role guard:
+			// RequireDNSAdmin for the DNS plane, RequireAdmin for
+			// users/groups).
 			mountAdminRoutes(r, h, db)
 		})
 	})
@@ -282,8 +284,8 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		r.Get("/stats", h.APIStats)
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireAdmin)
-			// Zone-scoped admin routes skip CheckZoneAccess, so the
+			r.Use(middleware.RequireDNSAdmin)
+			// Zone-scoped DNS-admin routes skip CheckZoneAccess, so the
 			// canonicalization it normally performs must be mounted
 			// explicitly: locks and audit key on the canonical zone ID.
 			r.Use(middleware.CanonicalizeZoneID())

@@ -107,6 +107,39 @@ func TestSkipLinkAndMainAnchor(t *testing.T) {
 	}
 }
 
+// TestSidebarLinksOperatorCanManageDNS locks the operator-role sidebar split:
+// with CanManageDNS=true and IsAdmin=false the TSIG Keys link (a DNS
+// management surface) must render, while the admin-only Users and Groups
+// links stay hidden.
+func TestSidebarLinksOperatorCanManageDNS(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+	data := map[string]interface{}{
+		"Title":        "Test",
+		"AppName":      "GoZone",
+		"Section":      "tsigkeys",
+		"IsAdmin":      false,
+		"CanManageDNS": true,
+		"CSRFToken":    "tok",
+		"User":         map[string]interface{}{"Username": "operator"},
+	}
+	var buf strings.Builder
+	if err := tmpl.ExecuteTemplate(&buf, "app_layout_start", data); err != nil {
+		t.Fatalf("execute app_layout_start (operator): %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `href="/tsigkeys"`) {
+		t.Errorf("operator sidebar must include the TSIG Keys link:\n%s", out)
+	}
+	for _, forbidden := range []string{`href="/users"`, `href="/groups"`} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("operator sidebar must not include admin-only link %s", forbidden)
+		}
+	}
+}
+
 func TestProfilePageLinksChangePassword(t *testing.T) {
 	// The self-service change-password form (/change-password) is mounted in
 	// the authenticated group — not behind RequireAdmin — but without a link

@@ -13,6 +13,7 @@ func TestUserIsAdmin(t *testing.T) {
 		admin bool
 	}{
 		{User{Role: "admin"}, true},
+		{User{Role: "operator"}, false},
 		{User{Role: "user"}, false},
 		{User{Role: ""}, false},
 		{User{Role: "Admin"}, false},
@@ -22,6 +23,27 @@ func TestUserIsAdmin(t *testing.T) {
 		got := tt.user.IsAdmin()
 		if got != tt.admin {
 			t.Errorf("User{Role: %q}.IsAdmin() = %v, want %v", tt.user.Role, got, tt.admin)
+		}
+	}
+}
+
+func TestCanManageDNS(t *testing.T) {
+	tests := []struct {
+		user User
+		want bool
+	}{
+		{User{Role: "admin"}, true},
+		{User{Role: "operator"}, true},
+		{User{Role: "user"}, false},
+		{User{Role: ""}, false},
+		{User{Role: "Admin"}, false},
+		{User{Role: "Operator"}, false},
+	}
+
+	for _, tt := range tests {
+		got := tt.user.CanManageDNS()
+		if got != tt.want {
+			t.Errorf("User{Role: %q}.CanManageDNS() = %v, want %v", tt.user.Role, got, tt.want)
 		}
 	}
 }
