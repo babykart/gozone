@@ -116,6 +116,15 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 	return newWithOpener(cfg, sql.Open)
 }
 
+// NewWithOpener opens a database using the given opener instead of sql.Open.
+// Everything else — dialect selection, DSN rewriting, pool tuning, the
+// startup ping, migrations and the failure-path cleanup — behaves exactly as
+// New. It exists so tests can route the connection through an instrumented
+// driver (e.g. a recording driver.Connector); production code uses New.
+func NewWithOpener(cfg *config.DatabaseConfig, open func(driverName, dsn string) (*sql.DB, error)) (*DB, error) {
+	return newWithOpener(cfg, openFunc(open))
+}
+
 func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	dialect, err := selectDialect(cfg.Driver)
 	if err != nil {
