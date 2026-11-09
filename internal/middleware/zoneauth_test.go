@@ -326,6 +326,47 @@ func TestCheckZoneAccess_APIRequestsUseJSONEnvelope(t *testing.T) {
 	assertAPIErrorEnvelope(t, w, "INTERNAL_ERROR")
 }
 
+// TestCheckZoneAccess_CanonicalizesZoneIDForAllRoles locks the
+// canonicalisation-before-shortcut contract: the {zone_id} path value must be
+// rewritten to its canonical form (lowercase, trailing dot) BEFORE the
+// CanManageDNS short-circuit, so admins and operators — who skip the grant
+// probe entirely — still hand a canonical zone ID to the downstream handler
+// (it determines the per-zone lock key, the PowerDNS path and the audit key).
+func TestCheckZoneAccess_CanonicalizesZoneIDForAllRoles(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	// No grants are seeded on purpose: the pass must come from the role
+	// short-circuit alone, exactly like the existing admin/operator tests.
+	serve := func(user *models.User) (*httptest.ResponseRecorder, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/Example.COM", nil)
+		r.SetPathValue("zone_id", "Example.COM")
+		r = withTestUser(r, user)
+		var seen string
+		CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr, seen
+	}
+
+	for _, tc := range []struct {
+		role string
+		user *models.User
+	}{
+		{"admin", &models.User{ID: 1, Username: "admin", Role: "admin"}},
+		{"operator", &models.User{ID: 3, Username: "operator", Role: "operator"}},
+	} {
+		rr, seen := serve(tc.user)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d (body: %s)", tc.role, rr.Code, rr.Body.String())
+		}
+		if seen != "example.com." {
+			t.Errorf("%s: downstream handler must observe the canonical zone ID, got %q", tc.role, seen)
+		}
+	}
+}
+
 // TestCheckZoneAccess_OperatorWithoutGrant_Passes is the operator fast-path
 // contract: the DNS operator role may manage every zone, so a zone-scoped
 // route must pass the operator through WITHOUT a group grant — exactly like

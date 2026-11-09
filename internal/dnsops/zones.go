@@ -103,6 +103,9 @@ func (s *Service) DeleteZone(ctx context.Context, user *models.User, zoneID stri
 	if err := requireAdmin(user); err != nil {
 		return err
 	}
+	// Canonicalise so the PDNS delete, the audit entry and the grant purge
+	// all key on the same ID whatever spelling the caller used.
+	zoneID = NormalizeZoneName(zoneID)
 	if err := s.PDNS.DeleteZone(ctx, zoneID); err != nil {
 		return err
 	}

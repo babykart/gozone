@@ -181,7 +181,11 @@ func TestCreateZone_AdminGateAndAudit(t *testing.T) {
 }
 
 func TestDeleteZone_PurgesGrantsAndAudits(t *testing.T) {
+	var deletePath string
 	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletePath = r.URL.Path
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	defer srv.Close()
@@ -192,8 +196,14 @@ func TestDeleteZone_PurgesGrantsAndAudits(t *testing.T) {
 	adminID := testutil.SeedTestUser(t, db, "admin", "pass", "admin", true)
 	seedGroupGrant(t, db, adminID, "gone.example.")
 
-	if err := s.DeleteZone(ctx, &models.User{ID: adminID, Username: "admin", Role: "admin"}, "gone.example", SourceAPI); err != nil {
+	// Mixed-case, dotless input: every downstream consumer — PowerDNS path,
+	// audit trail, grant purge — must key on the canonical zone ID.
+	if err := s.DeleteZone(ctx, &models.User{ID: adminID, Username: "admin", Role: "admin"}, "Gone.Example", SourceAPI); err != nil {
 		t.Fatalf("DeleteZone: %v", err)
+	}
+
+	if !strings.HasSuffix(deletePath, "/zones/gone.example.") {
+		t.Errorf("PDNS DELETE path = %q, want suffix /zones/gone.example.", deletePath)
 	}
 
 	// The grant rows are purged immediately (canonicalised zone id), and the
@@ -205,10 +215,10 @@ func TestDeleteZone_PurgesGrantsAndAudits(t *testing.T) {
 	}
 	var details string
 	if err := db.QueryRowContext(ctx,
-		`SELECT details FROM activity_logs WHERE action='delete_zone' AND zone_id='gone.example'`).Scan(&details); err != nil {
+		`SELECT details FROM activity_logs WHERE action='delete_zone' AND zone_id='gone.example.'`).Scan(&details); err != nil {
 		t.Fatalf("audit row: %v", err)
 	}
-	if details != "Deleted zone gone.example via API" {
+	if details != "Deleted zone gone.example. via API" {
 		t.Fatalf("unexpected audit details: %q", details)
 	}
 }

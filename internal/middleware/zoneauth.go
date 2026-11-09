@@ -20,18 +20,20 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 				}
 				return
 			}
-			// Admins and operators manage every zone: both skip the
-			// per-zone grant probe (see models.User.CanManageDNS).
-			if user.CanManageDNS() {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			zoneID := canonicalizeZonePathValue(r)
 			// Routes without a {zone_id} parameter (e.g. /zones list, /api/v1/stats)
 			// are handled by handler-level filtering (dnsops.FilterZonesForUser).
 			// This middleware only guards routes that carry a specific zone in the URL.
 			if zoneID == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Admins and operators manage every zone: both skip the
+			// per-zone grant probe (see models.User.CanManageDNS).
+			// Canonicalization already happened above, so downstream
+			// handlers see the canonical {zone_id} for every role.
+			if user.CanManageDNS() {
 				next.ServeHTTP(w, r)
 				return
 			}

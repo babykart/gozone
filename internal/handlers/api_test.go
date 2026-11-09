@@ -224,18 +224,22 @@ func TestAPIDeleteZone(t *testing.T) {
 	}
 
 	// Regression: an API-driven zone delete must produce a 'delete_zone'
-	// activity log entry attributed to the API key owner.
+	// activity log entry attributed to the API key owner. The entry is keyed
+	// on the canonical zone ID ("example.com.") because the handler delegates
+	// to dnsops.Service.DeleteZone, which canonicalises its zoneID argument —
+	// this test calls APIDeleteZone directly with a raw path value, bypassing
+	// the router's CanonicalizeZoneID middleware.
 	var (
 		count      int
 		userID     sql.NullInt64
 		hasViaAPI  bool
 		detailsStr string
 	)
-	h.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com'`).Scan(&count)
+	h.DB.QueryRow(`SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com.'`).Scan(&count)
 	if count != 1 {
 		t.Fatalf("expected 1 delete_zone activity log, got %d", count)
 	}
-	h.DB.QueryRow(`SELECT user_id, details FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com'`).Scan(&userID, &detailsStr)
+	h.DB.QueryRow(`SELECT user_id, details FROM activity_logs WHERE action='delete_zone' AND zone_id='example.com.'`).Scan(&userID, &detailsStr)
 	if !userID.Valid || userID.Int64 != 1 {
 		t.Errorf("expected delete_zone attributed to user_id=1, got %v", userID)
 	}

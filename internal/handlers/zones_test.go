@@ -604,8 +604,8 @@ func TestBulkDeleteZones_PartialFailure(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Deleted != 1 || len(resp.Failed) != 1 || resp.Failed[0] != "boom.example.com" {
-		t.Errorf("expected deleted=1 failed=[boom.example.com], got %+v", resp)
+	if resp.Deleted != 1 || len(resp.Failed) != 1 || resp.Failed[0] != "boom.example.com." {
+		t.Errorf("expected deleted=1 failed=[boom.example.com.], got %+v", resp)
 	}
 
 	// Only the successful zone is logged.
@@ -613,6 +613,72 @@ func TestBulkDeleteZones_PartialFailure(t *testing.T) {
 	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone'").Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 delete_zone activity log (success only), got %d", count)
+	}
+}
+
+// TestBulkDeleteZones_DedupesCanonicalSpellings locks the normalize-before-
+// dedupe contract: two spellings of the same zone ("Dup.EXAMPLE.com" and
+// "dup.example.com.") must collapse into exactly one PowerDNS DELETE and one
+// audit row keyed on the canonical zone ID.
+func TestBulkDeleteZones_DedupesCanonicalSpellings(t *testing.T) {
+	var deletePaths []string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletePaths = append(deletePaths, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "zone_id=Dup.EXAMPLE.com&zone_id=dup.example.com."
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteZones(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Deleted int      `json:"deleted"`
+		Failed  []string `json:"failed"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 1 || len(resp.Failed) != 0 {
+		t.Errorf("expected deleted=1 failed=[], got %+v", resp)
+	}
+	if len(deletePaths) != 1 {
+		t.Fatalf("expected exactly 1 PDNS DELETE, got %d (%v)", len(deletePaths), deletePaths)
+	}
+	if !strings.HasSuffix(deletePaths[0], "/zones/dup.example.com.") {
+		t.Errorf("PDNS DELETE path = %q, want suffix /zones/dup.example.com.", deletePaths[0])
+	}
+
+	var count int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM activity_logs WHERE action='delete_zone'").Scan(&count); err != nil {
+		t.Fatalf("audit count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 audit row, got %d", count)
+	}
+	// Portable scalar read (no GROUP BY): SQLite, MySQL and PostgreSQL agree.
+	var zoneID string
+	if err := h.DB.QueryRow(
+		"SELECT zone_id FROM activity_logs WHERE action='delete_zone'").Scan(&zoneID); err != nil {
+		t.Fatalf("audit zone_id: %v", err)
+	}
+	if zoneID != "dup.example.com." {
+		t.Errorf("audit zone_id = %q, want dup.example.com.", zoneID)
 	}
 }
 
@@ -634,6 +700,54 @@ func TestBulkDeleteZones_NoSelection(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for empty selection, got %d", w.Code)
+	}
+}
+
+// TestDeleteZone_CanonicalizesFormValue is the web single-delete half of the
+// single-canonicalization contract: the form value must reach PowerDNS, the
+// audit trail and the grant purge as the canonical "example.com." — and the
+// audit details must carry the "via Web" source label, because the handler
+// delegates to dnsops.Service.DeleteZone.
+func TestDeleteZone_CanonicalizesFormValue(t *testing.T) {
+	var deletePath string
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletePath = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/delete", strings.NewReader("zone_id=Example.COM"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteZone(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d", w.Code)
+	}
+	if !strings.HasSuffix(deletePath, "/zones/example.com.") {
+		t.Errorf("PDNS DELETE path = %q, want suffix /zones/example.com.", deletePath)
+	}
+
+	var zoneID, details string
+	if err := h.DB.QueryRow(
+		`SELECT zone_id, details FROM activity_logs WHERE action='delete_zone'`).Scan(&zoneID, &details); err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if zoneID != "example.com." {
+		t.Errorf("audit zone_id = %q, want example.com.", zoneID)
+	}
+	if details != "Deleted zone example.com. via Web" {
+		t.Errorf("audit details = %q, want %q", details, "Deleted zone example.com. via Web")
 	}
 }
 

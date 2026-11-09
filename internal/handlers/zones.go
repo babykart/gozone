@@ -441,30 +441,12 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.PDNS.DeleteZone(r.Context(), zoneID); err != nil {
+	if err := h.Ops.DeleteZone(r.Context(), user, zoneID, dnsops.SourceWeb); err != nil {
 		h.renderInternalError(w, r, "Failed to delete zone", err)
 		return
 	}
 
-	h.purgeZoneGroupGrants(r.Context(), zoneID)
-
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
-		logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
-	}
-
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)
-}
-
-// purgeZoneGroupGrants removes every group's access grant to the zone.
-// PowerDNS is the source of truth and deleting the zone there already
-// revoked the data, but a lingering grant must not survive until the hourly
-// reconciliation: a zone recreated under the same name within that window
-// would silently restore the old groups' access to the NEW zone. The zone ID
-// is canonicalised (lowercase + trailing dot) because the grants table keys
-// on the canonical form while a form value may arrive without the dot. The
-// implementation lives in the dnsops service layer.
-func (h *Handler) purgeZoneGroupGrants(ctx context.Context, zoneID string) {
-	dnsops.PurgeZoneGroupGrants(ctx, h.DB, zoneID)
 }
 
 // BulkDeleteZones deletes several zones by zone_id (POST /zones/bulk-delete).
@@ -488,10 +470,13 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 	seen := make(map[string]struct{})
 	var zoneIDs []string
 	for _, id := range r.PostForm["zone_id"] {
-		id = strings.TrimSpace(id)
+		// NormalizeZoneName trims whitespace; empty input stays empty.
+		id = dnsops.NormalizeZoneName(id)
 		if id == "" {
 			continue
 		}
+		// Canonicalise before the seen-map check so "example.com" and
+		// "Example.COM." dedupe to one delete keyed on the canonical ID.
 		if _, ok := seen[id]; ok {
 			continue
 		}
@@ -507,16 +492,12 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 	deleted := 0
 	var failed []string
 	for _, zoneID := range zoneIDs {
-		if err := h.PDNS.DeleteZone(r.Context(), zoneID); err != nil {
+		if err := h.Ops.DeleteZone(r.Context(), user, zoneID, dnsops.SourceWeb); err != nil {
 			logger.Error("bulk delete zone failed", "zone_id", zoneID, "error", err)
 			failed = append(failed, zoneID)
 			continue
 		}
-		h.purgeZoneGroupGrants(r.Context(), zoneID)
 		deleted++
-		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "delete_zone", Details: fmt.Sprintf("Deleted zone %s", zoneID)}); err != nil {
-			logger.Error("failed to log delete_zone activity", "zone_id", zoneID, "error", err)
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
