@@ -74,12 +74,21 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 
 	// Rate limiters.
 	//
-	// /login stack (both limiters BEFORE the handler — there is no separate
-	// auth step, the handler IS the auth):
-	//   loginLimiter (per-IP) → loginUsernameLimiter (per-username) → Login
+	// /login stack (all limiters BEFORE the handler — there is no separate
+	// auth step, the handler IS the auth), three families, each AND-compounded
+	// and each backed twice (in-process limiter in front, cluster-wide DB
+	// counterpart behind):
+	//   loginLimiter/dbLoginIPLimiter (per-IP)
+	//     → loginUserIPLimiter/dbLoginUserIPLimiter (per username+IP pair)
+	//     → loginUserGlobalLimiter/dbLoginUserGlobalLimiter (global per-username
+	//       ceiling, only when login_lock.username_global_rate_limit_per_minute > 0)
+	//     → Login
 	// The per-IP limiter catches floods before the form body is even parsed;
-	// the per-username limiter prevents distributed brute-force (many IPs,
-	// one target). Both must pass.
+	// the pair limiter stops one attacker IP from 429-ing a targeted account
+	// for everyone else; the global ceiling bounds distributed brute-force
+	// (many IPs, one target username). The OIDC login/callback routes share
+	// ONLY the per-IP family with /login. All keys are namespaced per family
+	// (login:ip: / login:pair: / login:user:, see ratelimit.go).
 	//
 	// /api stack (IP limiter BEFORE auth, per-key limiter AFTER auth):
 	//   apiIPLimiter (per-IP) → APIKeyAuth (DB lookup) → apiLimiter (per-key)
@@ -101,9 +110,13 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 	// limiters remain per-instance on purpose: they are anti-flood throttles,
 	// and the health limiter must never depend on the database it probes.
 	dbLoginIPLimiter := middleware.NewDBRateLimiter(db, 5)
-	var dbLoginUserLimiter *middleware.DBRateLimiter
+	var dbLoginUserIPLimiter *middleware.DBRateLimiter
 	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
-		dbLoginUserLimiter = middleware.NewDBRateLimiter(db, cfg.LoginLock.UsernameRateLimitPerMinute)
+		dbLoginUserIPLimiter = middleware.NewDBRateLimiter(db, cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	var dbLoginUserGlobalLimiter *middleware.DBRateLimiter
+	if cfg.LoginLock.UsernameGlobalRateLimitPerMinute > 0 {
+		dbLoginUserGlobalLimiter = middleware.NewDBRateLimiter(db, cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
 	}
 	// The readiness endpoint is unauthenticated and does real work per hit:
 	// a DB ping plus a PowerDNS HTTP call that deliberately bypasses the
@@ -115,9 +128,16 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 	// limited: it does no work (constant response) and throttling it could
 	// get a healthy container killed during a traffic spike.
 	healthLimiter := middleware.NewRateLimiter(healthReadyRateLimitPerMinute)
-	var loginUsernameLimiter *middleware.RateLimiter
+	var loginUserIPLimiter *middleware.RateLimiter
 	if cfg.LoginLock.UsernameRateLimitPerMinute > 0 {
-		loginUsernameLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
+		loginUserIPLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	// Global per-username ceiling across ALL source IPs (the distributed
+	// brute-force cap). Only mounted when the knob is positive; a 0 leaves
+	// the pair and per-IP families as the whole stack.
+	var loginUserGlobalLimiter *middleware.RateLimiter
+	if cfg.LoginLock.UsernameGlobalRateLimitPerMinute > 0 {
+		loginUserGlobalLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
 	}
 
 	// Session lifetime policy: idle inactivity timeout and/or an absolute
@@ -167,34 +187,41 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 
 		// Public routes
 		r.Get("/login", h.LoginPage)
-		// Both limiters run BEFORE the Login handler (no separate auth
+		// All limiters run BEFORE the Login handler (no separate auth
 		// middleware — see the rate-limiter documentation above for the
 		// /login vs /api ordering asymmetry, m7). Each in-process limiter is
 		// paired with its cluster-wide DB counterpart: in-memory absorbs
 		// floods cheaply, the shared counter caps the real budget across
 		// replicas.
 		loginChain := []func(http.Handler) http.Handler{
-			loginLimiter.Limit(middleware.ExtractIP),
-			dbLoginIPLimiter.Limit(middleware.ExtractIP),
+			loginLimiter.Limit(loginIPKey),
+			dbLoginIPLimiter.Limit(loginIPKey),
 		}
-		if loginUsernameLimiter != nil {
-			loginChain = append(loginChain, loginUsernameLimiter.Limit(loginUsernameKey))
+		if loginUserIPLimiter != nil {
+			loginChain = append(loginChain, loginUserIPLimiter.Limit(loginUserIPKey))
 		}
-		if dbLoginUserLimiter != nil {
-			loginChain = append(loginChain, dbLoginUserLimiter.Limit(loginUsernameKey))
+		if dbLoginUserIPLimiter != nil {
+			loginChain = append(loginChain, dbLoginUserIPLimiter.Limit(loginUserIPKey))
+		}
+		if loginUserGlobalLimiter != nil {
+			loginChain = append(loginChain, loginUserGlobalLimiter.Limit(loginUserKey))
+		}
+		if dbLoginUserGlobalLimiter != nil {
+			loginChain = append(loginChain, dbLoginUserGlobalLimiter.Limit(loginUserKey))
 		}
 		r.With(loginChain...).Post("/login", h.Login)
 
 		// OpenID Connect / OAuth2 SSO endpoints. These are public (the user
 		// is not authenticated yet): the login endpoint redirects to the IdP,
 		// and the callback completes the flow and establishes a session. They
-		// share the login rate limiters to throttle callback brute-forcing of
-		// the state parameter (ROADMAP "Security").
-		r.With(loginLimiter.Limit(middleware.ExtractIP),
-			dbLoginIPLimiter.Limit(middleware.ExtractIP)).
+		// share the login per-IP rate limiters (same namespaced keys, so the
+		// per-IP budget is common with /login) to throttle callback
+		// brute-forcing of the state parameter (ROADMAP "Security").
+		r.With(loginLimiter.Limit(loginIPKey),
+			dbLoginIPLimiter.Limit(loginIPKey)).
 			Get("/auth/oidc/{provider}/login", h.OIDCLogin)
-		r.With(loginLimiter.Limit(middleware.ExtractIP),
-			dbLoginIPLimiter.Limit(middleware.ExtractIP)).
+		r.With(loginLimiter.Limit(loginIPKey),
+			dbLoginIPLimiter.Limit(loginIPKey)).
 			Get("/auth/oidc/{provider}/callback", h.OIDCCallback)
 
 		// Authenticated routes (web UI)
@@ -332,8 +359,11 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		if sessionTracker != nil {
 			sessionTracker.Close()
 		}
-		if loginUsernameLimiter != nil {
-			loginUsernameLimiter.Close()
+		if loginUserGlobalLimiter != nil {
+			loginUserGlobalLimiter.Close()
+		}
+		if loginUserIPLimiter != nil {
+			loginUserIPLimiter.Close()
 		}
 		healthLimiter.Close()
 		apiIPLimiter.Close()

@@ -1,13 +1,20 @@
 // Rate-limit key functions and ceilings wired by runServer. The limiters
 // themselves live in internal/middleware; this file holds the cmd-level keys
-// (which know about form fields and username validation bounds) and the
-// readiness ceiling the wiring test locks onto.
+// (which know about form fields, client IP resolution and username validation
+// bounds) and the readiness ceiling the wiring test locks onto.
+//
+// The login limiters use three key families, every key namespaced by a
+// family prefix (see below): the per-IP family ("login:ip:"), the
+// per-(username, IP) pair family ("login:pair:") and the global per-username
+// family ("login:user:").
 package cmd
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/validators"
 )
 
@@ -47,4 +54,75 @@ func loginUsernameKey(r *http.Request) string {
 		return emptyUsernameRateLimitKey
 	}
 	return username
+}
+
+// loginMaxKeyBytes is the hard cap on any composed login rate-limit key. The
+// IP half of a key is client-influenced (IPv6 zone ids, unparseable
+// RemoteAddr fallbacks that ExtractIP returns verbatim), and every login
+// limiter family — in-process and cluster-wide — stores its counters under
+// these keys (the DB families in rate_limit_counters.bucket_key, a MySQL
+// VARCHAR(191)). Bounding every stored key at 160 bytes keeps the worst
+// case (prefix + IPv6 zone id + malformed fallback) comfortably inside that
+// column; anything longer folds to a family-prefixed sentinel instead of
+// being used verbatim.
+const loginMaxKeyBytes = 160
+
+// Login rate-limit bucket-key family prefixes. All three families share the
+// rate_limit_counters bucket_key namespace, so the raw key material must
+// never overlap across families: before the prefixes, a crafted username
+// such as "192.0.2.1" drew from the same DB bucket as a real client
+// connecting from 192.0.2.1, letting one family pollute another. The
+// disjoint prefixes make the families structurally disjoint regardless of
+// what an attacker puts in the username field.
+const (
+	loginIPFamilyPrefix   = "login:ip:"
+	loginPairFamilyPrefix = "login:pair:"
+	loginUserFamilyPrefix = "login:user:"
+)
+
+// boundLoginKey joins key material onto its family prefix, folding anything
+// past loginMaxKeyBytes to the family's oversized sentinel. The sentinel is
+// family-prefixed too, so folded keys stay disjoint across families and the
+// cap holds even for the fold itself.
+func boundLoginKey(familyPrefix, key, oversizedSentinel string) string {
+	if len(familyPrefix)+len(key) > loginMaxKeyBytes {
+		return familyPrefix + oversizedSentinel
+	}
+	return familyPrefix + key
+}
+
+// loginIPKey returns the per-IP family key: the resolved client IP under the
+// "login:ip:" prefix. /login, the OIDC login/callback routes and the
+// cluster-wide DB counterpart all key on this, so every per-IP login bucket
+// draws from the same namespaced key regardless of which route was hit.
+func loginIPKey(r *http.Request) string {
+	return boundLoginKey(loginIPFamilyPrefix, middleware.ExtractIP(r), "<oversized-ip>")
+}
+
+// loginUserIPKey returns the per-(username, IP) pair family key:
+// "login:pair:" + byte-length of the username + ":" + username + "|" + IP.
+// Keying the per-username limiter on the pair (instead of the username
+// alone, the previous behaviour) stops one attacker IP from exhausting the shared
+// per-username bucket and 429-ing the legitimate owner of that account for
+// everyone: each (username, IP) combination gets its own bucket. The
+// username part reuses loginUsernameKey verbatim (lowercased, trimmed,
+// sentinel for empty/over-long), so casing and whitespace variants of the
+// same attempt share a bucket, and the byte-length prefix makes the encoding
+// injective — a crafted username embedding the "|" separator and a victim IP
+// ("admin|192.0.2.1") can no longer reproduce the victim's pair key.
+func loginUserIPKey(r *http.Request) string {
+	u := loginUsernameKey(r)
+	pair := strconv.Itoa(len(u)) + ":" + u + "|" + middleware.ExtractIP(r)
+	return boundLoginKey(loginPairFamilyPrefix, pair, "<oversized-key>")
+}
+
+// loginUserKey returns the global per-username family key: "login:user:" +
+// the attempted username. Unlike the pair key it deliberately ignores the
+// source IP — it is the fleet-wide, deliberately generous ceiling (default
+// 60/min) on attempts at a single targeted username across ALL source IPs,
+// bounding distributed brute-force that rotates IPs to dodge the per-IP and
+// pair buckets. It can never exceed the cap (prefix + at most
+// MaxUsernameLength bytes), so it never folds.
+func loginUserKey(r *http.Request) string {
+	return loginUserFamilyPrefix + loginUsernameKey(r)
 }

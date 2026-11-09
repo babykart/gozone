@@ -78,3 +78,47 @@ func TestRoutePrefixesCoveredByReservedMCPList(t *testing.T) {
 	}
 	t.Logf("verified %d first-level route prefixes are covered by the reserved list", len(prefixes))
 }
+
+// loginChainMiddlewareCount builds the production router with the given
+// global per-username ceiling and returns the number of middlewares mounted
+// on POST /login (-1 when the route is missing).
+func loginChainMiddlewareCount(globalKnob int) int {
+	cfg := config.DefaultConfig()
+	cfg.Server.JWTKey = make([]byte, 32)
+	cfg.Server.CSRFKey = make([]byte, 32)
+	cfg.LoginLock.UsernameGlobalRateLimitPerMinute = globalKnob
+
+	handler, cleanup := buildRouter(cfg, nil, &handlers.Handler{}, nil)
+	defer cleanup()
+
+	mux, ok := handler.(*chi.Mux)
+	if !ok {
+		return -1
+	}
+	n := -1
+	_ = chi.Walk(mux, func(method, route string, _ http.Handler, mw ...func(http.Handler) http.Handler) error {
+		if method == http.MethodPost && route == "/login" {
+			n = len(mw)
+		}
+		return nil
+	})
+	return n
+}
+
+// TestLoginChainGlobalUserLimitersWiring locks the route-level wiring of the
+// new global per-username ceiling: with login_lock.username_global_rate_limit_per_minute
+// > 0, BOTH global limiters (in-process + cluster-wide DB counterpart) join
+// the POST /login chain; with the knob at 0 both are absent. The pair
+// limiters are present in both configurations (their own knob defaults to 5),
+// so the observed delta isolates the global pair exactly.
+func TestLoginChainGlobalUserLimitersWiring(t *testing.T) {
+	off := loginChainMiddlewareCount(0)
+	if off < 0 {
+		t.Fatal("POST /login route not found in the production router")
+	}
+	on := loginChainMiddlewareCount(60)
+	if on != off+2 {
+		t.Errorf("POST /login middleware count with global knob=60 is %d, want %d (knob off) + 2 (in-memory + DB global limiters); knob=0 must remove BOTH global limiters from the chain",
+			on, off)
+	}
+}

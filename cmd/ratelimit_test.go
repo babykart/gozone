@@ -1,14 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/testutil"
 	"github.com/babykart/gozone/internal/validators"
 )
 
@@ -210,4 +213,385 @@ func lastRetryAfter(stack http.Handler) string {
 	r := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
 	stack.ServeHTTP(w, r)
 	return w.Header().Get("Retry-After")
+}
+
+// newLoginRequest builds a POST /login request whose form carries the given
+// (already form-encoded) body and whose TCP source address is remoteAddr.
+// ExtractIP resolves the IP from RemoteAddr (no context IP is set here), so
+// remoteAddr controls which per-IP / per-pair bucket a request draws from.
+func newLoginRequest(body, remoteAddr string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if remoteAddr != "" {
+		r.RemoteAddr = remoteAddr
+	}
+	return r
+}
+
+// TestLoginIPKey pins the exact per-IP family prefix. The family prefix is
+// what keeps the per-IP bucket namespace disjoint from the per-username and
+// per-(username,IP) families sharing the same rate_limit_counters table.
+func TestLoginIPKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4", "192.0.2.1:1234", "login:ip:192.0.2.1"},
+		{"ipv6", "[2001:db8::1]:443", "login:ip:2001:db8::1"},
+		{"ipv6 zone id", "[fe80::1%eth0]:1234", "login:ip:fe80::1%eth0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := loginIPKey(newLoginRequest("", tt.remoteAddr)); got != tt.want {
+				t.Errorf("loginIPKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoginUserIPKey pins the exact pair encoding
+// "login:pair:" + byte-len(username) + ":" + username + "|" + ip. The
+// byte-length prefix makes the encoding structurally injective: a crafted
+// username such as "admin|192.0.2.1" can no longer reproduce the pair key of
+// (admin, 192.0.2.1) — the attack that let one caller exhaust another user's
+// bucket. The username part reuses loginUsernameKey verbatim (lowercased,
+// trimmed, sentinel for empty/over-long), so casing and whitespace variants
+// of the same attempt share a bucket.
+func TestLoginUserIPKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		remoteAddr string
+		want       string
+	}{
+		{"simple", "username=admin", "192.0.2.1:1234", "login:pair:5:admin|192.0.2.1"},
+		{"uppercased folds", "username=ADMIN", "192.0.2.1:1234", "login:pair:5:admin|192.0.2.1"},
+		{"surrounding spaces fold", "username=+admin+", "192.0.2.1:1234", "login:pair:5:admin|192.0.2.1"},
+		{
+			"empty username sentinel",
+			"",
+			"192.0.2.1:1234",
+			"login:pair:" + fmt.Sprint(len(emptyUsernameRateLimitKey)) + ":" + emptyUsernameRateLimitKey + "|192.0.2.1",
+		},
+		{
+			"over-long username sentinel",
+			"username=" + strings.Repeat("a", validators.MaxUsernameLength+1),
+			"192.0.2.1:1234",
+			"login:pair:" + fmt.Sprint(len(emptyUsernameRateLimitKey)) + ":" + emptyUsernameRateLimitKey + "|192.0.2.1",
+		},
+		// Crafted username embedding the separator and a victim IP: the
+		// length prefix (15) keeps it distinct from the victim's pair key
+		// "login:pair:5:admin|192.0.2.1".
+		{"crafted separator username", "username=admin|192.0.2.1", "10.0.0.1:9999", "login:pair:15:admin|192.0.2.1|10.0.0.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := loginUserIPKey(newLoginRequest(tt.body, tt.remoteAddr)); got != tt.want {
+				t.Errorf("loginUserIPKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoginUserKey pins the new global per-username ceiling key. Unlike the
+// pair key this one deliberately ignores the IP: it is the fleet-wide,
+// much-higher ceiling on a single targeted username across all sources.
+func TestLoginUserKey(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"simple", "username=admin", "login:user:admin"},
+		{"uppercased folds", "username=ADMIN", "login:user:admin"},
+		{"surrounding spaces fold", "username=+admin+", "login:user:admin"},
+		{"empty username sentinel", "", "login:user:" + emptyUsernameRateLimitKey},
+		{"over-long username sentinel", "username=" + strings.Repeat("a", validators.MaxUsernameLength+1), "login:user:" + emptyUsernameRateLimitKey},
+		// An IP-shaped username must land in a DIFFERENT namespace than the
+		// per-IP family (see TestLoginKeyFamiliesDisjoint).
+		{"ip-shaped username", "username=192.0.2.1", "login:user:192.0.2.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := loginUserKey(newLoginRequest(tt.body, "192.0.2.1:1234")); got != tt.want {
+				t.Errorf("loginUserKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoginKeyFamiliesDisjoint guards the namespace fix: all login limiter
+// families share one bucket_key namespace (the rate_limit_counters table),
+// so the raw key material must never overlap. The regression: username
+// "192.0.2.1" from any IP used to draw from the same bucket as a real client
+// connecting from 192.0.2.1.
+func TestLoginKeyFamiliesDisjoint(t *testing.T) {
+	r := newLoginRequest("username=192.0.2.1", "192.0.2.1:1234")
+	ip, pair, user := loginIPKey(r), loginUserIPKey(r), loginUserKey(r)
+
+	if ip == user {
+		t.Errorf("per-IP key %q collides with per-user key for an IP-shaped username", ip)
+	}
+	if ip == pair {
+		t.Errorf("per-IP key %q collides with pair key", ip)
+	}
+	if pair == user {
+		t.Errorf("pair key %q collides with per-user key", pair)
+	}
+	if !strings.HasPrefix(ip, "login:ip:") || !strings.HasPrefix(pair, "login:pair:") || !strings.HasPrefix(user, "login:user:") {
+		t.Errorf("family prefixes wrong: ip=%q pair=%q user=%q", ip, pair, user)
+	}
+
+	// An attacker forging the victim's "username|ip" string as a username
+	// must not land in the victim's pair bucket nor global bucket.
+	victim := newLoginRequest("username=admin", "198.51.100.9:1234")
+	attacker := newLoginRequest("username=admin|198.51.100.9", "198.51.100.9:1234")
+	if got, want := loginUserIPKey(victim), "login:pair:5:admin|198.51.100.9"; got != want {
+		t.Fatalf("victim pair key = %q, want %q", got, want)
+	}
+	if got := loginUserIPKey(attacker); got == loginUserIPKey(victim) {
+		t.Errorf("attacker pair key %q collides with the victim pair bucket", got)
+	}
+	if got := loginUserKey(attacker); got == loginUserKey(victim) {
+		t.Errorf("attacker global key %q collides with the victim global bucket", got)
+	}
+}
+
+// TestLoginUserIPKey_Injectivity spot-checks that distinct (username, ip)
+// attempts never map to the same pair key — the structural property the
+// byte-length prefix exists to provide.
+func TestLoginUserIPKey_Injectivity(t *testing.T) {
+	type attempt struct {
+		body       string
+		remoteAddr string
+	}
+	attempts := []attempt{
+		{"username=admin", "192.0.2.1:1234"},
+		{"username=admin", "10.0.0.1:1234"},
+		{"username=root", "192.0.2.1:1234"},
+		// The crafted separator cases: same IP, separator-laden usernames.
+		{"username=admin|192.0.2.1", "192.0.2.1:1234"},
+		{"username=admin|192.0.2.1", "10.0.0.1:1234"},
+		// Empty usernames collapse onto the sentinel pair bucket for the
+		// SAME ip only. (The over-long username folds to the same sentinel
+		// and is already asserted in TestLoginUserIPKey, so it is not part
+		// of the uniqueness set.)
+		{"", "192.0.2.1:1234"},
+		{"", "10.0.0.1:1234"},
+	}
+	seen := map[string]attempt{}
+	for _, a := range attempts {
+		key := loginUserIPKey(newLoginRequest(a.body, a.remoteAddr))
+		if prev, dup := seen[key]; dup {
+			t.Errorf("pair key %q produced by both %+v and %+v", key, prev, a)
+			continue
+		}
+		seen[key] = a
+	}
+}
+
+// TestLoginRateLimitKeyCap pins the final-key hard cap: any composed key
+// longer than 160 bytes folds to a family-prefixed sentinel, so a malformed
+// or hostile RemoteAddr (unparseable fallback, IPv6 zone id, oversized
+// garbage) can never overflow the bucket_key column (MySQL VARCHAR(191)) or
+// grow the in-process map unboundedly. Sentinels stay under the cap and
+// remain distinct per family.
+func TestLoginRateLimitKeyCap(t *testing.T) {
+	const capBytes = 160
+
+	t.Run("ip family folds oversized remote addr", func(t *testing.T) {
+		// No port: SplitHostPort fails, ExtractIP returns the raw
+		// (200-byte) RemoteAddr verbatim.
+		got := loginIPKey(newLoginRequest("", strings.Repeat("a", 200)))
+		if got != "login:ip:<oversized-ip>" {
+			t.Errorf("loginIPKey(oversized) = %q, want %q", got, "login:ip:<oversized-ip>")
+		}
+		if len(got) > capBytes {
+			t.Errorf("folded key is %d bytes, must be <= %d", len(got), capBytes)
+		}
+	})
+
+	t.Run("pair family folds oversized ipv6 zone id", func(t *testing.T) {
+		r := newLoginRequest("username=admin", "[fe80::1%"+strings.Repeat("z", 200)+"]:1234")
+		got := loginUserIPKey(r)
+		if got != "login:pair:<oversized-key>" {
+			t.Errorf("loginUserIPKey(oversized) = %q, want %q", got, "login:pair:<oversized-key>")
+		}
+		if len(got) > capBytes {
+			t.Errorf("folded key is %d bytes, must be <= %d", len(got), capBytes)
+		}
+	})
+
+	t.Run("family sentinels are distinct and prefixed", func(t *testing.T) {
+		ipSentinel := loginIPKey(newLoginRequest("", strings.Repeat("a", 200)))
+		pairSentinel := loginUserIPKey(newLoginRequest("username=admin", strings.Repeat("b", 200)))
+		if ipSentinel == pairSentinel {
+			t.Errorf("folded sentinels must stay family-distinct, both = %q", ipSentinel)
+		}
+	})
+
+	t.Run("boundary 160 bytes is not folded", func(t *testing.T) {
+		// "login:ip:" is 9 bytes: a 151-byte IP composes to exactly 160.
+		ip := strings.Repeat("a", 151)
+		got := loginIPKey(newLoginRequest("", ip+":1"))
+		want := "login:ip:" + ip
+		if got != want {
+			t.Errorf("loginIPKey(151-byte ip) = %q, want un-folded %q", got, want)
+		}
+		if len(got) != capBytes {
+			t.Errorf("boundary key length = %d, want exactly %d", len(got), capBytes)
+		}
+	})
+
+	t.Run("normal keys never fold", func(t *testing.T) {
+		r := newLoginRequest("username=admin", "[fe80::1%eth0]:1234")
+		for name, key := range map[string]string{
+			"ip":   loginIPKey(r),
+			"pair": loginUserIPKey(r),
+			"user": loginUserKey(r),
+		} {
+			if strings.Contains(key, "<oversized") {
+				t.Errorf("%s key %q folded despite being short", name, key)
+			}
+			if len(key) > capBytes {
+				t.Errorf("%s key is %d bytes, want <= %d", name, len(key), capBytes)
+			}
+		}
+	})
+}
+
+// TestLoginPairRateLimit_CrossIPIsolation is the core regression for the
+// attack this change fixes: the per-username limiter used to key on the
+// username alone, so five attempts at "admin" from one attacker's IP
+// exhausted the shared bucket and a legitimate admin logging in from their
+// own IP got 429. With the (username, IP) pair key the attacker's bucket is
+// their own.
+func TestLoginPairRateLimit_CrossIPIsolation(t *testing.T) {
+	const pairLimit = 5
+	const attacker = "198.51.100.1:1234"
+	const victim = "198.51.100.2:1234"
+
+	type stack struct {
+		post         func(body, remoteAddr string) int
+		handlerCalls *int32
+	}
+	build := func(t *testing.T, chain func(http.Handler) http.Handler) *stack {
+		t.Helper()
+		var calls int32
+		s := chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		return &stack{
+			post: func(body, remoteAddr string) int {
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, newLoginRequest(body, remoteAddr))
+				return w.Code
+			},
+			handlerCalls: &calls,
+		}
+	}
+	assertIsolation := func(t *testing.T, s *stack) {
+		t.Helper()
+		// The attacker exhausts THEIR pair bucket.
+		for i := 0; i < pairLimit; i++ {
+			if code := s.post("username=admin", attacker); code != http.StatusOK {
+				t.Fatalf("attempt %d from attacker: got %d, want 200", i+1, code)
+			}
+		}
+		if code := s.post("username=admin", attacker); code != http.StatusTooManyRequests {
+			t.Fatalf("attempt %d from attacker: got %d, want 429 (pair bucket exhausted)", pairLimit+1, code)
+		}
+		// The legitimate admin from another IP is unaffected.
+		if code := s.post("username=admin", victim); code != http.StatusOK {
+			t.Fatalf("victim request after attacker exhaustion: got %d, want 200 (cross-IP isolation broken)", code)
+		}
+		if got := atomic.LoadInt32(s.handlerCalls); got != pairLimit+1 {
+			t.Errorf("handler invoked %d times, want %d", got, pairLimit+1)
+		}
+	}
+
+	t.Run("in-memory chain", func(t *testing.T) {
+		limiter := middleware.NewRateLimiter(pairLimit)
+		t.Cleanup(limiter.Close)
+		assertIsolation(t, build(t, limiter.Limit(loginUserIPKey)))
+	})
+
+	t.Run("db chain", func(t *testing.T) {
+		db := testutil.NewTestDB(t)
+		dbLimiter := middleware.NewDBRateLimiter(db, pairLimit)
+
+		// Seed the attacker's pair bucket to the limit in BOTH the current
+		// and the next fixed window instead of replaying the request loop:
+		// the DB limiter derives the window from the clock on every request,
+		// so a loop would flake when the minute boundary falls between the
+		// last two attempts. Seeding both windows makes the 429 assertion
+		// deterministic no matter when the test runs.
+		attackerKey := loginUserIPKey(newLoginRequest("username=admin", attacker))
+		window := time.Now().UTC().Truncate(time.Minute)
+		for _, start := range []time.Time{window, window.Add(time.Minute)} {
+			for i := 0; i < pairLimit; i++ {
+				ok, err := db.HitRateLimit(context.Background(), attackerKey, start, pairLimit)
+				if err != nil {
+					t.Fatalf("seeding attacker bucket: %v", err)
+				}
+				if !ok {
+					t.Fatalf("seeding attacker bucket: hit %d rejected within limit", i+1)
+				}
+			}
+		}
+
+		s := build(t, dbLimiter.Limit(loginUserIPKey))
+		if code := s.post("username=admin", attacker); code != http.StatusTooManyRequests {
+			t.Fatalf("attacker request with exhausted bucket: got %d, want 429", code)
+		}
+		// The legitimate admin from another IP is unaffected.
+		if code := s.post("username=admin", victim); code != http.StatusOK {
+			t.Fatalf("victim request after attacker exhaustion: got %d, want 200 (cross-IP isolation broken)", code)
+		}
+		if got := atomic.LoadInt32(s.handlerCalls); got != 1 {
+			t.Errorf("handler invoked %d times, want 1 (only the victim request; the attacker's 429 never reaches the handler)", got)
+		}
+	})
+}
+
+// TestLoginGlobalRateLimit_Scoping pins the new global per-username ceiling:
+// it must count attempts for the SAME username across DIFFERENT IPs (that is
+// the point of the ceiling — it bounds distributed brute-force), while
+// leaving other usernames untouched.
+func TestLoginGlobalRateLimit_Scoping(t *testing.T) {
+	const globalLimit = 3
+	limiter := middleware.NewRateLimiter(globalLimit)
+	t.Cleanup(limiter.Close)
+
+	var handlerCalls int32
+	stack := limiter.Limit(loginUserKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&handlerCalls, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	post := func(body, remoteAddr string) int {
+		w := httptest.NewRecorder()
+		stack.ServeHTTP(w, newLoginRequest(body, remoteAddr))
+		return w.Code
+	}
+
+	// globalLimit attempts at "admin" from distinct IPs: all allowed, and
+	// together they exhaust the shared per-username budget.
+	for i := 0; i < globalLimit; i++ {
+		if code := post("username=admin", fmt.Sprintf("198.51.100.%d:1234", i+1)); code != http.StatusOK {
+			t.Fatalf("attempt %d at admin from a fresh IP: got %d, want 200", i+1, code)
+		}
+	}
+	if code := post("username=admin", "198.51.100.99:1234"); code != http.StatusTooManyRequests {
+		t.Fatalf("attempt %d at admin from yet another IP: got %d, want 429 (global ceiling ignored the IP spread)", globalLimit+1, code)
+	}
+	// A different username has its own global bucket.
+	if code := post("username=root", "198.51.100.100:1234"); code != http.StatusOK {
+		t.Fatalf("request for a different username: got %d, want 200 (global buckets must be per-username)", code)
+	}
+	if got := atomic.LoadInt32(&handlerCalls); got != globalLimit+1 {
+		t.Errorf("handler invoked %d times, want %d", got, globalLimit+1)
+	}
 }

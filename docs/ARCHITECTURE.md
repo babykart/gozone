@@ -131,7 +131,7 @@ and never on a concrete cache implementation.
 | `main.go` + `cmd` | `main.go` is a thin entry point (`main()` → `cmd.Execute()`). `cmd` holds the Cobra tree: the `server` subcommand bootstraps the app (load config, open DB, create PDNS client wrapped in cachedClient, seed admin user, parse templates, register routes, start periodic purge goroutines, start HTTP server with graceful shutdown on SIGINT/SIGTERM); `unlock` is the emergency DB recovery path |
 | `handlers` | Business logic for each endpoint: parse input, call `ZoneService` interface (PDNS or cached), log activity, render templates or write JSON |
 | `pdns` | HTTP client for PowerDNS REST API: zone CRUD, record management (single + filtered by `rrset_name`/`rrset_type`), DNSSEC rectification, statistics; typed errors map to HTTP status codes |
-| `middleware` | Request pipeline: extract JWT/API key, load user from DB, inject into context, enforce admin role, rate limiting (per-IP / per-username / per-API-key), client IP resolution (ClientIPFrom* with trusted CIDR list), security headers |
+| `middleware` | Request pipeline: extract JWT/API key, load user from DB, inject into context, enforce admin role, rate limiting (per-IP / per-(username, IP) pair / global per-username / per-API-key), client IP resolution (ClientIPFrom* with trusted CIDR list), security headers |
 | `database` | Multi-dialect connection factory with DSN validation, content-hash migrations with multi-instance locks, context-aware query methods, login lockout columns and audit table, periodic purge helpers |
 | `models` | Pure data structures — no behavior, just struct tags for JSON and SQL; RRSet has a `Comments []Comment` field round-tripped through PowerDNS PATCH |
 | `config` | Hierarchical config merging: defaults → YAML file → env vars; validates CIDR lists for trusted_proxies, bcrypt cost range, port range |
@@ -225,7 +225,8 @@ Client ──POST /api/v1/zones──► chi Router
 Browser ──POST /login──► chi Router
                           │
                           ▼ per-IP RateLimiter (5/min, AND-compounded)
-                          ▼ per-username RateLimiter (5/min)
+                          ▼ per-(username, IP) pair RateLimiter (5/min)
+                          ▼ global per-username RateLimiter (60/min, all IPs)
                           ▼ CSRF middleware
                           ▼ Auth → LoginHandler
                           │
@@ -286,7 +287,8 @@ chimw.GetClientIP(ctx) returns the resolved IP string
 ```
 POST /login (form: username + password + CSRF token)
   │
-  ▼ CSRF + per-IP RateLimiter + per-username RateLimiter (AND-compounded)
+  ▼ CSRF + per-IP RateLimiter + per-(username, IP) pair RateLimiter
+    + global per-username RateLimiter (AND-compounded)
   │
 LoginHandler
   │
@@ -387,7 +389,7 @@ GET /auth/oidc/<provider>/login (login button)
 … user authenticates at the provider …
 
 GET /auth/oidc/<provider>/callback?code=…&state=…
-  │  (rate-limited by the shared login limiter)
+  │  (rate-limited by the shared per-IP login limiter)
   ▼ oidc.Service.HandleCallback
   ├── verifyStateToken: AES-GCM decrypt (confidentiality + auth tag) + exp + provider match (else sso_error)
   ├── oauth2.Exchange(code, code_verifier) → {access_token, id_token, …}
@@ -459,15 +461,29 @@ RequireWriteScope (on /api/v1, after the per-key limiter)
 
 ### Rate Limiting (defense-in-depth)
 
-The login endpoint gets three layers of protection — all three must allow:
+The login endpoint gets three rate-limit layers — all must allow — each
+backed twice (an in-process token bucket in front, a cluster-wide
+`DBRateLimiter` on the shared `rate_limit_counters` table behind it, so the
+budget is identical on every replica):
 
 | Layer | Backend | Limit | Scope |
 |-------|---------|-------|-------|
-| Per-IP | In-memory token bucket | 5/min | Resolved client IP (`chimw.GetClientIP(ctx)`) |
-| Per-username | In-memory token bucket | 5/min (configurable) | Lowercased attempted username |
-| Per-account | Persistent DB (`users.locked_until`) | After N failed attempts | Account ID |
+| Per-IP | In-memory token bucket + DBRateLimiter | 5/min | Resolved client IP (`chimw.GetClientIP(ctx)`), key `login:ip:<ip>` |
+| Per-(username, IP) pair | In-memory token bucket + DBRateLimiter | 5/min (configurable) | Lowercased attempted username + client IP, key `login:pair:<len>:<user>\|<ip>` |
+| Global per-username | In-memory token bucket + DBRateLimiter | 60/min (configurable, 0 disables) | Lowercased attempted username across ALL source IPs, key `login:user:<user>` |
 
-The two in-memory limiters are AND-compounded on the route (`login_chain = append(login_chain, loginUsernameLimiter)`) so an attacker cannot bypass one by rotating the other dimension. The persistent DB lockout survives server restarts and applies across cluster instances.
+All three families share the `rate_limit_counters.bucket_key` namespace, so
+every key carries a disjoint family prefix — a crafted IP-shaped username can
+never draw from another family's bucket — and every composed key is capped at
+160 bytes, folding to a family-prefixed sentinel past the cap (covering IPv6
+zone ids and malformed `RemoteAddr` fallbacks vs the MySQL VARCHAR(191)
+column). The byte-length prefix in the pair encoding makes it injective: a
+username crafted to embed the `|` separator cannot reproduce another
+attempt's pair key. The pair keying closes the lockout-amplification hole of
+the old per-username-only limiter, where one attacker IP could 429 a targeted
+account for everyone; the global ceiling keeps distributed brute-force
+(many IPs, one username) bounded. The persistent DB lockout survives server
+restarts and applies across cluster instances.
 
 ### JWT Revocation
 
@@ -739,10 +755,15 @@ This split exists because the web UI drives a *merge* workflow (existing + user 
 
 ### Brute-Force Protection (defense-in-depth on /login)
 
-The login endpoint is protected by three layers, all of which must allow:
-1. **Per-IP rate limiter** — 5/min, in-memory token bucket keyed on the resolved client IP (fail-closed against XFF spoofing via chi's `ClientIPFrom*`)
-2. **Per-username rate limiter** — 5/min, in-memory token bucket keyed on the lowercased attempted username
-3. **Persistent per-account lockout** — `users.failed_login_attempts` and `users.locked_until` columns; locked accounts are rejected before any bcrypt work (no timing side channel)
+The login endpoint is protected by three rate-limit families plus the
+persistent lockout, all of which must allow:
+1. **Per-IP rate limiter** — 5/min, in-process token bucket keyed on the resolved client IP (fail-closed against XFF spoofing via chi's `ClientIPFrom*`), mirrored cluster-wide by a DBRateLimiter; key `login:ip:<ip>`
+2. **Per-(username, IP) pair rate limiter** — 5/min, in-process token bucket keyed on the lowercased attempted username AND the client IP (key `login:pair:<len>:<user>|<ip>`), mirrored cluster-wide. Pair keying stops one attacker IP from exhausting the shared bucket and 429-ing the legitimate owner of a targeted account for everyone.
+3. **Global per-username ceiling** — 60/min (configurable, `login_lock.username_global_rate_limit_per_minute`, 0 disables), in-process token bucket keyed on the lowercased attempted username across ALL source IPs (`login:user:<user>`), mirrored cluster-wide; the distributed-brute-force cap.
+4. **Persistent per-account lockout** — `users.failed_login_attempts` and `users.locked_until` columns; locked accounts are rejected before any bcrypt work (no timing side channel)
+
+Key namespaces, the disjoint family prefixes and the 160-byte key cap are
+detailed under "Rate Limiting (defense-in-depth)" above.
 
 Failed attempts (whether the username exists or not) are recorded in `login_attempts` for forensics and purged hourly. Admin can manually lock/unlock any user from `/users` — see LockUser/UnlockUser handlers and the `lock_user`/`unlock_user` activity log actions.
 
