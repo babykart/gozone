@@ -141,6 +141,94 @@ func TestChangePassword_Success(t *testing.T) {
 	}
 }
 
+// TestChangePassword_SameAsCurrentRejected is the regression for the
+// default-config gap: with password.history_size = 0 (the default, no reuse
+// check at all) a "new" password identical to the current one used to be
+// accepted. That defeats forced rotation: an admin reset (or an expiry)
+// leaves must_change_password=1 with a password a third party already knows,
+// and re-submitting it as the "new" password cleared the flag without any
+// rotation. The unconditional same-as-current compare must refuse it.
+func TestChangePassword_SameAsCurrentRejected(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	var credentialVersion int
+	h.DB.QueryRow("SELECT password_hash, credential_version FROM users WHERE id = ?", uid).Scan(&hash, &credentialVersion)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Oldpass1!&confirm_password=Oldpass1!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("new password identical to the current one must be rejected with 400, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "New password must be different from the current password") {
+		t.Errorf("expected the same-as-current error message in the body, got: %s", w.Body.String())
+	}
+	var unchangedHash string
+	var mustChange int
+	var newCredentialVersion int
+	h.DB.QueryRow("SELECT password_hash, must_change_password, credential_version FROM users WHERE id = ?", uid).Scan(&unchangedHash, &mustChange, &newCredentialVersion)
+	if unchangedHash != hash {
+		t.Error("password hash should be unchanged after rejected same-as-current change")
+	}
+	if mustChange != 1 {
+		t.Errorf("forced-change flag must remain set (must_change_password=1), got %d", mustChange)
+	}
+	if newCredentialVersion != credentialVersion {
+		t.Errorf("credential_version must not be bumped on rejection: before=%d after=%d", credentialVersion, newCredentialVersion)
+	}
+}
+
+// TestChangePassword_DifferentFromCurrentAcceptedWithHistoryDisabled pins
+// that the unconditional same-as-current check does not over-reject when
+// password.history_size is 0: a genuinely different, policy-passing password
+// still rotates the hash and clears the forced-change flag.
+func TestChangePassword_DifferentFromCurrentAcceptedWithHistoryDisabled(t *testing.T) {
+	h := strictPolicyHandler(t)
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&hash)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303 for a different new password, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var newHash string
+	var mustChange int
+	h.DB.QueryRow("SELECT password_hash, must_change_password FROM users WHERE id = ?", uid).Scan(&newHash, &mustChange)
+	if newHash == hash {
+		t.Error("expected password hash to change after self-service change")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(newHash), []byte("Newpass2!")); err != nil {
+		t.Errorf("new hash should validate the new password: %v", err)
+	}
+	if mustChange != 0 {
+		t.Errorf("expected must_change_password cleared (0), got %d", mustChange)
+	}
+}
+
 // TestChangePassword_PasswordVerbatim pins that the new password and its
 // confirmation are compared and stored verbatim: leading/trailing spaces can
 // be intentional, and Login compares the raw input. TrimSpace here would let

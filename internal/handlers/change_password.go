@@ -96,6 +96,19 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A "new" password identical to the current one must be refused
+	// unconditionally, independent of password.history_size (which defaults
+	// to 0, i.e. no reuse check at all). Otherwise a user whose password an
+	// admin reset (must_change_password forced) — or whose password simply
+	// expired — can "change" to the very password a third party already
+	// knows, clearing the forced-change flag with no real rotation. Reuses
+	// the hash refetched under the transaction, so the compare is atomic
+	// with the UPDATE below.
+	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(newPassword)); err == nil {
+		h.renderError(w, r, "New password must be different from the current password")
+		return
+	}
+
 	if h.Cfg.Password.HistorySize > 0 {
 		reused, err := tx.PasswordHistoryReused(ctx, user.ID, newPassword, h.Cfg.Password.HistorySize)
 		if err != nil {
