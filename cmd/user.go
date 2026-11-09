@@ -180,15 +180,21 @@ func unlockUser(cfg *config.Config, ident string) error {
 	return nil
 }
 
+// openDB opens the configured database. It is a package-level variable so
+// tests can route the connection through an instrumented driver; production
+// always uses database.New.
+var openDB = database.New
+
 // resetUserPassword resolves the target user, hashes the new password with the
 // configured bcrypt cost, writes it (rejecting recent reuse when history is
 // enabled), and records an audit entry attributing the action to the shell
 // operator. The lookup, reuse check, update and history write run in a single
-// transaction.
+// transaction; the audit entry is written after the commit, best-effort (see
+// below).
 func resetUserPassword(cfg *config.Config, ident, password string) error {
 	logger.Init(cfg.Logging.Level)
 
-	db, err := database.New(&cfg.Database)
+	db, err := openDB(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -258,18 +264,22 @@ func resetUserPassword(cfg *config.Config, ident, password string) error {
 		}
 	}
 
-	// Log with user_id=NULL: the actor is the shell operator, not a GoZone
-	// user. Capture the OS identity (username@hostname) for audit (m4).
-	if _, err := tx.ExecContext(ctx,
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	// The audit entry is written after the reset has committed, deliberately
+	// outside the transaction and best-effort: an audit-write failure must
+	// never lose an emergency recovery write, and on dialects where a failed
+	// statement aborts the surrounding transaction, keeping the INSERT inside
+	// would turn any audit failure into a lost reset. user_id is NULL: the
+	// actor is the shell operator, not a GoZone user. The OS identity
+	// (username@hostname) is captured for traceability.
+	if _, err := db.ExecContext(ctx,
 		"INSERT INTO activity_logs (user_id, action, details) VALUES (NULL, 'reset_password_cli', ?)",
 		fmt.Sprintf("Reset password for user id=%d username=%q by CLI operator %s", userID, username, operatorIdentity()),
 	); err != nil {
-		// Best-effort: the reset itself succeeded, so we don't fail the CLI.
 		logger.Warn("failed to log CLI reset-password activity", "user_id", userID, "error", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	logger.Info("password reset via CLI", "user_id", userID, "username", username)
