@@ -81,6 +81,7 @@ All errors return a JSON body:
 | `API_KEY_SCOPE_MISMATCH` | 403 | The key's scope belongs to another surface: an `mcp:*` key on `/api/v1`, or an `api:*` key on `/mcp` |
 | `INSUFFICIENT_SCOPE` | 403 | An `api:read` key attempted a write method (POST/PUT/DELETE) on `/api/v1` |
 | `RATE_LIMITED` | 429 | Per-key or per-IP rate limit exceeded; the response carries `Retry-After` |
+| `ZONE_BUSY` | 409 | The zone's write lock was not acquired within the wait budget (another write is in flight); no mutation was applied — retry later |
 | `ZONE_CREATE_ERROR` | 500 | PowerDNS rejected the zone creation (generic label; see `message`) |
 | `ZONE_DELETE_ERROR` | 500 | PowerDNS rejected the zone deletion (generic label; see `message`) |
 | `RECORD_ERROR` | 500 | A record operation failed upstream (generic label; see `message`) |

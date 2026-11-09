@@ -30,6 +30,7 @@ const (
 	ErrCodeConflict           = "CONFLICT"
 	ErrCodeUpstreamAuthError  = "UPSTREAM_AUTH_ERROR"
 	ErrCodeLuaUpdatesDisabled = "LUA_UPDATES_DISABLED"
+	ErrCodeZoneBusy           = "ZONE_BUSY"
 )
 
 // pdnsErrorStatus maps a typed PowerDNS client error to the appropriate HTTP
@@ -53,6 +54,8 @@ func pdnsErrorStatus(err error, notFoundCode string) (int, string) {
 		return http.StatusBadGateway, ErrCodeUpstreamAuthError
 	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return http.StatusBadRequest, ErrCodeLuaUpdatesDisabled
+	case errors.Is(err, dnsops.ErrZoneBusy):
+		return http.StatusConflict, ErrCodeZoneBusy
 	default:
 		return http.StatusInternalServerError, ErrCodeInternalError
 	}

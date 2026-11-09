@@ -659,6 +659,10 @@ func TestMapServiceError(t *testing.T) {
 		{"unwrapped validation", pdns.ErrValidation, codeZoneNotFound, "VALIDATION_ERROR"},
 		{"unwrapped unauthorized", pdns.ErrUnauthorized, codeZoneNotFound, "UPSTREAM_AUTH_ERROR"},
 		{"unwrapped lua disabled", pdns.ErrLuaUpdatesDisabled, codeZoneNotFound, "LUA_UPDATES_DISABLED"},
+		// Zone-lock contention (dnsops.ErrZoneBusy) is a client-retryable
+		// condition, surfaced as ZONE_BUSY whether the service returned the
+		// sentinel bare or tagged at StageLock.
+		{"lock stage zone busy", &dnsops.StageError{Stage: dnsops.StageLock, Err: dnsops.ErrZoneBusy}, codeZoneNotFound, "ZONE_BUSY"},
 	}
 	for _, c := range cases {
 		te, _ := mapServiceError(c.err, c.notFoundCode)

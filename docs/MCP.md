@@ -122,6 +122,7 @@ full cause goes to the server logs. Exhaustive list:
 | `ZONE_NOT_FOUND` | The zone does not exist (upstream 404 on a zone operation, including the fetch stage of a record write). | `get_zone`, `list_records`, `export_zone`, `list_zones`, `create_zone`, `delete_zone`, `gozone://zones/{zone}`, record tools at the fetch stage |
 | `RECORD_NOT_FOUND` | Upstream 404 at the write stage of a record operation. | `create_record`, `update_record`, `delete_record` |
 | `CONFLICT` | PowerDNS reports a conflict (e.g. creating an existing zone). | `create_zone`, record writes |
+| `ZONE_BUSY` | The zone's write lock was not acquired within the wait budget (another write is in flight); no mutation was applied — retry later. | record writes |
 | `UPSTREAM_AUTH_ERROR` | GoZone's PowerDNS credentials are rejected — contact the administrator. | any tool reaching PowerDNS |
 | `LUA_UPDATES_DISABLED` | LUA record updates are disabled on the PowerDNS server. | record writes |
 | `INTERNAL_ERROR` | Unexpected failure, failed zone-access lookup (fail-closed), or a recovered handler panic. | any tool |

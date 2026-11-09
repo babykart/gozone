@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/pdns"
@@ -1831,6 +1832,51 @@ func TestPdnsErrorStatus_Mapping(t *testing.T) {
 			status, code := pdnsErrorStatus(tc.err, tc.notFoundCode)
 			if status != tc.wantStatus || code != tc.wantCode {
 				t.Errorf("pdnsErrorStatus(%v) = %d/%s, want %d/%s", tc.err, status, code, tc.wantStatus, tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestZoneLockErrorResponse pins the lock-contention mapping of the web
+// zone-lock helpers: dnsops.ErrZoneBusy (held directly or wrapped in a
+// StageError at StageLock) answers 409 with a retry-later message, while any
+// other lock failure keeps the generic 500.
+func TestZoneLockErrorResponse(t *testing.T) {
+	status, msg := zoneLockErrorResponse(&dnsops.StageError{Stage: dnsops.StageLock, Err: dnsops.ErrZoneBusy})
+	if status != http.StatusConflict {
+		t.Errorf("zoneLockErrorResponse(ErrZoneBusy) status = %d, want 409", status)
+	}
+	if msg == "" {
+		t.Error("zoneLockErrorResponse(ErrZoneBusy) message must not be empty")
+	}
+
+	status, _ = zoneLockErrorResponse(errors.New("connection refused"))
+	if status != http.StatusInternalServerError {
+		t.Errorf("zoneLockErrorResponse(generic error) status = %d, want 500", status)
+	}
+}
+
+// TestPDNSErrorStatus_ZoneBusy pins the zone-lock contention mapping: a
+// dnsops.ErrZoneBusy — bare or wrapped in a StageError at StageLock — is a
+// client-retryable 409 ZONE_BUSY, not a 500 INTERNAL_ERROR. The code string
+// is asserted literally because the ErrCodeZoneBusy constant lands in the
+// same change as the sentinel.
+func TestPDNSErrorStatus_ZoneBusy(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"bare sentinel", dnsops.ErrZoneBusy},
+		{"stage-lock wrapped", &dnsops.StageError{Stage: dnsops.StageLock, Err: dnsops.ErrZoneBusy}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := pdnsErrorStatus(tc.err, ErrCodeZoneNotFound)
+			if status != http.StatusConflict {
+				t.Errorf("pdnsErrorStatus(%v) status = %d, want %d", tc.err, status, http.StatusConflict)
+			}
+			if code != "ZONE_BUSY" {
+				t.Errorf("pdnsErrorStatus(%v) code = %q, want %q", tc.err, code, "ZONE_BUSY")
 			}
 		})
 	}

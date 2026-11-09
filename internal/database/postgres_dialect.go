@@ -203,7 +203,15 @@ func (p *postgresDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID str
 
 	var tx *sql.Tx
 	for attempt := 1; ; attempt++ {
-		if tx, err = conn.BeginTx(ctx, nil); err != nil {
+		// The transaction holding the advisory lock must NOT be bound to
+		// the acquisition context: database/sql rolls a Tx back when its
+		// BeginTx context is canceled, which would silently release the
+		// lock while the caller's critical section still runs. The
+		// acquisition deadline still bounds the wait because the
+		// SET LOCAL / pg_advisory_xact_lock ExecContext calls below run
+		// on the passed ctx. (LockMigrations keeps ctx deliberately: its
+		// long startup budget is intentional.)
+		if tx, err = conn.BeginTx(context.WithoutCancel(ctx), nil); err != nil {
 			conn.Close() // #nosec G104 -- best-effort cleanup on error path
 			return nil, fmt.Errorf("acquire zone lock: %w", err)
 		}

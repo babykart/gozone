@@ -28,6 +28,7 @@ const (
 	codeInternal       = "INTERNAL_ERROR"
 	codeZoneNotFound   = "ZONE_NOT_FOUND"
 	codeRecordNotFound = "RECORD_NOT_FOUND"
+	codeZoneBusy       = "ZONE_BUSY"
 )
 
 // toolError is a tool-level error: the MCP client receives its Error() text
@@ -96,6 +97,8 @@ func mapServiceError(err error, notFoundCode string) (*toolError, error) {
 		return &toolError{code: "UPSTREAM_AUTH_ERROR", msg: "GoZone's PowerDNS credentials are invalid; contact the administrator"}, nil
 	case errors.Is(err, pdns.ErrLuaUpdatesDisabled):
 		return &toolError{code: "LUA_UPDATES_DISABLED", msg: "LUA record updates are disabled on the PowerDNS server"}, nil
+	case errors.Is(err, dnsops.ErrZoneBusy):
+		return &toolError{code: codeZoneBusy, msg: "zone is locked by another operation; retry later"}, nil
 	default:
 		// Internal/unexpected: generic message to the client, full cause
 		// back to the caller for server-side logging.

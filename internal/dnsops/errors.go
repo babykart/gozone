@@ -7,6 +7,12 @@ import "errors"
 // an admin-only operation by a non-admin. HTTP callers map it to 403.
 var ErrForbidden = errors.New("forbidden")
 
+// ErrZoneBusy is returned when the per-zone lock cannot be acquired within
+// the acquisition budget: another request holds the zone's read-modify-write
+// critical section. REST callers map it to 409 ZONE_BUSY, MCP callers to the
+// ZONE_BUSY tool code; both are client-retryable.
+var ErrZoneBusy = errors.New("zone is busy")
+
 // Stage identifies which stage of a composite service operation failed. The
 // REST error mapping (and later the MCP error codes) depends on the stage,
 // not just the underlying cause: the same PowerDNS ErrNotFound is a
