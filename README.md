@@ -224,7 +224,7 @@ docker compose exec gozone gozone user unlock admin
 kubectl exec -n gozone deploy/gozone -- gozone user unlock admin
 ```
 
-The action is **idempotent**: unlocking an already-unlocked user is a no-op on the database side but still writes an `unlock_user_cli` entry in the `activity_logs` table, so the audit trail always records the operator's intervention. Verify the unlock took effect by inspecting the user row:
+The action is **idempotent**: unlocking an already-unlocked user is a no-op on the database side but still writes an `unlock_user_cli` entry in the `activity_logs` table, so the audit trail records the operator's intervention. The audit write is best-effort: a failure logs a warning and leaves the unlock itself untouched. Verify the unlock took effect by inspecting the user row:
 
 ```bash
 # SQLite (default; adjust the path to match database.path in config.yaml)
@@ -264,7 +264,7 @@ gozone user reset-password admin < /run/secrets/gozone-admin-password
 gozone user reset-password admin --password 's3cret!'
 ```
 
-Like `unlock`, the reset writes a `reset_password_cli` entry to `activity_logs` with `user_id = NULL` (the actor is the shell operator, identified as `user@host`) so the audit trail records every intervention.
+Like `unlock`, the reset attempts a `reset_password_cli` entry in `activity_logs` with `user_id = NULL` (the actor is the shell operator, identified as `user@host`) once the password change has committed, so the audit trail records the intervention. The audit write is best-effort: a failure logs a warning and leaves the reset itself untouched.
 
 ### Admin User (initial seed)
 
