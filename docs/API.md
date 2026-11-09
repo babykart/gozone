@@ -382,6 +382,12 @@ Response `200`:
 
 `zone_count` reflects the number of zones visible to the authenticated user.
 
+Ring statistics (`RingStatisticItem` — most-queried names, NXDOMAIN names) are
+excluded upstream for every caller (`?includerings=false`), and
+`MapStatisticItem` entries (client resolver IPs) are additionally stripped for
+users who are not DNS admins (admin/operator). Non-admin responses carry
+scalar statistics only.
+
 ## Health Endpoints (no auth required)
 
 | Method | Path | Response |

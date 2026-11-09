@@ -169,6 +169,9 @@ func TestGetServer(t *testing.T) {
 func TestGetStatistics(t *testing.T) {
 	t.Run("string value", func(t *testing.T) {
 		client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("includerings"); got != "false" {
+				t.Errorf("expected includerings=false, got %q (raw query: %q)", got, r.URL.RawQuery)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode([]models.StatisticItem{
 				{Name: "udp-queries", Type: "StatisticItem", Value: "42"},
