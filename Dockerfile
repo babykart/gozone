@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27-alpine3.24 AS builder
 
 # Version metadata injected via ldflags. .dockerignore excludes .git, so these
 # default to "dev"/"none"/"unknown"; pass --build-arg VERSION=... (e.g. from
@@ -37,7 +37,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     -o /gozone .
 
 # Runtime stage
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 
