@@ -607,6 +607,82 @@ func TestPostgresIntegration_HitRateLimit(t *testing.T) {
 	}
 }
 
+// TestPostgresIntegration_AlreadyExistsToleratedPerStatement is the live
+// PostgreSQL regression for the per-statement savepoint recovery: a re-run
+// migration whose first statement hits an already-exists error must NOT abort
+// the surrounding transaction (25P02: "current transaction is aborted") and
+// must still apply the following statements. Without the savepoints the
+// tolerated error poisons the transaction and the second ALTER fails, so the
+// migration errors out and the new column never appears.
+func TestPostgresIntegration_AlreadyExistsToleratedPerStatement(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+
+	// Drive applyMigration directly on a scratch database: newIntegrationDB
+	// runs the full migration set, which would fill schema_migrations with
+	// versions irrelevant to this test. Instead mirror the SQLite unit-test
+	// setup — raw connection, hand-built tracking table, &DB with the
+	// postgresDialect.
+	dialect := &postgresDialect{}
+	conn, err := sql.Open("postgres", dialect.DSN(dsn))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Close via t.Cleanup (registered BEFORE the SQL cleanup below) so the
+	// connection is still open when the LIFO cleanup callbacks run; a
+	// deferred Close would run first and silently no-op the DROP/DELETE.
+	t.Cleanup(func() { conn.Close() }) // #nosec G104 -- best-effort close
+
+	if _, err := conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	// Scratch table with one pre-existing column; the migration's first
+	// statement re-adds it (tolerated), the second adds a new one.
+	const table = "mig_sp_scratch"
+	if _, err := conn.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+		t.Fatalf("drop scratch table: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec("DROP TABLE IF EXISTS " + table)
+		_, _ = conn.Exec("DELETE FROM schema_migrations WHERE version = 'mig_test_pg_savepoint'")
+	})
+	if _, err := conn.Exec("CREATE TABLE " + table + " (id INTEGER PRIMARY KEY, existing_col INTEGER)"); err != nil {
+		t.Fatalf("create scratch table: %v", err)
+	}
+
+	db := &DB{Conn: conn, dialect: dialect}
+	migration := "ALTER TABLE " + table + " ADD COLUMN existing_col INTEGER;\n" +
+		"ALTER TABLE " + table + " ADD COLUMN later_col INTEGER"
+	const version = "mig_test_pg_savepoint"
+	if err := db.applyMigration(migration, version); err != nil {
+		t.Fatalf("applyMigration with a tolerated already-exists statement: %v", err)
+	}
+
+	// The statement AFTER the tolerated error must have run.
+	var laterCol int
+	if err := conn.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = $1 AND column_name = 'later_col'",
+		table,
+	).Scan(&laterCol); err != nil {
+		t.Fatalf("query information_schema: %v", err)
+	}
+	if laterCol != 1 {
+		t.Error("later_col must be added by the statement following the tolerated already-exists error")
+	}
+
+	var recorded int
+	if err := conn.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version = $1", version,
+	).Scan(&recorded); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if recorded != 1 {
+		t.Errorf("migration must be recorded exactly once after the tolerated replay, got %d", recorded)
+	}
+}
+
 // TestPostgresIntegration_APIKeyScopeColumnBackfill verifies the scoped-API-key
 // migration on PostgreSQL: the scope column exists and an INSERT that omits it
 // reads back the DEFAULT 'api:write' (the pre-migration key backfill).

@@ -1,10 +1,17 @@
 package database
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/mattn/go-sqlite3"
 
 	"github.com/babykart/gozone/internal/config"
 )
@@ -255,6 +262,148 @@ CREATE TABLE mig_multi_b (id INTEGER PRIMARY KEY);`
 	}
 	if recorded != 1 {
 		t.Errorf("migration should be recorded exactly once, got %d", recorded)
+	}
+}
+
+// TestApplyMigration_AtomicOnPartialFailure (below) already guards the
+// whole-transaction rollback contract the savepoints must preserve: a hard
+// failure rolls back the sentinel table and the version claim. The NEW
+// behaviour — per-statement recovery from a tolerated already-exists error —
+// is pinned by TestApplyMigration_StatementsRunUnderSavepoints, since SQLite
+// tolerates per-statement errors even without savepoints and cannot
+// demonstrate the 25P02 abort that motivates them on PostgreSQL.
+
+// execRecordingConnector is a database/sql driver.Connector wrapping the
+// sqlite3 driver; it records the text of every statement seen through Prepare
+// or direct ExecContext on its connections. TestApplyMigration_StatementsRunUnderSavepoints
+// uses it to prove applyMigration brackets each migration statement with the
+// savepoint control statements — the observable contract of the per-statement
+// recovery that keeps a tolerated already-exists error from aborting the whole
+// PostgreSQL transaction (25P02).
+type execRecordingConnector struct {
+	inner   driver.Driver
+	dsn     string
+	mu      sync.Mutex
+	queries []string
+}
+
+func (c *execRecordingConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.inner.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &execRecordingConn{Conn: conn, rec: c}, nil
+}
+
+func (c *execRecordingConnector) Driver() driver.Driver { return c.inner }
+
+func (c *execRecordingConnector) record(query string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queries = append(c.queries, query)
+}
+
+// normalizedQueries returns the recorded statements trimmed of surrounding
+// whitespace and trailing semicolons, in execution order.
+func (c *execRecordingConnector) normalizedQueries() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	queries := make([]string, 0, len(c.queries))
+	for _, q := range c.queries {
+		queries = append(queries, strings.TrimSuffix(strings.TrimSpace(q), ";"))
+	}
+	return queries
+}
+
+// execRecordingConn delegates to the wrapped sqlite3 connection and records
+// every statement text seen through Prepare (the prepared path) or
+// ExecContext (the direct-exec path database/sql prefers when the connection
+// implements driver.ExecerContext — which sqlite3 does).
+type execRecordingConn struct {
+	driver.Conn
+	rec *execRecordingConnector
+}
+
+func (c *execRecordingConn) Prepare(query string) (driver.Stmt, error) {
+	c.rec.record(query)
+	return c.Conn.Prepare(query)
+}
+
+func (c *execRecordingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	c.rec.record(query)
+	ec, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return nil, errors.New("execRecordingConn: inner driver lacks ExecerContext")
+	}
+	return ec.ExecContext(ctx, query, args)
+}
+
+// TestApplyMigration_StatementsRunUnderSavepoints is the driver-level pin of
+// the per-statement savepoint contract: on atomic-DDL dialects every migration
+// statement must run between SAVEPOINT gozone_migration_stmt and RELEASE
+// SAVEPOINT gozone_migration_stmt, and a tolerated already-exists statement
+// must be recovered with ROLLBACK TO SAVEPOINT gozone_migration_stmt before
+// the loop moves on. On PostgreSQL the first error aborts the whole
+// transaction (25P02), so without these statements a re-run migration whose
+// first object already exists silently drops every following statement.
+// SQLite cannot demonstrate the abort (it tolerates per-statement errors
+// anyway), hence the assertion is on the savepoint SQL itself.
+func TestApplyMigration_StatementsRunUnderSavepoints(t *testing.T) {
+	dialect := &sqliteDialect{}
+	rec := &execRecordingConnector{
+		inner: &sqlite3.SQLiteDriver{},
+		dsn:   dialect.DSN(":memory:"),
+	}
+	conn := sql.OpenDB(rec)
+	// A single pooled connection: the in-memory database must be shared
+	// between the setup below and applyMigration, and every recorded
+	// statement then belongs to this test.
+	conn.SetMaxOpenConns(1)
+	t.Cleanup(func() { conn.Close() })
+
+	if _, err := conn.Exec(`CREATE TABLE schema_migrations (
+		version VARCHAR(255) PRIMARY KEY,
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	// The SECOND statement's object already exists: the savepoint recovery
+	// path (SAVEPOINT + ROLLBACK TO SAVEPOINT) must be exercised once.
+	if _, err := conn.Exec("CREATE TABLE stmt_two (id INTEGER)"); err != nil {
+		t.Fatalf("pre-create stmt_two: %v", err)
+	}
+
+	db := &DB{Conn: conn, dialect: dialect}
+	sqlText := "CREATE TABLE stmt_one (id INTEGER);\nCREATE TABLE stmt_two (id INTEGER);\nCREATE TABLE stmt_three (id INTEGER)"
+	if err := db.applyMigration(sqlText, migrationVersion(sqlText)); err != nil {
+		t.Fatalf("applyMigration with a pre-existing object: %v", err)
+	}
+
+	// Exact ordered pin: every statement runs between its own SAVEPOINT and
+	// RELEASE; the tolerated stmt_two error is recovered with ROLLBACK TO
+	// (followed by RELEASE to keep the savepoint stack clean) BEFORE
+	// stmt_three starts. A substring check would let one savepoint around
+	// the whole migration pass, and "SAVEPOINT x" matches RELEASE/ROLLBACK
+	// TO as well — hence the exact sequence comparison.
+	queries := rec.normalizedQueries()
+	start := slices.Index(queries, "SAVEPOINT gozone_migration_stmt")
+	if start < 0 {
+		t.Fatalf("no SAVEPOINT recorded; statements: %v", queries)
+	}
+	wantTail := []string{
+		"SAVEPOINT gozone_migration_stmt",
+		"CREATE TABLE stmt_one (id INTEGER)",
+		"RELEASE SAVEPOINT gozone_migration_stmt",
+		"SAVEPOINT gozone_migration_stmt",
+		"CREATE TABLE stmt_two (id INTEGER)",
+		"ROLLBACK TO SAVEPOINT gozone_migration_stmt",
+		"RELEASE SAVEPOINT gozone_migration_stmt",
+		"SAVEPOINT gozone_migration_stmt",
+		"CREATE TABLE stmt_three (id INTEGER)",
+		"RELEASE SAVEPOINT gozone_migration_stmt",
+	}
+	if tail := queries[start:]; !slices.Equal(tail, wantTail) {
+		t.Errorf("statement sequence mismatch\ngot:  %q\nwant: %q", tail, wantTail)
 	}
 }
 

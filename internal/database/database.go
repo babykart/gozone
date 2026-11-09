@@ -913,7 +913,19 @@ func (db *DB) applyMigration(sqlText, version string) error {
 	}
 
 	for _, stmt := range splitStatements(sqlText) {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		// Each statement runs under its own savepoint, so a tolerated error
+		// does not poison the transaction: on PostgreSQL a failed statement
+		// aborts the whole transaction (every following command fails with
+		// 25P02), and without ROLLBACK TO the already-exists skip below would
+		// leave the transaction unusable. Recovery is per-statement — a
+		// multi-object statement (e.g. ADD COLUMN a, ADD COLUMN b) is
+		// skipped wholesale, so a missing later object in a replayed
+		// migration stays missing.
+		if _, err := tx.ExecContext(ctx, "SAVEPOINT gozone_migration_stmt"); err != nil {
+			return fmt.Errorf("migration %s: savepoint: %w", version, err)
+		}
+		_, err := tx.ExecContext(ctx, stmt)
+		if err != nil {
 			// An already-existing object is skipped STATEMENT BY STATEMENT:
 			// a re-run migration (edited content hash, or a database whose
 			// objects predate tracking) used to abort at its first
@@ -921,12 +933,21 @@ func (db *DB) applyMigration(sqlText, version string) error {
 			// dropped — on MySQL, where DDL implicitly commits, that left a
 			// partially applied migration recorded as fully applied. Skipping
 			// just the offending statement lets the remaining ones run.
-			if db.dialect.IsAlreadyExistsError(err) {
-				logger.Warn("migration statement skipped: object already exists",
-					"version", version, "statement", firstLine(stmt), "error", err)
-				continue
+			if !db.dialect.IsAlreadyExistsError(err) {
+				return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
 			}
-			return fmt.Errorf("migration %s failed: %w\nSQL: %s", version, err, stmt)
+			if _, rbErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT gozone_migration_stmt"); rbErr != nil {
+				return fmt.Errorf("migration %s: rollback to savepoint: %v (original error: %w)",
+					version, rbErr, err)
+			}
+			logger.Warn("migration statement skipped: object already exists",
+				"version", version, "statement", firstLine(stmt), "error", err)
+		}
+		// Keep the savepoint stack clean: a tolerated error would otherwise
+		// leave the savepoint active for the next iteration. Shared by the
+		// success and tolerated-error paths.
+		if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT gozone_migration_stmt"); err != nil {
+			return fmt.Errorf("migration %s: release savepoint: %w", version, err)
 		}
 	}
 
