@@ -35,5 +35,24 @@ func (s *Service) Stats(ctx context.Context, user *models.User) ([]models.Statis
 	if filtered != nil {
 		zoneCount = len(filtered)
 	}
-	return stats, zoneCount, nil
+	return filterStatsForUser(stats, user), zoneCount, nil
+}
+
+// filterStatsForUser strips RingStatisticItem and MapStatisticItem entries for
+// users who cannot manage DNS. Those items expose the most-queried names and
+// client resolver IPs and are reserved for DNS admins. The filter always
+// builds a new slice — the input can be the shared cached backing array from
+// the PDNS cache, which must never be written into.
+func filterStatsForUser(stats []models.StatisticItem, user *models.User) []models.StatisticItem {
+	if user == nil || user.CanManageDNS() {
+		return stats
+	}
+	filtered := make([]models.StatisticItem, 0, len(stats))
+	for _, item := range stats {
+		if item.Type == "RingStatisticItem" || item.Type == "MapStatisticItem" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }

@@ -77,7 +77,7 @@ Scope matrix — which tools a key sees:
 | `list_zones` | `GET /api/v1/zones` | any user (filtered by groups) | read-only |
 | `get_zone` (`zone`) | `GET /api/v1/zones/{id}` | zone access | read-only |
 | `list_records` (`zone`, `name?`, `type?`) | `GET …/records` | zone access | read-only |
-| `get_stats` | `GET /api/v1/stats` | any user | read-only |
+| `get_stats` | `GET /api/v1/stats` | any user (ring/map items DNS admins only) | read-only |
 | `list_record_types` | — | any user | read-only |
 | `export_zone` (`zone`, `format: bind\|csv`) | `GET …/export` | zone access | read-only |
 | `create_record` (`zone`, `name`, `type`, `ttl?`, `records[]`) | `POST …/records` | zone access | write, not idempotent |

@@ -2347,3 +2347,43 @@ func TestAPIStats_ZoneFilterErrorSurfaces500(t *testing.T) {
 		t.Errorf("expected code %s, got %s", ErrCodeInternalError, resp.Code)
 	}
 }
+
+// TestAPIStats_NonAdminSeesNoRingOrMapItems is the REST-level regression for
+// the statistics info leak: PowerDNS ring (RingStatisticItem) and map
+// (MapStatisticItem) items carry per-client traffic detail and must be
+// stripped from /api/v1/stats responses for users who are not DNS admins.
+// Scalar statistics stay visible.
+func TestAPIStats_NonAdminSeesNoRingOrMapItems(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/statistics") {
+			json.NewEncoder(w).Encode([]models.StatisticItem{
+				{Name: "uptime", Type: "StatisticItem", Value: "12345"},
+				{Name: "queries", Type: "RingStatisticItem", Value: []interface{}{"example.com."}},
+				{Name: "remotes", Type: "MapStatisticItem", Value: map[string]interface{}{"192.0.2.1": 42}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode([]models.Zone{})
+	})
+	defer pdnsSrv.Close()
+
+	userID := seedUserWithHash(t, h, "statsplain", "pass", "user")
+	user := &models.User{ID: userID, Username: "statsplain", Role: "user"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil), user)
+	w := httptest.NewRecorder()
+	h.APIStats(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "uptime") {
+		t.Errorf("scalar statistic \"uptime\" must be visible to a plain user; body: %s", body)
+	}
+	for _, leak := range []string{"RingStatisticItem", "MapStatisticItem", "queries", "remotes"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("statistic detail %q leaked to a plain user; body: %s", leak, body)
+		}
+	}
+}

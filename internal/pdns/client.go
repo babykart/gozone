@@ -215,8 +215,14 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 }
 
 // GetStatistics returns global PowerDNS statistics.
+//
+// ?includerings=false excludes ring statistics from the response for every
+// caller: they list the most-queried names and client resolver IPs, and no
+// GoZone surface renders them (the dashboard reads named scalar stats only).
+// MapStatisticItem entries are not affected by this parameter; the dnsops
+// service strips those for non-DNS-admins.
 func (c *Client) GetStatistics(ctx context.Context) ([]models.StatisticItem, error) {
-	return doUnmarshal[[]models.StatisticItem](c, ctx, "GET", c.serverPath()+"/statistics", nil, "statistics")
+	return doUnmarshal[[]models.StatisticItem](c, ctx, "GET", c.serverPath()+"/statistics?includerings=false", nil, "statistics")
 }
 
 // ListZones returns all zones without their rrsets.
