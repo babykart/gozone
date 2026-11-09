@@ -92,7 +92,7 @@ func (k *cachedKeySet) Close() {
 // VerifySignature implements oidc.KeySet. The IDTokenVerifier has already
 // enforced the signing algorithm by the time this is called.
 func (k *cachedKeySet) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
-	jws, err := jose.ParseSigned(jwt, oidcSigAlgs)
+	jws, err := jose.ParseSignedCompact(jwt, oidcSigAlgs)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: malformed jwt: %w", err)
 	}
