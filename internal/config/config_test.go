@@ -603,6 +603,7 @@ func TestLoad_RejectsInvalidEnvOverride(t *testing.T) {
 		"GOZONE_LOGIN_MAX_FAILED_ATTEMPTS",
 		"GOZONE_LOGIN_LOCKOUT_MINUTES",
 		"GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE",
+		"GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE",
 		"GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS",
 	}
 	for _, env := range cases {
@@ -952,6 +953,12 @@ func TestLoad_ValidatesPort(t *testing.T) {
 			envVal:  "-5",
 			wantErr: "shutdown_timeout_seconds",
 		},
+		{
+			name:    "login global username rate limit negative",
+			envName: "GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE",
+			envVal:  "-1",
+			wantErr: "username_global_rate_limit_per_minute",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1004,6 +1011,7 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_LOGIN_LOCKOUT_MINUTES", "30")
 	t.Setenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", "10")
 	t.Setenv("GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", "48")
+	t.Setenv("GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE", "30")
 	t.Setenv("GOZONE_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.1/32, 2001:db8::/32")
 
 	cfg, err := Load("")
@@ -1022,6 +1030,9 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 	if cfg.LoginLock.AttemptsRetentionHours != 48 {
 		t.Errorf("expected attempts_retention_hours 48, got %d", cfg.LoginLock.AttemptsRetentionHours)
 	}
+	if cfg.LoginLock.UsernameGlobalRateLimitPerMinute != 30 {
+		t.Errorf("expected username_global_rate_limit_per_minute 30, got %d", cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
+	}
 	if len(cfg.Server.TrustedProxies) != 3 {
 		t.Fatalf("expected 3 trusted_proxies, got %d (%v)", len(cfg.Server.TrustedProxies), cfg.Server.TrustedProxies)
 	}
@@ -1030,6 +1041,61 @@ func TestLoad_LoginLockEnvOverrides(t *testing.T) {
 		if cfg.Server.TrustedProxies[i] != want {
 			t.Errorf("trusted_proxies[%d] = %q, want %q", i, cfg.Server.TrustedProxies[i], want)
 		}
+	}
+}
+
+// TestLoad_LoginLockGlobalRateLimitDefaults pins the out-of-the-box value of
+// the new global per-username ceiling: generous (60/min across ALL source
+// IPs for one username) so distributed brute-force stays bounded without
+// letting a single attacker IP lock a legitimate user out.
+func TestLoad_LoginLockGlobalRateLimitDefaults(t *testing.T) {
+	if got := DefaultConfig().LoginLock.UsernameGlobalRateLimitPerMinute; got != 60 {
+		t.Errorf("DefaultConfig username_global_rate_limit_per_minute = %d, want 60", got)
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.LoginLock.UsernameGlobalRateLimitPerMinute; got != 60 {
+		t.Errorf("Load username_global_rate_limit_per_minute = %d, want 60", got)
+	}
+}
+
+// TestLoad_LoginLockGlobalRateLimitYAML covers the YAML key
+// (login_lock.username_global_rate_limit_per_minute): the sample config and
+// operator files must map onto the same field as the env override.
+func TestLoad_LoginLockGlobalRateLimitYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "login_lock:\n  username_global_rate_limit_per_minute: 7\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.LoginLock.UsernameGlobalRateLimitPerMinute; got != 7 {
+		t.Errorf("username_global_rate_limit_per_minute = %d, want 7", got)
+	}
+}
+
+// TestConfigSampleDocumentsGlobalUsernameRateLimit keeps the shipped
+// config.yaml sample honest: the new knob must be documented next to the
+// existing per-username pair knob with its default value, so operators can
+// discover it. (The doc-comment counterpart for the env var is
+// TestLoadDocListsEveryEnvOverride.)
+func TestConfigSampleDocumentsGlobalUsernameRateLimit(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate config_test.go")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatalf("read repo config.yaml sample: %v", err)
+	}
+	if !strings.Contains(string(src), "username_global_rate_limit_per_minute: 60") {
+		t.Error("config.yaml sample must document username_global_rate_limit_per_minute: 60 next to username_rate_limit_per_minute")
 	}
 }
 
@@ -1164,6 +1230,7 @@ func TestLoad_RejectsNegativeLoginLockFields(t *testing.T) {
 func TestLoad_LoginLockDisabledByZero(t *testing.T) {
 	t.Setenv("GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", "0")
 	t.Setenv("GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", "0")
+	t.Setenv("GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE", "0")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -1174,6 +1241,9 @@ func TestLoad_LoginLockDisabledByZero(t *testing.T) {
 	}
 	if cfg.LoginLock.UsernameRateLimitPerMinute != 0 {
 		t.Errorf("expected username_rate_limit_per_minute 0, got %d", cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	if cfg.LoginLock.UsernameGlobalRateLimitPerMinute != 0 {
+		t.Errorf("expected username_global_rate_limit_per_minute 0, got %d", cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
 	}
 }
 

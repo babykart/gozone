@@ -62,9 +62,14 @@ type MCPConfig struct {
 
 // LoginLockConfig holds settings for the login brute-force protection.
 //
-// The /login endpoint is protected by three complementary defences:
-//   - an in-memory IP-based rate limiter (always on; see RateLimiter).
-//   - an in-memory username-based rate limiter that compounds with the IP one.
+// The /login endpoint is protected by four complementary defences across
+// three rate-limit families plus the persistent lockout:
+//   - an in-memory per-IP rate limiter (always on; see RateLimiter), mirrored
+//     cluster-wide by a DBRateLimiter on the shared rate_limit_counters table.
+//   - an in-memory per-(username, IP) pair rate limiter, mirrored the same way,
+//     so one attacker IP cannot exhaust another user's bucket.
+//   - an in-memory global per-username ceiling across ALL source IPs, mirrored
+//     the same way, bounding distributed brute-force.
 //   - persistent per-account lockout (failed_login_attempts, locked_until on users)
 //     that survives server restarts and cluster-wide rollouts.
 type LoginLockConfig struct {
@@ -90,9 +95,18 @@ type LoginLockConfig struct {
 	// threshold is reached. Subsequent failed attempts reset the window.
 	LockoutDurationMinutes int `yaml:"lockout_duration_minutes"`
 	// UsernameRateLimitPerMinute bounds login attempts per minute per
-	// attempted username. Compounded with the per-IP limit by AND-ing both
-	// limits at the route level. Set to 0 to disable.
+	// attempted username AND source-IP pair. Compounded with the per-IP limit
+	// by AND-ing both limits at the route level. Set to 0 to disable.
 	UsernameRateLimitPerMinute int `yaml:"username_rate_limit_per_minute"`
+	// UsernameGlobalRateLimitPerMinute bounds login attempts per minute per
+	// attempted username across ALL source IPs: the cluster-wide distributed
+	// brute-force ceiling, enforced through the shared rate_limit_counters
+	// table so the budget does not scale with the instance count. It
+	// complements the per-(username, IP) pair limit — the pair limit stops
+	// one IP from locking out a targeted account for everyone, the global
+	// ceiling stops many IPs from grinding one account together. Set to 0 to
+	// disable.
+	UsernameGlobalRateLimitPerMinute int `yaml:"username_global_rate_limit_per_minute"`
 	// AttemptsRetentionHours is how long a recorded login attempt is kept in
 	// the login_attempts table before being purged. Should be greater than
 	// LockoutDurationMinutes so the lockout window can be reliably enforced.
@@ -439,10 +453,11 @@ func DefaultConfig() *Config {
 			BatchSize:     1000,
 		},
 		LoginLock: LoginLockConfig{
-			MaxFailedAttempts:          10,
-			LockoutDurationMinutes:     15,
-			UsernameRateLimitPerMinute: 5,
-			AttemptsRetentionHours:     24,
+			MaxFailedAttempts:                10,
+			LockoutDurationMinutes:           15,
+			UsernameRateLimitPerMinute:       5,
+			UsernameGlobalRateLimitPerMinute: 60,
+			AttemptsRetentionHours:           24,
 		},
 		Password: PasswordConfig{
 			MinLength:        8,
@@ -493,6 +508,7 @@ func DefaultConfig() *Config {
 //	activity:   GOZONE_ACTIVITY_RETENTION_DAYS, GOZONE_ACTIVITY_BATCH_SIZE
 //	login lock: GOZONE_LOGIN_MAX_FAILED_ATTEMPTS, GOZONE_LOGIN_LOCKOUT_MINUTES,
 //	            GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE,
+//	            GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE,
 //	            GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS
 //	password:   GOZONE_PASSWORD_MIN_LENGTH, GOZONE_PASSWORD_MAX_LENGTH,
 //	            GOZONE_PASSWORD_HISTORY_SIZE, GOZONE_PASSWORD_MAX_AGE_DAYS,
@@ -685,6 +701,9 @@ func (cfg *Config) validate() error {
 	}
 	if cfg.LoginLock.UsernameRateLimitPerMinute < 0 {
 		return fmt.Errorf("invalid login_lock.username_rate_limit_per_minute %d: must be non-negative", cfg.LoginLock.UsernameRateLimitPerMinute)
+	}
+	if cfg.LoginLock.UsernameGlobalRateLimitPerMinute < 0 {
+		return fmt.Errorf("invalid login_lock.username_global_rate_limit_per_minute %d: must be non-negative", cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
 	}
 	if cfg.LoginLock.AttemptsRetentionHours < 0 {
 		return fmt.Errorf("invalid login_lock.attempts_retention_hours %d: must be non-negative", cfg.LoginLock.AttemptsRetentionHours)
@@ -1073,6 +1092,7 @@ var envOverrides = []envOverride{
 	intOverride{"GOZONE_LOGIN_MAX_FAILED_ATTEMPTS", func(c *Config, n int) { c.LoginLock.MaxFailedAttempts = n }},
 	intOverride{"GOZONE_LOGIN_LOCKOUT_MINUTES", func(c *Config, n int) { c.LoginLock.LockoutDurationMinutes = n }},
 	intOverride{"GOZONE_LOGIN_USERNAME_RATE_PER_MINUTE", func(c *Config, n int) { c.LoginLock.UsernameRateLimitPerMinute = n }},
+	intOverride{"GOZONE_LOGIN_USERNAME_GLOBAL_RATE_PER_MINUTE", func(c *Config, n int) { c.LoginLock.UsernameGlobalRateLimitPerMinute = n }},
 	intOverride{"GOZONE_LOGIN_ATTEMPTS_RETENTION_HOURS", func(c *Config, n int) { c.LoginLock.AttemptsRetentionHours = n }},
 	// password policy
 	intOverride{"GOZONE_PASSWORD_MIN_LENGTH", func(c *Config, n int) { c.Password.MinLength = n }},
