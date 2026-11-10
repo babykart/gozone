@@ -483,7 +483,7 @@ func TestAddMemberToGroup(t *testing.T) {
 	groupID := seedGroup(t, h, "test-group", "")
 	userID := seedUserWithHash(t, h, "memberuser", "pass", "user")
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	w := httptest.NewRecorder()
 	body := "user_id=" + strconv.FormatInt(userID, 10)
 	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-member", strings.NewReader(body))
@@ -515,7 +515,7 @@ func TestRemoveMemberFromGroup(t *testing.T) {
 
 	h.DB.Exec("INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?)", groupID, userID)
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	w := httptest.NewRecorder()
 	body := "user_id=" + strconv.FormatInt(userID, 10)
 	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/remove-member", strings.NewReader(body))
@@ -633,7 +633,7 @@ func TestAddZoneToGroup(t *testing.T) {
 
 	groupID := seedGroup(t, h, "test-group", "")
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	w := httptest.NewRecorder()
 	body := "zone_id=example.com."
 	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-zone", strings.NewReader(body))
@@ -656,6 +656,52 @@ func TestAddZoneToGroup(t *testing.T) {
 	}
 }
 
+// TestAddZoneToGroup_DuplicateGrantAccepted pins the duplicate-grant
+// contract on every dialect: re-adding an already-granted zone goes through
+// the skip-duplicate insert (MySQL: ON DUPLICATE KEY UPDATE self-assign,
+// PostgreSQL: ON CONFLICT DO NOTHING, SQLite: OR IGNORE), so the handler
+// returns 303 without error, leaves exactly one zone_group_zones row, and
+// still writes the request-level add_group_zone audit entry.
+func TestAddZoneToGroup_DuplicateGrantAccepted(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+	user := seedAdminUser(t, h)
+
+	add := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		body := "zone_id=example.com."
+		r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-zone", strings.NewReader(body))
+		r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = withUserContext(r, user)
+		h.AddZoneToGroup(w, r)
+		return w
+	}
+
+	if w := add(); w.Code != http.StatusSeeOther {
+		t.Fatalf("first add: expected 303 redirect, got %d", w.Code)
+	}
+	auditBefore := countActivity(t, h, "add_group_zone")
+
+	if w := add(); w.Code != http.StatusSeeOther {
+		t.Fatalf("duplicate add: expected 303 redirect, got %d", w.Code)
+	}
+
+	var count int
+	h.DB.QueryRow(
+		"SELECT COUNT(*) FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",
+		groupID, "example.com.",
+	).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected exactly one grant row after duplicate add, got %d", count)
+	}
+	if n := countActivity(t, h, "add_group_zone"); n != auditBefore+1 {
+		t.Errorf("expected one more add_group_zone audit row after duplicate add, got %d (before %d)", n, auditBefore)
+	}
+}
+
 // TestAddZoneToGroup_CanonicalizesZoneID verifies that the grant is stored
 // under the canonical form (lowercase, trailing dot): the access probe
 // compares the canonical form of the path value, so a grant stored dotless
@@ -667,7 +713,7 @@ func TestAddZoneToGroup_CanonicalizesZoneID(t *testing.T) {
 
 	groupID := seedGroup(t, h, "test-group", "")
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	w := httptest.NewRecorder()
 	body := "zone_id=Example.COM"
 	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-zone", strings.NewReader(body))
@@ -719,7 +765,7 @@ func TestRemoveZoneFromGroup(t *testing.T) {
 	groupID := seedGroup(t, h, "test-group", "")
 	h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "example.com.")
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	w := httptest.NewRecorder()
 	body := "zone_id=example.com."
 	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/remove-zone", strings.NewReader(body))
@@ -739,6 +785,264 @@ func TestRemoveZoneFromGroup(t *testing.T) {
 	).Scan(&count)
 	if count != 0 {
 		t.Error("expected zone to be removed from group")
+	}
+}
+
+// countActivity returns how many activity_logs rows carry the given action.
+func countActivity(t *testing.T, h *Handler, action string) int {
+	t.Helper()
+	var n int
+	if err := h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action = ?", action).Scan(&n); err != nil {
+		t.Fatalf("count activity %q: %v", action, err)
+	}
+	return n
+}
+
+// TestAddMemberToGroup_MissingGroupRejected pins the missing-GROUP case of the
+// add-member contract (the missing-USER case is covered by
+// TestAddMemberToGroup_NonExistentUser): a numeric but non-existent group_id
+// must yield a clean error page, not a 303 redirect, and must neither insert
+// a membership row nor write an add_group_member audit entry. Previously the
+// handler never checked the group: InsertIgnore swallowed the FK violation and
+// the audit entry was written regardless, so a tampered link looked like a
+// successful grant.
+func TestAddMemberToGroup_MissingGroupRejected(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	userID := seedUserWithHash(t, h, "memberuser", "pass", "user")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "user_id=" + strconv.FormatInt(userID, 10)
+	r := httptest.NewRequest(http.MethodPost, "/groups/999999/add-member", strings.NewReader(body))
+	r.SetPathValue("group_id", "999999")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddMemberToGroup(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Fatalf("expected an error page for a non-existent group, got a 303 redirect")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for non-existent group, got %d", w.Code)
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE user_id = ?", userID).Scan(&n)
+	if n != 0 {
+		t.Errorf("expected no membership row for a non-existent group, got %d", n)
+	}
+	if n := countActivity(t, h, "add_group_member"); n != 0 {
+		t.Errorf("expected no add_group_member audit row for a non-existent group, got %d", n)
+	}
+}
+
+// TestAddZoneToGroup_MissingGroupRejected is the zone-grant counterpart: a
+// non-existent group_id must yield a clean error, no grant row and no
+// add_group_zone audit entry, instead of the historical silent no-op +
+// success redirect.
+func TestAddZoneToGroup_MissingGroupRejected(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/999999/add-zone", strings.NewReader("zone_id=ops.example.com."))
+	r.SetPathValue("group_id", "999999")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddZoneToGroup(w, r)
+
+	if w.Code == http.StatusSeeOther {
+		t.Fatalf("expected an error page for a non-existent group, got a 303 redirect")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for non-existent group, got %d", w.Code)
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_zones WHERE zone_id = ?", "ops.example.com.").Scan(&n)
+	if n != 0 {
+		t.Errorf("expected no grant row for a non-existent group, got %d", n)
+	}
+	if n := countActivity(t, h, "add_group_zone"); n != 0 {
+		t.Errorf("expected no add_group_zone audit row for a non-existent group, got %d", n)
+	}
+}
+
+// TestAddMemberToGroup_InsertFailureAborts is the true INSERT-failure pin for
+// the new early-return branch: the group exists and the user exists, but the
+// zone_group_members table is gone, so the membership INSERT itself fails.
+// The handler must return 500 and write no add_group_member audit row — the
+// mutation and its audit entry must be all-or-nothing. (A missing-group case
+// returns before the INSERT, so it cannot exercise this path.)
+func TestAddMemberToGroup_InsertFailureAborts(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+	userID := seedUserWithHash(t, h, "memberuser", "pass", "user")
+
+	if _, err := h.DB.Exec("DROP TABLE zone_group_members"); err != nil {
+		t.Fatalf("drop zone_group_members: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "user_id=" + strconv.FormatInt(userID, 10)
+	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-member", strings.NewReader(body))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddMemberToGroup(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the membership insert fails, got %d", w.Code)
+	}
+	if n := countActivity(t, h, "add_group_member"); n != 0 {
+		t.Errorf("expected no add_group_member audit row when the insert fails, got %d", n)
+	}
+}
+
+// TestAddZoneToGroup_InsertFailureAborts is the zone-grant counterpart of the
+// INSERT-failure abort: with zone_group_zones missing the grant INSERT fails
+// and the handler must 500 without writing an add_group_zone audit row.
+func TestAddZoneToGroup_InsertFailureAborts(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+
+	if _, err := h.DB.Exec("DROP TABLE zone_group_zones"); err != nil {
+		t.Fatalf("drop zone_group_zones: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-zone", strings.NewReader("zone_id=ops.example.com."))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddZoneToGroup(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the grant insert fails, got %d", w.Code)
+	}
+	if n := countActivity(t, h, "add_group_zone"); n != 0 {
+		t.Errorf("expected no add_group_zone audit row when the insert fails, got %d", n)
+	}
+}
+
+// TestGroupRemovals_DBFailureAbort pins the removal contract: when the DELETE
+// itself fails, the handler must return 500 — not log-and-redirect 303 with a
+// fabricated remove_* audit entry. The association table is dropped after
+// seeding, so the DELETE fails inside the transaction; afterwards neither the
+// association nor its audit row may exist.
+func TestGroupRemovals_DBFailureAbort(t *testing.T) {
+	cases := []struct {
+		name        string
+		dropTable   string
+		auditAction string
+		setup       func(t *testing.T, h *Handler) (groupID int64, body string)
+		call        func(h *Handler, w http.ResponseWriter, r *http.Request)
+	}{
+		{
+			name:        "RemoveMemberFromGroup",
+			dropTable:   "zone_group_members",
+			auditAction: "remove_group_member",
+			setup: func(t *testing.T, h *Handler) (int64, string) {
+				groupID := seedGroup(t, h, "test-group", "")
+				userID := seedUserWithHash(t, h, "memberuser", "pass", "user")
+				attachGroupMember(t, h, groupID, userID)
+				return groupID, "user_id=" + strconv.FormatInt(userID, 10)
+			},
+			call: func(h *Handler, w http.ResponseWriter, r *http.Request) {
+				h.RemoveMemberFromGroup(w, r)
+			},
+		},
+		{
+			name:        "RemoveZoneFromGroup",
+			dropTable:   "zone_group_zones",
+			auditAction: "remove_group_zone",
+			setup: func(t *testing.T, h *Handler) (int64, string) {
+				groupID := seedGroup(t, h, "test-group", "")
+				if _, err := h.DB.Exec("INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?)", groupID, "example.com."); err != nil {
+					t.Fatalf("attach zone: %v", err)
+				}
+				return groupID, "zone_id=example.com."
+			},
+			call: func(h *Handler, w http.ResponseWriter, r *http.Request) {
+				h.RemoveZoneFromGroup(w, r)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+			defer srv.Close()
+
+			actor := seedAdminUser(t, h)
+			groupID, body := tc.setup(t, h)
+
+			// Dropped association table: the DELETE fails inside the
+			// transaction, so the handler must surface 500 and write no
+			// audit row.
+			if _, err := h.DB.Exec("DROP TABLE " + tc.dropTable); err != nil {
+				t.Fatalf("drop %s: %v", tc.dropTable, err)
+			}
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/remove", strings.NewReader(body))
+			r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r = withUserContext(r, actor)
+			tc.call(h, w, r)
+
+			if w.Code != http.StatusInternalServerError {
+				t.Errorf("expected 500 when the DELETE fails, got %d (must not redirect 303 or audit)", w.Code)
+			}
+			if n := countActivity(t, h, tc.auditAction); n != 0 {
+				t.Errorf("expected no %s audit row when the delete fails, got %d", tc.auditAction, n)
+			}
+		})
+	}
+}
+
+// TestAddMemberToGroup_AuditFailureRollsBack guards the atomicity of the
+// membership mutation and its audit trail: with activity_logs gone the audit
+// INSERT fails, the whole operation must roll back — the handler returns 500
+// AND the membership row is absent. Previously the insert committed and only
+// the audit error was logged, leaving an unaudited grant.
+func TestAddMemberToGroup_AuditFailureRollsBack(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	groupID := seedGroup(t, h, "test-group", "")
+	userID := seedUserWithHash(t, h, "memberuser", "pass", "user")
+
+	if _, err := h.DB.Exec("DROP TABLE activity_logs"); err != nil {
+		t.Fatalf("drop activity_logs: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	body := "user_id=" + strconv.FormatInt(userID, 10)
+	r := httptest.NewRequest(http.MethodPost, "/groups/"+strconv.FormatInt(groupID, 10)+"/add-member", strings.NewReader(body))
+	r.SetPathValue("group_id", strconv.FormatInt(groupID, 10))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.AddMemberToGroup(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when the audit write fails, got %d (mutation must not succeed without an audit trail)", w.Code)
+	}
+
+	var n int
+	h.DB.QueryRow("SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?", groupID, userID).Scan(&n)
+	if n != 0 {
+		t.Errorf("expected the membership insert to be rolled back (no row), got %d", n)
 	}
 }
 
@@ -1634,7 +1938,7 @@ func TestEditGroupPage_ActionRedirectsPreserveState(t *testing.T) {
 	groupID := seedPaginatedGroupFixture(t, h, "pgr", 12)
 	userID := testutil.SeedTestUser(t, h.DB, "pgr-new", "pass", "user", true)
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 
 	post := func(path, body string) string {
 		t.Helper()
@@ -1695,7 +1999,7 @@ func TestEditGroupPage_RemoveLastItemOnPageClamps(t *testing.T) {
 	groupID := seedPaginatedGroupFixture(t, h, "pgc", 11)
 
 	// Page 2 holds exactly one member (pgc-010). Remove it while "on" page 2.
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	user := seedAdminUser(t, h)
 	var lastUserID int64
 	if err := h.DB.QueryRow("SELECT user_id FROM zone_group_members ORDER BY user_id DESC LIMIT 1").Scan(&lastUserID); err != nil {
 		t.Fatalf("lookup last member: %v", err)

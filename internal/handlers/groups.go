@@ -614,9 +614,9 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate existence before inserting: InsertIgnore would otherwise drop a
-	// non-existent user_id silently (FK violation) with no feedback — the same
-	// gap as attachGroupSelections.
+	// Validate existence before inserting: the membership INSERT carries a
+	// foreign key to users, and a non-existent id would otherwise fail inside
+	// the transaction as a 500 — surface it as a clean 400 instead.
 	existing, err := h.existingUserIDs(r.Context(), []int64{userID})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to validate user", err)
@@ -626,19 +626,54 @@ func (h *Handler) AddMemberToGroup(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, "User does not exist")
 		return
 	}
+	// Same for the group side: a vanished group_id would FK-fail in the
+	// transaction; report it before opening one.
+	var groupCount int
+	if err := h.DB.QueryRowContext(r.Context(),
+		"SELECT COUNT(*) FROM zone_groups WHERE id = ?", groupID,
+	).Scan(&groupCount); err != nil {
+		h.renderInternalError(w, r, "Failed to validate group", err)
+		return
+	}
+	if groupCount == 0 {
+		h.renderError(w, r, "Group does not exist")
+		return
+	}
 
-	if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members",
+	// Mutation and audit share one transaction: an audit failure rolls the
+	// membership back, and an insert failure leaves no audit row behind.
+	tx, err := h.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to begin transaction", err)
+		return
+	}
+	defer tx.Rollback()
+
+	// InsertSkipDuplicate makes a duplicate add an accepted no-op WITHOUT an
+	// error on every dialect (MySQL: ON DUPLICATE KEY UPDATE self-assign,
+	// PostgreSQL: ON CONFLICT DO NOTHING, SQLite: OR IGNORE), so a handled
+	// violation can never abort the transaction before the audit insert.
+	// Foreign-key and conversion failures still error on every dialect
+	// (MySQL deliberately avoids INSERT IGNORE, which would downgrade FK
+	// violations to warnings) and roll the transaction back.
+	if _, err := tx.InsertSkipDuplicate(r.Context(), "zone_group_members",
 		[]string{"group_id", "user_id"},
 		[]string{"group_id", "user_id"}, // PK on this table
 		groupID, userID); err != nil {
-		logger.Error("failed to add member to group", "group_id", groupID, "user_id", userID, "error", err)
+		h.renderInternalError(w, r, "Failed to add member to group", err)
+		return
 	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{
+	if err := logActivity(r.Context(), tx, activityEntry{
 		UserID:  activityUserIDOf(r),
 		Action:  "add_group_member",
 		Details: fmt.Sprintf("Added user %d to group %d", userID, groupID),
 	}); err != nil {
-		logger.Error("failed to log add_group_member activity", "group_id", groupID, "error", err)
+		h.renderInternalError(w, r, "Failed to log activity", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		h.renderInternalError(w, r, "Failed to commit transaction", err)
+		return
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
@@ -659,18 +694,32 @@ func (h *Handler) RemoveMemberFromGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, err := h.DB.ExecContext(r.Context(),
+	// Removal and audit share one transaction: either both land or neither.
+	tx, err := h.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to begin transaction", err)
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(r.Context(),
 		"DELETE FROM zone_group_members WHERE group_id = ? AND user_id = ?",
 		groupID, userID,
 	); err != nil {
-		logger.Error("failed to remove member from group", "group_id", groupID, "user_id", userID, "error", err)
+		h.renderInternalError(w, r, "Failed to remove member from group", err)
+		return
 	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{
+	if err := logActivity(r.Context(), tx, activityEntry{
 		UserID:  activityUserIDOf(r),
 		Action:  "remove_group_member",
 		Details: fmt.Sprintf("Removed user %d from group %d", userID, groupID),
 	}); err != nil {
-		logger.Error("failed to log remove_group_member activity", "group_id", groupID, "error", err)
+		h.renderInternalError(w, r, "Failed to log activity", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		h.renderInternalError(w, r, "Failed to commit transaction", err)
+		return
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
@@ -686,19 +735,57 @@ func (h *Handler) AddZoneToGroup(w http.ResponseWriter, r *http.Request) {
 	zoneID := dnsops.NormalizeZoneName(strings.TrimSpace(r.FormValue("zone_id")))
 
 	if zoneID != "" {
-		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_zones",
+		// Validate group existence before inserting: the grant INSERT
+		// carries a foreign key to zone_groups, and a vanished group_id
+		// would otherwise fail inside the transaction as a 500.
+		var groupCount int
+		if err := h.DB.QueryRowContext(r.Context(),
+			"SELECT COUNT(*) FROM zone_groups WHERE id = ?", groupID,
+		).Scan(&groupCount); err != nil {
+			h.renderInternalError(w, r, "Failed to validate group", err)
+			return
+		}
+		if groupCount == 0 {
+			h.renderError(w, r, "Group does not exist")
+			return
+		}
+
+		// Grant and audit share one transaction: an audit failure rolls the
+		// grant back, and an insert failure leaves no audit row behind.
+		tx, err := h.DB.BeginTx(r.Context(), nil)
+		if err != nil {
+			h.renderInternalError(w, r, "Failed to begin transaction", err)
+			return
+		}
+		defer tx.Rollback()
+
+		// InsertSkipDuplicate makes a duplicate grant an accepted no-op
+		// WITHOUT an error on every dialect (MySQL: ON DUPLICATE KEY UPDATE
+		// self-assign, PostgreSQL: ON CONFLICT DO NOTHING, SQLite: OR
+		// IGNORE), so a handled violation can never abort the transaction
+		// before the audit insert. Foreign-key and conversion failures still
+		// error on every dialect (MySQL deliberately avoids INSERT IGNORE,
+		// which would downgrade FK violations to warnings) and roll the
+		// transaction back.
+		if _, err := tx.InsertSkipDuplicate(r.Context(), "zone_group_zones",
 			[]string{"group_id", "zone_id"},
 			[]string{"group_id", "zone_id"}, // PK on this table
 			groupID, zoneID); err != nil {
-			logger.Error("failed to add zone to group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
+			h.renderInternalError(w, r, "Failed to add zone to group", err)
+			return
 		}
-		if err := logActivity(r.Context(), h.DB, activityEntry{
+		if err := logActivity(r.Context(), tx, activityEntry{
 			UserID:  activityUserIDOf(r),
 			ZoneID:  zoneID,
 			Action:  "add_group_zone",
 			Details: fmt.Sprintf("Granted group %d access to zone %s", groupID, zoneID),
 		}); err != nil {
-			logger.Error("failed to log add_group_zone activity", "group_id", groupID, "error", err)
+			h.renderInternalError(w, r, "Failed to log activity", err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			h.renderInternalError(w, r, "Failed to commit transaction", err)
+			return
 		}
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
@@ -716,19 +803,33 @@ func (h *Handler) RemoveZoneFromGroup(w http.ResponseWriter, r *http.Request) {
 	// a dotless form would delete nothing.
 	zoneID := dnsops.NormalizeZoneName(r.FormValue("zone_id"))
 
-	if _, err := h.DB.ExecContext(r.Context(),
+	// Revocation and audit share one transaction: either both land or neither.
+	tx, err := h.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to begin transaction", err)
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(r.Context(),
 		"DELETE FROM zone_group_zones WHERE group_id = ? AND zone_id = ?",
 		groupID, zoneID,
 	); err != nil {
-		logger.Error("failed to remove zone from group", "group_id", groupIDStr, "zone_id", zoneID, "error", err)
+		h.renderInternalError(w, r, "Failed to remove zone from group", err)
+		return
 	}
-	if err := logActivity(r.Context(), h.DB, activityEntry{
+	if err := logActivity(r.Context(), tx, activityEntry{
 		UserID:  activityUserIDOf(r),
 		ZoneID:  zoneID,
 		Action:  "remove_group_zone",
 		Details: fmt.Sprintf("Revoked group %d access to zone %s", groupID, zoneID),
 	}); err != nil {
-		logger.Error("failed to log remove_group_zone activity", "group_id", groupID, "error", err)
+		h.renderInternalError(w, r, "Failed to log activity", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		h.renderInternalError(w, r, "Failed to commit transaction", err)
+		return
 	}
 	http.Redirect(w, r, "/groups/"+strconv.FormatInt(groupID, 10)+"/edit"+groupEditReturnQuery(r), http.StatusSeeOther)
 }
