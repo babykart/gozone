@@ -17,7 +17,7 @@ A clean web interface for managing PowerDNS authoritative DNS servers.
 - **Group-based Authorization**: Assign zones to groups, add users to groups — non-admin users see only their authorized zones
 - **User Management**: Admin, operator and user roles with access control — operators manage all DNS (zones, records, DNSSEC, TSIG keys, templates) but not users or groups
 - **API Keys**: Generate and manage API keys for REST API access (SHA-256 hashed)
-- **Activity Logging**: Track all zone, metadata, TSIG key, and user operations
+- **Activity Logging**: Track all zone, metadata, TSIG key, and user operations; admins see the full trail, operators only the zone-scoped entries
 - **REST API**: JSON API for zone, record, and statistics automation
 - **PowerDNS Integration**: Communicates through the PowerDNS REST API
 - **DNSSEC Support**: Zone rectification (manual + auto after key ops), slave notification

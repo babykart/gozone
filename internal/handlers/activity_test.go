@@ -48,6 +48,82 @@ func TestActivityLogSearch_LiteralWildcardMatch(t *testing.T) {
 	}
 }
 
+// TestActivityVisibility_ByRole pins the three-way visibility split of the
+// global activity log: admins see the full trail (zone-scoped and account
+// entries alike), operators manage DNS rather than accounts so they only see
+// zone-scoped entries, and regular users keep the historical scope (their own
+// non-zone entries plus zone-scoped entries for zones in their groups). The
+// distinct-action dropdown must reflect the same split.
+func TestActivityVisibility_ByRole(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+	operatorID := seedUserWithHash(t, h, "opuser", "pass", "operator")
+	regularID := seedUserWithHash(t, h, "reguser", "pass", "user")
+
+	seed := func(userID int64, zoneID, action, details string) {
+		t.Helper()
+		var zoneArg interface{}
+		if zoneID != "" {
+			zoneArg = zoneID
+		}
+		if _, err := h.DB.Exec(
+			`INSERT INTO activity_logs (user_id, zone_id, action, details, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+			userID, zoneArg, action, details,
+		); err != nil {
+			t.Fatalf("seed %s: %v", action, err)
+		}
+	}
+	seed(operatorID, "example.com.", "import_zone", "zone op")
+	seed(regularID, "", "login", "someone logged in")
+	seed(admin.ID, "", "create_user", "account created")
+
+	operator := &models.User{ID: operatorID, Username: "opuser", Role: "operator"}
+	regular := &models.User{ID: regularID, Username: "reguser", Role: "user"}
+
+	assertActions := func(user *models.User, want map[string]bool) {
+		t.Helper()
+		actions, err := h.getDistinctActivityActions(context.Background(), user)
+		if err != nil {
+			t.Fatalf("getDistinctActivityActions(%s): %v", user.Role, err)
+		}
+		for _, action := range []string{"import_zone", "login", "create_user"} {
+			if got := want[action]; containsString(actions, action) != got {
+				t.Errorf("role %s: distinct actions %v, want %q present=%v", user.Role, actions, action, got)
+			}
+		}
+	}
+
+	// Admin: full visibility.
+	logs, total := h.getActivityLogs(context.Background(), admin, "", "", "", "", 1, 0)
+	if total != 3 || len(logs) != 3 {
+		t.Errorf("admin must see all 3 seeded entries, got total=%d rows=%d", total, len(logs))
+	}
+	assertActions(admin, map[string]bool{"import_zone": true, "login": true, "create_user": true})
+
+	// Operator: zone-scoped entries only; account/log entries are out of role.
+	logs, total = h.getActivityLogs(context.Background(), operator, "", "", "", "", 1, 0)
+	if total != 1 || len(logs) != 1 || logs[0].Action != "import_zone" {
+		t.Errorf("operator must see only the zone-scoped entry, got total=%d rows=%v", total, logs)
+	}
+	assertActions(operator, map[string]bool{"import_zone": true, "login": false, "create_user": false})
+
+	// Regular user: own non-zone entries plus group zones (none seeded).
+	logs, total = h.getActivityLogs(context.Background(), regular, "", "", "", "", 1, 0)
+	if total != 1 || len(logs) != 1 || logs[0].Action != "login" {
+		t.Errorf("regular user must see only their own login entry, got total=%d rows=%v", total, logs)
+	}
+	assertActions(regular, map[string]bool{"import_zone": false, "login": true, "create_user": false})
+}
+
+func containsString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
 // TestActivityLogs_AllViewCapped pins the "All" (perPage = 0) bound: without
 // it any authenticated user could load the entire activity_logs table —
 // old/new JSON snapshots included — in one request, a memory DoS vector on

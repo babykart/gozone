@@ -62,27 +62,30 @@ func TestOperator_CanListTSIGKeys(t *testing.T) {
 	}
 }
 
-// TestOperator_ActivityPage_ShowsOtherUsersActivity is the operator-role
-// visibility test: an operator (a DNS-management role, not admin) must see
-// the global activity log including rows created by OTHER users.
-func TestOperator_ActivityPage_ShowsOtherUsersActivity(t *testing.T) {
+// TestOperator_ActivityPage_ScopedToZoneEntries is the operator-role
+// visibility test: an operator (a DNS-management role, not admin) sees the
+// global activity log restricted to zone-scoped rows — non-zone rows
+// (accounts, logins) are outside the role.
+func TestOperator_ActivityPage_ScopedToZoneEntries(t *testing.T) {
 	h := newTestHandler(t)
 	operator := seedOperatorUser(t, h)
 	otherID := testutil.SeedTestUser(t, h.DB, "bob", "bobpass", "user", true)
 
-	seedActivity := func(userID int64, action string) {
+	seedActivity := func(userID int64, zoneID, action string) {
 		t.Helper()
+		var zoneArg interface{}
+		if zoneID != "" {
+			zoneArg = zoneID
+		}
 		if _, err := h.DB.Exec(
-			`INSERT INTO activity_logs (user_id, zone_id, action, details, created_at) VALUES (?, NULL, ?, ?, CURRENT_TIMESTAMP)`,
-			userID, action, "activity page visibility seed",
+			`INSERT INTO activity_logs (user_id, zone_id, action, details, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+			userID, zoneArg, action, "activity page visibility seed",
 		); err != nil {
 			t.Fatalf("seed %q: %v", action, err)
 		}
 	}
-	// One non-zone row per user: the visibility clause only ever hid
-	// other users' non-zone rows from non-admins.
-	seedActivity(otherID, "other_user_action")
-	seedActivity(operator.ID, "operator_own_action")
+	seedActivity(otherID, "example.com.", "zone_op_action")
+	seedActivity(operator.ID, "", "operator_own_action")
 
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, operator)
 	w := httptest.NewRecorder()
@@ -94,10 +97,10 @@ func TestOperator_ActivityPage_ShowsOtherUsersActivity(t *testing.T) {
 		t.Fatalf("operator GET /activity: expected 200, got %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "operator_own_action") {
-		t.Errorf("operator must still see their own activity entries, body: %s", body)
+	if !strings.Contains(body, "zone_op_action") {
+		t.Errorf("operator must see zone-scoped activity entries, body: %s", body)
 	}
-	if !strings.Contains(body, "other_user_action") {
-		t.Errorf("operator must see activity entries created by other users (operator is a DNS-management role, not a plain user), body: %s", body)
+	if strings.Contains(body, "operator_own_action") {
+		t.Errorf("operator must not see non-zone activity entries (accounts and logins are outside the role), body: %s", body)
 	}
 }

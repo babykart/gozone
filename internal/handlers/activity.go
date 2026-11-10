@@ -71,9 +71,9 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 
 // getDistinctActivityActions returns the distinct action values visible to the
 // given user, ordered alphabetically, so the filter dropdown can be built.
-// Admin and operator users see all actions; other users see only actions from
-// logs they are allowed to view. ctx propagates request cancellation into the
-// query.
+// Admins see all actions; operators see only actions on zone-scoped entries;
+// other users see only actions from logs they are allowed to view. ctx
+// propagates request cancellation into the query.
 func (h *Handler) getDistinctActivityActions(ctx context.Context, user *models.User) ([]string, error) {
 	query := "SELECT DISTINCT action FROM activity_logs AS al"
 	var args []interface{}
@@ -105,12 +105,17 @@ func (h *Handler) getDistinctActivityActions(ctx context.Context, user *models.U
 }
 
 // activityLogVisibilityClause returns the SQL WHERE clause (and args) that
-// restricts activity logs to the ones visible to the given user. Admins and
-// operators see everything; other users see zone-scoped logs for zones in
-// their groups plus their own non-zone logs.
+// restricts activity logs to the ones visible to the given user. Admins see
+// everything; operators see only zone-scoped entries — they manage DNS, not
+// accounts, so non-zone entries (account creation and locking, SSO bindings,
+// logins, CLI writes) stay outside their view; other users see zone-scoped
+// logs for zones in their groups plus their own non-zone logs.
 func activityLogVisibilityClause(user *models.User) (string, []interface{}) {
-	if user.CanManageDNS() {
+	if user.IsAdmin() {
 		return "", nil
+	}
+	if user.CanManageDNS() {
+		return "al.zone_id IS NOT NULL", nil
 	}
 	return "((al.zone_id IS NULL AND al.user_id = ?) OR al.zone_id IN (SELECT z.zone_id FROM zone_group_members m JOIN zone_group_zones z ON m.group_id = z.group_id WHERE m.user_id = ?))", []interface{}{user.ID, user.ID}
 }
@@ -123,10 +128,10 @@ func activityLogVisibilityClause(user *models.User) (string, []interface{}) {
 const activityLogAllCap = 1000
 
 // getActivityLogs returns activity logs visible to the given user, after
-// applying text search, action filter, date range, and pagination. Admin and
-// operator users see all logs; other users see zone-scoped logs for zones
-// assigned to their groups together with non-zone logs created by themselves.
-// ctx propagates request cancellation into both queries.
+// applying text search, action filter, date range, and pagination. Admins see
+// all logs; operators see zone-scoped logs only; other users see zone-scoped
+// logs for zones assigned to their groups together with non-zone logs created
+// by themselves. ctx propagates request cancellation into both queries.
 //
 // perPage = 0 ("All") is capped at activityLogAllCap rows: the snapshots make
 // each row expensive, and an unbounded fetch of the whole table is a memory
@@ -232,8 +237,7 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 		}
 	}
 
-	if !user.CanManageDNS() {
-		clause, clauseArgs := activityLogVisibilityClause(user)
+	if clause, clauseArgs := activityLogVisibilityClause(user); clause != "" {
 		filters = append(filters, clause)
 		args = append(args, clauseArgs...)
 	}
