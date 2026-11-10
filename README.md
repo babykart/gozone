@@ -410,7 +410,12 @@ Admin users can manage DNSSEC for each zone directly from the zone view page. Cr
 
 Export full zone records in RFC 1035 BIND zone file format or CSV with a single click from the zone view page. Import zone data by uploading a `.zone` or `.csv` file — records are parsed and batch-created into the existing zone. Both are restricted to users with group access to the zone.
 
-Import uses PowerDNS `REPLACE` semantics: for each name+type pair in the file, the existing RRSet is replaced if present, or created if absent. Records not referenced in the import file are left untouched. Importing a file with fewer records than currently exist for a given name+type replaces the entire RRSet — extra existing records within that same name+type are removed.
+Import offers two modes (merge is the default):
+
+- **Merge** is record-additive: imported records are added to the existing zone state. Sibling records absent from the file are kept, new records keep their CSV `disabled` flag, exact duplicates keep the existing occurrence (first-occurrence wins), and comments on existing non-SOA record sets are preserved. An imported SOA replaces the existing SOA record set — the zone file carries the authoritative serial; if the imported SOA carries comments they replace the existing SOA comments, otherwise the existing ones are kept.
+- **Replace** (opt-in) uses PowerDNS `REPLACE` semantics: for each name+type pair in the file, the existing RRSet is rewritten — sibling records within that name+type are dropped. Records under name+type pairs not referenced in the file are left untouched.
+
+Both modes snapshot the affected pre-import record sets into the import's activity entry (bounded in size; when the snapshot is truncated the activity details note how many record sets were affected versus shown). The snapshot is an audit before-image, not a full recovery mechanism.
 
 BIND names — record owners and RDATA targets alike — are resolved against the current `$ORIGIN` per RFC 1035: under `$ORIGIN example.com.`, `mail` in an MX record imports as `mail.example.com.`, and `target.example` in a CNAME imports as `target.example.example.com.`. Absolute names (trailing dot) are left unchanged.
 
