@@ -86,9 +86,11 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 	// The per-IP limiter catches floods before the form body is even parsed;
 	// the pair limiter stops one attacker IP from 429-ing a targeted account
 	// for everyone else; the global ceiling bounds distributed brute-force
-	// (many IPs, one target username). The OIDC login/callback routes share
-	// ONLY the per-IP family with /login. All keys are namespaced per family
-	// (login:ip: / login:pair: / login:user:, see ratelimit.go).
+	// (many IPs, one target username). The OIDC login/callback routes do NOT
+	// share any family with /login anymore: they draw from their own dedicated
+	// per-IP family (sso:ip:, 30/min — see ssoIPLimiter below). All /login keys
+	// are namespaced per family (login:ip: / login:pair: / login:user:, see
+	// ratelimit.go).
 	//
 	// /api stack (IP limiter BEFORE auth, per-key limiter AFTER auth):
 	//   apiIPLimiter (per-IP) → APIKeyAuth (DB lookup) → apiLimiter (per-key)
@@ -159,6 +161,19 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 	chpwUserLimiter := middleware.NewRateLimiter(30)
 	dbChpwPairLimiter := middleware.NewDBRateLimiter(db, 5)
 	dbChpwUserLimiter := middleware.NewDBRateLimiter(db, 30)
+
+	// Dedicated per-IP budget for the OIDC login/callback pair: a single SSO
+	// sign-in costs two route hits (redirect + callback), so 30/min per
+	// address ≈ 15 sign-ins/min. The state parameter these routes carry is
+	// high-entropy AES-GCM ciphertext — this is flood control, not
+	// brute-force defence, hence the generous ceiling (the /login budget
+	// stays at its strict 5/min, and the two families no longer drain each
+	// other: SSO traffic behind a shared egress address must not exhaust the
+	// password-login budget, nor be exhausted by it). Keys live in their own
+	// "sso:ip:" family (see ratelimit.go), disjoint from the login families
+	// in the shared rate_limit_counters namespace.
+	ssoIPLimiter := middleware.NewRateLimiter(30)
+	dbSsoIPLimiter := middleware.NewDBRateLimiter(db, 30)
 
 	// Session lifetime policy: idle inactivity timeout and/or an absolute
 	// refresh cap. Both default to 0 (disabled) → AuthWithPolicy behaves
@@ -234,14 +249,15 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		// OpenID Connect / OAuth2 SSO endpoints. These are public (the user
 		// is not authenticated yet): the login endpoint redirects to the IdP,
 		// and the callback completes the flow and establishes a session. They
-		// share the login per-IP rate limiters (same namespaced keys, so the
-		// per-IP budget is common with /login) to throttle callback
-		// brute-forcing of the state parameter (ROADMAP "Security").
-		r.With(loginLimiter.Limit(loginIPKey),
-			dbLoginIPLimiter.Limit(loginIPKey)).
+		// draw from the dedicated SSO per-IP family (ssoIPLimiter/ssoIPKey,
+		// 30/min — see above), NOT /login's 5/min brute-force budget: one
+		// sign-in costs two route hits, and the throttled state parameter is
+		// high-entropy AES-GCM ciphertext, so this is flood control.
+		r.With(ssoIPLimiter.Limit(ssoIPKey),
+			dbSsoIPLimiter.Limit(ssoIPKey)).
 			Get("/auth/oidc/{provider}/login", h.OIDCLogin)
-		r.With(loginLimiter.Limit(loginIPKey),
-			dbLoginIPLimiter.Limit(loginIPKey)).
+		r.With(ssoIPLimiter.Limit(ssoIPKey),
+			dbSsoIPLimiter.Limit(ssoIPKey)).
 			Get("/auth/oidc/{provider}/callback", h.OIDCCallback)
 
 		// Authenticated routes (web UI)
@@ -394,6 +410,7 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		healthLimiter.Close()
 		apiIPLimiter.Close()
 		apiLimiter.Close()
+		ssoIPLimiter.Close()
 		loginLimiter.Close()
 	}
 	return r, cleanup

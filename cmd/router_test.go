@@ -233,6 +233,126 @@ func setupChangePasswordRouter(t *testing.T) map[string]func(remoteAddr string) 
 	return posts
 }
 
+// setupSSORateLimitRouter builds the production router (buildRouter) over an
+// in-memory DB seeded with one user ("alice") and returns GET
+// /auth/oidc/{provider}/login and POST /login helpers. OIDC is unconfigured,
+// so the SSO handlers answer their disabled no-op (a 303 redirect to
+// /login?error=...) — the invariant under test is the LIMITER (429 vs
+// non-429), not the handler's redirect; the limiters run before the handler
+// either way. The POST helper carries the CSRF cookie and form token
+// bootstrapped from GET /login, exactly like a browser, and submits wrong
+// credentials so the handler answer (303) is reached without minting a
+// session. remoteAddr on both helpers selects the per-IP bucket.
+func setupSSORateLimitRouter(t *testing.T) (oidcGet func(provider, remoteAddr string) int, loginPost func(username, password, remoteAddr string) int) {
+	t.Helper()
+
+	db := testutil.NewTestDB(t)
+	cfg := config.DefaultConfig()
+	// csrf.Protect requires a 32-byte key at construction time (Load() would
+	// derive these from the secret key).
+	cfg.Server.JWTKey = make([]byte, 32)
+	cfg.Server.CSRFKey = make([]byte, 32)
+
+	h := &handlers.Handler{
+		DB:   db,
+		Cfg:  cfg,
+		Tmpl: changePasswordTestTemplates(),
+	}
+	router, cleanup := buildRouter(cfg, db, h, nil)
+	t.Cleanup(cleanup)
+
+	testutil.SeedTestUser(t, db, "alice", "CorrectPass1!", "user", true)
+
+	// CSRF bootstrap from the public login page (same path a browser takes).
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /login: got %d, want 200 (CSRF bootstrap failed)", w.Code)
+	}
+	var csrfCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("GET /login did not set the CSRF cookie (_gorilla_csrf)")
+	}
+	m := csrfTokenInputRe.FindSubmatch(w.Body.Bytes())
+	if m == nil {
+		t.Fatal("stub login page did not render the gorilla.csrf.Token input")
+	}
+	csrfToken := html.UnescapeString(string(m[1]))
+
+	oidcGet = func(provider, remoteAddr string) int {
+		r := httptest.NewRequest(http.MethodGet, "/auth/oidc/"+provider+"/login", nil)
+		if remoteAddr != "" {
+			r.RemoteAddr = remoteAddr
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w.Code
+	}
+	loginPost = func(username, password, remoteAddr string) int {
+		form := url.Values{
+			"gorilla.csrf.Token": {csrfToken},
+			"username":           {username},
+			"password":           {password},
+		}
+		r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if remoteAddr != "" {
+			r.RemoteAddr = remoteAddr
+		}
+		r.AddCookie(csrfCookie)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w.Code
+	}
+	return oidcGet, loginPost
+}
+
+// TestSSORoutesDedicatedRateLimit_RouterLevel is the router wiring +
+// behaviour test for the dedicated SSO per-IP rate-limit family (30/min,
+// in-memory + cluster-wide DB counterpart) on the OIDC routes, exercised via
+// the /auth/oidc/{provider}/login route (the callback route carries the same
+// two limiters by construction; the exact 30/min ceiling is pinned at the
+// limiter layer, where the assertion is deterministic — a router-level
+// 30-hit exhaustion loop depends on wall-clock bucket refill and is
+// inherently flaky). Before the dedicated family these routes shared
+// /login's 5/min per-IP budget: one SSO sign-in costs two route hits
+// (redirect + callback), so an organization behind a shared egress address
+// got ~2 sign-ins/min, and SSO traffic drained the password-login
+// brute-force budget (and was drained by it) in both directions.
+func TestSSORoutesDedicatedRateLimit_RouterLevel(t *testing.T) {
+	oidcGet, loginPost := setupSSORateLimitRouter(t)
+
+	// Decoupling: seven OIDC hits from one IP stay under the dedicated
+	// budget (on the old shared wiring hit 6 returns 429), and a
+	// password-login POST from the SAME IP afterwards still reaches the
+	// handler (on the old shared wiring the OIDC hits drained the 5/min
+	// login budget and the POST was 429-ed).
+	t.Run("sso traffic does not consume the login budget", func(t *testing.T) {
+		const ip = "198.0.2.1:4444"
+		for i := 0; i < 7; i++ {
+			if code := oidcGet("test", ip); code == http.StatusTooManyRequests {
+				t.Fatalf("OIDC login hit %d from %s: got 429, want non-429 (SSO routes must not draw from the 5/min /login budget)", i+1, ip)
+			}
+		}
+		if code := loginPost("alice", "WrongPass1!", ip); code == http.StatusTooManyRequests {
+			t.Fatal("POST /login after the OIDC hits: got 429, want the handler response (SSO traffic must not exhaust the password-login budget)")
+		}
+	})
+
+	// Per-IP keying: after several hits from one address, a different
+	// TEST-NET address still gets through (the bucket key is the IP alone).
+	t.Run("per-IP buckets are independent", func(t *testing.T) {
+		if code := oidcGet("test", "198.0.2.3:1234"); code == http.StatusTooManyRequests {
+			t.Fatal("first OIDC hit from a fresh IP: got 429, want non-429 (per-IP isolation)")
+		}
+	})
+}
+
 // TestChangePasswordPairRateLimit_RouterLevel is the wiring + behaviour test
 // for the per-(user, IP) limiter family on POST /change-password
 // (5/min, in-memory + cluster-wide DB counterpart): five failed submissions

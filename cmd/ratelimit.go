@@ -92,11 +92,29 @@ func boundLoginKey(familyPrefix, key, oversizedSentinel string) string {
 }
 
 // loginIPKey returns the per-IP family key: the resolved client IP under the
-// "login:ip:" prefix. /login, the OIDC login/callback routes and the
-// cluster-wide DB counterpart all key on this, so every per-IP login bucket
-// draws from the same namespaced key regardless of which route was hit.
+// "login:ip:" prefix. POST /login and the cluster-wide DB counterpart all key
+// on this, so every per-IP login bucket draws from the same namespaced key
+// regardless of which layer counted the hit. The OIDC login/callback routes
+// do NOT draw from this family anymore — they have their own dedicated
+// "sso:ip:" family (see ssoIPKey).
 func loginIPKey(r *http.Request) string {
 	return boundLoginKey(loginIPFamilyPrefix, middleware.ExtractIP(r), "<oversized-ip>")
+}
+
+// ssoIPFamilyPrefix is the dedicated SSO per-IP family prefix. Like the login
+// families it stores counters in the shared rate_limit_counters bucket_key
+// namespace, so the disjoint prefix keeps SSO buckets structurally separate
+// from "login:ip:" no matter what a client puts in the request.
+const ssoIPFamilyPrefix = "sso:ip:"
+
+// ssoIPKey returns the dedicated SSO per-IP family key: "sso:ip:" + the
+// resolved client IP, bounded like the login keys. The OIDC login and
+// callback routes draw from THIS budget, not the /login one: a single SSO
+// sign-in costs two route hits (redirect + callback) and SSO traffic behind a
+// shared egress address must not exhaust the password-login brute-force
+// budget (nor be exhausted by it).
+func ssoIPKey(r *http.Request) string {
+	return boundLoginKey(ssoIPFamilyPrefix, middleware.ExtractIP(r), "<oversized-ip>")
 }
 
 // loginUserIPKey returns the per-(username, IP) pair family key:

@@ -597,6 +597,119 @@ func TestLoginGlobalRateLimit_Scoping(t *testing.T) {
 	}
 }
 
+// newSSORequest builds a GET SSO request (the OIDC login redirect route)
+// with the given TCP source address. ExtractIP resolves the IP from
+// RemoteAddr (no context IP is set here), so remoteAddr controls which
+// per-IP SSO bucket a request draws from.
+func newSSORequest(remoteAddr string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/test/login", nil)
+	if remoteAddr != "" {
+		r.RemoteAddr = remoteAddr
+	}
+	return r
+}
+
+// TestSsoIPKey pins the exact dedicated SSO per-IP family prefix. The OIDC
+// login and callback routes draw from "sso:ip:<ip>" buckets, NOT the
+// "login:ip:" ones: a single SSO sign-in costs two route hits (redirect +
+// callback), so keying SSO traffic on the password-login budget would cap a
+// NAT-ed organization at ~2 sign-ins/min and let the two traffic classes
+// starve each other in both directions.
+func TestSsoIPKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"ipv4", "192.0.2.1:1234", "sso:ip:192.0.2.1"},
+		{"ipv6", "[2001:db8::1]:443", "sso:ip:2001:db8::1"},
+		{"ipv6 zone id", "[fe80::1%eth0]:1234", "sso:ip:fe80::1%eth0"},
+		// No port: SplitHostPort fails, ExtractIP returns the raw 200-byte
+		// RemoteAddr verbatim, and the composed key exceeds loginMaxKeyBytes
+		// — it must fold to the family-prefixed sentinel instead of being
+		// used verbatim (the bucket_key column is a MySQL VARCHAR(191)).
+		{"oversized remote addr folds", strings.Repeat("a", 200), "sso:ip:<oversized-ip>"},
+		// Same cap mechanics through a huge IPv6 zone id.
+		{"oversized zone id folds", "[fe80::1%" + strings.Repeat("z", 200) + "]:1234", "sso:ip:<oversized-ip>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ssoIPKey(newSSORequest(tt.remoteAddr)); got != tt.want {
+				t.Errorf("ssoIPKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSsoIPKeyDisjointFromLogin guards the decoupling invariant at the key
+// level: the SSO family shares the rate_limit_counters bucket_key namespace
+// with the password-login families, so for the same request the "sso:ip:"
+// key must never equal the "login:ip:" one — including the folded sentinel
+// case, where both families fold to the same "<oversized-ip>" material and
+// only the prefix keeps the buckets apart.
+func TestSsoIPKeyDisjointFromLogin(t *testing.T) {
+	r := newSSORequest("192.0.2.1:1234")
+	sso, login := ssoIPKey(r), loginIPKey(r)
+	if sso == login {
+		t.Errorf("SSO key %q collides with the login per-IP key", sso)
+	}
+	if !strings.HasPrefix(sso, "sso:ip:") || !strings.HasPrefix(login, "login:ip:") {
+		t.Errorf("family prefixes wrong: sso=%q login=%q", sso, login)
+	}
+
+	// Folded sentinels: identical "<oversized-ip>" material, and only the
+	// family prefix keeps the two oversized buckets disjoint.
+	oversized := newSSORequest(strings.Repeat("a", 200))
+	foldedSSO, foldedLogin := ssoIPKey(oversized), loginIPKey(oversized)
+	if foldedSSO != "sso:ip:<oversized-ip>" {
+		t.Errorf("ssoIPKey(oversized) = %q, want %q", foldedSSO, "sso:ip:<oversized-ip>")
+	}
+	if foldedSSO == foldedLogin {
+		t.Errorf("folded sentinels collide: both = %q", foldedSSO)
+	}
+	if len(foldedSSO) > loginMaxKeyBytes {
+		t.Errorf("folded key is %d bytes, must be <= %d", len(foldedSSO), loginMaxKeyBytes)
+	}
+}
+
+// TestSSORateLimitCeiling pins the dedicated SSO family ceiling at the
+// limiter layer, where the exhaustion assertion is deterministic (a
+// router-level 30-hit loop would depend on wall-clock bucket refill: the
+// in-memory bucket refills one token every two seconds and the DB limiter
+// uses calendar-minute windows, so a slow runner could see the 31st request
+// admitted). The OIDC routes must cap at 30 hits/min per IP, the key must be
+// IP-only (source ports vary across all 30 admitted hits), and a different
+// IP must have its own budget.
+func TestSSORateLimitCeiling(t *testing.T) {
+	const limit = 30
+	limiter := middleware.NewRateLimiter(limit)
+	t.Cleanup(limiter.Close)
+	stack := limiter.Limit(ssoIPKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const hitIP = "198.0.2.2"
+	for i := 0; i < limit; i++ {
+		w := httptest.NewRecorder()
+		// Vary the source port every hit: the bucket key must be IP-only.
+		stack.ServeHTTP(w, newSSORequest(fmt.Sprintf("%s:%d", hitIP, 10000+i)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("SSO hit %d from %s: got %d, want 200 (within the %d/min dedicated budget)", i+1, hitIP, w.Code, limit)
+		}
+	}
+	w := httptest.NewRecorder()
+	stack.ServeHTTP(w, newSSORequest(hitIP+":19999"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("SSO hit %d from the same IP: got %d, want 429 (dedicated 30/min ceiling)", limit+1, w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	stack.ServeHTTP(w, newSSORequest("198.0.2.3:1234"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("first SSO hit from a fresh IP: got %d, want 200 (per-IP isolation)", w.Code)
+	}
+}
+
 // newChangePasswordRequest builds a POST /change-password request carrying the
 // given context user (mirroring what authMiddleware stores via
 // middleware.UserContextKey) and the given TCP source address.
