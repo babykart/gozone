@@ -2437,3 +2437,101 @@ func TestAPIStats_NonAdminSeesNoRingOrMapItems(t *testing.T) {
 		}
 	}
 }
+
+// TestAPICreateRecord_SRVPriorityConflict pins the REST mapping of a priority
+// divergence on POST: wire-shaped SRV content fed back with a priority field
+// that disagrees with the embedded value must be rejected with 400
+// VALIDATION_ERROR carrying the conflict message (both numbers), and
+// PowerDNS must receive no PATCH.
+func TestAPICreateRecord_SRVPriorityConflict(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"_sip._tcp.example.com.","type":"SRV","ttl":3600,"records":[{"content":"10 5 5060 sip.example.com.","priority":0}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Code != ErrCodeValidationError {
+		t.Errorf("code = %q, want %q", resp.Code, ErrCodeValidationError)
+	}
+	for _, needle := range []string{"embeds priority 10", "priority field value 0"} {
+		if !strings.Contains(resp.Message, needle) {
+			t.Errorf("message %q should contain %q", resp.Message, needle)
+		}
+	}
+	if len(sent) != 0 {
+		t.Errorf("no PATCH must reach PowerDNS on a priority conflict, got %d rrsets", len(sent))
+	}
+}
+
+// TestAPIUpdateRecord_SRVPriorityConflict pins the PUT counterpart: the
+// divergence is caught by the pre-flight normalisation, so the response must
+// be 400 VALIDATION_ERROR with the conflict message preserved (both numbers)
+// and no PowerDNS contact at all.
+func TestAPIUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no PowerDNS call expected for a priority conflict, got %s %s", r.Method, r.URL.Path)
+	})
+	defer pdnsSrv.Close()
+
+	body := `{"name":"_sip._tcp.example.com.","type":"SRV","ttl":3600,"records":[{"content":"10 5 5060 sip.example.com.","priority":0}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Code != ErrCodeValidationError {
+		t.Errorf("code = %q, want %q", resp.Code, ErrCodeValidationError)
+	}
+	for _, needle := range []string{"embeds priority 10", "priority field value 0"} {
+		if !strings.Contains(resp.Message, needle) {
+			t.Errorf("message %q should contain %q", resp.Message, needle)
+		}
+	}
+}
+
+// TestAPICreateRecord_SRVPriorityConsistent is the round-trip positive case:
+// wire-shaped SRV content whose embedded priority MATCHES the dedicated
+// priority field (wire data fed back in) passes through unchanged — embedded
+// once, not twice, not rejected.
+func TestAPICreateRecord_SRVPriorityConsistent(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"_sip._tcp.example.com.","type":"SRV","ttl":3600,"records":[{"content":"10 5 5060 sip.example.com.","priority":10}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 rrset with 1 record sent to PDNS, got %+v", sent)
+	}
+	if got := sent[0].Records[0]; got.Content != "10 5 5060 sip.example.com." || got.Priority != 0 {
+		t.Errorf("PDNS received content=%q priority=%d, want %q and 0", got.Content, got.Priority, "10 5 5060 sip.example.com.")
+	}
+}

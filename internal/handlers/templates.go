@@ -453,7 +453,11 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err.Error())
 		return
 	}
-	patch := finalizeBatchRRSets(merged, nil)
+	patch, err := finalizeBatchRRSets(merged, nil)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, patch); err != nil {
 		h.renderInternalError(w, r, "Failed to create records from template", err)
@@ -573,6 +577,7 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 			missing[strings.Trim(leftover, "{}")] = struct{}{}
 			incomplete = true
 		}
+		priority := 0
 
 		if name == "@" {
 			name = zoneID
@@ -589,12 +594,19 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 			if err := validateParsedRecord(rtype, name, content, r.Priority); err != nil {
 				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, rtype, r.Name, err)
 			}
+
+			// Embed MX/SRV priority into the content; PDNS rejects a separate
+			// "priority" element in the PATCH body. Records with unresolved
+			// variables skip this pass entirely: normalizing {{VAR}}-laden
+			// content would trip a spurious priority conflict, and the
+			// aggregated missing-variable error below stays the primary
+			// diagnosis.
+			var err error
+			content, priority, err = prepareRecordContent(rtype, content, r.Priority)
+			if err != nil {
+				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, rtype, r.Name, err)
+			}
 		}
-
-		// Embed MX/SRV priority into the content; PDNS rejects a separate
-		// "priority" element in the PATCH body.
-		content, priority := prepareRecordContent(rtype, content, r.Priority)
-
 		rrsets = append(rrsets, models.RRSet{
 			Name:    name,
 			Type:    rtype,

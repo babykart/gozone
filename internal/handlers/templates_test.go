@@ -1139,6 +1139,104 @@ func TestApplyTemplateToZone_InvalidRecordRejected(t *testing.T) {
 	}
 }
 
+// TestSubstituteTemplateRecords_SRVPriorityConflictNamesRecord pins the
+// template-apply contract for a stored SRV record whose content embeds a
+// leading priority that disagrees with the record's priority column: the
+// apply must fail with an error naming the template and the record (same
+// labelling as every other template validation failure), carrying the
+// conflict message with both numbers.
+func TestSubstituteTemplateRecords_SRVPriorityConflictNamesRecord(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "_sip._tcp", Type: "SRV", Content: "20 5 5060 sip.example.com.", TTL: 3600, Priority: 10},
+	}
+	vars := map[string]string{"ZONE": "example.com."}
+
+	_, err := h.substituteTemplateRecords("example.com.", "web", records, vars)
+	if err == nil {
+		t.Fatal("expected an error for a template record with a divergent embedded SRV priority")
+	}
+	for _, needle := range []string{`template "web"`, "record 1", "embeds priority 20", "priority field value 10"} {
+		if !strings.Contains(err.Error(), needle) {
+			t.Errorf("error %q should contain %q so the operator can locate the template line to fix", err.Error(), needle)
+		}
+	}
+}
+
+// TestSubstituteTemplateRecords_UnresolvedVarsSkipPriorityNormalization pins
+// the precedence contract: a template record that still contains {{VAR}}
+// placeholders must NOT be priority-normalized — the aggregated
+// missing-variable error is the primary diagnosis and must win over the
+// (spurious) priority conflict the unresolved content would otherwise trip.
+func TestSubstituteTemplateRecords_UnresolvedVarsSkipPriorityNormalization(t *testing.T) {
+	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+
+	records := []models.ZoneTemplateRecord{
+		{Name: "_sip._tcp", Type: "SRV", Content: "10 {{WEIGHT}} 5060 {{TARGET}}", TTL: 3600, Priority: 0},
+	}
+	vars := map[string]string{"ZONE": "example.com."}
+
+	_, err := h.substituteTemplateRecords("example.com.", "web", records, vars)
+	if err == nil {
+		t.Fatal("expected an error for unresolved template variables")
+	}
+	if !strings.Contains(err.Error(), "missing template variable") ||
+		!strings.Contains(err.Error(), "WEIGHT") ||
+		!strings.Contains(err.Error(), "TARGET") {
+		t.Errorf("error %q must be the missing-variable diagnosis naming WEIGHT and TARGET", err.Error())
+	}
+	if strings.Contains(err.Error(), "conflicts with the priority field value") {
+		t.Errorf("an unresolved-variable record must not surface a priority conflict: %q", err.Error())
+	}
+}
+
+// TestApplyTemplateToZone_SRVPriorityConflictRejected is the handler-level
+// twin: a stored template record with a divergent embedded SRV priority must
+// abort the apply with the labelled conflict message, and PowerDNS must never
+// receive the PATCH.
+func TestApplyTemplateToZone_SRVPriorityConflictRejected(t *testing.T) {
+	patched := false
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "srv-tmpl", "")
+	// seedTemplateRecord has no priority parameter; insert the divergent
+	// record directly (embedded priority 20 vs the priority column 10).
+	insertReturnID(t, h.DB,
+		"INSERT INTO zone_template_records (template_id, name, type, content, ttl, priority) VALUES (?, ?, ?, ?, ?, ?)",
+		templateID, "_sip._tcp", "SRV", "20 5 5060 sip.example.com.", 3600, 10)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if patched {
+		t.Error("PowerDNS must not be called when a template record has a divergent embedded priority")
+	}
+	page := w.Body.String()
+	for _, needle := range []string{"srv-tmpl", "record 1", "embeds priority 20", "priority field value 10"} {
+		if !strings.Contains(page, needle) {
+			t.Errorf("error page should contain %q, got: %s", needle, page)
+		}
+	}
+}
+
 // TestTemplateMutationsLogged pins the audit trail for template management:
 // create, update, record add and delete must each leave an activity_logs row
 // attributed to the acting admin — these mutations previously left no trace.

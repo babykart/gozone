@@ -164,8 +164,12 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := range records {
-		records[i].Content, records[i].Priority =
-			prepareRecordContent(recordType, records[i].Content, records[i].Priority)
+		normalized, prio, err := prepareRecordContent(recordType, records[i].Content, records[i].Priority)
+		if err != nil {
+			h.renderError(w, r, err.Error())
+			return
+		}
+		records[i].Content, records[i].Priority = normalized, prio
 	}
 	// Deduplicate after normalisation (batch-path parity, see
 	// finalizeBatchRRSets): a new record whose wire content matches an
@@ -529,8 +533,11 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	}
 
 	for i := range updatedRecords {
-		updatedRecords[i].Content, updatedRecords[i].Priority =
-			prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
+		normalized, prio, err := prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
+		if err != nil {
+			return nil, nil, 0, &recordValidationError{Message: err.Error()}
+		}
+		updatedRecords[i].Content, updatedRecords[i].Priority = normalized, prio
 	}
 
 	// Resolve an unspecified (empty) TTL exactly like CreateRecord: inherit
@@ -610,7 +617,11 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err.Error())
 		return
 	}
-	merged := finalizeBatchRRSets(mergedMap, pendingComments)
+	merged, err := finalizeBatchRRSets(mergedMap, pendingComments)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 
 	if err := h.PDNS.CreateRecords(r.Context(), zoneID, merged); err != nil {
 		h.renderInternalError(w, r, "Failed to create records", err)
@@ -826,7 +837,7 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 // reflects the finalised, post-normalisation record set. Map iteration order
 // is non-deterministic, but each RRSet is sent as an independent PATCH so the
 // order does not matter.
-func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment) []models.RRSet {
+func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment) ([]models.RRSet, error) {
 	var out []models.RRSet
 	for key, rr := range merged {
 		// Last-resort TTL resolution: a merged RRSet that neither inherited an
@@ -836,8 +847,13 @@ func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]b
 			rr.TTL = defaultRecordTTL
 		}
 		for i := range rr.Records {
-			rr.Records[i].Content, rr.Records[i].Priority =
-				prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
+			normalized, prio, err := prepareRecordContent(rr.Type, rr.Records[i].Content, rr.Records[i].Priority)
+			if err != nil {
+				// A divergent record discards the WHOLE pending patch: a
+				// partial batch must never reach PowerDNS.
+				return nil, err
+			}
+			rr.Records[i].Content, rr.Records[i].Priority = normalized, prio
 		}
 		rr.Records = dedupRecordsByContent(rr.Records)
 
@@ -858,7 +874,7 @@ func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]b
 		}
 		out = append(out, *rr)
 	}
-	return out
+	return out, nil
 }
 
 // rrsetSnapshot serialises an RRSet to JSON for storage in activity_logs,
@@ -886,13 +902,15 @@ func rrsetSnapshot(rrset *models.RRSet) string {
 // prepareRecordContent normalises record content for the PDNS PATCH API,
 // returning the wire content and the value to store in RecordInfo.Priority.
 // MX/SRV priority is embedded in the content (and the separate Priority element
-// cleared, since PDNS rejects it); TXT/SPF content is quoted. See the codec in
+// cleared, since PDNS rejects it); TXT/SPF content is quoted. When MX/SRV
+// content already embeds a priority that conflicts with the provided one, it
+// returns a *dnsops.PriorityConflictError and zero values. See the codec in
 // internal/models for the per-type rules.
 // prepareRecordContent normalises record content for the PDNS PATCH API;
 // the implementation lives in the dnsops service layer
 // (dnsops.PrepareRecordContent) so REST, web and MCP writes produce the same
 // wire content.
-func prepareRecordContent(recordType, content string, priority int) (string, int) {
+func prepareRecordContent(recordType, content string, priority int) (string, int, error) {
 	return dnsops.PrepareRecordContent(recordType, content, priority)
 }
 
@@ -1122,7 +1140,11 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	patch, _, _ := buildRemovalPatch(allRecords, removal)
+	patch, _, _, err := buildRemovalPatch(allRecords, removal)
+	if err != nil {
+		h.renderError(w, r, err.Error())
+		return
+	}
 	if len(patch) == 0 {
 		h.renderError(w, r, "Record not found")
 		return
@@ -1161,7 +1183,9 @@ type recordIdentity struct {
 // It also returns a snapshot of the records actually removed (for the activity
 // log) and the total count. RRSets referenced by removal whose selected
 // records no longer exist (stale rows) are skipped. allRecords is not mutated.
-func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordIdentity]struct{}) (patch []models.RRSet, removedSnapshot []models.RRSet, totalRemoved int) {
+// A priority-embedding conflict on a remaining record surfaces as an error so
+// the caller can reject the whole removal instead of PATCHing a corrupt set.
+func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordIdentity]struct{}) (patch []models.RRSet, removedSnapshot []models.RRSet, totalRemoved int, err error) {
 	for i := range allRecords {
 		rr := allRecords[i]
 		key := rr.Name + "|" + rr.Type
@@ -1187,8 +1211,11 @@ func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordI
 			patch = append(patch, models.RRSet{Name: rr.Name, Type: rr.Type, ChangeType: "DELETE"})
 		} else {
 			for j := range remaining {
-				remaining[j].Content, remaining[j].Priority =
-					prepareRecordContent(rr.Type, remaining[j].Content, remaining[j].Priority)
+				normalized, prio, perr := prepareRecordContent(rr.Type, remaining[j].Content, remaining[j].Priority)
+				if perr != nil {
+					return nil, nil, 0, perr
+				}
+				remaining[j].Content, remaining[j].Priority = normalized, prio
 			}
 			patch = append(patch, models.RRSet{
 				Name:       rr.Name,
@@ -1207,7 +1234,7 @@ func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordI
 		})
 		totalRemoved += len(removed)
 	}
-	return patch, removedSnapshot, totalRemoved
+	return patch, removedSnapshot, totalRemoved, nil
 }
 
 // BulkDeleteRecords deletes several records from a zone in a single PATCH
@@ -1303,7 +1330,11 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	patch, removedSnapshot, totalRemoved := buildRemovalPatch(allRecords, removal)
+	patch, removedSnapshot, totalRemoved, err := buildRemovalPatch(allRecords, removal)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	if len(patch) > 0 {
 		if err := h.PDNS.PatchRecords(r.Context(), zoneID, patch); err != nil {

@@ -2360,14 +2360,14 @@ func TestPrepareRecordContent(t *testing.T) {
 	}{
 		// MX: priority embedding, no existing prefix (form: 1 token)
 		{"MX_new", "MX", "mail.example.com.", 10, "10 mail.example.com.", 0},
-		// MX: strip existing priority prefix from PDNS then re-embed (2 tokens)
-		{"MX_update", "MX", "10 mail.example.com.", 20, "20 mail.example.com.", 0},
+		// MX: matching embedded priority re-embedded cleanly (2 tokens)
+		{"MX_update", "MX", "10 mail.example.com.", 10, "10 mail.example.com.", 0},
 		// MX: priority=0
 		{"MX_zero", "MX", "mail.example.com.", 0, "0 mail.example.com.", 0},
 		// SRV: new form record (3 tokens: weight port target) — do NOT strip weight
 		{"SRV_new", "SRV", "5 5060 sip.example.com.", 10, "10 5 5060 sip.example.com.", 0},
-		// SRV: update from PDNS (4 tokens: priority weight port target) — strip old priority
-		{"SRV_update", "SRV", "10 5 5060 sip.example.com.", 5, "5 5 5060 sip.example.com.", 0},
+		// SRV: matching embedded priority re-embedded cleanly (4 tokens)
+		{"SRV_update", "SRV", "10 5 5060 sip.example.com.", 10, "10 5 5060 sip.example.com.", 0},
 		// Non-MX/SRV: pass through unchanged
 		{"A", "A", "192.0.2.1", 0, "192.0.2.1", 0},
 		{"CNAME", "CNAME", "target.example.com.", 0, "target.example.com.", 0},
@@ -2386,7 +2386,7 @@ func TestPrepareRecordContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotContent, gotPrio := prepareRecordContent(tt.recordType, tt.content, tt.priority)
+			gotContent, gotPrio, _ := prepareRecordContent(tt.recordType, tt.content, tt.priority)
 			if gotContent != tt.wantContent {
 				t.Errorf("content = %q, want %q", gotContent, tt.wantContent)
 			}
@@ -4142,5 +4142,230 @@ func TestBatchCreateRecords_ClearFlagAlignedPerRow(t *testing.T) {
 	twoPart := body[twoIdx:]
 	if !strings.Contains(twoPart, `"comments":[]`) {
 		t.Errorf("row with the clear flag must purge its comments, got %s", twoPart)
+	}
+}
+
+// TestCreateRecord_SRVPriorityConflict pins the web create-path contract for a
+// priority divergence: SRV content that already embeds a leading priority
+// which disagrees with the priority field must render the 400 error page with
+// the conflict message (both numbers), not a 500, and no PATCH may reach
+// PowerDNS.
+func TestCreateRecord_SRVPriorityConflict(t *testing.T) {
+	patched := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patched = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=_sip._tcp.example.com&type=SRV&content=10+5+5060+sip.example.com.&ttl=300&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, needle := range []string{"embeds priority 10", "priority field value 0"} {
+		if !strings.Contains(w.Body.String(), needle) {
+			t.Errorf("error page should contain %q, got: %s", needle, w.Body.String())
+		}
+	}
+	if patched {
+		t.Error("PowerDNS must not receive a PATCH for a divergent record")
+	}
+}
+
+// TestUpdateRecord_SRVPriorityConflict pins the web update path: a divergence
+// discovered while merging the edit into the stored RRSet must take the
+// recordValidationError path (400 error page), not the 500 internal-error
+// path, and nothing may be sent to PowerDNS.
+func TestUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	patched := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+			// Wire form; the PDNS client read path splits the priority
+			// into Priority=10, Content="5 5060 sip.example.com.".
+			RRSets: []models.RRSet{{Name: "_sip._tcp.example.com.", Type: "SRV", TTL: 300, Records: []models.RecordInfo{{Content: "10 5 5060 sip.example.com.", Disabled: false}}}},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// The edit submits wire-shaped content whose embedded priority (20)
+	// disagrees with the priority field (10).
+	body := "name=_sip._tcp.example.com&type=SRV&content=20+5+5060+sip.example.com.&ttl=300&priority=10&disabled=false" +
+		"&original_content=5+5060+sip.example.com.&original_priority=10"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.UpdateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, needle := range []string{"embeds priority 20", "priority field value 10"} {
+		if !strings.Contains(w.Body.String(), needle) {
+			t.Errorf("error page should contain %q, got: %s", needle, w.Body.String())
+		}
+	}
+	if patched {
+		t.Error("PowerDNS must not receive a PATCH for a divergent record")
+	}
+}
+
+// TestInlineUpdateRecord_SRVPriorityConflict is the JSON twin of the web
+// update contract: the inline editor must receive a 400 {"error": ...}
+// response carrying the conflict message, not a 500.
+func TestInlineUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	patched := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		json.NewEncoder(w).Encode(struct {
+			models.Zone
+			RRSets []models.RRSet `json:"rrsets"`
+		}{
+			Zone:   models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+			RRSets: []models.RRSet{{Name: "_sip._tcp.example.com.", Type: "SRV", TTL: 300, Records: []models.RecordInfo{{Content: "10 5 5060 sip.example.com.", Disabled: false}}}},
+		})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=_sip._tcp.example.com&type=SRV&content=20+5+5060+sip.example.com.&ttl=300&priority=10&disabled=false" +
+		"&original_content=5+5060+sip.example.com.&original_priority=10"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	for _, needle := range []string{"embeds priority 20", "priority field value 10"} {
+		if !strings.Contains(resp["error"], needle) {
+			t.Errorf("error response should contain %q, got: %s", needle, resp["error"])
+		}
+	}
+	if patched {
+		t.Error("PowerDNS must not receive a PATCH for a divergent record")
+	}
+}
+
+// TestBatchCreateRecords_SRVPriorityConflictDiscardsPatch pins the batch
+// invariant: when any row of a batch submission carries a priority
+// divergence, the WHOLE pending patch is discarded with a 400 — a partial
+// batch must never reach PowerDNS.
+func TestBatchCreateRecords_SRVPriorityConflictDiscardsPatch(t *testing.T) {
+	patched := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patched = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	// Row 1 is a perfectly valid A record; row 2 carries the divergence.
+	form := "name=www.example.com&type=A&content=192.0.2.1&ttl=300&priority=0" +
+		"&name=_sip._tcp.example.com&type=SRV&content=10+5+5060+sip.example.com.&ttl=300&priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/batch-create", strings.NewReader(form))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.BatchCreateRecords(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "embeds priority 10") || !strings.Contains(w.Body.String(), "priority field value 0") {
+		t.Errorf("error page should carry the conflict message, got: %s", w.Body.String())
+	}
+	if patched {
+		t.Error("a divergent batch row must discard the whole pending patch; nothing may reach PowerDNS")
+	}
+}
+
+// TestUpdateRecord_SRVWireRoundTrip is the false-divergence regression: an
+// SRV record read from PowerDNS in wire form ("10 5 5060 sip.example.com."),
+// edited through the logical form the edit form shows (content "5 5060
+// sip.example.com.", priority 10), must be written back byte-identically —
+// the update must not be rejected as a priority conflict.
+func TestUpdateRecord_SRVWireRoundTrip(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "_sip._tcp.example.com.", Type: "SRV", TTL: 300, Records: []models.RecordInfo{
+			{Content: "10 5 5060 sip.example.com.", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=_sip._tcp.example.com&type=SRV&content=5+5060+sip.example.com.&ttl=300&priority=10&disabled=false" +
+		"&original_content=5+5060+sip.example.com.&original_priority=10"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.UpdateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 1 {
+		t.Fatalf("expected 1 rrset with 1 record sent to PDNS, got %+v", sent)
+	}
+	if got := sent[0].Records[0]; got.Content != "10 5 5060 sip.example.com." || got.Priority != 0 {
+		t.Errorf("round-tripped wire content = %q priority=%d, want %q and 0 (wire unchanged)", got.Content, got.Priority, "10 5 5060 sip.example.com.")
 	}
 }

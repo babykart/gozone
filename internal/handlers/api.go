@@ -358,6 +358,15 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
 			return
 		}
+		// A priority divergence between embedded and provided MX/SRV
+		// priority is a client-input problem, not an upstream failure:
+		// reject it as 400 VALIDATION_ERROR with the actionable conflict
+		// message (errors.As unwraps any StageError wrapping).
+		var pce *dnsops.PriorityConflictError
+		if errors.As(err, &pce) {
+			writeAPIError(w, http.StatusBadRequest, ErrCodeValidationError, pce.Error())
+			return
+		}
 		// The fetch stage of the service merge maps a missing zone to 404
 		// ZONE_NOT_FOUND (the fetch fails before anything was created, and
 		// the caller can act on the zone); the PATCH stage maps to

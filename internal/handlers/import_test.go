@@ -765,6 +765,72 @@ func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
 	}
 }
 
+// TestParseBindZone_SRVPriorityConflictSkipped pins the no-silent-token-drop
+// contract for BIND SRV lines whose data carries TWO leading priorities
+// ("10 20 5 5060 target" — priority 10 then a 4-field remainder embedding
+// priority 20): the line must be REJECTED and reported through the
+// skipped-lines mechanism with both numbers in the reason, while every other
+// line still imports. Silently re-embedding would have dropped the weight
+// token "20" from the wire content.
+func TestParseBindZone_SRVPriorityConflictSkipped(t *testing.T) {
+	input := strings.Join([]string{
+		"$ORIGIN example.com.",
+		"$TTL 3600",
+		"_sip._tcp IN SRV 10 20 5 5060 sip.example.com.",
+		"www IN A 192.0.2.1",
+	}, "\n")
+
+	rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 || rrsets[0].Type != "A" {
+		t.Fatalf("expected only the A rrset to import, got %+v", rrsets)
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("expected exactly 1 skipped line (the divergent SRV), got %+v", skipped)
+	}
+	s := skipped[0]
+	if !strings.Contains(s.Line, "SRV") || !strings.Contains(s.Line, "10 20 5 5060") {
+		t.Errorf("skipped line must preserve the original line text (no token dropped), got %q", s.Line)
+	}
+	for _, needle := range []string{"embeds priority 20", "priority field value 10"} {
+		if !strings.Contains(s.Reason, needle) {
+			t.Errorf("skip reason %q should contain %q", s.Reason, needle)
+		}
+	}
+}
+
+// TestParseCSVZone_SRVPriorityConflictSkipped is the CSV counterpart: a row
+// whose SRV content already embeds a priority that disagrees with the row's
+// priority column must be reported as a skipped row (with both numbers in the
+// reason), not silently rewritten — and the remaining rows still import.
+func TestParseCSVZone_SRVPriorityConflictSkipped(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+_sip._tcp.example.com.,SRV,10 5 5060 sip.example.com.,3600,0,false
+www.example.com.,A,192.0.2.1,3600,0,false`
+
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 || rrsets[0].Type != "A" {
+		t.Fatalf("expected only the A rrset to import, got %+v", rrsets)
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("expected exactly 1 skipped row (the divergent SRV), got %+v", skipped)
+	}
+	s := skipped[0]
+	if !strings.Contains(s.Line, "SRV") || !strings.Contains(s.Line, "10 5 5060 sip.example.com.") {
+		t.Errorf("skipped row must preserve the original row text, got %q", s.Line)
+	}
+	for _, needle := range []string{"embeds priority 10", "priority field value 0"} {
+		if !strings.Contains(s.Reason, needle) {
+			t.Errorf("skip reason %q should contain %q", s.Reason, needle)
+		}
+	}
+}
+
 // TestCSVFormulaNeutralizationRoundTrip pins the spreadsheet-formula
 // defence across the full export→import cycle: dangerous prefixes in record
 // content and comments are escaped by the shared renderer (web, REST and

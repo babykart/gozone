@@ -241,6 +241,14 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: verr.Error()})
 			continue
 		}
+		// A priority divergence (wire data carrying two leading priorities,
+		// e.g. "10 20 5 5060 target") must not be silently re-embedded — that
+		// would drop a token from the wire content. Reject the line with the
+		// conflict message while the other lines still import.
+		if _, _, perr := prepareRecordContent(rec.rtype, rest, prio); perr != nil {
+			skipped = append(skipped, skippedLine{Line: bl.text, Reason: perr.Error()})
+			continue
+		}
 		raw = append(raw, rec)
 	}
 
@@ -504,7 +512,7 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 			// prepareRecordContent re-embeds it correctly and applies
 			// FQDN-target / multi-FQDN-field trailing-dot normalization.
 			prio, rest, _ := models.SplitPriority(r.rtype, r.data)
-			normalized, _ := prepareRecordContent(r.rtype, rest, prio)
+			normalized, _, _ := prepareRecordContent(r.rtype, rest, prio)
 			records = append(records, models.RecordInfo{
 				Content:  normalized,
 				Disabled: false,
@@ -597,8 +605,15 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 
 		// Route through the same normalization pipeline as the web/API paths
 		// so FQDN-target (CNAME/NS/PTR/…) and multi-FQDN-field (SOA/RP/…)
-		// types get trailing dots, not just priority/quoted handling.
-		csvContent, csvPriority := prepareRecordContent(rtype, content, priority)
+		// types get trailing dots, not just priority/quoted handling. A
+		// priority divergence between embedded and column priority is
+		// reported as a skipped row (with the conflict message), like every
+		// other per-row validation failure — the remaining rows still import.
+		csvContent, csvPriority, perr := prepareRecordContent(rtype, content, priority)
+		if perr != nil {
+			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: perr.Error()})
+			continue
+		}
 
 		k := key{name, rtype}
 		if _, exists := groups[k]; !exists {
