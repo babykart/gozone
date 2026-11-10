@@ -2,6 +2,7 @@ package dnsops
 
 import (
 	"context"
+	"hash/fnv"
 	"sync"
 	"time"
 )
@@ -42,12 +43,35 @@ type zoneLockBackend interface {
 // the HTTP write deadline). A canceled parent context still surfaces
 // ctx.Err(), which takes precedence over ErrZoneBusy.
 //
-// The lock map is write-once per zone and never pruned: a one-token channel
-// is a few dozen bytes and the zone count is bounded by what PowerDNS serves.
+// The lock state is a fixed pool of zoneLockShards one-token channels hashed
+// by zone ID, so memory stays bounded regardless of how many distinct zone
+// names are ever referenced — including names that turn out not to exist,
+// which leave nothing behind. The trade-off is that distinct zones hashing
+// to the same shard contend on one semaphore: mutual exclusion is unaffected
+// (a collision only adds waiting bounded by the acquisition budget), and
+// canonical zone IDs (lowercase + trailing dot) always map to the same
+// shard.
 type ZoneLocks struct {
 	mu     sync.Mutex
-	locks  map[string]chan struct{}
+	semas  [zoneLockShards]chan struct{}
 	shared zoneLockBackend
+}
+
+// zoneLockShards is the size of the local semaphore pool. Power of two so
+// the index is a single mask-grade modulo; large enough that distinct live
+// zones rarely share a shard. The array is the whole of the lock state:
+// memory is bounded at construction regardless of how many distinct zone
+// names are ever touched, including names that turn out not to exist.
+const zoneLockShards = 1024
+
+// zoneLockShardIndex hashes a zone ID to its semaphore slot. FNV-1a 32 is
+// deterministic across processes (tests can pin colliding pairs) and needs
+// no seed: the hash only balances load between shards, it never crosses a
+// security boundary.
+func zoneLockShardIndex(zoneID string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(zoneID)) // fnv.Write never errors; the discard is intentional.
+	return h.Sum32() % zoneLockShards
 }
 
 // Lock acquires the local and shared locks for zoneID and returns one release
@@ -114,22 +138,30 @@ func (z *ZoneLocks) Lock(ctx context.Context, zoneID string) (func(), error) {
 	}, nil
 }
 
-// lockLocal acquires the in-process semaphore for zoneID, bounded by the
-// caller's acquisition context. The map is created lazily so a zero-value
-// ZoneLocks remains usable without a constructor. The semaphore is a
-// capacity-1 channel so acquisition can respect context cancellation and
-// deadline; the returned release func drains the token.
-func (z *ZoneLocks) lockLocal(ctx context.Context, zoneID string) (func(), error) {
+// semaphore returns the one-token channel for zoneID's shard, creating it on
+// first use. Slot creation is the only critical section guarded by mu;
+// acquisition waits on the channel outside the mutex so a contended zone
+// never blocks unrelated slots from being handed out.
+func (z *ZoneLocks) semaphore(zoneID string) chan struct{} {
+	idx := zoneLockShardIndex(zoneID)
 	z.mu.Lock()
-	if z.locks == nil {
-		z.locks = make(map[string]chan struct{})
-	}
-	ch, ok := z.locks[zoneID]
-	if !ok {
+	defer z.mu.Unlock()
+	ch := z.semas[idx]
+	if ch == nil {
 		ch = make(chan struct{}, 1)
-		z.locks[zoneID] = ch
+		z.semas[idx] = ch
 	}
-	z.mu.Unlock()
+	return ch
+}
+
+// lockLocal acquires the in-process semaphore for zoneID, bounded by the
+// caller's acquisition context. The semaphore slot is created lazily under
+// mu so a zero-value ZoneLocks remains usable without a constructor.
+// Acquisition and release never hold mu. The semaphore is a capacity-1
+// channel so acquisition can respect context cancellation and deadline; the
+// returned release func drains the token.
+func (z *ZoneLocks) lockLocal(ctx context.Context, zoneID string) (func(), error) {
+	ch := z.semaphore(zoneID)
 	select {
 	case ch <- struct{}{}:
 	case <-ctx.Done():

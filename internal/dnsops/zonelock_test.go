@@ -3,6 +3,7 @@ package dnsops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -351,4 +352,197 @@ func TestZoneLocksSharedParentCancel(t *testing.T) {
 		t.Fatalf("Lock after parent-cancel failure did not succeed (leaked semaphore token?): %v", err)
 	}
 	release()
+}
+
+// TestZoneLocksCollidingZonesSerializeLocally pins the hashed-pool contract:
+// the zone names below collide on the same semaphore shard (FNV-1a 32 %
+// 1024 = 78 for both, verified against zoneLockShardIndex below), so a Lock
+// on one must exclude a Lock on the other even though they are distinct
+// names. With a per-zone map the two acquire concurrently and this test
+// fails. Timing tolerances are generous and all shared state is
+// mutex-protected, so the test is race-detector safe.
+func TestZoneLocksCollidingZonesSerializeLocally(t *testing.T) {
+	z := &ZoneLocks{} // zero value: local semaphore only, shared == nil
+	ctx := context.Background()
+	const zoneA = "collision-18.example.com."
+	const zoneB = "collision-164.example.com."
+
+	if zoneLockShardIndex(zoneA) != zoneLockShardIndex(zoneB) {
+		t.Fatalf("test premise broken: %s and %s no longer collide on a shard",
+			zoneA, zoneB)
+	}
+
+	// Main goroutine holds zoneA's lock for the whole observation window.
+	releaseA, err := z.Lock(ctx, zoneA)
+	if err != nil {
+		t.Fatalf("Lock %s: %v", zoneA, err)
+	}
+
+	var mu sync.Mutex
+	aReleased := false
+	overlap := false
+	bEntered := make(chan struct{})
+
+	go func() {
+		defer close(bEntered)
+		releaseB, err := z.Lock(ctx, zoneB)
+		if err != nil {
+			t.Errorf("Lock %s: %v", zoneB, err)
+			return
+		}
+		defer releaseB()
+		mu.Lock()
+		if !aReleased {
+			// Entered while zoneA was still held: same-shard zones ran
+			// their critical sections concurrently.
+			overlap = true
+		}
+		mu.Unlock()
+		// Hold the lock briefly so a would-be overlap is observable.
+		time.Sleep(50 * time.Millisecond)
+	}()
+
+	// Generous window in which a broken implementation lets B slip in
+	// while A is still held.
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	aReleased = true
+	mu.Unlock()
+	releaseA()
+
+	select {
+	case <-bEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lock on colliding zone did not enter within 2s of the release")
+	}
+
+	mu.Lock()
+	gotOverlap := overlap
+	mu.Unlock()
+	if gotOverlap {
+		t.Fatal("zones hashing to the same shard acquired the local semaphore concurrently")
+	}
+}
+
+// TestZoneLocksShardIndexStableAndBounded pins the properties the rest of
+// the suite relies on: zoneLockShardIndex is deterministic across calls,
+// spreads a handful of known names (no universal inequality is asserted —
+// collisions are legitimate), and always lands inside the pool bounds.
+func TestZoneLocksShardIndexStableAndBounded(t *testing.T) {
+	if got := zoneLockShardIndex("example.com."); got != zoneLockShardIndex("example.com.") {
+		t.Fatalf("zoneLockShardIndex not deterministic: %d vs %d",
+			got, zoneLockShardIndex("example.com."))
+	}
+
+	if zoneLockShardIndex("collision-18.example.com.") == zoneLockShardIndex("example.com.") {
+		t.Fatal("zoneLockShardIndex unexpectedly maps the collision pair and a plain name to one shard")
+	}
+
+	for _, name := range []string{
+		"example.com.",
+		"test.example.org.",
+		"a.b.c.example.net.",
+		"",
+	} {
+		if got := zoneLockShardIndex(name); got >= zoneLockShards {
+			t.Fatalf("zoneLockShardIndex(%q) = %d, want < %d", name, got, zoneLockShards)
+		}
+	}
+}
+
+// TestZoneLocksDistinctZonesAcquireConcurrently is the regression guard for
+// the hashed pool: 32 distinct names held simultaneously must all acquire
+// without ErrZoneBusy. With only colliding shards contending, simultaneous
+// acquisition proves the pool introduced no false exclusion. The derived
+// names are deterministic; if they ever map to fewer than 8 distinct shards
+// the concurrency assertion loses meaning and the test skips.
+func TestZoneLocksDistinctZonesAcquireConcurrently(t *testing.T) {
+	shortenZoneLockWaitBudget(t, 3*time.Second) // never call t.Parallel here
+	z := &ZoneLocks{}                           // zero value: local semaphore only
+	ctx := context.Background()
+
+	// Derive 32 names on 32 distinct shards so simultaneous holding cannot
+	// deadlock through a shard collision. The scan is deterministic (FNV-1a
+	// is fixed), so the derived set is stable across runs. The skip check
+	// below is kept as a guard against a future change to the pool making
+	// the derivation degenerate.
+	names := make([]string, 0, 32)
+	seen := make(map[uint32]bool, 32)
+	for i := 0; len(names) < 32 && i < 100000; i++ {
+		name := fmt.Sprintf("pool-distinct-%d.example.", i)
+		idx := zoneLockShardIndex(name)
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		names = append(names, name)
+	}
+	if len(names) < 32 {
+		t.Skipf("could not derive 32 distinct-shard names (got %d)", len(names))
+	}
+	if len(seen) < 8 {
+		t.Skipf("derived names map to only %d distinct shards; concurrency assertion not meaningful",
+			len(seen))
+	}
+
+	start := make(chan struct{})
+	releaseAll := make(chan struct{})
+	var acquired sync.WaitGroup // counts goroutines past a successful Lock
+	acquired.Add(len(names))
+	var wg sync.WaitGroup
+	errs := make([]error, len(names))
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			<-start
+			release, err := z.Lock(ctx, name)
+			if err != nil {
+				errs[i] = fmt.Errorf("Lock %s: %w", name, err)
+				acquired.Done()
+				return
+			}
+			acquired.Done()
+			// Hold the lock until every goroutine is in, then release.
+			<-releaseAll
+			release()
+		}(i, name)
+	}
+
+	close(start)
+	allIn := make(chan struct{})
+	go func() {
+		acquired.Wait()
+		close(allIn)
+	}()
+
+	select {
+	case <-allIn:
+		// All 32 distinct-shard locks are held simultaneously: the pool
+		// added no false exclusion beyond colliding shards.
+	case <-time.After(5 * time.Second):
+		t.Fatal("32 distinct zones did not all acquire within the budget")
+	}
+	close(releaseAll)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("goroutines did not release after the barrier opened")
+	}
+
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, ErrZoneBusy) {
+			t.Fatalf("distinct zone misclassified as contended: %v", err)
+		}
+		t.Fatal(err)
+	}
 }
