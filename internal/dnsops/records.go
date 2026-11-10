@@ -58,6 +58,35 @@ func NormalizeRecordName(name, zoneName string) string {
 	return name + "." + zone
 }
 
+// asciiFold lowercases only ASCII A-Z. DNS case folding (RFC 4343) applies
+// to ASCII letters alone: Go's strings.EqualFold and strings.ToLower apply
+// Unicode mappings that would merge distinct names presented as raw UTF-8
+// (the Kelvin sign U+212A folds to ASCII 'k' under Unicode, but the two are
+// different DNS names on the wire).
+func asciiFold(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, s)
+}
+
+// RRSetsMatch reports whether two RRSets are the same set, comparing name
+// and type case-insensitively with DNS folding (ASCII only). DNS names are
+// case-insensitive; case-preserving backends return original casing while
+// submissions are lowercase; an exact match misses the RRSet and the REPLACE
+// then drops its siblings.
+func RRSetsMatch(aName, aType, bName, bType string) bool {
+	return asciiFold(aName) == asciiFold(bName) && asciiFold(aType) == asciiFold(bType)
+}
+
+// RRSetKey returns the canonical map key for grouping RRSets across
+// casings: the ASCII-folded name and type joined by "|".
+func RRSetKey(name, rtype string) string {
+	return asciiFold(name) + "|" + asciiFold(rtype)
+}
+
 // PriorityConflictError reports an MX/SRV submission whose content already
 // embeds a leading priority that diverges from the explicitly provided
 // Priority field value (wire data fed back in with a stale or zeroed
@@ -280,7 +309,7 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 	var existingRRSet models.RRSet
 	foundExisting := false
 	for _, rr := range allRecords {
-		if rr.Name == rrset.Name && rr.Type == rrset.Type {
+		if RRSetsMatch(rr.Name, rr.Type, rrset.Name, rrset.Type) {
 			existingRRSet = rr
 			foundExisting = true
 			rrset.Records = append(append([]models.RecordInfo{}, rr.Records...), rrset.Records...)
