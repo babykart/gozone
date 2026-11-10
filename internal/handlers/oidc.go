@@ -447,7 +447,10 @@ func (h *Handler) applySSORole(ctx context.Context, user *models.User, desired s
 // GroupMapping resolves from the claim values. It is additive only — existing
 // memberships are kept, and memberships are never removed automatically (revoke
 // manually). Target groups that do not exist are skipped with a warning so the
-// operator is nudged to pre-create them.
+// operator is nudged to pre-create them. Each newly added membership is
+// recorded in activity_logs (action sso_group_sync) inside the same
+// transaction, so an audit failure rolls the membership back; logins whose
+// memberships are all unchanged add and log nothing.
 func (h *Handler) syncGroups(ctx context.Context, userID int64, claims *oidc.Claims) error {
 	values := oidc.ClaimStrings(claims.Raw, h.Cfg.OIDC.GroupClaim)
 	if len(values) == 0 {
@@ -479,8 +482,22 @@ func (h *Handler) syncGroups(ctx context.Context, userID int64, claims *oidc.Cla
 				"group", groupName, "claim_value", v)
 			continue
 		}
-		if err := tx.AddGroupMembership(ctx, groupID, userID); err != nil {
+		res, err := tx.InsertIgnore(ctx, "zone_group_members",
+			[]string{"group_id", "user_id"},
+			[]string{"group_id", "user_id"}, // PK on this table
+			groupID, userID)
+		if err != nil {
 			return err
+		}
+		added, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check group membership insert: %w", err)
+		}
+		if added == 0 {
+			continue // already a member: re-login adds nothing, logs nothing
+		}
+		if err := logActivity(ctx, tx, activityEntry{UserID: userID, Action: "sso_group_sync", Details: fmt.Sprintf("SSO group sync added user %d to group %q", userID, groupName)}); err != nil {
+			return fmt.Errorf("log sso group sync: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

@@ -386,6 +386,9 @@ oidc:
   manually). This avoids revoking manually-granted memberships.
 - The target `zone_group` **must already exist** (create it under *Groups* in
   the UI). A missing group is skipped with a warning.
+- Each zone-group membership added through an SSO login is recorded in the
+  activity log (action `sso_group_sync`); re-logins add nothing once the
+  membership exists.
 
 ---
 

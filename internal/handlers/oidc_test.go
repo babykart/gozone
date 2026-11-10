@@ -1114,6 +1114,49 @@ func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
 	if n != 1 {
 		t.Errorf("expected 1 membership, got %d", n)
 	}
+
+	// The new membership must be audited: exactly one sso_group_sync row,
+	// keyed to the provisioned user, naming the GoZone group.
+	var auditN int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM activity_logs WHERE action = 'sso_group_sync' AND user_id = ?",
+		user.ID).Scan(&auditN); err != nil {
+		t.Fatalf("count sso_group_sync rows: %v", err)
+	}
+	if auditN != 1 {
+		t.Errorf("expected exactly 1 sso_group_sync audit row, got %d", auditN)
+	}
+	var details string
+	if err := h.DB.QueryRow(
+		"SELECT details FROM activity_logs WHERE action = 'sso_group_sync' AND user_id = ?",
+		user.ID).Scan(&details); err != nil {
+		t.Fatalf("read sso_group_sync details: %v", err)
+	}
+	if !strings.Contains(details, "developers") {
+		t.Errorf("expected audit details to contain group name %q, got %q", "developers", details)
+	}
+
+	// Re-login (same issuer/subject → same user): the membership is not new,
+	// so no second audit row may appear.
+	if _, err := h.resolveSSOUser(ctx, claims); err != nil {
+		t.Fatalf("re-login resolveSSOUser: %v", err)
+	}
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?",
+		gid, user.ID).Scan(&n); err != nil {
+		t.Fatalf("count members after re-login: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected membership count to stay 1 after re-login, got %d", n)
+	}
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM activity_logs WHERE action = 'sso_group_sync' AND user_id = ?",
+		user.ID).Scan(&auditN); err != nil {
+		t.Fatalf("count sso_group_sync rows after re-login: %v", err)
+	}
+	if auditN != 1 {
+		t.Errorf("expected sso_group_sync audit rows to stay 1 after re-login (no duplicate), got %d", auditN)
+	}
 }
 
 func TestResolveSSOUser_GroupMappingSkipsMissingGroup(t *testing.T) {
@@ -1130,6 +1173,71 @@ func TestResolveSSOUser_GroupMappingSkipsMissingGroup(t *testing.T) {
 	}
 	if _, err := h.resolveSSOUser(ctx, claims); err != nil {
 		t.Fatalf("resolveSSOUser should not fail when target group missing: %v", err)
+	}
+
+	// No membership was created, so no sso_group_sync audit row may exist.
+	var auditN int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM activity_logs WHERE action = 'sso_group_sync'").Scan(&auditN); err != nil {
+		t.Fatalf("count sso_group_sync rows: %v", err)
+	}
+	if auditN != 0 {
+		t.Errorf("expected 0 sso_group_sync audit rows when target group missing, got %d", auditN)
+	}
+}
+
+// TestSyncGroups_AuditFailureRollsBackMembership guards the atomicity of the
+// SSO group sync: the membership INSERT and its sso_group_sync audit row run
+// in the same transaction, so a failure to write the audit trail must roll
+// the membership back — a membership can never commit without an audit entry.
+func TestSyncGroups_AuditFailureRollsBackMembership(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.GroupClaim = "groups"
+	h.Cfg.OIDC.GroupMapping = map[string]string{"dev-team": "developers"}
+	ctx := context.Background()
+	gid := insertReturnID(t, h.DB,
+		"INSERT INTO zone_groups (name, description) VALUES (?, ?)", "developers", "")
+
+	// Provision the user FIRST (no group claim yet, so no group sync runs and
+	// the provisioning audit write succeeds against the intact table).
+	provisionClaims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-grp3",
+		Email: "grp3@example.com", EmailVerified: false,
+		PreferredUsername: "grpuser3",
+	}
+	if _, err := h.resolveSSOUser(ctx, provisionClaims); err != nil {
+		t.Fatalf("provision resolveSSOUser: %v", err)
+	}
+
+	// Force every activity_logs INSERT to fail.
+	if _, err := h.DB.Exec("DROP TABLE activity_logs"); err != nil {
+		t.Fatalf("drop activity_logs: %v", err)
+	}
+
+	// Re-login with the group claim: the membership INSERT and its
+	// sso_group_sync audit row share one transaction, so the failed audit
+	// write must roll the membership back.
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-grp3",
+		Email: "grp3@example.com", EmailVerified: false,
+		PreferredUsername: "grpuser3",
+		Raw:               rawClaim("groups", "dev-team"),
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Fatal("expected resolveSSOUser to fail when the audit write fails (membership must not commit without audit)")
+	}
+
+	// The membership must have been rolled back together with the failed
+	// audit write (activity_logs itself is gone, so assert via
+	// zone_group_members only).
+	var n int
+	if err := h.DB.QueryRow(
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ?", gid).Scan(&n); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected membership rolled back (0 rows) when audit write fails, got %d", n)
 	}
 }
 
