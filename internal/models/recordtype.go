@@ -246,24 +246,44 @@ func SplitPriority(recordType, content string) (priority int, rest string, ok bo
 	return prio, parts[1], true
 }
 
+// EmbeddedPriority reports whether content already carries an embedded
+// leading priority and, if so, returns its value. The guard is deliberately
+// strict: the leading token counts as an embedded priority only when the type
+// carries one (MX, SRV), the content has at least the full wire field count
+// (so SRV form content "weight port target" is not mistaken for wire content)
+// and the token parses as a 16-bit unsigned integer (0-65535) — a negative or
+// out-of-range numeric prefix is content, not a priority. Presence must not
+// be inferred from a non-zero value: 0 is a valid priority. For any other
+// input it returns (0, false).
+func EmbeddedPriority(recordType, content string) (priority int, embedded bool) {
+	spec := specFor(recordType)
+	if !spec.hasPriority {
+		return 0, false
+	}
+	tokens := strings.Fields(content)
+	if len(tokens) < spec.wireFields {
+		return 0, false
+	}
+	// strconv.Atoi would also accept negative or out-of-range values like
+	// "-5", matching a token that was never a real priority.
+	v, err := strconv.ParseUint(tokens[0], 10, 16)
+	if err != nil {
+		return 0, false
+	}
+	return int(v), true
+}
+
 // JoinPriority embeds priority into a priority-bearing record's content for the
 // PowerDNS PATCH wire format (the write direction). If content already carries a
 // priority (wire data fed back in) it is stripped first so the value is not
 // duplicated. For non-priority types content is returned unchanged.
 func JoinPriority(recordType string, priority int, content string) string {
-	spec := specFor(recordType)
-	if !spec.hasPriority {
+	if !specFor(recordType).hasPriority {
 		return content
 	}
-	tokens := strings.Fields(content)
-	if len(tokens) >= spec.wireFields {
-		// Only strip an already-embedded priority when the leading token is a
-		// valid 16-bit unsigned integer (0-65535). strconv.Atoi would also
-		// accept negative or out-of-range values like "-5", stripping a
-		// token that was never a real priority.
-		if _, err := strconv.ParseUint(tokens[0], 10, 16); err == nil {
-			content = strings.Join(tokens[1:], " ")
-		}
+	if _, embedded := EmbeddedPriority(recordType, content); embedded {
+		tokens := strings.Fields(content)
+		content = strings.Join(tokens[1:], " ")
 	}
 	return fmt.Sprintf("%d %s", priority, content)
 }

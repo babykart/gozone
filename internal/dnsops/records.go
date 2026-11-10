@@ -58,34 +58,61 @@ func NormalizeRecordName(name, zoneName string) string {
 	return name + "." + zone
 }
 
+// PriorityConflictError reports an MX/SRV submission whose content already
+// embeds a leading priority that diverges from the explicitly provided
+// Priority field value (wire data fed back in with a stale or zeroed
+// priority). Silently re-embedding one of the two values would drop the
+// other, so the write is rejected with an actionable message instead.
+type PriorityConflictError struct {
+	RecordType string
+	Embedded   int
+	Provided   int
+}
+
+// Error renders the conflict in a uniform, actionable form for every
+// transport: "SRV content embeds priority 10 which conflicts with the
+// priority field value 0; align them or remove the priority from the
+// content".
+func (e *PriorityConflictError) Error() string {
+	return fmt.Sprintf("%s content embeds priority %d which conflicts with the priority field value %d; align them or remove the priority from the content",
+		strings.ToUpper(e.RecordType), e.Embedded, e.Provided)
+}
+
 // PrepareRecordContent normalises record content for the PDNS PATCH API,
 // returning the wire content and the value to store in RecordInfo.Priority.
 // MX/SRV priority is embedded in the content (and the separate Priority
-// element cleared, since PDNS rejects it); TXT/SPF content is quoted. See
-// the codec in internal/models for the per-type rules.
-func PrepareRecordContent(recordType, content string, priority int) (string, int) {
+// element cleared, since PDNS rejects it); TXT/SPF content is quoted. When
+// MX/SRV content already embeds a priority that conflicts with the provided
+// one, it returns a *PriorityConflictError and zero values for content and
+// priority. See the codec in internal/models for the per-type rules.
+func PrepareRecordContent(recordType, content string, priority int) (string, int, error) {
 	switch {
 	case models.TypeHasPriority(recordType):
-		// MX/SRV: embed priority first, then ensure the FQDN target (the
+		// MX/SRV: wire data fed back in must agree with the provided
+		// priority — never silently re-embed one of the two values.
+		if embedded, ok := models.EmbeddedPriority(recordType, content); ok && embedded != priority {
+			return "", 0, &PriorityConflictError{RecordType: recordType, Embedded: embedded, Provided: priority}
+		}
+		// Embed priority first, then ensure the FQDN target (the
 		// last space-separated field) ends with a trailing dot.
-		return models.EnsureTrailingDot(models.JoinPriority(recordType, priority, content)), 0
+		return models.EnsureTrailingDot(models.JoinPriority(recordType, priority, content)), 0, nil
 	case models.TypeIsQuoted(recordType):
-		return models.QuoteContent(recordType, content), priority
+		return models.QuoteContent(recordType, content), priority, nil
 	case models.TypeIsFQDNTarget(recordType):
 		// CNAME/NS/PTR/ALIAS/DNAME/AFSDB/NAPTR: the entire content or the
 		// last space-separated field is a DNS name target.
-		return models.EnsureTrailingDot(content), priority
+		return models.EnsureTrailingDot(content), priority, nil
 	case models.TypeHasFQDNFields(recordType):
 		// SOA/RP/MINFO/NSEC: specific fields are FQDNs but not in the last
 		// position, so per-field normalisation is required.
-		return models.EnsureTrailingDotFields(content, models.FQDNFieldIndices(recordType)), priority
+		return models.EnsureTrailingDotFields(content, models.FQDNFieldIndices(recordType)), priority, nil
 	case models.TypeHasQuotedFields(recordType):
 		// CAA/HINFO/URI: specific fields are character-strings PowerDNS
 		// requires quoted; already-quoted fields (possibly with spaces)
 		// pass through untouched.
-		return models.QuoteContentFields(content, models.QuotedFieldIndices(recordType)), priority
+		return models.QuoteContentFields(content, models.QuotedFieldIndices(recordType)), priority, nil
 	default:
-		return content, priority
+		return content, priority, nil
 	}
 }
 
@@ -194,8 +221,11 @@ func PrepareValidatedRecordSet(rrset *models.RRSet, zoneID string) error {
 		return err
 	}
 	for i := range rrset.Records {
-		rrset.Records[i].Content, rrset.Records[i].Priority =
-			PrepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
+		content, prio, err := PrepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
+		if err != nil {
+			return err
+		}
+		rrset.Records[i].Content, rrset.Records[i].Priority = content, prio
 	}
 	return nil
 }
@@ -258,8 +288,11 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 		}
 	}
 	for i := range rrset.Records {
-		rrset.Records[i].Content, rrset.Records[i].Priority =
-			PrepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
+		content, prio, err := PrepareRecordContent(rrset.Type, rrset.Records[i].Content, rrset.Records[i].Priority)
+		if err != nil {
+			return err
+		}
+		rrset.Records[i].Content, rrset.Records[i].Priority = content, prio
 	}
 	// Deduplicate after normalisation: a payload record whose wire content
 	// matches an existing sibling of the RRSet would make the merged PATCH

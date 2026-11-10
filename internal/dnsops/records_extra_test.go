@@ -33,7 +33,11 @@ func TestPrepareRecordContent_TypeMatrix(t *testing.T) {
 		{"AAAA passthrough", "AAAA", "2001:db8::1", 0, "2001:db8::1", 0},
 	}
 	for _, c := range cases {
-		gotC, gotP := PrepareRecordContent(c.rtype, c.content, c.priority)
+		gotC, gotP, err := PrepareRecordContent(c.rtype, c.content, c.priority)
+		if err != nil {
+			t.Fatalf("%s: PrepareRecordContent(%s, %q, %d): %v",
+				c.name, c.rtype, c.content, c.priority, err)
+		}
 		if gotC != c.wantC || gotP != c.wantP {
 			t.Errorf("%s: PrepareRecordContent(%s, %q, %d) = (%q, %d), want (%q, %d)",
 				c.name, c.rtype, c.content, c.priority, gotC, gotP, c.wantC, c.wantP)

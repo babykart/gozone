@@ -345,6 +345,52 @@ func TestEnsureTrailingDotFields(t *testing.T) {
 	}
 }
 
+// TestEmbeddedPriority pins the strip guard shared by JoinPriority and the
+// dnsops priority-conflict check: a leading token is an embedded priority only
+// when the type carries one (MX/SRV), the content already has the full wire
+// field count (MX=2, SRV=4) and the token parses as a 16-bit unsigned int.
+// Presence must not be inferred from a non-zero value — 0 is a valid priority.
+func TestEmbeddedPriority(t *testing.T) {
+	tests := []struct {
+		name    string
+		rtype   string
+		content string
+		want    int
+		wantOK  bool
+	}{
+		{"SRV wire priority 10", "SRV", "10 5 5060 sip.example.com.", 10, true},
+		{"SRV wire priority zero", "SRV", "0 5 5060 sip.example.com.", 0, true},
+		// Form content ("weight port target", 3 fields) must NOT have its
+		// numeric weight mistaken for a priority.
+		{"SRV form content, numeric weight", "SRV", "5 5060 sip.example.com.", 0, false},
+		// Beyond the wire field count the leading numeric token is still an
+		// embedded priority: the guard keys on >= wireFields, not on the
+		// content being a valid record (validity is the validator's job).
+		{"SRV beyond wire field count", "SRV", "10 5 5060 t. extra", 10, true},
+		{"SRV max uint16", "SRV", "65535 5 5060 t.", 65535, true},
+		{"SRV over uint16", "SRV", "65536 5 5060 t.", 0, false},
+		{"SRV negative", "SRV", "-1 5 5060 t.", 0, false},
+		{"SRV non-numeric", "SRV", "abc 5 5060 t.", 0, false},
+		{"MX wire priority", "MX", "10 mail.example.com.", 10, true},
+		{"MX single field", "MX", "mail.example.com.", 0, false},
+		{"A is not a priority type", "A", "1.2.3.4", 0, false},
+		{"CNAME is not a priority type", "CNAME", "target.example.com.", 0, false},
+		{"unknown type", "BOGUS", "10 5 5060 t.", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := EmbeddedPriority(tt.rtype, tt.content)
+			if ok != tt.wantOK {
+				t.Fatalf("EmbeddedPriority(%q, %q) ok = %t, want %t", tt.rtype, tt.content, ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("EmbeddedPriority(%q, %q) = %d, want %d", tt.rtype, tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestQuoteContentFields pins the per-field wire quoting for CAA (value),
 // HINFO (cpu/os) and URI (target): a bare field is escaped and wrapped, an
 // already-quoted field — possibly containing spaces — passes through
