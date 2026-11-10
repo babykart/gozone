@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
 	"github.com/babykart/gozone/internal/testutil"
 	"github.com/babykart/gozone/internal/validators"
 )
@@ -590,6 +591,161 @@ func TestLoginGlobalRateLimit_Scoping(t *testing.T) {
 	// A different username has its own global bucket.
 	if code := post("username=root", "198.51.100.100:1234"); code != http.StatusOK {
 		t.Fatalf("request for a different username: got %d, want 200 (global buckets must be per-username)", code)
+	}
+	if got := atomic.LoadInt32(&handlerCalls); got != globalLimit+1 {
+		t.Errorf("handler invoked %d times, want %d", got, globalLimit+1)
+	}
+}
+
+// newChangePasswordRequest builds a POST /change-password request carrying the
+// given context user (mirroring what authMiddleware stores via
+// middleware.UserContextKey) and the given TCP source address.
+// changePasswordUserIPKey reads the user from the context and the IP via
+// middleware.ExtractIP (RemoteAddr fallback, as in the unit tests for the
+// login family), so this helper controls both halves of the pair key.
+func newChangePasswordRequest(user *models.User, remoteAddr string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/change-password", nil)
+	if remoteAddr != "" {
+		r.RemoteAddr = remoteAddr
+	}
+	if user != nil {
+		r = r.WithContext(context.WithValue(r.Context(), middleware.UserContextKey, user))
+	}
+	return r
+}
+
+// TestChangePasswordUserIPKey pins the exact change-password pair encoding
+// "chpw:pair:" + byte-length(username) + ":" + username + "|" + IP. Unlike the
+// login family the username comes from the authenticated session
+// (middleware.GetUser), not the form, and an empty (missing) user maps to ""
+// — which RateLimiter.Limit treats as "skip this request" — rather than to a
+// shared sentinel bucket.
+func TestChangePasswordUserIPKey(t *testing.T) {
+	alice := &models.User{Username: "alice"}
+	tests := []struct {
+		name       string
+		user       *models.User
+		remoteAddr string
+		want       string
+	}{
+		{"simple", alice, "192.0.2.1:1234", "chpw:pair:5:alice|192.0.2.1"},
+		{"ipv6", alice, "[2001:db8::1]:443", "chpw:pair:5:alice|2001:db8::1"},
+		{"ipv6 zone id", alice, "[fe80::1%eth0]:1234", "chpw:pair:5:alice|fe80::1%eth0"},
+		// The length prefix counts BYTES, not runes: "é" is one rune, two
+		// bytes — the same injectivity property the login pair key pins.
+		{"multi-byte length is bytes", &models.User{Username: "é"}, "192.0.2.1:1234", "chpw:pair:2:é|192.0.2.1"},
+		// No authenticated user → "" → the limiter skips the request.
+		{"no user skips", nil, "192.0.2.1:1234", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := changePasswordUserIPKey(newChangePasswordRequest(tt.user, tt.remoteAddr)); got != tt.want {
+				t.Errorf("changePasswordUserIPKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestChangePasswordUserIPKey_OversizedFolds pins the 160-byte hard cap: the
+// IP half is client-influenced (malformed RemoteAddr fallbacks, IPv6 zone
+// ids), and every change-password family — in-process and cluster-wide —
+// stores counters under these keys, so anything past the cap folds to the
+// family-prefixed sentinel instead of being used verbatim.
+func TestChangePasswordUserIPKey_OversizedFolds(t *testing.T) {
+	// No port: SplitHostPort fails, ExtractIP returns the raw 200-byte
+	// RemoteAddr verbatim, and the composed pair key exceeds the cap.
+	r := newChangePasswordRequest(&models.User{Username: "alice"}, strings.Repeat("a", 200))
+	got := changePasswordUserIPKey(r)
+	if got != "chpw:pair:<oversized-key>" {
+		t.Errorf("changePasswordUserIPKey(oversized) = %q, want %q", got, "chpw:pair:<oversized-key>")
+	}
+	if len(got) > loginMaxKeyBytes {
+		t.Errorf("folded key is %d bytes, must be <= %d", len(got), loginMaxKeyBytes)
+	}
+
+	// Normal keys never fold and stay under the cap.
+	normal := changePasswordUserIPKey(newChangePasswordRequest(&models.User{Username: "alice"}, "[fe80::1%eth0]:1234"))
+	if strings.Contains(normal, "<oversized") {
+		t.Errorf("normal key %q folded despite being short", normal)
+	}
+	if len(normal) > loginMaxKeyBytes {
+		t.Errorf("normal key is %d bytes, want <= %d", len(normal), loginMaxKeyBytes)
+	}
+}
+
+// TestChangePasswordUserGlobalKey pins the change-password global per-user
+// family encoding "chpw:user:" + username. Unlike the pair key it ignores the
+// source IP entirely — it is the fleet-wide ceiling on a single targeted
+// account — and, like the pair key, an empty user maps to "" (skip).
+func TestChangePasswordUserGlobalKey(t *testing.T) {
+	alice := &models.User{Username: "alice"}
+
+	got := changePasswordUserGlobalKey(newChangePasswordRequest(alice, "192.0.2.1:1234"))
+	if want := "chpw:user:alice"; got != want {
+		t.Errorf("changePasswordUserGlobalKey() = %q, want %q", got, want)
+	}
+
+	// IP-independent: same user from a different source draws the same key.
+	again := changePasswordUserGlobalKey(newChangePasswordRequest(alice, "10.0.0.1:9999"))
+	if again != got {
+		t.Errorf("global key must ignore the IP: got %q and %q for the same user", got, again)
+	}
+
+	// The chpw families must stay disjoint from the login families sharing
+	// the rate_limit_counters namespace, and from each other.
+	pair := changePasswordUserIPKey(newChangePasswordRequest(alice, "192.0.2.1:1234"))
+	if pair == got {
+		t.Errorf("pair key %q collides with the global key", pair)
+	}
+	if !strings.HasPrefix(pair, "chpw:pair:") || !strings.HasPrefix(got, "chpw:user:") {
+		t.Errorf("family prefixes wrong: pair=%q global=%q", pair, got)
+	}
+
+	if got := changePasswordUserGlobalKey(newChangePasswordRequest(nil, "192.0.2.1:1234")); got != "" {
+		t.Errorf("changePasswordUserGlobalKey(nil user) = %q, want \"\" (skip)", got)
+	}
+}
+
+// TestChangePasswordGlobalRateLimit_Scoping pins the global family behaviour
+// at the limiter level (the router-level pair test isolates the pair family;
+// driving both through one router would have the pair limiter fire first): 30
+// attempts for one user across distinct IPs exhaust the IP-independent
+// bucket, the 31st from yet another IP is 429, and a second user is
+// unaffected.
+func TestChangePasswordGlobalRateLimit_Scoping(t *testing.T) {
+	const globalLimit = 30
+	limiter := middleware.NewRateLimiter(globalLimit)
+	t.Cleanup(limiter.Close)
+
+	var handlerCalls int32
+	stack := limiter.Limit(changePasswordUserGlobalKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&handlerCalls, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	post := func(user *models.User, remoteAddr string) int {
+		w := httptest.NewRecorder()
+		stack.ServeHTTP(w, newChangePasswordRequest(user, remoteAddr))
+		return w.Code
+	}
+
+	alice := &models.User{Username: "alice"}
+	bob := &models.User{Username: "bob"}
+
+	// globalLimit attempts for alice from distinct IPs (each pair would be
+	// under the 5/min pair ceiling): all allowed, exhausting the shared
+	// per-user budget.
+	for i := 0; i < globalLimit; i++ {
+		if code := post(alice, fmt.Sprintf("198.51.100.%d:1234", i+1)); code != http.StatusOK {
+			t.Fatalf("attempt %d for alice from a fresh IP: got %d, want 200", i+1, code)
+		}
+	}
+	if code := post(alice, "198.51.100.99:1234"); code != http.StatusTooManyRequests {
+		t.Fatalf("attempt %d for alice from yet another IP: got %d, want 429 (global ceiling must ignore the IP spread)", globalLimit+1, code)
+	}
+	// A different user has his own global bucket, even from the same IPs.
+	if code := post(bob, "198.51.100.1:1234"); code != http.StatusOK {
+		t.Fatalf("request for a different user: got %d, want 200 (global buckets must be per-user)", code)
 	}
 	if got := atomic.LoadInt32(&handlerCalls); got != globalLimit+1 {
 		t.Errorf("handler invoked %d times, want %d", got, globalLimit+1)

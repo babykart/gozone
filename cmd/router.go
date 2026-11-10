@@ -140,6 +140,26 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		loginUserGlobalLimiter = middleware.NewRateLimiter(cfg.LoginLock.UsernameGlobalRateLimitPerMinute)
 	}
 
+	// POST /change-password stack: two families, each AND-compounded and
+	// each backed twice (in-process limiter in front, cluster-wide DB
+	// counterpart behind):
+	//   chpwPairLimiter/dbChpwPairLimiter (per user+IP pair, 5/min)
+	//     → chpwUserLimiter/dbChpwUserLimiter (global per-user ceiling,
+	//       30/min, IP-independent)
+	//     → ChangePassword
+	// The route sits inside the authenticated group, so the key funcs read
+	// the session user from the context (unlike /login, which keys on the
+	// submitted form). The pair family isolates retry bursts per (user, IP)
+	// so one user behind a shared NAT address cannot 429 another; the
+	// global family bounds distributed current-password guessing for one
+	// account across rotated source addresses. Ceilings are fixed (same
+	// fixed-ceiling convention as loginLimiter's 5/min). GET /change-password
+	// is deliberately unwired.
+	chpwPairLimiter := middleware.NewRateLimiter(5)
+	chpwUserLimiter := middleware.NewRateLimiter(30)
+	dbChpwPairLimiter := middleware.NewDBRateLimiter(db, 5)
+	dbChpwUserLimiter := middleware.NewDBRateLimiter(db, 30)
+
 	// Session lifetime policy: idle inactivity timeout and/or an absolute
 	// refresh cap. Both default to 0 (disabled) → AuthWithPolicy behaves
 	// exactly like the legacy Auth middleware.
@@ -236,7 +256,11 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 			r.Post("/logout", h.Logout)
 			r.Get("/profile", h.ProfilePage)
 			r.Get("/change-password", h.ChangePasswordPage)
-			r.Post("/change-password", h.ChangePassword)
+			r.With(chpwPairLimiter.Limit(changePasswordUserIPKey),
+				dbChpwPairLimiter.Limit(changePasswordUserIPKey),
+				chpwUserLimiter.Limit(changePasswordUserGlobalKey),
+				dbChpwUserLimiter.Limit(changePasswordUserGlobalKey)).
+				Post("/change-password", h.ChangePassword)
 			r.Get("/profile/api-keys", h.ListAPIKeys)
 			r.Post("/profile/api-keys/create", h.CreateAPIKey)
 			r.Post("/profile/api-keys/delete", h.DeleteAPIKey)
@@ -359,6 +383,8 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		if sessionTracker != nil {
 			sessionTracker.Close()
 		}
+		chpwUserLimiter.Close()
+		chpwPairLimiter.Close()
 		if loginUserGlobalLimiter != nil {
 			loginUserGlobalLimiter.Close()
 		}

@@ -126,3 +126,52 @@ func loginUserIPKey(r *http.Request) string {
 func loginUserKey(r *http.Request) string {
 	return loginUserFamilyPrefix + loginUsernameKey(r)
 }
+
+// Change-password rate-limit bucket-key family prefixes. Both families share
+// the rate_limit_counters bucket_key namespace with the login families, so
+// the "chpw:" prefix keeps the raw key material structurally disjoint from
+// "login:ip:" / "login:pair:" / "login:user:" no matter what a username
+// looks like.
+const (
+	chgPairFamilyPrefix = "chpw:pair:"
+	chgUserFamilyPrefix = "chpw:user:"
+)
+
+// changePasswordUserKey returns the authenticated session user's username,
+// or "" when the request carries no user. POST /change-password sits behind
+// the auth middleware, so a request without a user never reaches these
+// limiters in production; the empty key makes RateLimiter.Limit skip
+// enforcement (same sentinel convention as the login family).
+func changePasswordUserKey(r *http.Request) string {
+	if u := middleware.GetUser(r); u != nil {
+		return u.Username
+	}
+	return ""
+}
+
+// changePasswordUserIPKey returns the per-(user, IP) pair family key:
+// "chpw:pair:" + byte-length of the username + ":" + username + "|" + IP.
+// The pair bucket (rather than a per-IP bucket) keeps one user's retry burst
+// from 429-ing another user behind the same NAT address, and the byte-length
+// prefix keeps the encoding injective (same reasoning as loginUserIPKey).
+func changePasswordUserIPKey(r *http.Request) string {
+	u := changePasswordUserKey(r)
+	if u == "" {
+		return ""
+	}
+	pair := strconv.Itoa(len(u)) + ":" + u + "|" + middleware.ExtractIP(r)
+	return boundLoginKey(chgPairFamilyPrefix, pair, "<oversized-key>")
+}
+
+// changePasswordUserGlobalKey returns the global per-user family key:
+// "chpw:user:" + username. IP-independent: bounds distributed guessing of
+// the current password for ONE account across rotated source addresses.
+// Usernames are validated at creation and bounded by MaxUsernameLength, so
+// the key never exceeds loginMaxKeyBytes and never folds.
+func changePasswordUserGlobalKey(r *http.Request) string {
+	u := changePasswordUserKey(r)
+	if u == "" {
+		return ""
+	}
+	return chgUserFamilyPrefix + u
+}

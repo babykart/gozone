@@ -1,14 +1,24 @@
 package cmd
 
 import (
+	"html"
+	"html/template"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/constants"
 	"github.com/babykart/gozone/internal/handlers"
+	"github.com/babykart/gozone/internal/middleware"
+	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 // TestRoutePrefixesCoveredByReservedMCPList locks the overlap invariant
@@ -120,5 +130,141 @@ func TestLoginChainGlobalUserLimitersWiring(t *testing.T) {
 	if on != off+2 {
 		t.Errorf("POST /login middleware count with global knob=60 is %d, want %d (knob off) + 2 (in-memory + DB global limiters); knob=0 must remove BOTH global limiters from the chain",
 			on, off)
+	}
+}
+
+// csrfTokenInputRe extracts the gorilla/csrf form token from a rendered page
+// (the stub login page below emits exactly this input).
+var csrfTokenInputRe = regexp.MustCompile(`name="gorilla\.csrf\.Token" value="([^"]+)"`)
+
+// changePasswordTestTemplates is the minimal stub template set for driving
+// GET /login (CSRF-token bootstrap; the stub renders the token input a real
+// browser form would carry) and POST /change-password (the 400 error page the
+// handler renders for a wrong current password) through the production router.
+func changePasswordTestTemplates() *template.Template {
+	return template.Must(template.New("test").Parse(`
+{{define "login.html"}}<html><body><form method="post" action="/login"><input type="hidden" name="gorilla.csrf.Token" value="{{ .CSRFToken }}"></form></body></html>{{end}}
+{{define "error.html"}}ERROR: {{ .Message }}{{end}}
+`))
+}
+
+// setupChangePasswordRouter builds the production router (buildRouter) over an
+// in-memory DB seeded with two users ("alice", "bob") and returns a POST
+// helper per user. Each helper carries a real session JWT (minted with the
+// cfg key, so the Auth middleware's revocation/credential-version checks run
+// for real) plus the CSRF cookie and form token bootstrapped from GET /login,
+// exactly like a browser. Submissions use a wrong current password, so the
+// handler is reached (400 "Current password is incorrect") without the
+// credential_version bump a successful change would trigger — the session
+// stays valid across all attempts.
+func setupChangePasswordRouter(t *testing.T) map[string]func(remoteAddr string) int {
+	t.Helper()
+
+	db := testutil.NewTestDB(t)
+	cfg := config.DefaultConfig()
+	// csrf.Protect requires a 32-byte key at construction time (Load() would
+	// derive these from the secret key).
+	cfg.Server.JWTKey = make([]byte, 32)
+	cfg.Server.CSRFKey = make([]byte, 32)
+
+	h := &handlers.Handler{
+		DB:   db,
+		Cfg:  cfg,
+		Tmpl: changePasswordTestTemplates(),
+	}
+	router, cleanup := buildRouter(cfg, db, h, nil)
+	t.Cleanup(cleanup)
+
+	// CSRF bootstrap from the public login page (same path a browser takes).
+	// The token is not user-bound, so both sessions share the cookie+token.
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /login: got %d, want 200 (CSRF bootstrap failed)", w.Code)
+	}
+	var csrfCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			csrfCookie = c
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("GET /login did not set the CSRF cookie (_gorilla_csrf)")
+	}
+	m := csrfTokenInputRe.FindSubmatch(w.Body.Bytes())
+	if m == nil {
+		t.Fatal("stub login page did not render the gorilla.csrf.Token input")
+	}
+	csrfToken := html.UnescapeString(string(m[1]))
+
+	posts := make(map[string]func(remoteAddr string) int)
+	for _, username := range []string{"alice", "bob"} {
+		id := testutil.SeedTestUser(t, db, username, "CorrectPass1!", "user", true)
+		user := &models.User{ID: id, Username: username, Role: "user"}
+		jwt, err := middleware.GenerateToken(user, cfg.Server.JWTKey, time.Duration(cfg.Auth.SessionDurationHours)*time.Hour)
+		if err != nil {
+			t.Fatalf("mint session token for %s: %v", username, err)
+		}
+
+		posts[username] = func(remoteAddr string) int {
+			form := url.Values{
+				"gorilla.csrf.Token": {csrfToken},
+				// Wrong current password: the handler answers 400 AFTER the
+				// change-password limiters, without
+				// bumping credential_version, so the session stays valid.
+				"current_password": {"WrongPass1!"},
+				// Policy-valid (default policy: 8+ chars, all four classes) so
+				// validation passes and the handler reaches the bcrypt compare.
+				"new_password":     {"NewPass1!x"},
+				"confirm_password": {"NewPass1!x"},
+			}
+			r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(form.Encode()))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if remoteAddr != "" {
+				r.RemoteAddr = remoteAddr
+			}
+			r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: jwt})
+			r.AddCookie(csrfCookie)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
+			return w.Code
+		}
+	}
+	return posts
+}
+
+// TestChangePasswordPairRateLimit_RouterLevel is the wiring + behaviour test
+// for the per-(user, IP) limiter family on POST /change-password
+// (5/min, in-memory + cluster-wide DB counterpart): five failed submissions
+// from one user+IP must be answered by the handler (400), the sixth must be
+// 429, and a SECOND user submitting from the SAME IP must still reach the
+// handler (400, not 429) — the pair key isolates their buckets.
+func TestChangePasswordPairRateLimit_RouterLevel(t *testing.T) {
+	posts := setupChangePasswordRouter(t)
+	alice, bob := posts["alice"], posts["bob"]
+	const sharedIP = "198.0.2.1:4444"
+
+	// Five failed submissions from (alice, sharedIP): each passes the limiters
+	// and reaches the handler, which answers 400 (wrong current password).
+	// The first iteration also proves the harness end-to-end: session JWT
+	// accepted by Auth, CSRF token accepted, handler reached.
+	for i := 0; i < 5; i++ {
+		if code := alice(sharedIP); code != http.StatusBadRequest {
+			t.Fatalf("alice attempt %d from %s: got %d, want 400 (the handler must be reached before the limit is exhausted; a 303 here means the harness lost auth/CSRF)",
+				i+1, sharedIP, code)
+		}
+	}
+
+	// The sixth submission from the SAME (user, IP) pair must be rejected by
+	// the limiter before the handler.
+	if code := alice(sharedIP); code != http.StatusTooManyRequests {
+		t.Fatalf("alice attempt 6 from %s: got %d, want 429 (per-(user,IP) limiter missing or mis-keyed on POST /change-password)", sharedIP, code)
+	}
+
+	// bob from the SAME IP has his own pair bucket: the request must pass the
+	// limiter and reach the handler (400), proving the key is per-(user, IP)
+	// and not per-IP alone.
+	if code := bob(sharedIP); code != http.StatusBadRequest {
+		t.Fatalf("bob attempt 1 from the shared IP %s: got %d, want 400 (bob must not inherit alice's exhausted pair bucket)", sharedIP, code)
 	}
 }
