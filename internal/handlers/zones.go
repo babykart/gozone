@@ -719,10 +719,16 @@ func (h *Handler) RectifyZone(w http.ResponseWriter, r *http.Request) {
 //
 // Requires admin role. Redirects back to the zone view after completion.
 func (h *Handler) NotifyZone(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
+
 	zoneID := r.PathValue("zone_id")
 	if err := h.PDNS.NotifySlaves(r.Context(), zoneID); err != nil {
 		h.renderInternalError(w, r, "Notify failed", err)
 		return
+	}
+
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "notify_zone", Details: fmt.Sprintf("Sent NOTIFY for zone %s", zoneID)}); err != nil {
+		logger.Error("failed to log notify_zone activity", "zone_id", zoneID, "error", err)
 	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern

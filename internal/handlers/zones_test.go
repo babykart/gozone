@@ -891,7 +891,10 @@ func TestNotifyZone_Success(t *testing.T) {
 	})
 	defer pdnsSrv.Close()
 
-	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	// Seed the admin so the activity_logs FK on user_id holds.
+	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: adminID, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
 	w := httptest.NewRecorder()
@@ -902,6 +905,30 @@ func TestNotifyZone_Success(t *testing.T) {
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+
+	var action, zoneID string
+	var userID int64
+	var details string
+	err := h.DB.QueryRow("SELECT action, zone_id, user_id, details FROM activity_logs WHERE action='notify_zone'").
+		Scan(&action, &zoneID, &userID, &details)
+	if err != nil {
+		t.Fatalf("expected exactly one notify_zone activity log, query error: %v", err)
+	}
+	if zoneID != "example.com" {
+		t.Errorf("expected audit zone_id 'example.com', got %q", zoneID)
+	}
+	if userID != adminID {
+		t.Errorf("expected audit user_id %d, got %d", adminID, userID)
+	}
+	if !strings.Contains(details, "NOTIFY") {
+		t.Errorf("expected audit details to mention NOTIFY, got %q", details)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='notify_zone'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected exactly 1 notify_zone activity log, got %d", count)
 	}
 }
 
@@ -942,6 +969,12 @@ func TestNotifyZone_PDNSError(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Notify failed") {
 		t.Error("expected 'Notify failed' in error page")
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='notify_zone'").Scan(&count)
+	if count != 0 {
+		t.Errorf("expected no notify_zone activity log on failure, got %d", count)
 	}
 }
 
