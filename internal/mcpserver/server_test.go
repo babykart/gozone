@@ -363,6 +363,55 @@ func TestWriteTools_EmptyRecordsRejected(t *testing.T) {
 	}
 }
 
+// TestWriteTools_SRVPriorityConflict pins the transport mapping of
+// dnsops.PriorityConflictError for both MCP write tools: an SRV record whose
+// content embeds a leading priority that disagrees with the record's
+// priority field must come back as an isError result carrying the stable
+// VALIDATION_ERROR code and the conflict message with both numbers — never
+// INTERNAL_ERROR — and PowerDNS must receive no write.
+func TestWriteTools_SRVPriorityConflict(t *testing.T) {
+	session, db := newMCPTestEnv(t, false, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
+		t.Errorf("no PowerDNS write expected for a priority conflict, got %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	grantZoneToMCPUser(t, db, "example.com.")
+	ctx := context.Background()
+
+	for _, tool := range []string{"create_record", "update_record"} {
+		t.Run(tool, func(t *testing.T) {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{
+				Name: tool,
+				Arguments: map[string]any{
+					"zone": "example.com.", "name": "_sip._tcp", "type": "SRV", "ttl": 3600,
+					"records": []map[string]any{
+						{"content": "10 5 5060 sip.example.com.", "priority": 0},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("CallTool %s: %v", tool, err)
+			}
+			if !res.IsError {
+				t.Fatalf("%s with a divergent SRV record must be a tool error, got %+v", tool, res.Content)
+			}
+			text := resultText(res)
+			if !strings.HasPrefix(text, "VALIDATION_ERROR:") {
+				t.Fatalf("%s error text must carry the stable VALIDATION_ERROR code, got %q", tool, text)
+			}
+			for _, needle := range []string{"embeds priority 10", "priority field value 0"} {
+				if !strings.Contains(text, needle) {
+					t.Errorf("%s error text %q should contain %q", tool, text, needle)
+				}
+			}
+		})
+	}
+}
+
 // TestRecoverMiddleware_KeepsServerAlive proves the receiving-side recover
 // middleware: a panicking tool handler must come back as an isError result
 // with the stable INTERNAL_ERROR code, and the server must keep answering

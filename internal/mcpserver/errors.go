@@ -78,6 +78,7 @@ func fail(tool string, err error, notFoundCode string) error {
 // so the caller can log it server-side.
 func mapServiceError(err error, notFoundCode string) (*toolError, error) {
 	var se *dnsops.StageError
+	var pce *dnsops.PriorityConflictError
 	switch {
 	case err == nil:
 		return nil, nil
@@ -89,6 +90,11 @@ func mapServiceError(err error, notFoundCode string) (*toolError, error) {
 		return &toolError{code: codeZoneNotFound, msg: "zone not found"}, nil
 	case errors.Is(err, pdns.ErrNotFound):
 		return &toolError{code: notFoundCode, msg: "not found"}, nil
+	case errors.As(err, &pce):
+		// An MX/SRV priority divergence is a client-input error, not an
+		// upstream failure: surface the actionable conflict message with the
+		// VALIDATION_ERROR code (mirrors the REST 400 VALIDATION_ERROR).
+		return &toolError{code: "VALIDATION_ERROR", msg: pce.Error()}, nil
 	case errors.Is(err, pdns.ErrValidation):
 		return &toolError{code: "VALIDATION_ERROR", msg: "PowerDNS rejected the change as invalid"}, nil
 	case errors.Is(err, pdns.ErrConflict):
