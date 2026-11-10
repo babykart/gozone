@@ -93,6 +93,9 @@ func (c *cachedClient) ServerID() string { return c.client.ServerID() }
 // (WithoutCancel, bounded by fetchTimeout). Followers share the leader's
 // outcome, so the leader's client navigating away mid-fetch (request context
 // cancelled) must not abort the shared fetch and fail every follower with it.
+// A follower whose own request context ends while waiting returns its context
+// error immediately instead of waiting for the shared fetch, which continues
+// detached for the remaining callers.
 func readThrough[V any](
 	c *cachedClient,
 	ch *cache.Cache[V],
@@ -105,7 +108,7 @@ func readThrough[V any](
 	}
 	gen := c.gen.Load()
 	sfKey := key + ":" + strconv.FormatInt(gen, 10)
-	val, err := c.flight.Do(sfKey, func() (any, error) {
+	val, err := c.flight.Do(ctx, sfKey, func() (any, error) {
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
 		defer cancel()
 		v, ferr := fetch(fctx)

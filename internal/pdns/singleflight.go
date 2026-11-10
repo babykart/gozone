@@ -1,6 +1,7 @@
 package pdns
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -30,16 +31,26 @@ type singleFlight struct {
 // Do executes fn for key exactly once among concurrent callers; followers
 // receive the leader's result verbatim. A panic inside fn is recovered and
 // surfaced as an error to the leader and all followers, so a buggy fetch
-// cannot deadlock followers on an unclosed done channel.
-func (g *singleFlight) Do(key string, fn func() (any, error)) (any, error) {
+// cannot deadlock followers on an unclosed done channel. A follower whose ctx
+// ends while waiting for the leader returns ctx.Err() immediately instead of
+// blocking on the shared flight; the leader's fn keeps running to completion
+// for the remaining followers.
+func (g *singleFlight) Do(ctx context.Context, key string, fn func() (any, error)) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	g.mu.Lock()
 	if g.inflight == nil {
 		g.inflight = make(map[string]*call)
 	}
 	if c, ok := g.inflight[key]; ok {
 		g.mu.Unlock()
-		<-c.done
-		return c.val, c.err
+		select {
+		case <-c.done:
+			return c.val, c.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	c := &call{done: make(chan struct{})}
 	g.inflight[key] = c

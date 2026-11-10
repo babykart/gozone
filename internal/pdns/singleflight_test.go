@@ -1,6 +1,7 @@
 package pdns
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ func TestSingleFlight_CoalescesRelaxed(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			g.Do("k", fn)
+			g.Do(context.Background(), "k", fn)
 		}()
 	}
 	close(start)
@@ -76,7 +77,7 @@ func TestSingleFlight_DistinctKeysDoNotCoalesce(t *testing.T) {
 		wg.Add(1)
 		go func(key string) {
 			defer wg.Done()
-			g.Do(key, fn)
+			g.Do(context.Background(), key, fn)
 		}(key)
 	}
 	wg.Wait()
@@ -103,7 +104,7 @@ func TestSingleFlight_PanicRecovered(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, err := g.Do("panic-key", fn)
+			_, err := g.Do(context.Background(), "panic-key", fn)
 			errs[i] = err
 		}(i)
 	}
@@ -128,7 +129,7 @@ func TestSingleFlight_PanicRecovered(t *testing.T) {
 	// A subsequent call with the same key must run fn again (the panicked call
 	// was deregistered), proving the in-flight entry was cleaned up.
 	ran := false
-	_, err := g.Do("panic-key", func() (any, error) {
+	_, err := g.Do(context.Background(), "panic-key", func() (any, error) {
 		ran = true
 		return "ok", nil
 	})
@@ -156,7 +157,7 @@ func TestSingleFlight_ErrorPropagated(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, err := g.Do("err-key", fn)
+			_, err := g.Do(context.Background(), "err-key", fn)
 			errs[i] = err
 		}(i)
 	}
@@ -178,9 +179,153 @@ func TestSingleFlight_SequentialCallsReRun(t *testing.T) {
 	var calls atomic.Int64
 	fn := func() (any, error) { calls.Add(1); return calls.Load(), nil }
 
-	v1, _ := g.Do("k", fn)
-	v2, _ := g.Do("k", fn)
+	v1, _ := g.Do(context.Background(), "k", fn)
+	v2, _ := g.Do(context.Background(), "k", fn)
 	if v1.(int64) != 1 || v2.(int64) != 2 {
 		t.Errorf("sequential calls must each run fn; got v1=%v v2=%v", v1, v2)
+	}
+}
+
+// TestSingleFlight_FollowerCanceledBeforeWait confirms a follower whose own
+// context is already canceled returns its context error immediately instead of
+// queueing behind a held-open leader.
+func TestSingleFlight_FollowerCanceledBeforeWait(t *testing.T) {
+	var g singleFlight
+	release := make(chan struct{})
+	leaderStarted := make(chan struct{})
+	leaderDone := make(chan struct{})
+	var leaderVal any
+	var leaderErr error
+
+	leaderFn := func() (any, error) {
+		close(leaderStarted)
+		<-release
+		return "leader-value", nil
+	}
+
+	// Leader blocks on release in the background.
+	go func() {
+		leaderVal, leaderErr = g.Do(context.Background(), "held", leaderFn)
+		close(leaderDone)
+	}()
+	<-leaderStarted
+
+	// Follower with an already-canceled context must bail out without
+	// waiting for the leader.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	type result struct {
+		val any
+		err error
+	}
+	res := make(chan result, 1)
+	go func() {
+		val, err := g.Do(ctx, "held", leaderFn)
+		res <- result{val, err}
+	}()
+
+	select {
+	case r := <-res:
+		if !errors.Is(r.err, context.Canceled) {
+			t.Errorf("follower err = %v, want context.Canceled", r.err)
+		}
+		if r.val != nil {
+			t.Errorf("follower val = %v, want nil", r.val)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower with canceled context still waiting on the leader")
+	}
+
+	// Release the leader; it must complete with its own value.
+	close(release)
+	select {
+	case <-leaderDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader did not complete after release")
+	}
+	if leaderErr != nil {
+		t.Errorf("leader err = %v, want nil", leaderErr)
+	}
+	if leaderVal != "leader-value" {
+		t.Errorf("leader val = %v, want leader-value", leaderVal)
+	}
+
+	// A fresh call with the same key must run fn again (the leader's defer
+	// deregistered the entry).
+	ran := false
+	v, err := g.Do(context.Background(), "held", func() (any, error) {
+		ran = true
+		return "fresh", nil
+	})
+	if err != nil {
+		t.Errorf("fresh call err = %v, want nil", err)
+	}
+	if !ran || v != "fresh" {
+		t.Errorf("fresh call must rerun fn; ran=%v v=%v", ran, v)
+	}
+}
+
+// TestSingleFlight_FollowerContextCanceledMidFlight confirms a follower that
+// is already queued behind a leader returns its context error promptly when
+// its own context is canceled mid-flight, while the leader still completes.
+func TestSingleFlight_FollowerContextCanceledMidFlight(t *testing.T) {
+	var g singleFlight
+	release := make(chan struct{})
+	leaderStarted := make(chan struct{})
+	leaderDone := make(chan struct{})
+	var leaderVal any
+	var leaderErr error
+
+	leaderFn := func() (any, error) {
+		close(leaderStarted)
+		<-release
+		return "leader-value", nil
+	}
+
+	go func() {
+		leaderVal, leaderErr = g.Do(context.Background(), "held", leaderFn)
+		close(leaderDone)
+	}()
+	<-leaderStarted
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		val any
+		err error
+	}
+	res := make(chan result, 1)
+	go func() {
+		val, err := g.Do(ctx, "held", leaderFn)
+		res <- result{val, err}
+	}()
+
+	// Give the follower time to actually register behind the leader.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case r := <-res:
+		if !errors.Is(r.err, context.Canceled) {
+			t.Errorf("follower err = %v, want context.Canceled", r.err)
+		}
+		if r.val != nil {
+			t.Errorf("follower val = %v, want nil", r.val)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower did not return promptly after context cancellation")
+	}
+
+	// The leader must still complete with its value once released.
+	close(release)
+	select {
+	case <-leaderDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader did not complete after release")
+	}
+	if leaderErr != nil {
+		t.Errorf("leader err = %v, want nil", leaderErr)
+	}
+	if leaderVal != "leader-value" {
+		t.Errorf("leader val = %v, want leader-value", leaderVal)
 	}
 }
