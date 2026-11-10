@@ -4369,3 +4369,50 @@ func TestUpdateRecord_SRVWireRoundTrip(t *testing.T) {
 		t.Errorf("round-tripped wire content = %q priority=%d, want %q and 0 (wire unchanged)", got.Content, got.Priority, "10 5 5060 sip.example.com.")
 	}
 }
+
+// TestMergeBatchRRSets_CaseVariantExisting is the case-preserving-backend
+// regression guard for the batch path: PowerDNS returns the existing RRSet
+// under its original casing while the submitted rows are lowercased by
+// normalizeRecordName. The existing-map lookup must fold case — an exact
+// key match misses the RRSet, produces a bare REPLACE of the new row and
+// silently drops the existing sibling (and its TTL).
+func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "Mail.Example.COM.", Type: "MX", TTL: 300,
+			Records: []models.RecordInfo{{Content: "mail.example.com.", Priority: 10}},
+		},
+	}
+	newRRSets := []models.RRSet{
+		{
+			Name: "mail.example.com.", Type: "MX", TTL: 0,
+			Records: []models.RecordInfo{{Content: "mail.example.com.", Priority: 20}},
+		},
+	}
+
+	merged, err := mergeBatchRRSets(newRRSets, existing)
+	if err != nil {
+		t.Fatalf("mergeBatchRRSets: %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected a single merged group, got %d: %+v", len(merged), merged)
+	}
+	for key, rr := range merged {
+		if rr.TTL != 300 {
+			t.Errorf("group %q: TTL = %d, want 300 inherited from the existing RRSet", key, rr.TTL)
+		}
+		if len(rr.Records) != 2 {
+			t.Fatalf("group %q: expected both the existing sibling and the new record, got %+v", key, rr.Records)
+		}
+		priorities := map[int]bool{}
+		for _, rec := range rr.Records {
+			if rec.Content != "mail.example.com." {
+				t.Errorf("group %q: unexpected record content %q", key, rec.Content)
+			}
+			priorities[rec.Priority] = true
+		}
+		if !priorities[10] || !priorities[20] {
+			t.Errorf("group %q: merged RRSet must carry priorities 10 (existing) and 20 (new), got %+v", key, priorities)
+		}
+	}
+}

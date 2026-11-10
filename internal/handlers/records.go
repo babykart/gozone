@@ -134,7 +134,7 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 
 	var existingRRSet *models.RRSet
 	for _, rr := range allRecords {
-		if rr.Name == name && rr.Type == recordType {
+		if dnsops.RRSetsMatch(rr.Name, rr.Type, name, recordType) {
 			existingRRSet = &rr
 			break
 		}
@@ -234,7 +234,7 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 	var targetRRSet *models.RRSet
 	for _, rr := range records {
-		if rr.Name == recordName && rr.Type == recordType {
+		if dnsops.RRSetsMatch(rr.Name, rr.Type, recordName, recordType) {
 			targetRRSet = &rr
 			break
 		}
@@ -478,7 +478,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 
 	var existingRRSet *models.RRSet
 	for _, rr := range allRecords {
-		if rr.Name == name && rr.Type == recordType {
+		if dnsops.RRSetsMatch(rr.Name, rr.Type, name, recordType) {
 			existingRRSet = &rr
 			break
 		}
@@ -757,7 +757,10 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 		})
 		logs = append(logs, batchLogEntry{recordType: recordType, name: name, content: content})
 
-		key := name + "|" + recordType
+		// The pending map lives in the same canonical key space as the
+		// merged map (finalizeBatchRRSets looks these up by the merged
+		// key), so it must use RRSetKey too — not a raw "name|type".
+		key := dnsops.RRSetKey(name, recordType)
 		if rowComment != "" || rowCommentClear {
 			pending[key] = append(pending[key], batchPendingComment{text: rowComment, clear: rowCommentClear})
 		}
@@ -781,7 +784,7 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[string]*models.RRSet, error) {
 	existingMap := make(map[string]*models.RRSet)
 	for i := range existing {
-		existingMap[existing[i].Name+"|"+existing[i].Type] = &existing[i]
+		existingMap[dnsops.RRSetKey(existing[i].Name, existing[i].Type)] = &existing[i]
 	}
 
 	merged := make(map[string]*models.RRSet)
@@ -791,7 +794,7 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 	// never voted on.
 	explicit := make(map[string]int)
 	for _, newRR := range newRRSets {
-		key := newRR.Name + "|" + newRR.Type
+		key := dnsops.RRSetKey(newRR.Name, newRR.Type)
 		if _, seen := explicit[key]; seen {
 			// Subsequent row of an already-started group.
 			if newRR.TTL > 0 {
@@ -1120,7 +1123,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	// the recordIdentity used on the PowerDNS read path (SplitPriority has
 	// already detached the priority for MX/SRV).
 	removal := map[string]map[recordIdentity]struct{}{
-		recordName + "|" + recordType: {
+		dnsops.RRSetKey(recordName, recordType): {
 			{Content: content, Priority: priority}: {},
 		},
 	}
@@ -1134,7 +1137,7 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	// Snapshot the full RRSet before mutation for the activity log.
 	var oldRRSet *models.RRSet
 	for i := range allRecords {
-		if allRecords[i].Name == recordName && allRecords[i].Type == recordType {
+		if dnsops.RRSetsMatch(allRecords[i].Name, allRecords[i].Type, recordName, recordType) {
 			oldRRSet = &allRecords[i]
 			break
 		}
@@ -1188,7 +1191,7 @@ type recordIdentity struct {
 func buildRemovalPatch(allRecords []models.RRSet, removal map[string]map[recordIdentity]struct{}) (patch []models.RRSet, removedSnapshot []models.RRSet, totalRemoved int, err error) {
 	for i := range allRecords {
 		rr := allRecords[i]
-		key := rr.Name + "|" + rr.Type
+		key := dnsops.RRSetKey(rr.Name, rr.Type)
 		drop, ok := removal[key]
 		if !ok {
 			continue
@@ -1306,7 +1309,7 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 			priority, _ = strconv.Atoi(strings.TrimSpace(priorities[i]))
 		}
 
-		key := name + "|" + recordType
+		key := dnsops.RRSetKey(name, recordType)
 		if removal[key] == nil {
 			removal[key] = make(map[recordIdentity]struct{})
 		}
