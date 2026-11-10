@@ -223,42 +223,6 @@ func TestZoneGroupIDByNameTx(t *testing.T) {
 	}
 }
 
-func TestAddGroupMembershipIdempotent(t *testing.T) {
-	db := newTestDB(t)
-	ctx := context.Background()
-	user, err := db.CreateExternalUser(ctx, "greg", "greg@example.com", "", "", "user", "iss", "sub")
-	if err != nil {
-		t.Fatalf("CreateExternalUser: %v", err)
-	}
-	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it.
-	gid, err := db.ExecReturnID(ctx, "INSERT INTO zone_groups (name, description) VALUES (?, ?)", "devs", "")
-	if err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-
-	// Add twice in two transactions; the second must not error (idempotent).
-	for i := 0; i < 2; i++ {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatalf("begin tx: %v", err)
-		}
-		if err := tx.AddGroupMembership(ctx, gid, user.ID); err != nil {
-			t.Fatalf("AddGroupMembership #%d: %v", i, err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
-	var n int
-	if err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?", gid, user.ID).Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("expected 1 membership row, got %d", n)
-	}
-}
-
 // TestLinkExternalIdentity_ConflictRejection is the silent-link regression:
 // an (issuer, subject) pair already tied to another user used to make the
 // insert-ignore no-op and report success, letting the caller keep acting for

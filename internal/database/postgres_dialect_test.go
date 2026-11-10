@@ -361,6 +361,29 @@ func TestPostgresDialect_InsertIgnore_AllowsConflictSubsetOfColumns(t *testing.T
 	}
 }
 
+// TestPostgresDialect_InsertSkipDuplicate pins the skip-duplicate form: it
+// reuses ON CONFLICT (...) DO NOTHING, which only handles the named conflict
+// target — foreign-key, CHECK and conversion errors still fail the
+// statement and abort the transaction.
+func TestPostgresDialect_InsertSkipDuplicate(t *testing.T) {
+	d := &postgresDialect{}
+	columns := []string{"group_id", "user_id"}
+	got := d.InsertSkipDuplicate("zone_group_members", columns, columns)
+	want := "INSERT INTO zone_group_members (group_id, user_id) VALUES (?, ?) ON CONFLICT (group_id, user_id) DO NOTHING"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	if got != d.InsertIgnore("zone_group_members", columns, columns) {
+		t.Error("InsertSkipDuplicate must reuse the InsertIgnore SQL on PostgreSQL")
+	}
+
+	// The conflictColumns invariant is inherited from InsertIgnore: an
+	// empty target must produce the error sentinel, not a fallback.
+	if got := d.InsertSkipDuplicate("any_table", []string{"a"}, nil); !strings.Contains(got, "-- ERROR") {
+		t.Errorf("empty conflictColumns must produce an error sentinel, got %q", got)
+	}
+}
+
 func TestPostgresDialect_InsertIgnore_RequiresConflictColumns(t *testing.T) {
 	// Defence against the silent-fallback bug the new signature was
 	// introduced for: an empty conflictColumns must produce an obviously

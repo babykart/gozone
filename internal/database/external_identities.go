@@ -206,19 +206,6 @@ func (tx *Tx) ZoneGroupIDByNameTx(ctx context.Context, name string) (int64, erro
 	return id, err
 }
 
-// AddGroupMembership adds userID to groupID idempotently (no-op if already a
-// member). Intended to run inside the SSO provisioning/login transaction.
-func (tx *Tx) AddGroupMembership(ctx context.Context, groupID, userID int64) error {
-	_, err := tx.InsertIgnore(ctx, "zone_group_members",
-		[]string{"group_id", "user_id"},
-		[]string{"group_id", "user_id"},
-		groupID, userID)
-	if err != nil {
-		return fmt.Errorf("add group membership: %w", err)
-	}
-	return nil
-}
-
 // SetUserRole updates a user's role. role MUST be validated
 // ("admin"/"operator"/"user") by the caller. The last-enabled-admin guard is
 // NOT applied here — the caller is

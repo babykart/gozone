@@ -69,6 +69,17 @@ func (m *mysqlDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 
+// InsertSkipDuplicate uses ON DUPLICATE KEY UPDATE with a self-assignment
+// no-op instead of INSERT IGNORE: a duplicate key updates nothing and
+// returns no error, while foreign-key, CHECK and data-conversion errors
+// still fail the statement — INSERT IGNORE would silently downgrade those
+// to warnings.
+func (m *mysqlDialect) InsertSkipDuplicate(table string, columns, _ []string) string {
+	cols := strings.Join(columns, ", ")
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s = %s",
+		table, cols, placeholders(len(columns)), columns[0], columns[0])
+}
+
 // SupportsInsertReturning returns false: Oracle MySQL has no RETURNING clause
 // (only MariaDB 10.5+ does), so DB/Tx.ExecReturnID falls back to
 // sql.Result.LastInsertId, which go-sql-driver/mysql supports.

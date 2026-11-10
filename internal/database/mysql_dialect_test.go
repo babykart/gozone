@@ -278,6 +278,29 @@ func TestMySQLDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_InsertSkipDuplicate pins the FK-fatal duplicate-safe
+// form: ON DUPLICATE KEY UPDATE with a self-assignment no-op turns a
+// duplicate key into a no-op, but never uses INSERT IGNORE (which would
+// downgrade foreign-key violations to warnings and silently accept broken
+// association rows).
+func TestMySQLDialect_InsertSkipDuplicate(t *testing.T) {
+	d := &mysqlDialect{}
+	got := d.InsertSkipDuplicate(
+		"zone_group_zones",
+		[]string{"group_id", "zone_id"},
+		// Any value here is intentionally ignored; pass a non-empty value
+		// to confirm the signature accepts it without altering output.
+		[]string{"group_id", "zone_id"},
+	)
+	want := "INSERT INTO zone_group_zones (group_id, zone_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE group_id = group_id"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	if strings.Contains(got, "IGNORE") {
+		t.Errorf("InsertSkipDuplicate must not use INSERT IGNORE (FK-fatal contract), got %q", got)
+	}
+}
+
 // TestMySQLLockRetryable pins the retry decision: a timed-out attempt (0) and
 // a NULL internal error are retried — the holder may legitimately still be
 // migrating — while an acquired lock (1) and unexpected values are not.

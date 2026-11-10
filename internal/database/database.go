@@ -256,6 +256,18 @@ func (db *DB) InsertIgnore(ctx context.Context, table string, columns, conflictC
 	return db.ExecContext(ctx, query, values...)
 }
 
+// InsertSkipDuplicate inserts a row into table, silently skipping a row that
+// collides on conflictColumns while letting every other constraint (foreign
+// keys, CHECK, data conversion) fail loudly. The per-dialect SQL strategy is
+// documented on Dialect.InsertSkipDuplicate. Use it for idempotent
+// association inserts inside a transaction: a duplicate is an accepted
+// no-op, so later statements in the same transaction are never aborted by a
+// handled violation.
+func (db *DB) InsertSkipDuplicate(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
+	query := db.dialect.InsertSkipDuplicate(table, columns, conflictColumns)
+	return db.ExecContext(ctx, query, values...)
+}
+
 // ExecReturnID executes an INSERT statement and returns the auto-generated
 // primary key of the inserted row. It abstracts the dialect difference that
 // made raw result.LastInsertId() non-portable:
@@ -746,6 +758,16 @@ func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *s
 // linking its external identity atomically).
 func (tx *Tx) InsertIgnore(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
 	query := tx.dialect.InsertIgnore(table, columns, conflictColumns)
+	return tx.ExecContext(ctx, query, values...)
+}
+
+// InsertSkipDuplicate is the transaction-scoped counterpart of
+// DB.InsertSkipDuplicate: a duplicate-key insert is a silent no-op and
+// leaves the transaction usable, while foreign-key, CHECK and conversion
+// errors still fail (and thereby roll back) the transaction. See
+// Dialect.InsertSkipDuplicate for the per-dialect SQL strategy.
+func (tx *Tx) InsertSkipDuplicate(ctx context.Context, table string, columns, conflictColumns []string, values ...any) (sql.Result, error) {
+	query := tx.dialect.InsertSkipDuplicate(table, columns, conflictColumns)
 	return tx.ExecContext(ctx, query, values...)
 }
 

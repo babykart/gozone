@@ -57,6 +57,13 @@ type Dialect interface {
 	// explicitly so the Postgres dialect cannot silently fall back to the
 	// wrong index when columns != unique constraint.
 	InsertIgnore(table string, columns, conflictColumns []string) string
+	// InsertSkipDuplicate returns an INSERT statement that silently skips rows
+	// colliding on conflictColumns while letting every other constraint
+	// (foreign keys, CHECK, data conversion) fail loudly. Identical to
+	// InsertIgnore SQL on SQLite and PostgreSQL (their ignore forms already
+	// propagate FK errors); MySQL needs ON DUPLICATE KEY UPDATE, because
+	// INSERT IGNORE would also downgrade foreign-key violations to warnings.
+	InsertSkipDuplicate(table string, columns, conflictColumns []string) string
 	// SupportsInsertReturning reports whether the dialect supports the
 	// INSERT ... RETURNING <col> clause. PostgreSQL requires it (lib/pq does
 	// not implement sql.Result.LastInsertId), SQLite supports it since 3.35,

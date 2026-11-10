@@ -133,6 +133,13 @@ func (s *sqliteDialect) InsertIgnore(table string, columns, _ []string) string {
 	return fmt.Sprintf("INSERT OR IGNORE INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ", "), placeholders(len(columns)))
 }
 
+// InsertSkipDuplicate reuses the OR IGNORE form: SQLite's conflict-resolution
+// clause only suppresses UNIQUE/PRIMARY-KEY violations, so foreign-key, CHECK
+// and conversion errors still abort the statement.
+func (s *sqliteDialect) InsertSkipDuplicate(table string, columns, conflictColumns []string) string {
+	return s.InsertIgnore(table, columns, conflictColumns)
+}
+
 // SupportsInsertReturning returns true: the bundled SQLite is 3.53.2, well past
 // the 3.35 release that added RETURNING. This also exercises the RETURNING code
 // path under the in-memory SQLite test suite, giving confidence that the

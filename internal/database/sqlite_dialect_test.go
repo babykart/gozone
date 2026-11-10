@@ -207,6 +207,23 @@ func TestSQLiteDialect_InsertIgnore_IgnoresConflictColumns(t *testing.T) {
 	}
 }
 
+// TestSQLiteDialect_InsertSkipDuplicate pins the skip-duplicate form: it
+// reuses INSERT OR IGNORE, whose conflict resolution only suppresses
+// UNIQUE/PRIMARY-KEY violations — foreign-key, CHECK and conversion errors
+// still fail the statement.
+func TestSQLiteDialect_InsertSkipDuplicate(t *testing.T) {
+	d := &sqliteDialect{}
+	columns := []string{"group_id", "user_id"}
+	got := d.InsertSkipDuplicate("zone_group_members", columns, columns)
+	want := "INSERT OR IGNORE INTO zone_group_members (group_id, user_id) VALUES (?, ?)"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	if got != d.InsertIgnore("zone_group_members", columns, columns) {
+		t.Error("InsertSkipDuplicate must reuse the InsertIgnore SQL on SQLite")
+	}
+}
+
 func TestSQLiteDialect_Migrations_NoDoubleOnConflict(t *testing.T) {
 	// Defence against a regression on the SQLite side: a future contributor
 	// must not "fix" SQLite by adding an ON CONFLICT clause (that's Postgres

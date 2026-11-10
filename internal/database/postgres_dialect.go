@@ -88,6 +88,13 @@ func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []
 		table, cols, placeholders(len(columns)), target)
 }
 
+// InsertSkipDuplicate reuses the ON CONFLICT form: DO NOTHING only handles
+// the named conflict target, so foreign-key, CHECK and conversion errors
+// still fail the statement (and thereby the transaction).
+func (p *postgresDialect) InsertSkipDuplicate(table string, columns, conflictColumns []string) string {
+	return p.InsertIgnore(table, columns, conflictColumns)
+}
+
 // postgresAdvisoryLockKey derives the migration advisory-lock key from the
 // module path. The previous constant 42 was banal enough that any other
 // application sharing the PostgreSQL cluster could take (or hold) it. A
