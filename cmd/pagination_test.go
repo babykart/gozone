@@ -108,3 +108,73 @@ func TestPaginationPartial(t *testing.T) {
 		t.Errorf("dropdown searches must not be escaped into one opaque query value:\n%s", out)
 	}
 }
+
+// TestPaginationPartial_AllCap exercises the AllCap-aware "All" option of the
+// real pagination.html partial: when a caller passes AllCap (the zone view
+// records pager), the last option offers the bounded "All (max N)" instead of
+// the unbounded value="0" "All"; when AllCap is absent (every other page) the
+// partial keeps the historical All option and behavior.
+func TestPaginationPartial_AllCap(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+
+	// Capped page (PerPage = AllCap): the bounded option is selected.
+	var buf strings.Builder
+	data := map[string]interface{}{
+		"PageInfo": handlers.PageInfo{Current: 1, PerPage: 1000, TotalPages: 2, Total: 1005},
+		"Search":   "",
+		"Label":    "records",
+		"Prefix":   "",
+		"AllCap":   1000,
+	}
+	if err := tmpl.ExecuteTemplate(&buf, "pagination.html", data); err != nil {
+		t.Fatalf("execute capped pagination: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{`value="1000"`, "All (max 1000)", `value="1000" selected>All (max 1000)`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("capped pagination output missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `value="0"`) {
+		t.Errorf("capped pagination must not render the unbounded All option:\n%s", out)
+	}
+
+	// Uncapped page (no AllCap): the historical All option and behavior.
+	buf.Reset()
+	listData := map[string]interface{}{
+		"PageInfo": handlers.PageInfo{Current: 1, PerPage: 10, TotalPages: 2, Total: 15},
+		"Search":   "",
+		"Label":    "zones",
+		"Prefix":   "",
+	}
+	if err := tmpl.ExecuteTemplate(&buf, "pagination.html", listData); err != nil {
+		t.Fatalf("execute uncapped pagination: %v", err)
+	}
+	out = buf.String()
+	for _, want := range []string{`value="0"`, ">All</option>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("uncapped pagination output missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "All (max") {
+		t.Errorf("uncapped pagination must not render the bounded All option:\n%s", out)
+	}
+
+	// Capped selector showing a normal page size: the 10 option is selected
+	// and the bounded All option is not.
+	buf.Reset()
+	data["PageInfo"] = handlers.PageInfo{Current: 1, PerPage: 10, TotalPages: 101, Total: 1005}
+	if err := tmpl.ExecuteTemplate(&buf, "pagination.html", data); err != nil {
+		t.Fatalf("execute capped small-page pagination: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, `value="10" selected`) {
+		t.Errorf("capped small-page pagination must select the 10 option:\n%s", out)
+	}
+	if strings.Contains(out, `value="1000" selected`) {
+		t.Errorf("capped small-page pagination must not select the All (max) option:\n%s", out)
+	}
+}

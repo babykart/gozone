@@ -40,7 +40,14 @@
         <option value="30" {{if eq $info.PerPage 30}}selected{{end}}>30</option>
         <option value="40" {{if eq $info.PerPage 40}}selected{{end}}>40</option>
         <option value="50" {{if eq $info.PerPage 50}}selected{{end}}>50</option>
+        {{with $cap := .AllCap}}{{/*
+          AllCap is set by pages that bound their "All" view (zone view
+          records): the option requests the cap instead of PerPage=0 so the
+          selector state matches what the handler actually renders. */}}
+        <option value="{{$cap}}" {{if eq $info.PerPage $cap}}selected{{end}}>All (max {{$cap}})</option>
+        {{else}}
         <option value="0" {{if eq $info.PerPage 0}}selected{{end}}>All</option>
+        {{end}}
     </select>
 </div>
 {{end}}

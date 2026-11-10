@@ -74,6 +74,7 @@ When adding a new record type to `GetRecordTypes()` (`internal/handlers/zones.go
 - Query params are **capitalized**: `Page`, `PerPage` (or `logPage`, `logPerPage` for activity log). Not lowercase.
 - `PerPage=0` means "All". The per-page selector in `pagination.html` offers 10/20/30/40/50/All.
 - `paginate[T]` is a generic slice paginator in `internal/handlers/zones.go`.
+- The zone view caps the records "All" per-page at `zoneViewAllCap` (1000) rows: `PerPage=0` and explicit values above the cap are clamped, and the per-page selector shows "All (max N)". The activity-log section is not affected (it caps itself).
 - Zone view paginates by **individual record rows** (`ZoneRecordRow`), not RRSets — a zone with 1 SOA + 10 NS records is 11 rows, not 2 items.
 
 ## Auth Patterns

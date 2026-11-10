@@ -37,6 +37,16 @@ type PageInfo struct {
 	Total      int
 }
 
+// zoneViewAllCap bounds the "All" (perPage = 0) view of the zone record
+// table. Every rendered row carries its own edit form, textarea inputs and
+// data-* attributes, so an uncapped "All" on a large zone produces tens of
+// megabytes of HTML and a heavy CPU/memory cost server-side; any zone member
+// can trigger it with the selector or a hand-edited URL. The cap keeps the
+// page bounded: "All" now means "at most 1000 rows per page", and the
+// per-page selector shows "All (max 1000)". It applies only to the records
+// pagination in ViewZone; the activity-log section caps itself.
+const zoneViewAllCap = 1000
+
 // ZoneRecordRow is a single displayable record row in the zone view table.
 // It carries the RRset-level metadata (Name, Type, TTL, Comments) alongside
 // the individual RecordInfo so that pagination counts rows (individual
@@ -642,6 +652,11 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	// all 11 rows land on a single page, violating the per-page limit.
 	rows := flattenRecords(records)
 	recordPage, recordPerPage := parsePaginationParams(r, 10)
+	// Clamp "All" (0) and oversized explicit values to the cap so the
+	// per-row markup of a large zone cannot be rendered in one request.
+	if recordPerPage == 0 || recordPerPage > zoneViewAllCap {
+		recordPerPage = zoneViewAllCap
+	}
 	paginatedRows, recordPageInfo := paginate(rows, recordPage, recordPerPage)
 
 	logPage, logPerPage := parseLogPaginationParams(r, 10)
@@ -663,6 +678,7 @@ func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 		"Zone":           zone,
 		"Records":        paginatedRows,
 		"RecordPageInfo": recordPageInfo,
+		"RecordAllCap":   zoneViewAllCap,
 		"Search":         search,
 		"MetaData":       metadata,
 		"Logs":           logs,

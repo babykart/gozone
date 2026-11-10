@@ -1634,6 +1634,89 @@ func TestViewZone_SearchAt(t *testing.T) {
 	}
 }
 
+func TestViewZone_AllPerPageCapped(t *testing.T) {
+	// The zone carries 1005 single-record A RRSets and nothing else: the
+	// "All" per-page request must clamp to zoneViewAllCap (1000) rows, so
+	// exactly 1000 "192.0.2." rows render on page 1 of 2. (SOA/NS RRSets
+	// are omitted because sortZoneRecords always places them in the first
+	// two row slots, which would displace A rows from the capped page.)
+	var rrsets strings.Builder
+	rrsets.WriteString(`"rrsets":[`)
+	for i := 1; i <= 1005; i++ {
+		if i > 1 {
+			rrsets.WriteString(",")
+		}
+		fmt.Fprintf(&rrsets, `{"name":"host%d.example.com.","type":"A","ttl":300,"records":[{"content":"192.0.2.%d","disabled":false}]}`, i, i)
+	}
+	rrsets.WriteString("]")
+
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/metadata") {
+			w.Write([]byte(`[]`))
+			return
+		}
+		if strings.HasSuffix(path, "/cryptokeys") {
+			w.Write([]byte(`[]`))
+			return
+		}
+		if strings.Contains(path, "/servers/localhost") && !strings.Contains(path, "/zones/") {
+			w.Write([]byte(`{"id":"localhost","type":"Server","version":"4.9.0"}`))
+			return
+		}
+		fmt.Fprintf(w, `{"id":"example.com.","name":"example.com.","kind":"Native","serial":2024010100,%s}`, rrsets.String())
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	doRequest := func(t *testing.T, query string) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/example.com."+query, nil)
+		r.SetPathValue("zone_id", "example.com.")
+		r = r.WithContext(ctx)
+		h.ViewZone(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// PerPage=0 ("All") clamps to the cap: 1000 rows on page 1 of 2.
+	body := doRequest(t, "?PerPage=0")
+	if n := strings.Count(body, "192.0.2."); n != 1000 {
+		t.Errorf("PerPage=0: expected 1000 capped rows, got %d", n)
+	}
+	for _, want := range []string{"PerPage=1000", "Total=1005", "PageInfo=1/2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("PerPage=0: output missing %q", want)
+		}
+	}
+
+	// An explicit PerPage above the cap clamps the same way.
+	body = doRequest(t, "?PerPage=5000")
+	if n := strings.Count(body, "192.0.2."); n != 1000 {
+		t.Errorf("PerPage=5000: expected 1000 capped rows, got %d", n)
+	}
+	for _, want := range []string{"PerPage=1000", "Total=1005", "PageInfo=1/2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("PerPage=5000: output missing %q", want)
+		}
+	}
+
+	// Normal page sizes are untouched.
+	body = doRequest(t, "?PerPage=50")
+	if n := strings.Count(body, "192.0.2."); n != 50 {
+		t.Errorf("PerPage=50: expected 50 rows, got %d", n)
+	}
+	if !strings.Contains(body, "PerPage=50") {
+		t.Error("PerPage=50: output missing PerPage=50")
+	}
+}
+
 func TestViewZone_SortOrder(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
