@@ -31,8 +31,13 @@ GoZone implements the **OIDC Authorization Code flow with PKCE (S256)**:
 > GitHub user OAuth) cannot be used directly — see
 > [Provider notes](#provider-notes).
 
-The callback endpoint is rate-limited (shared with the login limiter) to
-prevent brute-forcing of the `state` parameter.
+The OIDC login and callback endpoints are rate-limited by a dedicated
+30/min per-IP budget (namespace `sso:ip:`, enforced twice: in-process limiter
+plus cluster-wide counterpart). This is flood control only — the `state`
+parameter is AES-256-GCM encrypted, bound to the browser and single-use, so
+brute-forcing it is infeasible. The budget is separate from `/login`'s:
+SSO traffic behind a shared egress address cannot exhaust password-login
+attempts, nor be exhausted by them (one SSO sign-in costs two route hits).
 
 ---
 
