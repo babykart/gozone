@@ -97,6 +97,14 @@ func (m *mysqlDialect) RateLimitHitUpsert() (string, bool) {
 		ON DUPLICATE KEY UPDATE hits = hits + 1`, false
 }
 
+// SSOIDTokenUpsert: ON DUPLICATE KEY UPDATE — a single statement that takes
+// the exclusive row lock directly. The deliberate VALUES() form works on both
+// MySQL 8 and MariaDB, which share this dialect struct (the row-alias
+// `AS new` syntax is MySQL-8.0.19+ only).
+func (m *mysqlDialect) SSOIDTokenUpsert() string {
+	return `INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE id_token = VALUES(id_token), expires_at = VALUES(expires_at)`
+}
+
 // Bounds for MySQL named-lock acquisition: the per-attempt wait and the total
 // number of attempts before giving up. Migration and zone locks share these
 // bounds so every cluster-wide lock acquisition stays finite.

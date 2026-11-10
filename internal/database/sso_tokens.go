@@ -13,32 +13,14 @@ import (
 // what fits in the ~4 KiB session cookie. expiresAt bounds retention (aligned
 // with the session's maximum possible lifetime) and drives the periodic purge;
 // it is normalized to UTC so the purge cutoff compares the same instant.
-// A DELETE+INSERT pair inside one transaction replaces any stale row for the
-// same sid portably across dialects (no dialect-specific upsert SQL needed).
+// A single native upsert replaces any stale row for the same sid (last
+// writer wins); being one atomic statement, concurrent stores for the same
+// session serialize on the row lock instead of racing a DELETE+INSERT pair
+// into a unique violation.
 func (db *DB) UpsertSSOIDToken(ctx context.Context, sessionID, idToken string, expiresAt time.Time) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+	if _, err := db.ExecContext(ctx, db.dialect.SSOIDTokenUpsert(), sessionID, idToken, expiresAt.UTC()); err != nil {
+		return fmt.Errorf("upsert sso id token: %w", err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM sso_id_tokens WHERE session_id = ?", sessionID); err != nil {
-		return fmt.Errorf("clear sso id token: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?)",
-		sessionID, idToken, expiresAt.UTC(),
-	); err != nil {
-		return fmt.Errorf("insert sso id token: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-	committed = true
 	return nil
 }
 

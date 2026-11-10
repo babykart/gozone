@@ -73,6 +73,12 @@ func (p *postgresDialect) RateLimitHitUpsert() (string, bool) {
 		RETURNING hits`, true
 }
 
+// SSOIDTokenUpsert: ON CONFLICT ... DO UPDATE — one atomic statement;
+// concurrent stores for the same session serialize on the row lock.
+func (p *postgresDialect) SSOIDTokenUpsert() string {
+	return `INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET id_token = EXCLUDED.id_token, expires_at = EXCLUDED.expires_at`
+}
+
 func (p *postgresDialect) InsertIgnore(table string, columns, conflictColumns []string) string {
 	// conflictColumns is REQUIRED for PostgreSQL: ON CONFLICT (col1, col2, ...)
 	// must match an existing UNIQUE constraint or PRIMARY KEY on the table.

@@ -157,6 +157,12 @@ func (s *sqliteDialect) RateLimitHitUpsert() (string, bool) {
 		RETURNING hits`, true
 }
 
+// SSOIDTokenUpsert: ON CONFLICT ... DO UPDATE — one atomic statement;
+// concurrent stores for the same session serialize on the row lock.
+func (s *sqliteDialect) SSOIDTokenUpsert() string {
+	return `INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET id_token = excluded.id_token, expires_at = excluded.expires_at`
+}
+
 // LockMigrations is a no-op for SQLite. SQLite serializes writers at the
 // database-file level and MaxOpenConns is set to 1, so concurrent migration
 // races from a single process are impossible. Cross-process concurrency (the

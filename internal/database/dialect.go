@@ -81,6 +81,13 @@ type Dialect interface {
 	// false the caller reads it with a follow-up SELECT in the same
 	// transaction (MySQL: ON DUPLICATE KEY UPDATE has no RETURNING).
 	RateLimitHitUpsert() (query string, returnsCount bool)
+	// SSOIDTokenUpsert returns the static SQL for the atomic upsert of one
+	// sso_id_tokens row, keyed by its session_id primary key. On conflict the
+	// id_token and expires_at are replaced — last writer wins, preserving the
+	// semantics of the former DELETE+INSERT. A single statement is atomic, so
+	// concurrent stores for the same session serialize on the row lock
+	// instead of racing a DELETE+INSERT pair into a unique violation.
+	SSOIDTokenUpsert() string
 	// LockMigrations acquires a cluster-wide lock so that only one instance
 	// runs migrations at a time. The returned release function must be called
 	// when migrations are finished.

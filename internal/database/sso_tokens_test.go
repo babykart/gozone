@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -9,7 +11,6 @@ import (
 func TestSSOIDTokensCRUD(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
-	now := time.Now()
 	hint := "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhLiJ9.sig"
 
 	// Initially absent.
@@ -18,7 +19,8 @@ func TestSSOIDTokensCRUD(t *testing.T) {
 	}
 
 	// Store.
-	if err := db.UpsertSSOIDToken(ctx, "s1", hint, now.Add(time.Hour)); err != nil {
+	exp1 := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	if err := db.UpsertSSOIDToken(ctx, "s1", hint, exp1); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	got, err := db.FindSSOIDToken(ctx, "s1")
@@ -30,13 +32,26 @@ func TestSSOIDTokensCRUD(t *testing.T) {
 	}
 
 	// Upsert replaces a stale row for the same sid (fresh login reusing the
-	// key must not keep the old token).
+	// key must not keep the old token). Replace-semantics guard: both the
+	// token AND the expiry must come from the second call — a "DO NOTHING"
+	// style upsert would keep the old expiry while leaving the token
+	// unchanged and slip past a token-only assertion.
 	hint2 := "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJiLiJ9.sig2"
-	if err := db.UpsertSSOIDToken(ctx, "s1", hint2, now.Add(2*time.Hour)); err != nil {
+	exp2 := time.Date(2026, 11, 11, 14, 0, 0, 0, time.UTC)
+	if err := db.UpsertSSOIDToken(ctx, "s1", hint2, exp2); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 	if got, _ := db.FindSSOIDToken(ctx, "s1"); got != hint2 {
 		t.Errorf("re-upsert did not replace: got %q", got)
+	}
+	var storedExp time.Time
+	if err := db.QueryRowContext(ctx,
+		"SELECT expires_at FROM sso_id_tokens WHERE session_id = 's1'",
+	).Scan(&storedExp); err != nil {
+		t.Fatalf("select expires_after re-upsert: %v", err)
+	}
+	if !storedExp.Equal(exp2) {
+		t.Errorf("re-upsert must replace expires_at too: got %v, want %v", storedExp, exp2)
 	}
 
 	// Delete removes the row; a second delete is a no-op.
@@ -106,5 +121,115 @@ func TestUpsertSSOIDToken_NormalizesExpiryToUTC(t *testing.T) {
 	}
 	if stored.Location() != time.UTC {
 		t.Errorf("stored expires_at location = %v, want UTC (naive columns must hold UTC wall time)", stored.Location())
+	}
+}
+
+// TestSSOIDTokenUpsertSQL pins the exact native upsert statement per dialect:
+// a single atomic INSERT ... ON CONFLICT / ON DUPLICATE KEY UPDATE must back
+// UpsertSSOIDToken so concurrent writers never interleave a DELETE+INSERT
+// pair into a unique-violation window.
+func TestSSOIDTokenUpsertSQL(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"sqlite",
+			"INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) " +
+				"ON CONFLICT (session_id) DO UPDATE SET id_token = excluded.id_token, expires_at = excluded.expires_at"},
+		{"mysql",
+			"INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) " +
+				"ON DUPLICATE KEY UPDATE id_token = VALUES(id_token), expires_at = VALUES(expires_at)"},
+		{"postgres",
+			"INSERT INTO sso_id_tokens (session_id, id_token, expires_at) VALUES (?, ?, ?) " +
+				"ON CONFLICT (session_id) DO UPDATE SET id_token = EXCLUDED.id_token, expires_at = EXCLUDED.expires_at"},
+	}
+	queries := map[string]string{
+		"sqlite":   (&sqliteDialect{}).SSOIDTokenUpsert(),
+		"mysql":    (&mysqlDialect{}).SSOIDTokenUpsert(),
+		"postgres": (&postgresDialect{}).SSOIDTokenUpsert(),
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := queries[c.name]; got != c.query {
+				t.Errorf("SSOIDTokenUpsert =\n%s\nwant:\n%s", got, c.query)
+			}
+		})
+	}
+}
+
+// TestUpsertSSOIDToken_ConcurrentSameSession exercises the upsert from N
+// goroutines racing on the same session_id with distinct (id_token,
+// expires_at) pairs. The final row must be exactly one and its pair must be
+// coherent (belong to exactly one writer), and no call may return an error.
+//
+// On SQLite this is a serialization smoke test (the single-connection pool
+// serializes writers anyway); the unique-violation regression it guards —
+// the old DELETE+INSERT pair letting a second transaction's INSERT land on a
+// row whose DELETE has not committed yet — only manifests on the network
+// dialects exercised by the dbmatrix CI jobs (PostgreSQL surfaces it as a
+// 23505 unique violation, MySQL as a duplicate-key error).
+func TestUpsertSSOIDToken_ConcurrentSameSession(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	const n = 8
+	type pair struct {
+		token string
+		exp   time.Time
+	}
+	pairs := make([]pair, n)
+	for i := range pairs {
+		pairs[i] = pair{
+			token: fmt.Sprintf("race-token-%d", i),
+			exp:   time.Date(2026, 11, 11, 12, 0, i, 0, time.UTC),
+		}
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := range pairs {
+		wg.Add(1)
+		go func(p pair) {
+			defer wg.Done()
+			<-start
+			errs <- db.UpsertSSOIDToken(ctx, "race-sid", p.token, p.exp)
+		}(pairs[i])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent upsert returned error: %v", err)
+		}
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sso_id_tokens WHERE session_id = 'race-sid'",
+	).Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one row for race-sid, got %d", count)
+	}
+
+	var gotToken string
+	var gotExp time.Time
+	if err := db.QueryRowContext(ctx,
+		"SELECT id_token, expires_at FROM sso_id_tokens WHERE session_id = 'race-sid'",
+	).Scan(&gotToken, &gotExp); err != nil {
+		t.Fatalf("select winner row: %v", err)
+	}
+	coherent := false
+	for _, p := range pairs {
+		if p.token == gotToken && p.exp.Equal(gotExp) {
+			coherent = true
+			break
+		}
+	}
+	if !coherent {
+		t.Errorf("stored pair (%q, %v) matches no single writer's (id_token, expires_at) pair", gotToken, gotExp)
 	}
 }
