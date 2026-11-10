@@ -26,6 +26,11 @@ var (
 	dummyHash     []byte
 )
 
+// bcryptCompare is the password-compare seam used by the login paths.
+// Production value is bcrypt.CompareHashAndPassword; tests substitute a
+// counting wrapper to pin how many compares a login attempt performs.
+var bcryptCompare = bcrypt.CompareHashAndPassword
+
 // Login error codes returned in the ?error=<code> query string on the login
 // page. The user-facing banner always maps the same code to a single generic
 // message so an attacker cannot enumerate valid usernames by triggering the
@@ -125,6 +130,36 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, "login.html", data)
 }
 
+// legacyCostPadCap bounds the padding loop when the gap between a stored
+// hash's cost and the configured cost is extreme. Cost steps between config
+// versions are small in practice; a stored hash far below the configured cost
+// leaves the padded total short of the configured band, which the cap
+// accepts rather than burning unbounded work per failed attempt.
+const legacyCostPadCap = 1<<12 - 1
+
+// legacyCostPads reports how many additional compares of the stored hash are
+// needed so a hash minted under an older, lower bcrypt cost lands in the same
+// response-time band as the configured cost. The unknown-username path (and
+// its dummy compare) always runs at the configured cost, while
+// CompareHashAndPassword follows the cost embedded in the stored hash: a
+// legacy lower-cost hash would otherwise return measurably faster than an
+// unknown username and leak account existence. Each pad costs one stored-cost
+// compare, so 2^(configuredCost-storedCost)-1 pads bring the total to
+// 2^configuredCost work — the configured band exactly. A stored hash whose
+// cost is >= the configured cost, or whose cost cannot be parsed, needs no
+// pad.
+func legacyCostPads(storedHash []byte, configuredCost int) int {
+	cost, err := bcrypt.Cost(storedHash)
+	if err != nil || cost >= configuredCost {
+		return 0
+	}
+	shift := configuredCost - cost
+	if shift > 12 {
+		shift = 12
+	}
+	return 1<<uint(shift) - 1
+}
+
 // Login authenticates a user from a POST form submission (POST /login).
 //
 // When SSO is enabled and allow_local_login is false, the request is refused
@@ -200,6 +235,21 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		// Constant-time dummy bcrypt compare so missing-vs-wrong-password
 		// cannot be distinguished by response time.
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+		// Sentinel reads mirroring the known-user failure path below: an
+		// unknown username must issue the same database reads as a wrong
+		// password for a real user, otherwise the number of round trips
+		// distinguishes the two and leaks account existence. User ID 0 matches
+		// no row, so both calls are behaviorally inert (they return
+		// "not locked" for a missing user). Deliberate residual: the
+		// failed-login counter transaction below still runs only for a real
+		// user — its core (IncrementFailedLoginsInTx) reads the row back and
+		// errors on a missing one, so it cannot be mirrored with a sentinel
+		// ID; its few indexed statements are negligible next to one bcrypt
+		// run.
+		_, _ = h.DB.IsManualLock(ctx, 0)
+		if maxAttempts > 0 {
+			_, _, _ = h.DB.UserLockStatus(ctx, 0)
+		}
 		h.recordFailedAttempt(ctx, username, 0, clientIP, maxAttempts, lockoutDuration)
 		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 		return
@@ -278,7 +328,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	if err := bcryptCompare([]byte(user.PasswordHash), []byte(password)); err != nil {
+		for i := 0; i < legacyCostPads([]byte(user.PasswordHash), h.Cfg.Auth.BcryptCost); i++ {
+			bcryptCompare([]byte(user.PasswordHash), []byte(password)) // #nosec G104 — intentional timing side-channel mitigation
+		}
 		h.recordFailedAttempt(ctx, username, user.ID, clientIP, maxAttempts, lockoutDuration)
 		http.Redirect(w, r, loginErrorRedirect(invalidCredentialsError), http.StatusSeeOther)
 		return
