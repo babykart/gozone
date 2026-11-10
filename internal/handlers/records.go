@@ -435,7 +435,12 @@ func pdnsPlainStatus(err error) (int, string, bool) {
 // merged RRSet and returns it along with the original RRSet (if any) and the
 // index within rrset.Records of the record the edit replaced (0 for a
 // replacement of the sole record of a single-record RRSet or a brand-new
-// RRSet). It is shared by UpdateRecord and InlineUpdateRecord.
+// RRSet). The merged RRSet is deduplicated after normalisation: an edit that
+// collapses a record onto a sibling would otherwise send duplicate contents,
+// which PowerDNS rejects. Because dedup keeps the first occurrence, the
+// returned index is re-pointed at the surviving record, which may sit earlier
+// in the slice than the record the edit replaced. It is shared by UpdateRecord
+// and InlineUpdateRecord.
 func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.RRSet, int, error) {
 	zoneID := r.PathValue("zone_id")
 
@@ -538,6 +543,25 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 			return nil, nil, 0, &recordValidationError{Message: err.Error()}
 		}
 		updatedRecords[i].Content, updatedRecords[i].Priority = normalized, prio
+	}
+
+	// The edit can collapse a record onto a sibling of the same RRSet (e.g.
+	// both A records now hold the same address). RRSets are a set — duplicate
+	// contents are meaningless and PowerDNS rejects them — so dedup exactly
+	// like the create and batch paths do.
+	editedContent := updatedRecords[updatedIdx].Content
+	updatedRecords = dedupRecordsByContent(updatedRecords)
+	// Dedup keeps the first occurrence, so the record the edit saved may now
+	// sit at an earlier index than the one it replaced. Re-point updatedIdx
+	// at the surviving record: InlineUpdateRecord echoes
+	// rrset.Records[updatedIdx] back to the inline editor, and a stale index
+	// would read past the shrunk slice or pick the wrong record.
+	updatedIdx = 0
+	for i, rec := range updatedRecords {
+		if rec.Content == editedContent {
+			updatedIdx = i
+			break
+		}
 	}
 
 	// Resolve an unspecified (empty) TTL exactly like CreateRecord: inherit

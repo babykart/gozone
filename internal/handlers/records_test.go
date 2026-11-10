@@ -1026,6 +1026,112 @@ func TestInlineUpdateRecord_StaleOriginalContentSingleRecordReturns409(t *testin
 	}
 }
 
+// TestInlineUpdateRecord_DeduplicatesSiblingOnEdit pins the merge-to-duplicate
+// collapse: editing a record so it becomes identical to a sibling of the same
+// RRSet must send a single deduplicated record to PowerDNS — an RRSet carrying
+// the same content twice is rejected with an opaque 422.
+func TestInlineUpdateRecord_DeduplicatesSiblingOnEdit(t *testing.T) {
+	var patched []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &patched, []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "10.0.0.1", Disabled: false},
+			{Content: "10.0.0.2", Disabled: false},
+		}},
+	}))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.2&ttl=3600&priority=0&disabled=false&original_content=10.0.0.1&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(patched) != 1 {
+		t.Fatalf("expected 1 PATCH RRSet, got %d", len(patched))
+	}
+	if got := patched[0].Records; len(got) != 1 || got[0].Content != "10.0.0.2" {
+		t.Errorf("expected a single deduplicated record 10.0.0.2, got %+v", got)
+	}
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Updated models.RecordInfo `json:"updated"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if got := resp.Updated.Content; got != "10.0.0.2" {
+		t.Errorf("updated.content = %q, want %q", got, "10.0.0.2")
+	}
+}
+
+// TestInlineUpdateRecord_DedupRePointsUpdatedIndex covers the collapse of the
+// LAST record onto the FIRST: dedup keeps the first occurrence, so the saved
+// record now sits at an earlier index than the one the edit replaced. The
+// echoed "updated" record must be the survivor at its re-pointed index, not
+// whatever record (or index-out-of-range panic) the stale position would hit
+// on the shrunk slice.
+func TestInlineUpdateRecord_DedupRePointsUpdatedIndex(t *testing.T) {
+	var patched []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &patched, []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "10.0.0.1", Disabled: false},
+			{Content: "10.0.0.2", Disabled: false},
+			{Content: "10.0.0.3", Disabled: false},
+		}},
+	}))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=www.example.com&type=A&content=10.0.0.1&ttl=3600&priority=0&disabled=false&original_content=10.0.0.3&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(patched) != 1 {
+		t.Fatalf("expected 1 PATCH RRSet, got %d", len(patched))
+	}
+	got := patched[0].Records
+	if len(got) != 2 || got[0].Content != "10.0.0.1" || got[1].Content != "10.0.0.2" {
+		t.Errorf("expected exactly [10.0.0.1 10.0.0.2] (collapsed copy deduped away), got %+v", got)
+	}
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Updated models.RecordInfo `json:"updated"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if got := resp.Updated.Content; got != "10.0.0.1" {
+		t.Errorf("updated.content = %q, want %q (re-pointed to the surviving first occurrence)", got, "10.0.0.1")
+	}
+}
+
 func TestInlineUpdateRecord_PDNSErrorNotBlind500(t *testing.T) {
 	// The zone vanishes between page load and save: the PDNS fetch inside
 	// updateRecordFromForm fails with ErrNotFound and the inline endpoint
