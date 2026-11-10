@@ -310,6 +310,8 @@ curl -X POST \
 | `comments[].account` | string | no | Account name that added the comment. **Always emitted, as `""` when unset** — PowerDNS rejects comment items missing the `account` key on PATCH; on read an absent key is accepted and normalised to `""` |
 | `comments[].modified_at` | int | no | Unix timestamp; omitted from the request if not set (PowerDNS defaults it server-side) |
 
+For SRV records the content must be the bare `weight port target` form: if it embeds a leading priority, that value must equal `records[].priority`, otherwise the write is rejected with `400 VALIDATION_ERROR`.
+
 The `comments` array is omitted from the PATCH payload when left empty or absent, which tells PowerDNS to keep the RRSet's existing comments untouched. When provided, it *replaces* the entire comment list for the RRSet (PowerDNS `comments` semantics), so include every comment you want to keep. Every comment item carries an `account` field — PowerDNS rejects items missing the key on PATCH — emitted as `""` when no account was set; `modified_at` stays optional and PowerDNS fills in the server-side default when omitted.
 
 > The REST API is a pass-through for the `comments` field: the array is forwarded to PowerDNS exactly as the client sent it, with no implicit deduplication, padding, or clearing. If you want to **add** a comment to an existing list, GET the RRSet first (returns the current `comments`), merge your additions client-side, and PUT the combined list back. The web UI's textarea + "Clear all comments" checkbox builds the patch for you on the form path; the API path leaves that work to the caller.

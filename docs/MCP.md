@@ -98,7 +98,9 @@ because they are what prevents the most LLM mistakes):
 - Every write must carry **at least one record**: `records: []` is rejected
   with `VALIDATION_ERROR` (removing an RRSet is `delete_record`'s job).
 - MX/SRV: `priority` is a separate field of each record (embedded into the
-  content at write time).
+  content at write time). For SRV, a content that embeds a leading priority
+  must agree with `priority`, otherwise the write fails with
+  `VALIDATION_ERROR`.
 - TXT/SPF: bare content, quoting is automatic.
 - `update_record` is a **REPLACE**: the submitted list becomes the whole set
   (`list_records` first, so nothing is lost).
