@@ -295,6 +295,14 @@
                     <option value="csv">CSV</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="import-mode">Mode</label>
+                <select id="import-mode" name="mode">
+                    <option value="merge" selected>Merge with existing records</option>
+                    <option value="replace">Replace matching record sets</option>
+                </select>
+            </div>
+            <small class="form-hint">Merge adds to the zone and keeps records absent from the file (existing non-SOA comments and disabled flags stay as they are). Replace rewrites each imported name+type and removes its other records.</small>
             <button type="submit" class="btn btn-primary">Import</button>
         </form>
     </details>

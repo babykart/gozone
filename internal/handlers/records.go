@@ -814,9 +814,13 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 		explicit[key] = newRR.TTL
 		if ex, ok := existingMap[key]; ok {
 			clone := *ex
-			for _, nr := range newRR.Records {
-				clone.Records = mergeRecordIntoRRSet(clone.Records, "", 0, nr)
-			}
+			// Defensive bulk append: the imported records were validated as
+			// non-empty content, so the per-record merge loop could never
+			// match a record to replace — it degenerated to an O(k²) copy.
+			records := make([]models.RecordInfo, 0, len(clone.Records)+len(newRR.Records))
+			records = append(records, clone.Records...)
+			records = append(records, newRR.Records...)
+			clone.Records = records
 			if newRR.TTL > 0 {
 				clone.TTL = newRR.TTL
 			}
@@ -826,6 +830,28 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 		}
 	}
 	return merged, nil
+}
+
+// splitEmbeddedPriorities returns a copy of rrsets with any MX/SRV priority
+// embedded in the wire content moved back into the record's Priority field
+// (PowerDNS read form). Callers whose RRSets arrive in wire form (zone
+// imports, templates) must split before mergeBatchRRSets/finalizeBatchRRSets,
+// because the final normalisation pass re-embeds the priority and is not
+// idempotent for MX/SRV. The input slices are never mutated.
+func splitEmbeddedPriorities(rrsets []models.RRSet) []models.RRSet {
+	out := make([]models.RRSet, 0, len(rrsets))
+	for _, rr := range rrsets {
+		clone := rr
+		clone.Records = append([]models.RecordInfo(nil), rr.Records...)
+		for i := range clone.Records {
+			if p, c, ok := models.SplitPriority(clone.Type, clone.Records[i].Content); ok {
+				clone.Records[i].Priority = p
+				clone.Records[i].Content = c
+			}
+		}
+		out = append(out, clone)
+	}
+	return out
 }
 
 // finalizeBatchRRSets prepares each merged RRSet for the PowerDNS write:

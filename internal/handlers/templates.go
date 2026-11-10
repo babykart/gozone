@@ -437,17 +437,7 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		h.renderInternalError(w, r, "Failed to fetch existing records", err)
 		return
 	}
-	templateReadForm := make([]models.RRSet, 0, len(rrsets))
-	for _, rr := range rrsets {
-		clone := rr
-		for i := range clone.Records {
-			if p, c, ok := models.SplitPriority(clone.Type, clone.Records[i].Content); ok {
-				clone.Records[i].Priority = p
-				clone.Records[i].Content = c
-			}
-		}
-		templateReadForm = append(templateReadForm, clone)
-	}
+	templateReadForm := splitEmbeddedPriorities(rrsets)
 	merged, err := mergeBatchRRSets(templateReadForm, existing)
 	if err != nil {
 		h.renderError(w, r, err.Error())

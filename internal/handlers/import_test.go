@@ -18,6 +18,8 @@ import (
 )
 
 func importPDNS() testutil.PDNSHandlerFunc {
+	// Serves GET /zones/ ListRecords from an empty zone so a merge-aware
+	// ImportZone decodes a clean before-image, and ACKs every PATCH with 204.
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -26,7 +28,10 @@ func importPDNS() testutil.PDNSHandlerFunc {
 			return
 		}
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
-			w.Write([]byte(`{"id":"example.com.","name":"example.com.","kind":"Native","serial":2024010100}`))
+			// #nosec G104 -- test helper
+			json.NewEncoder(w).Encode(struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}{})
 			return
 		}
 		w.Write([]byte(`[]`))
@@ -117,6 +122,12 @@ func TestImportZone_NoFile(t *testing.T) {
 
 func TestImportZone_PDNSError_NoLogs(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		// The merge path fetches a before-image first; only the PATCH fails.
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	defer srv.Close()
@@ -150,6 +161,12 @@ func TestImportZone_PDNSError_NoLogs(t *testing.T) {
 func TestImportZone_PDNSError_NoRawErrorLeak(t *testing.T) {
 	leak := "Error while executing query: SELECT password_hash FROM users WHERE id=1"
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		// The merge path fetches a before-image first; only the PATCH fails.
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"error":"` + leak + `"}`))
 	})
@@ -185,6 +202,12 @@ func TestImportZone_PDNSError_NoRawErrorLeak(t *testing.T) {
 
 func TestImportZone_PDNSValidationError(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		// The merge path fetches a before-image first; only the PATCH fails.
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{"error":"unknown record type"}`))
@@ -218,6 +241,12 @@ func TestImportZone_PDNSValidationError(t *testing.T) {
 
 func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		// The merge path fetches a before-image first; only the PATCH fails.
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+			return
+		}
 		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"unauthorized"}`))
@@ -415,10 +444,16 @@ func TestImportZone_ConcurrentCreateSerialized(t *testing.T) {
 	mu.Lock()
 	got := rrsets["www.example.com.|A"]
 	mu.Unlock()
-	// REPLACE sérialisé: l'import est l'opération complète la plus tardive,
-	// son enregistrement doit remplacer celui de la création.
-	if len(got) != 1 || got[0].Content != "192.0.2.10" {
-		t.Fatalf("serialized import must win with exactly its record, got %+v", got)
+	// Fusion sérialisée: la création détient le verrou pendant son
+	// fetch→merge→PATCH, donc le GET before-image de l'import (mode fusion
+	// par défaut) observe 192.0.2.20 et y AJOUTE 192.0.2.10 au lieu de
+	// l'écraser. Les deux enregistrements doivent survivre.
+	contents := map[string]bool{}
+	for _, rec := range got {
+		contents[rec.Content] = true
+	}
+	if len(got) != 2 || !contents["192.0.2.20"] || !contents["192.0.2.10"] {
+		t.Fatalf("serialized import merge must keep both records, got %+v", got)
 	}
 }
 
@@ -1312,3 +1347,849 @@ txt1 IN TXT "value (parenthetical) inside"
 		t.Error("records following a TXT with quoted parens must still parse")
 	}
 }
+
+// --- Merge/replace mode tests (web zone import) -----------------------------
+//
+// ImportZone gains a `mode` form field: `merge` (default) merges imported
+// RRSets into the existing zone state under the zone lock, `replace` keeps
+// the historical REPLACE semantics. Both modes audit a before-image. The
+// mocks below serve the pre-import zone state via GET ListRecords (PowerDNS
+// read form) and capture the PATCH body.
+
+// importCaptureMock serves GET ListRecords from existing (read form) and
+// captures the PATCH body into patched. Unlike the shared captureRRSets
+// helper it lets each test pin the pre-import zone state.
+func importCaptureMock(t *testing.T, existing []models.RRSet, patched *[]models.RRSet) testutil.PDNSHandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			// #nosec G104 -- test helper
+			json.NewEncoder(w).Encode(struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}{RRSets: existing})
+			return
+		}
+		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
+			var payload struct {
+				RRSets []models.RRSet `json:"rrsets"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode PATCH body: %v", err)
+			}
+			*patched = payload.RRSets
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Write([]byte(`[]`)) // #nosec G104 -- test helper
+	}
+}
+
+// importBody builds the multipart upload body; the mode field is omitted when
+// mode is empty so the default-mode path is exercised.
+func importBody(filename, contentType, fileContent, mode string) string {
+	var b strings.Builder
+	b.WriteString("--boundary\r\n")
+	fmt.Fprintf(&b, "Content-Disposition: form-data; name=\"zonefile\"; filename=\"%s\"\r\n", filename)
+	fmt.Fprintf(&b, "Content-Type: %s\r\n\r\n", contentType)
+	b.WriteString(fileContent)
+	b.WriteString("\r\n")
+	if mode != "" {
+		b.WriteString("--boundary\r\n")
+		b.WriteString("Content-Disposition: form-data; name=\"mode\"\r\n\r\n")
+		b.WriteString(mode)
+		b.WriteString("\r\n")
+	}
+	b.WriteString("--boundary--\r\n")
+	return b.String()
+}
+
+func postImport(t *testing.T, h *Handler, zoneID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/zones/"+zoneID+"/import", strings.NewReader(body))
+	r.SetPathValue("zone_id", zoneID)
+	r.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+	w := httptest.NewRecorder()
+	h.ImportZone(w, r)
+	return w
+}
+
+// findPatchedRRSet locates a PATCHed RRSet by canonical (case-folded) key —
+// the same dnsops.RRSetKey matching the handler must use for the merge.
+func findPatchedRRSet(rrsets []models.RRSet, name, rtype string) *models.RRSet {
+	for i := range rrsets {
+		if dnsops.RRSetKey(rrsets[i].Name, rrsets[i].Type) == dnsops.RRSetKey(name, rtype) {
+			return &rrsets[i]
+		}
+	}
+	return nil
+}
+
+// assertRecordContents asserts the RRSet carries exactly the wanted wire-form
+// record contents (order-insensitive).
+func assertRecordContents(t *testing.T, rr *models.RRSet, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(rr.Records))
+	for _, rec := range rr.Records {
+		got = append(got, rec.Content)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s/%s records = %v, want exactly %v", rr.Name, rr.Type, got, want)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, c := range got {
+		seen[c] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Errorf("%s/%s missing record %q (got %v)", rr.Name, rr.Type, w, got)
+		}
+	}
+}
+
+func rrsetHasComment(rr *models.RRSet, want string) bool {
+	if rr.Comments == nil {
+		return false
+	}
+	for _, c := range rr.Comments.Items {
+		if c.Content == want {
+			return true
+		}
+	}
+	return false
+}
+
+// importAuditRow reads the most recent import_zone audit row.
+func importAuditRow(t *testing.T, h *Handler) (details, oldValue string) {
+	t.Helper()
+	if err := h.DB.QueryRow(`SELECT details, old_value FROM activity_logs WHERE action = 'import_zone' ORDER BY id DESC LIMIT 1`).Scan(&details, &oldValue); err != nil {
+		t.Fatalf("read import_zone audit row: %v", err)
+	}
+	return details, oldValue
+}
+
+// TestImportZone_MergeDefaultKeepsSibling pins the default merge mode: with
+// no `mode` field, an imported RRSet is merged into the existing one — the
+// pre-existing sibling record AND its comments survive — and the audit row
+// carries a before-image plus the mode name.
+func TestImportZone_MergeDefaultKeepsSibling(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 300,
+			Records:  []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+			Comments: &models.CommentPatch{Items: []models.Comment{{Content: "ops", Account: ""}}},
+		},
+		{
+			Name: "example.com.", Type: "SOA", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024020200 3600 900 1209600 3600
+www IN A 5.6.7.8`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatalf("PATCH carries no www/A RRSet: %+v", patched)
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8"})
+	if !rrsetHasComment(www, "ops") {
+		t.Errorf("merged www/A must preserve the existing 'ops' comment, got %+v", www.Comments)
+	}
+
+	details, oldValue := importAuditRow(t, h)
+	if oldValue == "" {
+		t.Error("import_zone audit row must carry a before-image old_value")
+	}
+	if !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("old_value must snapshot the pre-import www/A record, got %q", oldValue)
+	}
+	if !strings.Contains(details, "merge") {
+		t.Errorf("details must name the merge mode, got %q", details)
+	}
+}
+
+// TestImportZone_ReplaceModeExplicitAndAudited pins the explicit replace
+// mode: the imported RRSet fully replaces the existing one (sibling record
+// dropped) and the audit row still snapshots the replaced before-image.
+func TestImportZone_ReplaceModeExplicitAndAudited(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 300,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+www IN A 5.6.7.8`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, "replace"))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatalf("PATCH carries no www/A RRSet: %+v", patched)
+	}
+	assertRecordContents(t, www, []string{"5.6.7.8"})
+
+	details, oldValue := importAuditRow(t, h)
+	if !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("old_value must snapshot the replaced www/A record, got %q", oldValue)
+	}
+	if !strings.Contains(details, "replace") {
+		t.Errorf("details must name the replace mode, got %q", details)
+	}
+}
+
+// TestImportZone_SOASingletonMerge pins the SOA overlay contract of merge
+// mode: the imported SOA fully replaces the existing SOA RRSet (exactly one
+// SOA record survives, with the imported serial and TTL), while a nil
+// comments patch on the imported SOA preserves the existing SOA comments;
+// NS records merge additively and ordinary RRSets keep their existing
+// records.
+func TestImportZone_SOASingletonMerge(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "example.com.", Type: "SOA", TTL: 3000,
+			Records:  []models.RecordInfo{{Content: "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600", Disabled: false}},
+			Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing soa comment", Account: ""}}},
+		},
+		{
+			Name: "example.com.", Type: "NS", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "ns1.example.com.", Disabled: false}},
+		},
+		{
+			Name: "www.example.com.", Type: "A", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024020200 3600 900 1209600 3600
+@ IN NS ns2.example.com.
+www IN A 5.6.7.8`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	soa := findPatchedRRSet(patched, "example.com.", "SOA")
+	if soa == nil || len(soa.Records) != 1 {
+		t.Fatalf("merge must leave exactly one SOA record, got %+v", soa)
+	}
+	if !strings.Contains(soa.Records[0].Content, "2024020200") || strings.Contains(soa.Records[0].Content, "2024010100") {
+		t.Errorf("imported SOA must fully replace the existing one, got %q", soa.Records[0].Content)
+	}
+	if soa.TTL != 3600 {
+		t.Errorf("imported SOA must set the RRSet TTL, got %d", soa.TTL)
+	}
+	if !rrsetHasComment(soa, "existing soa comment") {
+		t.Errorf("imported SOA with nil comments must preserve the existing SOA comments, got %+v", soa.Comments)
+	}
+
+	ns := findPatchedRRSet(patched, "example.com.", "NS")
+	if ns == nil {
+		t.Fatal("PATCH carries no apex NS RRSet")
+	}
+	assertRecordContents(t, ns, []string{"ns1.example.com.", "ns2.example.com."})
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatal("PATCH carries no www/A RRSet")
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8"})
+}
+
+// TestImportZone_SOACommentOverlay pins the non-nil comment case of the SOA
+// overlay: an imported SOA carrying comments replaces the whole RRSet
+// including its comments — the previous SOA comment must not survive.
+func TestImportZone_SOACommentOverlay(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "example.com.", Type: "SOA", TTL: 3000,
+			Records:  []models.RecordInfo{{Content: "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600", Disabled: false}},
+			Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing soa comment", Account: ""}}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	csvContent := "name,type,content,ttl,priority,disabled,comment\n" +
+		`@,SOA,"ns1.example.com. hostmaster.example.com. 2024020200 3600 900 1209600 3600",3600,0,false,soa import comment`
+
+	w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", csvContent, ""))
+	assertImportRedirect(t, w)
+
+	soa := findPatchedRRSet(patched, "example.com.", "SOA")
+	if soa == nil || len(soa.Records) != 1 {
+		t.Fatalf("merge must leave exactly one SOA record, got %+v", soa)
+	}
+	if !strings.Contains(soa.Records[0].Content, "2024020200") {
+		t.Errorf("imported SOA must replace the existing one, got %q", soa.Records[0].Content)
+	}
+	if soa.TTL != 3600 {
+		t.Errorf("imported SOA must set the RRSet TTL, got %d", soa.TTL)
+	}
+	if !rrsetHasComment(soa, "soa import comment") || rrsetHasComment(soa, "existing soa comment") {
+		t.Errorf("imported SOA comments must replace the existing ones when non-empty, got %+v", soa.Comments)
+	}
+}
+
+// TestImportZone_MergeMultiRecordAndDuplicates pins the dedup contract of
+// merge mode: an imported record whose content exactly matches an existing
+// sibling keeps the EXISTING occurrence (first-occurrence wins), so merging
+// [5.6.7.8, 9.9.9.9, 1.2.3.4] into an existing [1.2.3.4] yields exactly the
+// three distinct records.
+func TestImportZone_MergeMultiRecordAndDuplicates(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+www IN A 5.6.7.8
+www IN A 9.9.9.9
+www IN A 1.2.3.4`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatal("PATCH carries no www/A RRSet")
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8", "9.9.9.9"})
+}
+
+// TestImportZone_BindMXSRVMergeWithSiblings pins priority-type merging: the
+// existing zone state arrives in PowerDNS read form (priority separate from
+// content); merge mode must re-embed both the existing and the imported
+// priorities into the wire content sent to the PATCH.
+func TestImportZone_BindMXSRVMergeWithSiblings(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			// PowerDNS wire form, as ListRecords receives it: the priority is
+			// embedded in the content and the client detaches it on read.
+			Name: "example.com.", Type: "MX", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "10 mail1.example.com.", Disabled: false}},
+		},
+		{
+			Name: "_sip._tcp.example.com.", Type: "SRV", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "10 5 5060 sip1.example.com.", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN MX 20 mail2.example.com.
+_sip._tcp IN SRV 10 5 5061 sip2.example.com.`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	mx := findPatchedRRSet(patched, "example.com.", "MX")
+	if mx == nil {
+		t.Fatal("PATCH carries no apex MX RRSet")
+	}
+	assertRecordContents(t, mx, []string{"10 mail1.example.com.", "20 mail2.example.com."})
+	for _, rec := range mx.Records {
+		if rec.Priority != 0 {
+			t.Errorf("PATCH write form must embed priority in the content, got priority %d on %q", rec.Priority, rec.Content)
+		}
+	}
+
+	srvRR := findPatchedRRSet(patched, "_sip._tcp.example.com.", "SRV")
+	if srvRR == nil {
+		t.Fatal("PATCH carries no _sip._tcp SRV RRSet")
+	}
+	assertRecordContents(t, srvRR, []string{"10 5 5060 sip1.example.com.", "10 5 5061 sip2.example.com."})
+}
+
+// TestImportZone_CSVMXPriorityMerge pins CSV priority handling in merge
+// mode: the priority column of an MX row merges into an existing MX RRSet
+// read from PowerDNS (bare content + separate priority), and the PATCH
+// carries both priorities re-embedded in the wire content.
+func TestImportZone_CSVMXPriorityMerge(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			// PowerDNS wire form: the priority is embedded in the content.
+			Name: "example.com.", Type: "MX", TTL: 3600,
+			Records: []models.RecordInfo{{Content: "10 mail1.example.com.", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	csvContent := "name,type,content,ttl,priority,disabled\n" +
+		"@,MX,mail2.example.com.,300,20,false"
+
+	w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", csvContent, ""))
+	assertImportRedirect(t, w)
+
+	mx := findPatchedRRSet(patched, "example.com.", "MX")
+	if mx == nil {
+		t.Fatal("PATCH carries no apex MX RRSet")
+	}
+	assertRecordContents(t, mx, []string{"10 mail1.example.com.", "20 mail2.example.com."})
+	for _, rec := range mx.Records {
+		if rec.Priority != 0 {
+			t.Errorf("PATCH write form must embed priority in the content, got priority %d on %q", rec.Priority, rec.Content)
+		}
+	}
+}
+
+// TestImportZone_CSVCommentOnNewRRSetOnly pins the comment contract of merge
+// mode: a brand-new RRSet imported from CSV carries its CSV comment, while an
+// existing RRSet keeps ONLY its pre-existing comments — the imported CSV
+// comment cell is ignored for RRSets that already exist.
+func TestImportZone_CSVCommentOnNewRRSetOnly(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 300,
+			Records:  []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+			Comments: &models.CommentPatch{Items: []models.Comment{{Content: "existing", Account: ""}}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	csvContent := "name,type,content,ttl,priority,disabled,comment\n" +
+		"www,A,5.6.7.8,300,0,false,imported comment\n" +
+		"brandnew,A,9.9.9.9,300,0,false,new comment"
+
+	w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", csvContent, ""))
+	assertImportRedirect(t, w)
+
+	brandnew := findPatchedRRSet(patched, "brandnew.example.com.", "A")
+	if brandnew == nil {
+		t.Fatalf("PATCH carries no brandnew/A RRSet: %+v", patched)
+	}
+	if !rrsetHasComment(brandnew, "new comment") {
+		t.Errorf("new RRSet must carry its imported CSV comment, got %+v", brandnew.Comments)
+	}
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatal("PATCH carries no www/A RRSet")
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8"})
+	if www.Comments == nil || len(www.Comments.Items) != 1 || www.Comments.Items[0].Content != "existing" {
+		t.Errorf("existing RRSet must keep only its pre-existing comments, got %+v", www.Comments)
+	}
+}
+
+// TestImportZone_NewDisabledRecordInExistingRRSet pins the disabled-flag
+// contract of merge mode: a NEW record imported with disabled=true keeps its
+// disabled flag inside an existing RRSet (the existing sibling stays
+// enabled), and an exact duplicate with the OPPOSITE disabled flag keeps the
+// EXISTING occurrence — dedup first-occurrence wins.
+func TestImportZone_NewDisabledRecordInExistingRRSet(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 300,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+
+	t.Run("new disabled record merges in", func(t *testing.T) {
+		var patched []models.RRSet
+		h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+		defer srv.Close()
+
+		testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+		csvContent := "name,type,content,ttl,priority,disabled\n" +
+			"www,A,5.6.7.8,300,0,true"
+
+		w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", csvContent, ""))
+		assertImportRedirect(t, w)
+
+		www := findPatchedRRSet(patched, "www.example.com.", "A")
+		if www == nil {
+			t.Fatal("PATCH carries no www/A RRSet")
+		}
+		if len(www.Records) != 2 {
+			t.Fatalf("www/A must carry both records, got %+v", www.Records)
+		}
+		byContent := map[string]models.RecordInfo{}
+		for _, rec := range www.Records {
+			byContent[rec.Content] = rec
+		}
+		if rec, ok := byContent["5.6.7.8"]; !ok || !rec.Disabled {
+			t.Errorf("new imported record must keep its disabled=true flag, got %+v", www.Records)
+		}
+		if rec, ok := byContent["1.2.3.4"]; !ok || rec.Disabled {
+			t.Errorf("existing record must stay enabled, got %+v", www.Records)
+		}
+	})
+
+	t.Run("duplicate with opposite disabled keeps existing occurrence", func(t *testing.T) {
+		var patched []models.RRSet
+		h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+		defer srv.Close()
+
+		testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+		csvContent := "name,type,content,ttl,priority,disabled\n" +
+			"www,A,1.2.3.4,300,0,true"
+
+		w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", csvContent, ""))
+		assertImportRedirect(t, w)
+
+		www := findPatchedRRSet(patched, "www.example.com.", "A")
+		if www == nil {
+			t.Fatal("PATCH carries no www/A RRSet")
+		}
+		if len(www.Records) != 1 {
+			t.Fatalf("exact duplicate must not grow the RRSet, got %+v", www.Records)
+		}
+		if www.Records[0].Disabled {
+			t.Errorf("first-occurrence dedup must keep the existing enabled record, got %+v", www.Records[0])
+		}
+	})
+}
+
+// TestImportZone_GETFailureAbortsImport pins the abort contract: both modes
+// fetch the before-image under the zone lock before PATCHing, so a ListRecords
+// failure must render an error, send no PATCH and write no audit row.
+func TestImportZone_GETFailureAbortsImport(t *testing.T) {
+	newMock := func(patched *bool) testutil.PDNSHandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/zones/") {
+				*patched = true
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.Write([]byte(`[]`)) // #nosec G104 -- test helper
+		}
+	}
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+www IN A 5.6.7.8`
+
+	run := func(t *testing.T, mode string) {
+		patched := false
+		h, srv := newTestHandlerWithPDNS(t, newMock(&patched))
+		defer srv.Close()
+
+		testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+		w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, mode))
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("a ListRecords failure must abort the import with a 500 render, got %d body=%s", w.Code, w.Body.String())
+		}
+		if patched {
+			t.Error("no PATCH must reach PowerDNS when the before-image fetch fails")
+		}
+
+		var count int
+		h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='import_zone'").Scan(&count)
+		if count != 0 {
+			t.Errorf("a failed import must not be audited, got %d activity rows", count)
+		}
+	}
+
+	t.Run("merge default", func(t *testing.T) { run(t, "") })
+	t.Run("replace", func(t *testing.T) { run(t, "replace") })
+}
+
+// TestImportZone_MixedCaseOwnerMergeAndAudit pins canonical key matching: the
+// pre-import zone state may carry a differently-cased owner name (PowerDNS
+// preserves case); the merge must match it against the imported canonical
+// name via dnsops.RRSetKey and still capture the before-image for the audit
+// row.
+func TestImportZone_MixedCaseOwnerMergeAndAudit(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "WWW.Example.COM.", Type: "A", TTL: 300,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+www.example.com. IN A 5.6.7.8`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatalf("PATCH carries no www/A RRSet under the canonical key: %+v", patched)
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8"})
+
+	_, oldValue := importAuditRow(t, h)
+	if oldValue == "" || !strings.Contains(oldValue, "1.2.3.4") {
+		t.Errorf("before-image must be captured through canonical key matching, got %q", oldValue)
+	}
+}
+
+// TestImportZone_InvalidModeFallsBackToMerge pins the fallback: an unknown
+// mode value behaves exactly like the default merge mode (sibling records
+// survive).
+func TestImportZone_InvalidModeFallsBackToMerge(t *testing.T) {
+	existing := []models.RRSet{
+		{
+			Name: "www.example.com.", Type: "A", TTL: 300,
+			Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+		},
+	}
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := `$ORIGIN example.com.
+$TTL 3600
+www IN A 5.6.7.8`
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, "bogus"))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatal("PATCH carries no www/A RRSet")
+	}
+	assertRecordContents(t, www, []string{"1.2.3.4", "5.6.7.8"})
+}
+
+// TestImportZone_BeforeImageBoundedAndExcludesUnaffected pins the audit
+// before-image contract: only RRSets whose key matches an imported key are
+// snapshotted (an untouched RRSet must not leak into old_value), the
+// snapshot is a single-encoded JSON array capped at 100 entries, and the
+// details name the omitted count when the affected set exceeds the cap.
+func TestImportZone_BeforeImageBoundedAndExcludesUnaffected(t *testing.T) {
+	// 150 affected RRSets: every name is referenced by the import file, so
+	// all 150 qualify for the before-image — 50 over the 100-entry cap. The
+	// details must report the full affected count, not stop at the cutoff.
+	existing := make([]models.RRSet, 0, 151)
+	var bindLines []string
+	for i := 0; i < 150; i++ {
+		name := fmt.Sprintf("r%d.example.com.", i)
+		existing = append(existing, models.RRSet{
+			Name:    name,
+			Type:    "A",
+			TTL:     300,
+			Records: []models.RecordInfo{{Content: fmt.Sprintf("10.0.0.%d", i), Disabled: false}},
+		})
+		bindLines = append(bindLines, fmt.Sprintf("%s IN A 10.1.0.%d", name, i))
+	}
+	existing = append(existing, models.RRSet{
+		Name:    "untouched.example.com.",
+		Type:    "A",
+		TTL:     300,
+		Records: []models.RecordInfo{{Content: "192.0.2.99", Disabled: false}},
+	})
+
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, existing, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	bindContent := "$ORIGIN example.com.\n$TTL 3600\n" + strings.Join(bindLines, "\n")
+
+	w := postImport(t, h, "example.com.", importBody("test.zone", "text/plain", bindContent, ""))
+	assertImportRedirect(t, w)
+
+	details, oldValue := importAuditRow(t, h)
+	if oldValue == "" {
+		t.Fatal("import_zone audit row must carry a before-image old_value")
+	}
+
+	// Single-encoded JSON array of objects (a double-encoded string fails here).
+	var snapshot []map[string]interface{}
+	if err := json.Unmarshal([]byte(oldValue), &snapshot); err != nil {
+		t.Fatalf("old_value must decode as a JSON array of RRSet snapshots: %v", err)
+	}
+	if len(snapshot) != 100 {
+		t.Errorf("before-image must be capped at 100 RRSets, got %d", len(snapshot))
+	}
+	if !strings.Contains(oldValue, "10.0.0.0") {
+		t.Error("before-image must snapshot affected RRSets")
+	}
+	if strings.Contains(oldValue, "untouched") || strings.Contains(oldValue, "192.0.2.99") {
+		t.Error("unaffected RRSets must not appear in the before-image")
+	}
+	if !strings.Contains(details, "before-image") || !strings.Contains(details, "of 150") {
+		t.Errorf("details must note the omitted 150 affected record sets, got %q", details)
+	}
+}
+
+// --- importBeforeImage helper unit tests ------------------------------------
+
+// beforeImageRRSet builds an A RRSet whose serialized snapshot has length
+// snapLen (achieved by padding the record content; plain 'x' bytes marshal
+// verbatim inside the JSON string, so snapshot size grows exactly with pad).
+func beforeImageRRSet(name string, snapLen int) models.RRSet {
+	rr := models.RRSet{
+		Name:    name,
+		Type:    "A",
+		TTL:     300,
+		Records: []models.RecordInfo{{Content: "10.0.0.1", Disabled: false}},
+	}
+	pad := snapLen - len(rrsetSnapshot(&rr))
+	if pad < 0 {
+		panic("beforeImageRRSet: base snapshot larger than requested size")
+	}
+	rr.Records[0].Content += strings.Repeat("x", pad)
+	if got := len(rrsetSnapshot(&rr)); got != snapLen {
+		panic(fmt.Sprintf("beforeImageRRSet: snapshot len = %d, want %d", got, snapLen))
+	}
+	return rr
+}
+
+func assertBeforeImageJSON(t *testing.T, oldValue string, wantLen int) []map[string]interface{} {
+	t.Helper()
+	var snapshot []map[string]interface{}
+	if err := json.Unmarshal([]byte(oldValue), &snapshot); err != nil {
+		t.Fatalf("before-image must decode as a JSON array of RRSet snapshots: %v", err)
+	}
+	if len(snapshot) != wantLen {
+		t.Errorf("before-image has %d entries, want %d", len(snapshot), wantLen)
+	}
+	return snapshot
+}
+
+// TestImportBeforeImage_ByteBudgetJustUnder pins the byte budget: a single
+// affected RRSet whose snapshot lands ~50 bytes under the budget is fully
+// included.
+func TestImportBeforeImage_ByteBudgetJustUnder(t *testing.T) {
+	existing := []models.RRSet{beforeImageRRSet("a.example.com.", importBeforeImageMaxBytes-50)}
+	imported := []models.RRSet{{Name: "a.example.com.", Type: "A"}}
+
+	oldValue, affected, shown := importBeforeImage(existing, imported)
+	if affected != 1 || shown != 1 {
+		t.Fatalf("affected/shown = %d/%d, want 1/1", affected, shown)
+	}
+	assertBeforeImageJSON(t, oldValue, 1)
+}
+
+// TestImportBeforeImage_ByteBudgetJustOver pins the byte budget stop: a
+// single affected RRSet whose snapshot lands ~50 bytes over the budget fits
+// nothing — oldValue is "" but affected is still reported.
+func TestImportBeforeImage_ByteBudgetJustOver(t *testing.T) {
+	existing := []models.RRSet{beforeImageRRSet("a.example.com.", importBeforeImageMaxBytes+50)}
+	imported := []models.RRSet{{Name: "a.example.com.", Type: "A"}}
+
+	oldValue, affected, shown := importBeforeImage(existing, imported)
+	if affected != 1 || shown != 0 {
+		t.Fatalf("affected/shown = %d/%d, want 1/0", affected, shown)
+	}
+	if oldValue != "" {
+		t.Errorf("nothing fits the budget: oldValue must be empty, got %d bytes", len(oldValue))
+	}
+}
+
+// TestImportBeforeImage_ByteBudgetPartialInclusion pins the framing math
+// (2 + sum(len) + (n-1)): with three equal snapshots sized so two fit exactly
+// under the budget but the third would exceed it, the snapshot holds the
+// first two and stays valid JSON.
+func TestImportBeforeImage_ByteBudgetPartialInclusion(t *testing.T) {
+	perSnap := (importBeforeImageMaxBytes - 3) / 2 // two fit: 2 + 2*perSnap + 1 <= budget
+	existing := []models.RRSet{
+		beforeImageRRSet("r1.example.com.", perSnap),
+		beforeImageRRSet("r2.example.com.", perSnap),
+		beforeImageRRSet("r3.example.com.", perSnap),
+	}
+	imported := []models.RRSet{
+		{Name: "r1.example.com.", Type: "A"},
+		{Name: "r2.example.com.", Type: "A"},
+		{Name: "r3.example.com.", Type: "A"},
+	}
+	if 2+3*perSnap+2 <= importBeforeImageMaxBytes {
+		t.Fatalf("test construction: three snapshots of %d bytes would fit, want them to exceed %d", perSnap, importBeforeImageMaxBytes)
+	}
+
+	oldValue, affected, shown := importBeforeImage(existing, imported)
+	if affected != 3 || shown != 2 {
+		t.Fatalf("affected/shown = %d/%d, want 3/2", affected, shown)
+	}
+	snapshot := assertBeforeImageJSON(t, oldValue, 2)
+	if len(snapshot) > 0 && snapshot[0]["name"] != "r1.example.com." {
+		t.Errorf("first included snapshot must be the first affected RRSet, got %v", snapshot[0]["name"])
+	}
+}
+
+// TestImportBeforeImage_CountCap pins the entry cap: 101 tiny affected RRSets
+// yield exactly 100 included snapshots and the correct affected/shown counts.
+func TestImportBeforeImage_CountCap(t *testing.T) {
+	existing := make([]models.RRSet, 0, 101)
+	imported := make([]models.RRSet, 0, 101)
+	for i := 0; i <= 100; i++ {
+		name := fmt.Sprintf("r%03d.example.com.", i)
+		existing = append(existing, models.RRSet{
+			Name:    name,
+			Type:    "A",
+			TTL:     300,
+			Records: []models.RecordInfo{{Content: fmt.Sprintf("10.0.0.%d", i), Disabled: false}},
+		})
+		imported = append(imported, models.RRSet{Name: name, Type: "A"})
+	}
+
+	oldValue, affected, shown := importBeforeImage(existing, imported)
+	if affected != 101 || shown != 100 {
+		t.Fatalf("affected/shown = %d/%d, want 101/100", affected, shown)
+	}
+	assertBeforeImageJSON(t, oldValue, 100)
+}
+
+// (Key-matching coverage lives at handler level: mixed-case canonical keys in
+// TestImportZone_MixedCaseOwnerMergeAndAudit, unaffected-exclusion in
+// TestImportZone_BeforeImageBoundedAndExcludesUnaffected.)

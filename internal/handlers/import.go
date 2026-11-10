@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,14 +19,28 @@ import (
 
 // ImportZone handles file upload for zone import (BIND or CSV).
 //
-// Uses PowerDNS REPLACE semantics via CreateRecords: each name+type pair
-// in the imported file replaces the existing RRSet if present, or creates
-// it if absent. Records not in the import file are untouched. Within the
-// same name+type, the import replaces the entire set of records — any
-// extra existing records with that name+type are removed. Because the file
-// therefore describes the complete desired state of every RRSet it touches,
-// any skipped line or unsupported directive makes the upload incomplete:
-// the import is rejected before PowerDNS is called.
+// The upload is parsed and validated first: any line or directive that cannot
+// be turned into a record is reported, and the import is rejected before
+// PowerDNS is called (a partial import would make the file's description of
+// every RRSet it touches incomplete).
+//
+// The write itself runs under the per-zone lock in one of two modes, selected
+// by the `mode` form field:
+//
+//   - merge (default; any missing, empty or unknown value falls back to it):
+//     the imported RRSets are merged into the existing zone state — sibling
+//     records, comments and disabled flags on existing RRSets survive, exact
+//     duplicates keep the existing occurrence, and an imported SOA replaces
+//     the existing SOA RRSet because the file carries the authoritative serial.
+//   - replace: each imported name+type pair REPLACes the existing RRSet if
+//     present, or creates it if absent; records not in the import file are
+//     untouched, but extra existing records within a touched name+type are
+//     removed.
+//
+// Both modes fetch the pre-import zone state under the lock (the before-image)
+// and audit a bounded snapshot of the affected RRSets — capped at
+// importBeforeImageMaxSets entries and importBeforeImageMaxBytes bytes, with
+// the truncation noted in the activity details.
 func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	zoneID := r.PathValue("zone_id")
 
@@ -88,29 +103,59 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parsing runs outside the lock; the REPLACE PATCH itself is serialized
-	// against concurrent writers on the same zone (web create/update, batch,
-	// REST, MCP, imports on other instances). Without the lock, a create whose
-	// fetch→merge lands around this PATCH silently loses either the imported
-	// RRSet or the new record.
+	// Parsing runs outside the lock; the fetch→merge→PATCH sequence itself is
+	// serialized against concurrent writers on the same zone (web
+	// create/update, batch, REST, MCP, imports on other instances). Without
+	// the lock, a create whose fetch→merge lands around this PATCH silently
+	// loses either the imported RRSet or the new record.
 	release, ok := h.lockZone(w, r, zoneID)
 	if !ok {
 		return
 	}
 	defer release()
 
+	// Both modes need the pre-import zone state: merge mode merges into it,
+	// and the audit trail snapshots it. A failure here aborts the import
+	// before any PATCH and before any audit row.
+	existing, err := h.PDNS.ListRecords(r.Context(), zoneID)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch existing records", err)
+		return
+	}
+
+	oldValue, affected, shown := importBeforeImage(existing, rrsets)
+
+	mode := r.FormValue("mode")
+	if mode != "replace" {
+		mode = "merge"
+	}
+
+	var patch []models.RRSet
+	if mode == "replace" {
+		// Historical REPLACE semantics, unchanged write shape: the parsed
+		// wire-form RRSets describe the complete desired state of every
+		// RRSet they touch.
+		patch = rrsets
+	} else {
+		patch, err = buildImportMergePatch(rrsets, existing)
+		if err != nil {
+			h.renderError(w, r, err.Error())
+			return
+		}
+	}
+
 	// Route every PowerDNS failure through renderInternalError so the raw
 	// upstream error text (which may quote SQL fragments or internal paths on a
 	// backend failure) never reaches the user; pdnsUserFacingStatus maps each
 	// sentinel to a fixed, category-level message and the cause is logged
 	// server-side.
-	if err := h.PDNS.CreateRecords(r.Context(), zoneID, rrsets); err != nil {
+	if err := h.PDNS.CreateRecords(r.Context(), zoneID, patch); err != nil {
 		h.renderInternalError(w, r, "Failed to create records", err)
 		return
 	}
 
 	user := middleware.GetUser(r)
-	logger.Info("Zone imported", "zone", zoneID, "format", format, "count", len(rrsets), "user", user.Username)
+	logger.Info("Zone imported", "zone", zoneID, "format", format, "mode", mode, "count", len(rrsets), "user", user.Username)
 
 	// A single summary entry instead of one activity_logs row per RRSet: a
 	// 10 MiB import can carry thousands of RRSets, and each row was its own
@@ -120,13 +165,114 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 	for _, rs := range rrsets {
 		recordCount += len(rs.Records)
 	}
-	details := fmt.Sprintf("Imported %d RRSets (%d records) from %s zone file", len(rrsets), recordCount, strings.ToUpper(format))
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details}); err != nil {
+	details := fmt.Sprintf("Imported %d RRSets (%d records) from %s zone file (%s mode)", len(rrsets), recordCount, strings.ToUpper(format), mode)
+	if shown < affected {
+		details += fmt.Sprintf("; before-image limited to first %d of %d affected record set(s)", shown, affected)
+	}
+	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "import_zone", Details: details, OldValue: oldValue}); err != nil {
 		logger.Error("failed to log import_zone activity", "zone_id", zoneID, "error", err)
 	}
 
 	// #nosec G710 — redirect target is "/zones/" + zoneID (chi PathValue, route-controlled); no user-controlled host/path.
 	http.Redirect(w, r, "/zones/"+zoneID, http.StatusSeeOther)
+}
+
+// buildImportMergePatch merges the parsed (wire-form) import RRSets into the
+// existing zone state, exactly like BatchCreateRecords and ApplyTemplateToZone:
+// split embedded MX/SRV priorities back to the read form, merge under the
+// canonical RRSetKey, then a single final normalisation/dedup pass. On top of
+// the plain merge, an imported SOA whose name+type already exists in the zone
+// replaces the existing SOA RRSet — the zone file carries the authoritative
+// serial, so the old SOA record must never survive. When the imported SOA
+// carries no comments, the existing SOA comments are kept (a nil comment patch
+// would be omitted from the PATCH, but carrying them keeps the audit and the
+// sent state consistent).
+func buildImportMergePatch(rrsets, existing []models.RRSet) ([]models.RRSet, error) {
+	converted := splitEmbeddedPriorities(rrsets)
+	mergedMap, err := mergeBatchRRSets(converted, existing)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range rrsets {
+		if !strings.EqualFold(rrsets[i].Type, "SOA") {
+			continue
+		}
+		key := dnsops.RRSetKey(rrsets[i].Name, rrsets[i].Type)
+		clone := rrsets[i]
+		if clone.Comments == nil {
+			if prev := mergedMap[key]; prev != nil {
+				clone.Comments = prev.Comments
+			}
+		}
+		// Assigning unconditionally also covers a brand-new SOA: the merge
+		// already put the imported records at that key.
+		mergedMap[key] = &clone
+	}
+
+	return finalizeBatchRRSets(mergedMap, nil)
+}
+
+const (
+	// importBeforeImageMaxSets caps how many RRSets of the pre-import zone
+	// state are snapshotted into the audit row's old_value.
+	importBeforeImageMaxSets = 100
+	// importBeforeImageMaxBytes caps the serialized size of that snapshot so
+	// a huge import cannot blow up the activity_logs row.
+	importBeforeImageMaxBytes = 48 * 1024
+)
+
+// importBeforeImage builds the bounded audit snapshot of the pre-import zone
+// state: the JSON-array serialization (single-encoded) of the existing RRSets
+// whose canonical key matches an imported key. It stops before exceeding
+// EITHER importBeforeImageMaxSets entries OR importBeforeImageMaxBytes
+// serialized bytes (accounting for the JSON array framing: 2 + sum(len) +
+// (n-1)), so the result is always valid JSON. It returns the snapshot ("" when
+// nothing fits), the number of affected existing RRSets, and how many were
+// included.
+func importBeforeImage(existing, imported []models.RRSet) (oldValue string, affected, shown int) {
+	importedKeys := make(map[string]struct{}, len(imported))
+	for i := range imported {
+		importedKeys[dnsops.RRSetKey(imported[i].Name, imported[i].Type)] = struct{}{}
+	}
+
+	var snaps []json.RawMessage
+	total := 2 // "[" + "]"
+	capped := false
+	for i := range existing {
+		key := dnsops.RRSetKey(existing[i].Name, existing[i].Type)
+		if _, ok := importedKeys[key]; !ok {
+			continue
+		}
+		affected++
+		if capped || len(snaps) >= importBeforeImageMaxSets {
+			// A cap is reached: stop including snapshots but keep counting
+			// the affected RRSets, so the details can report the real total.
+			continue
+		}
+		snap := rrsetSnapshot(&existing[i])
+		if snap == "" {
+			continue // defensive: never place an invalid/empty element
+		}
+		size := len(snap)
+		if len(snaps) > 0 {
+			size++ // "," separator
+		}
+		if total+size > importBeforeImageMaxBytes {
+			capped = true
+			continue
+		}
+		snaps = append(snaps, json.RawMessage(snap))
+		total += size
+	}
+	if len(snaps) == 0 {
+		return "", affected, 0
+	}
+	data, err := json.Marshal(snaps)
+	if err != nil {
+		return "", affected, 0
+	}
+	return string(data), affected, len(snaps)
 }
 
 func detectFormat(filename string) string {
