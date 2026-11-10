@@ -112,6 +112,19 @@ func TestOIDCValidateRoleClaimWithoutAdminValues(t *testing.T) {
 	}
 }
 
+func TestOIDCValidateRoleClaimWithOperatorValuesOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OIDC.Enabled = true
+	cfg.OIDC.RoleClaim = "groups"
+	cfg.OIDC.OperatorRoleValues = []string{"dns-operators"}
+	cfg.OIDC.Providers = []OIDCProviderConfig{
+		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
+	}
+	if err := cfg.validateOIDC(); err != nil {
+		t.Fatalf("role_claim with only operator_role_values must validate: %v", err)
+	}
+}
+
 func TestOIDCValidateGroupClaimWithoutMapping(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.OIDC.Enabled = true
@@ -145,6 +158,7 @@ func TestOIDCRoleGroupEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_OIDC_ENABLED", "true")
 	t.Setenv("GOZONE_OIDC_ROLE_CLAIM", "realm_access.roles")
 	t.Setenv("GOZONE_OIDC_ADMIN_ROLE_VALUES", "admins, super-admins")
+	t.Setenv("GOZONE_OIDC_OPERATOR_ROLE_VALUES", "dns-operators, netops")
 	t.Setenv("GOZONE_OIDC_PROVIDER_NAME", "keycloak")
 	t.Setenv("GOZONE_OIDC_ISSUER_URL", "https://kc.example.com")
 	t.Setenv("GOZONE_OIDC_CLIENT_ID", "cid")
@@ -158,6 +172,9 @@ func TestOIDCRoleGroupEnvOverrides(t *testing.T) {
 	}
 	if len(cfg.OIDC.AdminRoleValues) != 2 || cfg.OIDC.AdminRoleValues[1] != "super-admins" {
 		t.Errorf("AdminRoleValues = %v", cfg.OIDC.AdminRoleValues)
+	}
+	if len(cfg.OIDC.OperatorRoleValues) != 2 || cfg.OIDC.OperatorRoleValues[1] != "netops" {
+		t.Errorf("OperatorRoleValues = %v", cfg.OIDC.OperatorRoleValues)
 	}
 	// group_claim is YAML-only (group_mapping cannot be expressed in env), so
 	// it is exercised via the YAML/validate tests instead.

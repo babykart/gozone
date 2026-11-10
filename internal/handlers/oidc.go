@@ -351,7 +351,8 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 // claims and the configured role mapping. When role mapping is disabled
 // (RoleClaim empty) it returns DefaultRole (defaulting to "user"). When enabled,
 // any overlap between the claim values and AdminRoleValues promotes the user to
-// "admin"; otherwise DefaultRole applies.
+// "admin"; then any overlap with OperatorRoleValues promotes to "operator"
+// (admin wins on overlap); otherwise DefaultRole applies.
 func (h *Handler) desiredRole(claims *oidc.Claims) string {
 	role := h.Cfg.OIDC.DefaultRole
 	if role == "" {
@@ -363,6 +364,13 @@ func (h *Handler) desiredRole(claims *oidc.Claims) string {
 			for _, admin := range h.Cfg.OIDC.AdminRoleValues {
 				if v == admin {
 					return "admin"
+				}
+			}
+		}
+		for _, v := range values {
+			for _, operator := range h.Cfg.OIDC.OperatorRoleValues {
+				if v == operator {
+					return "operator"
 				}
 			}
 		}

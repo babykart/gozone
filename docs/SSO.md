@@ -87,6 +87,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 | `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` | Global fallback scopes (`openid` is always added). |
 | `oidc.role_claim` | `GOZONE_OIDC_ROLE_CLAIM` | *(none)* | Dotted claim path inspected for role mapping (e.g. `groups`, `realm_access.roles`). Empty disables role mapping. |
 | `oidc.admin_role_values` | `GOZONE_OIDC_ADMIN_ROLE_VALUES` | `[]` | Claim values (at `role_claim`) that grant the GoZone `admin` role. |
+| `oidc.operator_role_values` | `GOZONE_OIDC_OPERATOR_ROLE_VALUES` | `[]` | Claim values (at `role_claim`) that grant the GoZone `operator` role. A value matching both lists maps to `admin`. |
 | `oidc.group_claim` | `GOZONE_OIDC_GROUP_CLAIM` | *(none)* | Dotted claim path inspected for zone-group mapping. Empty disables group mapping. |
 | `oidc.group_mapping` | *(YAML only)* | `{}` | Maps an IdP claim value → a GoZone `zone_group` name. |
 | `oidc.jwks_cache_ttl_minutes` | `GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES` | `60` | How long a provider's signing keys are cached before a proactive background refresh (so key rotation is picked up without a verification miss). `0` disables proactive refresh (keys are still fetched on first use and on an unknown kid). |
@@ -339,22 +340,25 @@ the examples above.
 
 ## Role mapping
 
-`role_claim` + `admin_role_values` make the **IdP authoritative** for a user's
-GoZone role. On every SSO login GoZone reads the claim at the dotted path; if
-it contains any value from `admin_role_values`, the user is promoted to
-`admin`, otherwise they get `default_role`.
+`role_claim` + `admin_role_values`/`operator_role_values` make the **IdP
+authoritative** for a user's GoZone role. On every SSO login GoZone reads the
+claim at the dotted path; if it contains any value from `admin_role_values`,
+the user is promoted to `admin`, else any value from `operator_role_values`
+promotes them to `operator`, otherwise they get `default_role`.
 
 ```yaml
 oidc:
   role_claim: "realm_access.roles"     # or "groups", "roles", …
   admin_role_values: ["gozone-admins", "dns-admins"]
+  operator_role_values: ["dns-operators"]
 ```
 
 - Works with nested claims (Keycloak `realm_access.roles`) and top-level arrays
   (`groups`).
-- Claim mapping can mint `admin` (via `admin_role_values`) or fall back to
-  `default_role` — including `operator`. It never mints `operator` from a
-  dedicated claim value: set `default_role: "operator"` to provision
+- Claim mapping can mint `admin` (via `admin_role_values`), `operator` (via
+  `operator_role_values`), or fall back to `default_role` — including
+  `operator`. A claim value matching both lists maps to `admin`. Without
+  `operator_role_values`, set `default_role: "operator"` to provision
   operators, or manage the role locally in the admin UI.
 - A demotion `admin → operator`/`admin → user` that would remove the **last
   enabled admin** is refused (the user keeps `admin` and a warning is logged),

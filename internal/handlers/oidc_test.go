@@ -999,6 +999,92 @@ func TestResolveSSOUser_ExistingUserRoleSync(t *testing.T) {
 	}
 }
 
+func TestResolveSSOUser_RoleMappingPromotesToOperator(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.OperatorRoleValues = []string{"dns-operators"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-op-role",
+		Email: "oprole@example.com", EmailVerified: false,
+		PreferredUsername: "oproleuser",
+		Raw:               rawClaim("groups", "devs", "dns-operators"),
+	}
+	user, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if user.Role != "operator" {
+		t.Errorf("expected operator role from claim mapping, got %q", user.Role)
+	}
+}
+
+func TestResolveSSOUser_AdminWinsOverOperator(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.AdminRoleValues = []string{"admins"}
+	h.Cfg.OIDC.OperatorRoleValues = []string{"dns-operators"}
+	ctx := context.Background()
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-both-roles",
+		Email: "both@example.com", EmailVerified: false,
+		PreferredUsername: "bothuser",
+		Raw:               rawClaim("groups", "dns-operators", "admins"),
+	}
+	user, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if user.Role != "admin" {
+		t.Errorf("expected admin to win over operator on overlap, got %q", user.Role)
+	}
+}
+
+func TestResolveSSOUser_ExistingOperatorNotDemoted(t *testing.T) {
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	h.Cfg.OIDC.RoleClaim = "groups"
+	h.Cfg.OIDC.OperatorRoleValues = []string{"dns-operators"}
+	ctx := context.Background()
+	// Provision a user first with the operator role.
+	first, err := h.DB.CreateExternalUser(ctx, "opuser", "op@example.com", "", "", "operator",
+		"https://idp.example.com", "sub-op")
+	if err != nil {
+		t.Fatalf("first provision: %v", err)
+	}
+	if first.Role != "operator" {
+		t.Fatalf("setup: expected operator, got %q", first.Role)
+	}
+	// Second login with an operator-group claim must keep the operator role.
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-op",
+		Raw: rawClaim("groups", "dns-operators"),
+	}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser: %v", err)
+	}
+	if got.ID != first.ID {
+		t.Fatalf("expected same user %d, got %d", first.ID, got.ID)
+	}
+	if got.Role != "operator" {
+		t.Errorf("expected operator role preserved, got %q", got.Role)
+	}
+	// Persisted in DB too.
+	var role string
+	if err := h.DB.QueryRow("SELECT role FROM users WHERE id = ?", first.ID).Scan(&role); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if role != "operator" {
+		t.Errorf("expected persisted role operator, got %q", role)
+	}
+}
+
 func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true

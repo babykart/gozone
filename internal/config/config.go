@@ -266,6 +266,11 @@ type OIDCConfig struct {
 	// admin role. Any user whose claim set contains one of these values is
 	// mapped to "admin"; otherwise the DefaultRole applies. Case-sensitive.
 	AdminRoleValues []string `yaml:"admin_role_values"`
+	// OperatorRoleValues lists claim values (at RoleClaim) that grant the
+	// GoZone operator role. Evaluated after AdminRoleValues: a claim value
+	// matching both lists maps to "admin". Values matching neither list fall
+	// back to DefaultRole. Case-sensitive.
+	OperatorRoleValues []string `yaml:"operator_role_values"`
 	// GroupClaim is the dotted path of the ID-token claim inspected for zone-
 	// group mapping (e.g. "groups", "teams"). When empty (the default) group
 	// mapping is disabled.
@@ -519,7 +524,8 @@ func DefaultConfig() *Config {
 //	oidc:       GOZONE_OIDC_ENABLED, GOZONE_OIDC_ALLOW_LOCAL_LOGIN,
 //	            GOZONE_OIDC_AUTO_PROVISION, GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL,
 //	            GOZONE_OIDC_DEFAULT_ROLE, GOZONE_OIDC_SCOPES, GOZONE_OIDC_ROLE_CLAIM,
-//	            GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_GROUP_CLAIM,
+//	            GOZONE_OIDC_ADMIN_ROLE_VALUES, GOZONE_OIDC_OPERATOR_ROLE_VALUES,
+//	            GOZONE_OIDC_GROUP_CLAIM,
 //	            GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS, GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES
 //	mcp:        GOZONE_MCP_ENABLED, GOZONE_MCP_PATH, GOZONE_MCP_READ_ONLY,
 //	            GOZONE_MCP_ALLOWED_ORIGINS
@@ -952,11 +958,12 @@ func (cfg *Config) validateOIDC() error {
 	}
 
 	// Role/group mapping sanity: a claim path with no mapped values is a no-op
-	// footgun (AdminRoleValues empty means nobody is ever promoted; GroupMapping
-	// empty means no memberships are synced). Surface these so an operator who
-	// sets the claim but forgets the values is warned at startup.
-	if cfg.OIDC.RoleClaim != "" && len(cfg.OIDC.AdminRoleValues) == 0 {
-		return fmt.Errorf("oidc.role_claim %q is set but admin_role_values is empty", cfg.OIDC.RoleClaim)
+	// footgun (AdminRoleValues and OperatorRoleValues both empty means nobody is
+	// ever promoted; GroupMapping empty means no memberships are synced). Surface
+	// these so an operator who sets the claim but forgets the values is warned
+	// at startup.
+	if cfg.OIDC.RoleClaim != "" && len(cfg.OIDC.AdminRoleValues) == 0 && len(cfg.OIDC.OperatorRoleValues) == 0 {
+		return fmt.Errorf("oidc.role_claim %q is set but admin_role_values and operator_role_values are empty", cfg.OIDC.RoleClaim)
 	}
 	if cfg.OIDC.GroupClaim != "" && len(cfg.OIDC.GroupMapping) == 0 {
 		return fmt.Errorf("oidc.group_claim %q is set but group_mapping is empty", cfg.OIDC.GroupClaim)
@@ -1116,6 +1123,7 @@ var envOverrides = []envOverride{
 	sliceOverride{"GOZONE_OIDC_SCOPES", func(c *Config, v []string) { c.OIDC.Scopes = v }},
 	strOverride{"GOZONE_OIDC_ROLE_CLAIM", func(c *Config, v string) { c.OIDC.RoleClaim = v }},
 	sliceOverride{"GOZONE_OIDC_ADMIN_ROLE_VALUES", func(c *Config, v []string) { c.OIDC.AdminRoleValues = v }},
+	sliceOverride{"GOZONE_OIDC_OPERATOR_ROLE_VALUES", func(c *Config, v []string) { c.OIDC.OperatorRoleValues = v }},
 	sliceOverride{"GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS", func(c *Config, v []string) { c.OIDC.AllowedEmailDomains = v }},
 	strOverride{"GOZONE_OIDC_GROUP_CLAIM", func(c *Config, v string) { c.OIDC.GroupClaim = v }},
 	intOverride{"GOZONE_OIDC_JWKS_CACHE_TTL_MINUTES", func(c *Config, n int) { c.OIDC.JWKSCacheTTLMinutes = n }},
