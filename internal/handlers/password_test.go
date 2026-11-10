@@ -717,3 +717,227 @@ func TestUpdateUser_ProfileEditDoesNotRevokeSessions(t *testing.T) {
 		t.Errorf("tokens_valid_after must not change on a profile-only edit: before=%v after=%v", tvaBefore, tvaAfter)
 	}
 }
+
+// TestChangePassword_PreservesSessionIdentity is the SSO regression for the
+// session re-issue at the end of ChangePassword: the handler must read the
+// incoming session credentials BEFORE the transaction and re-issue with
+// RefreshSessionToken preserving AuthProvider and SessionID. Re-issuing via
+// GenerateToken instead resets the provider to "" and mints a fresh random
+// SessionID — silently breaking SSO logout routing (server-side id_token_hint
+// is keyed by sid) and the session tracker's idle/absolute budget for any
+// session that just rotated its password.
+func TestChangePassword_PreservesSessionIdentity(t *testing.T) {
+	h := strictPolicyHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	var credentialVersion int64
+	h.DB.QueryRow("SELECT password_hash, credential_version FROM users WHERE id = ?", uid).Scan(&hash, &credentialVersion)
+
+	// Incoming SSO session with a KNOWN provider and sid, exactly as the
+	// OIDC callback would have issued it.
+	incoming, err := middleware.RefreshSessionToken(
+		&models.User{ID: uid, Username: "target", Role: "user", CredentialVersion: credentialVersion},
+		h.Cfg.Server.JWTKey, time.Hour, "keycloak", "fixed-sid-123")
+	if err != nil {
+		t.Fatalf("mint incoming token: %v", err)
+	}
+	incomingClaims, err := middleware.ParseToken(incoming, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse incoming token: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: incoming})
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var newHash string
+	var mustChange int
+	h.DB.QueryRow("SELECT password_hash, must_change_password FROM users WHERE id = ?", uid).Scan(&newHash, &mustChange)
+	if newHash == hash {
+		t.Fatal("expected password hash to rotate; identity assertions below must run on the success path")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(newHash), []byte("Newpass2!")); err != nil {
+		t.Errorf("new hash should validate the new password: %v", err)
+	}
+	if mustChange != 0 {
+		t.Errorf("expected must_change_password cleared (0), got %d", mustChange)
+	}
+
+	var sessionValue string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionValue = c.Value
+		}
+	}
+	if sessionValue == "" {
+		t.Fatal("expected a fresh session cookie after password change")
+	}
+	newClaims, err := middleware.ParseToken(sessionValue, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse re-issued token: %v", err)
+	}
+	if newClaims.AuthProvider != "keycloak" {
+		t.Errorf("re-issued token must preserve AuthProvider %q, got %q", "keycloak", newClaims.AuthProvider)
+	}
+	if newClaims.SessionID != "fixed-sid-123" {
+		t.Errorf("re-issued token must preserve SessionID %q, got %q", "fixed-sid-123", newClaims.SessionID)
+	}
+	if newClaims.ID == "" || newClaims.ID == incomingClaims.ID {
+		t.Errorf("re-issued token must carry a FRESH jti (old=%q, new=%q)", incomingClaims.ID, newClaims.ID)
+	}
+	if newClaims.CredentialVersion != credentialVersion+1 {
+		t.Errorf("re-issued token CredentialVersion = %d, want bumped %d", newClaims.CredentialVersion, credentialVersion+1)
+	}
+}
+
+// TestChangePassword_LegacyTokenKeepsJtiAsSessionID pins the tracker-continuity
+// fallback: tokens minted before SessionID existed carry no sid, and the
+// session tracker keys those legacy sessions by the jti. Re-issuing with an
+// empty sid would orphan the tracker row, so the handler must fall back to the
+// incoming token's jti (claims.ID) as the effective SessionID.
+func TestChangePassword_LegacyTokenKeepsJtiAsSessionID(t *testing.T) {
+	h := strictPolicyHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	var credentialVersion int64
+	h.DB.QueryRow("SELECT password_hash, credential_version FROM users WHERE id = ?", uid).Scan(&hash, &credentialVersion)
+
+	// Legacy pre-sid token: provider "" and sid "".
+	incoming, err := middleware.RefreshSessionToken(
+		&models.User{ID: uid, Username: "target", Role: "user", CredentialVersion: credentialVersion},
+		h.Cfg.Server.JWTKey, time.Hour, "", "")
+	if err != nil {
+		t.Fatalf("mint incoming token: %v", err)
+	}
+	incomingClaims, err := middleware.ParseToken(incoming, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse incoming token: %v", err)
+	}
+	if incomingClaims.SessionID != "" {
+		t.Fatalf("fixture must be a legacy no-sid token, got sid %q", incomingClaims.SessionID)
+	}
+	if incomingClaims.ID == "" {
+		t.Fatal("fixture token must carry a jti")
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: incoming})
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var newHash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&newHash)
+	if newHash == hash {
+		t.Fatal("expected password hash to rotate; identity assertions below must run on the success path")
+	}
+
+	var sessionValue string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionValue = c.Value
+		}
+	}
+	if sessionValue == "" {
+		t.Fatal("expected a fresh session cookie after password change")
+	}
+	newClaims, err := middleware.ParseToken(sessionValue, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse re-issued token: %v", err)
+	}
+	if newClaims.SessionID != incomingClaims.ID {
+		t.Errorf("legacy token: re-issued SessionID = %q, want the incoming jti %q (tracker continuity fallback)", newClaims.SessionID, incomingClaims.ID)
+	}
+	if newClaims.AuthProvider != "" {
+		t.Errorf("legacy token: re-issued AuthProvider = %q, want empty", newClaims.AuthProvider)
+	}
+}
+
+// TestChangePassword_BearerTokenPreservesIdentity mirrors the Auth middleware's
+// credential selection: when no session cookie is present, the session travels
+// in the Authorization: Bearer header. ChangePassword must read it from there
+// too and preserve provider/sid on re-issue.
+func TestChangePassword_BearerTokenPreservesIdentity(t *testing.T) {
+	h := strictPolicyHandler(t)
+	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
+	_ = seedAdminUser(t, h)
+	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
+	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
+
+	var hash string
+	var credentialVersion int64
+	h.DB.QueryRow("SELECT password_hash, credential_version FROM users WHERE id = ?", uid).Scan(&hash, &credentialVersion)
+
+	incoming, err := middleware.RefreshSessionToken(
+		&models.User{ID: uid, Username: "target", Role: "user", CredentialVersion: credentialVersion},
+		h.Cfg.Server.JWTKey, time.Hour, "keycloak", "fixed-sid-123")
+	if err != nil {
+		t.Fatalf("mint incoming token: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey,
+		&models.User{ID: uid, Username: "target", Role: "user", PasswordHash: hash, MustChangePassword: true})
+
+	body := "current_password=Oldpass1!&new_password=Newpass2!&confirm_password=Newpass2!"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/change-password", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Authorization", "Bearer "+incoming)
+	r = r.WithContext(ctx)
+	h.ChangePassword(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var newHash string
+	h.DB.QueryRow("SELECT password_hash FROM users WHERE id = ?", uid).Scan(&newHash)
+	if newHash == hash {
+		t.Fatal("expected password hash to rotate; identity assertions below must run on the success path")
+	}
+
+	var sessionValue string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			sessionValue = c.Value
+		}
+	}
+	if sessionValue == "" {
+		t.Fatal("expected a fresh session cookie after password change")
+	}
+	newClaims, err := middleware.ParseToken(sessionValue, h.Cfg.Server.JWTKey)
+	if err != nil {
+		t.Fatalf("parse re-issued token: %v", err)
+	}
+	if newClaims.AuthProvider != "keycloak" {
+		t.Errorf("bearer session: re-issued token must preserve AuthProvider %q, got %q", "keycloak", newClaims.AuthProvider)
+	}
+	if newClaims.SessionID != "fixed-sid-123" {
+		t.Errorf("bearer session: re-issued token must preserve SessionID %q, got %q", "fixed-sid-123", newClaims.SessionID)
+	}
+}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -11,6 +12,20 @@ import (
 	"github.com/babykart/gozone/internal/middleware"
 	"github.com/babykart/gozone/internal/validators"
 )
+
+// sessionTokenString returns the raw session JWT from the request: the
+// session cookie when present, otherwise the Authorization: Bearer header —
+// the same precedence the auth middleware uses. Empty when neither carries a
+// token.
+func sessionTokenString(r *http.Request) string {
+	if c, err := r.Cookie(constants.SessionCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	return ""
+}
 
 // ChangePasswordPage renders the self-service password-change form
 // (GET /change-password). Reached either voluntarily from the profile area or
@@ -46,6 +61,27 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
+
+	// Capture the current session's identity before doing any work: the
+	// re-issued token must keep it. The auth middleware accepts the session
+	// cookie or an Authorization: Bearer token (in that order) — mirror that
+	// selection here. ParseToken re-validates exp; a token that expired
+	// mid-request falls back to the empty legacy identity rather than
+	// failing the password change.
+	provider, sessionID := "", ""
+	if raw := sessionTokenString(r); raw != "" {
+		if claims, err := middleware.ParseToken(raw, h.Cfg.Server.JWTKey); err == nil {
+			provider = claims.AuthProvider
+			// Legacy pre-sid tokens carry no SessionID; the session tracker
+			// keys those by jti (claims.ID), so fall back to it to keep the
+			// tracker row (idle/absolute budget) across the re-issue.
+			sessionID = claims.SessionID
+			if sessionID == "" {
+				sessionID = claims.ID
+			}
+		}
+	}
+
 	currentPassword := r.FormValue("current_password")
 	// Both fields verbatim (no TrimSpace): leading/trailing spaces can be
 	// intentional, and the comparison at login uses the raw input. Trimming
@@ -167,12 +203,18 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// tokens_valid_after and credential_version were just bumped, which
 	// invalidates every access token minted before this instant — including
 	// the cookie this request arrived with, and any session on another
-	// device / a stolen JWT. A fresh token carries an iat >= the cutoff and
-	// the bumped version (mirror the UPDATE above so the middleware's check
-	// accepts it), and the overwritten cookie drops the stale one.
+	// device / a stolen JWT. The re-issue preserves AuthProvider and
+	// SessionID, so an SSO session keeps its RP-initiated logout routing
+	// (provider slug, plus the server-side id_token lookup keyed by sid) and
+	// the SessionTracker keeps the same idle/absolute budget (keyed by sid).
+	// The legacy embedded IDTokenHint claim (sessions issued before the hint
+	// moved server-side) is not carried over — those sessions degrade to
+	// logout without an id_token_hint. The tokens_valid_after cutoff and
+	// credential_version bump still invalidate every pre-change token; only
+	// this session is re-authorized.
 	user.CredentialVersion++
 	duration := time.Duration(h.Cfg.Auth.SessionDurationHours) * time.Hour
-	newToken, err := middleware.GenerateToken(user, h.Cfg.Server.JWTKey, duration)
+	newToken, err := middleware.RefreshSessionToken(user, h.Cfg.Server.JWTKey, duration, provider, sessionID)
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to issue session token", err)
 		return
