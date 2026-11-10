@@ -428,7 +428,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "update_user", Details: fmt.Sprintf("Updated user %d", userID)})
+	err = logActivity(ctx, tx, activityEntry{UserID: admin.ID, Action: "update_user", Details: fmt.Sprintf("Updated user %d (role: %s->%s, enabled: %t->%t)", userID, target.Role, requestedRole, target.Enabled, requestedEnabled)})
 	if err != nil {
 		h.renderInternalError(w, r, "Failed to log activity", err)
 		return

@@ -564,7 +564,9 @@ func TestUpdateUser_LastAdminDemotionBlocked(t *testing.T) {
 }
 
 // TestUpdateUser_DemotionWithTwoAdminsAllowed verifies that demotion succeeds
-// when there is a second enabled admin (the guard inside the tx sees count=2).
+// when there is a second enabled admin (the guard inside the tx sees count=2),
+// and pins the audit detail format: the update_user entry must carry the
+// role/enabled before->after diff, not a bare "Updated user %d".
 func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
@@ -577,8 +579,9 @@ func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
 
-	// Demote the second admin (admin → user).
-	body := "email=admin2@test.local&first_name=&last_name=&role=user&enabled=1"
+	// Demote AND disable the second admin (admin/enabled → user/disabled);
+	// two enabled admins exist, so the guard allows it.
+	body := "email=admin2@test.local&first_name=&last_name=&role=user&enabled=0"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/users/%d/update", secondID), strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -594,6 +597,17 @@ func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 	h.DB.QueryRow("SELECT role FROM users WHERE id=?", secondID).Scan(&role)
 	if role != "user" {
 		t.Errorf("expected second admin to be demoted to user, got role=%q", role)
+	}
+
+	// The audit trail must record the before->after diff so an auditor can
+	// see what changed without diffing the users table.
+	var details string
+	h.DB.QueryRow("SELECT details FROM activity_logs WHERE action = 'update_user'").Scan(&details)
+	if !strings.Contains(details, "role: admin->user") {
+		t.Errorf("expected update_user audit details to contain 'role: admin->user', got %q", details)
+	}
+	if !strings.Contains(details, "enabled: true->false") {
+		t.Errorf("expected update_user audit details to contain 'enabled: true->false', got %q", details)
 	}
 }
 
