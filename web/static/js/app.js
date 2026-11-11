@@ -217,6 +217,26 @@ function showNotification(message, type) {
     }, 5000);
 }
 
+// inlineEditFailureMessage picks the most specific error message from a
+// failed inline-update response body: a server-provided JSON `error` string,
+// a plain-text body verbatim, or a generic fallback carrying the HTTP status.
+function inlineEditFailureMessage(status, bodyText) {
+    if (bodyText) {
+        var trimmed = bodyText.trim();
+        if (trimmed.charAt(0) === '{' ) {
+            try {
+                var parsed = JSON.parse(trimmed);
+                if (parsed && typeof parsed.error === 'string' && parsed.error !== '') {
+                    return parsed.error;
+                }
+            } catch (e) { /* not JSON: fall through to the generic message */ }
+        } else if (trimmed !== '' && trimmed.charAt(0) !== '[') {
+            return trimmed;
+        }
+    }
+    return 'HTTP ' + status;
+}
+
 function saveRecordRow(btn) {
     var row = btn.closest('tr');
     var zoneID = row.getAttribute('data-zone-id');
@@ -253,7 +273,20 @@ function saveRecordRow(btn) {
     .then(function(resp) {
         if (!resp.ok) {
             return resp.text().then(function(text) {
-                throw new Error('HTTP ' + resp.status + (text ? ': ' + text : ''));
+                if (resp.status === 409) {
+                    var conflict = null;
+                    try { conflict = JSON.parse(text); } catch (e) { /* non-JSON body */ }
+                    // Only the stale-before-image conflict carries reload=true:
+                    // the server merged nothing, so reloading shows the
+                    // authoritative state. Other 409s on this endpoint (zone
+                    // busy, PowerDNS conflicts) keep the operator's edits on
+                    // screen and surface their message instead.
+                    if (conflict && conflict.reload === 'true') {
+                        window.location.reload();
+                        return new Promise(function() {});
+                    }
+                }
+                throw new Error(inlineEditFailureMessage(resp.status, text));
             });
         }
         // Session expired: the auth middleware 303-redirects to /login, which
@@ -1099,6 +1132,7 @@ if (typeof module !== 'undefined' && module.exports) {
         filterOptions: filterOptions,
         generateTSIGSecret: generateTSIGSecret,
         initDelegatedListeners: initDelegatedListeners,
+        inlineEditFailureMessage: inlineEditFailureMessage,
         makeBulkController: makeBulkController,
         replayBulkResult: replayBulkResult,
         saveRecordRow: saveRecordRow,

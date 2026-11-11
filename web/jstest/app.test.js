@@ -1034,3 +1034,183 @@ test('saveRecordRow syncs sibling rows of a multi-record RRSet', async () => {
     assert.strictEqual(sib.els['.rv-ttl'].textContent, 60, 'sibling row follows the RRSet-wide TTL');
     assert.strictEqual(sib.els['.ev-comments'].value, 'old rset comment', 'empty non-clear save preserves the stored comment in the sibling textarea');
 });
+
+// --- Inline-edit failure feedback (inlineEditFailureMessage) ------------------
+//
+// The !resp.ok branch used to throw 'HTTP <status>: <raw body>', so a 409
+// conflict (JSON body) dumped raw JSON into the notification and never
+// reloaded the page. The server contract is now two-fold: the stale
+// before-image conflict carries `reload: "true"` in its JSON body (the server
+// merged nothing — the page must resync) while other 409s on the endpoint
+// (zone busy, PowerDNS conflicts) surface their message and keep the
+// operator's edits on screen. inlineEditFailureMessage extracts a
+// server-provided `error` string or a plain-text body; the saveRecordRow
+// branch treats a reload-flagged 409 as terminal: exactly one reload, no
+// notification, nothing propagated downstream.
+
+test('inlineEditFailureMessage returns the server-provided JSON error string', () => {
+    assert.strictEqual(app.inlineEditFailureMessage(500, '{"error":"boom"}'), 'boom');
+});
+
+test('inlineEditFailureMessage trims and returns a plain-text body', () => {
+    assert.strictEqual(
+        app.inlineEditFailureMessage(502, '  cache upstream hiccup\n'),
+        'cache upstream hiccup'
+    );
+});
+
+test('inlineEditFailureMessage ignores JSON without a non-empty string error', () => {
+    assert.strictEqual(
+        app.inlineEditFailureMessage(500, '{"message":"x"}'),
+        'HTTP 500'
+    );
+    assert.strictEqual(
+        app.inlineEditFailureMessage(500, '{"error":""}'),
+        'HTTP 500'
+    );
+    assert.strictEqual(
+        app.inlineEditFailureMessage(500, '{"error":123}'),
+        'HTTP 500'
+    );
+    assert.strictEqual(
+        app.inlineEditFailureMessage(500, '[{"error":"boom"}]'),
+        'HTTP 500'
+    );
+});
+
+test('inlineEditFailureMessage falls back to the generic message on empty or whitespace bodies', () => {
+    assert.strictEqual(app.inlineEditFailureMessage(500, ''), 'HTTP 500');
+    assert.strictEqual(app.inlineEditFailureMessage(500, '   '), 'HTTP 500');
+});
+
+// driveSaveRecordRow stubs fetch/document/window around a single saveRecordRow
+// call. status/body model an error response (ok:false); payload models a
+// success response (ok:true, JSON). The notification auto-hide timer is
+// replaced with a never-firing stub so textContent survives the assertion.
+function driveSaveRecordRow(status, body, payload) {
+    const row = stubInlineRow();
+    const btn = { closest(sel) { return sel === 'tr' ? row : null; } };
+    const notificationEl = withClassList({ textContent: '', className: 'notification hidden' });
+    const doc = stubDocument();
+    doc.setElement('notification', notificationEl);
+
+    let reloads = 0;
+    const prevDocument = global.document;
+    const prevWindow = global.window;
+    const prevFetch = global.fetch;
+    const prevSetTimeout = global.setTimeout;
+    global.document = doc;
+    global.window = { location: { reload: function() { reloads++; } } };
+    global.setTimeout = function() { return 1; }; // never fire the auto-hide
+    if (payload !== undefined) {
+        global.fetch = function() {
+            return Promise.resolve({
+                ok: true,
+                redirected: false,
+                headers: { get: function() { return 'application/json'; } },
+                json: function() { return Promise.resolve(payload); }
+            });
+        };
+    } else {
+        global.fetch = function() {
+            return Promise.resolve({
+                ok: false,
+                status: status,
+                text: function() { return Promise.resolve(body); }
+            });
+        };
+    }
+
+    return {
+        row: row,
+        notificationEl: notificationEl,
+        reloadCount: function() { return reloads; },
+        run: async function() {
+            try {
+                app.saveRecordRow(btn);
+                // Let the fetch promise chain settle (microtasks + a macrotask).
+                await new Promise(function(res) { prevSetTimeout(res, 10); });
+            } finally {
+                global.document = prevDocument;
+                global.window = prevWindow;
+                global.fetch = prevFetch;
+                global.setTimeout = prevSetTimeout;
+            }
+        }
+    };
+}
+
+test('saveRecordRow reloads exactly once on a reload-flagged 409 and shows no error notification', async () => {
+    const ctx = driveSaveRecordRow(409, JSON.stringify({ error: 'stale before-image', reload: 'true' }));
+    await ctx.run();
+
+    assert.strictEqual(ctx.reloadCount(), 1, 'a reload-flagged 409 means the before-image is stale: the page must reload');
+    assert.strictEqual(ctx.notificationEl.textContent, '', 'no notification on the terminal 409 branch');
+    assert.ok(
+        ctx.notificationEl.className.indexOf('notification-error') === -1,
+        'the 409 branch must not surface a "Request failed" error notification'
+    );
+});
+
+test('saveRecordRow keeps the edits on screen for a zone-busy 409 and surfaces its message', async () => {
+    const ctx = driveSaveRecordRow(409, JSON.stringify({ error: 'Zone is busy, try again later' }));
+    await ctx.run();
+
+    assert.strictEqual(ctx.reloadCount(), 0, 'a zone-busy 409 must NOT reload: the operator keeps their edits');
+    assert.ok(ctx.notificationEl.textContent.indexOf('Zone is busy') !== -1,
+        'the zone-busy message must reach the notification, got "' + ctx.notificationEl.textContent + '"');
+    assert.ok(ctx.notificationEl.textContent.indexOf('{') === -1,
+        'the notification must never contain a raw JSON dump, got "' + ctx.notificationEl.textContent + '"');
+});
+
+test('saveRecordRow surfaces a server JSON error without dumping raw JSON', async () => {
+    const ctx = driveSaveRecordRow(500, '{"error":"boom"}');
+    await ctx.run();
+
+    assert.ok(ctx.notificationEl.textContent.indexOf('boom') !== -1,
+        'the server-provided error string must reach the notification, got "' + ctx.notificationEl.textContent + '"');
+    assert.ok(ctx.notificationEl.textContent.indexOf('{') === -1,
+        'the notification must never contain a raw JSON dump, got "' + ctx.notificationEl.textContent + '"');
+    assert.strictEqual(ctx.reloadCount(), 0);
+});
+
+test('saveRecordRow shows a plain-text error body verbatim', async () => {
+    const ctx = driveSaveRecordRow(500, 'cache upstream hiccup');
+    await ctx.run();
+
+    assert.strictEqual(ctx.notificationEl.textContent, 'Request failed: cache upstream hiccup');
+});
+
+test('saveRecordRow falls back to a generic message when the JSON error field is missing', async () => {
+    const ctx = driveSaveRecordRow(500, '{"message":"x"}');
+    await ctx.run();
+
+    assert.ok(ctx.notificationEl.textContent.indexOf('{') === -1,
+        'must not dump raw JSON, got "' + ctx.notificationEl.textContent + '"');
+    assert.ok(ctx.notificationEl.textContent.indexOf('HTTP 500') !== -1,
+        'generic message must carry the status, got "' + ctx.notificationEl.textContent + '"');
+});
+
+test('saveRecordRow falls back to a generic message on an empty error body', async () => {
+    const ctx = driveSaveRecordRow(500, '');
+    await ctx.run();
+
+    assert.ok(ctx.notificationEl.textContent.indexOf('{') === -1,
+        'must not dump raw JSON, got "' + ctx.notificationEl.textContent + '"');
+    assert.ok(ctx.notificationEl.textContent.indexOf('HTTP 500') !== -1,
+        'generic message must carry the status, got "' + ctx.notificationEl.textContent + '"');
+});
+
+test('saveRecordRow success path still shows a success notification and does not reload', async () => {
+    const ctx = driveSaveRecordRow(null, null, {
+        success: true,
+        record: { name: 'www.example.com', type: 'CNAME', ttl: 60, records: [] },
+        updated: { content: 'backup.example.com.', priority: 0, disabled: false }
+    });
+    await ctx.run();
+
+    assert.strictEqual(ctx.reloadCount(), 0, 'a successful save must not reload');
+    assert.strictEqual(ctx.notificationEl.textContent, 'Record updated');
+    assert.ok(ctx.notificationEl.className.indexOf('notification-success') !== -1);
+    assert.ok(ctx.notificationEl.className.indexOf('notification-error') === -1);
+});
