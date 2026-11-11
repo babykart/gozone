@@ -757,6 +757,24 @@ func (cfg *Config) validate() error {
 	if cfg.Password.MaxLength < 0 || cfg.Password.MaxLength > 72 {
 		return fmt.Errorf("invalid password.max_length %d: must be between 0 (disabled) and 72 (bcrypt's hard limit)", cfg.Password.MaxLength)
 	}
+	// A minimum above the maximum makes every password — including the
+	// emergency CLI reset — unsatisfiable, so fail at startup instead of
+	// surfacing the misconfiguration as unusable password forms. The
+	// effective maximum is the explicit max_length, or bcrypt's 72-byte
+	// hard limit when the max check is disabled: bcrypt REJECTS longer
+	// input rather than truncating it, and a minimum of N runes requires
+	// at least N bytes, so a minimum above the effective maximum can never
+	// be satisfied.
+	maxBytes := cfg.Password.MaxLength
+	if maxBytes == 0 {
+		maxBytes = 72
+	}
+	if cfg.Password.MinLength > maxBytes {
+		if cfg.Password.MaxLength == 0 {
+			return fmt.Errorf("invalid password.min_length %d: must not exceed 72 (bcrypt's hard limit applies even when password.max_length is disabled)", cfg.Password.MinLength)
+		}
+		return fmt.Errorf("invalid password.min_length %d: must not exceed password.max_length %d", cfg.Password.MinLength, cfg.Password.MaxLength)
+	}
 	if cfg.Password.HistorySize < 0 {
 		return fmt.Errorf("invalid password.history_size %d: must be non-negative", cfg.Password.HistorySize)
 	}

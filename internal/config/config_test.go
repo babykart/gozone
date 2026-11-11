@@ -293,6 +293,55 @@ func TestValidate_RetentionCoversLockout(t *testing.T) {
 	}
 }
 
+// TestValidate_PasswordMinLengthExceedsMaxLength pins the min/max cross-check:
+// a minimum above the maximum makes every password — including the emergency
+// CLI reset — unsatisfiable, so the misconfiguration must fail at startup
+// instead of surfacing as unusable password forms. A zero min disables the
+// minimum; a zero max disables the explicit maximum, but bcrypt's 72-byte
+// hard limit still applies (bcrypt rejects longer input instead of
+// truncating it), so a minimum above 72 is rejected even with max disabled.
+func TestValidate_PasswordMinLengthExceedsMaxLength(t *testing.T) {
+	tests := []struct {
+		name    string
+		min     int
+		max     int
+		wantErr bool
+	}{
+		{"exceeds default max", 80, 72, true},
+		{"exceeds explicit max", 50, 40, true},
+		{"equal is allowed", 40, 40, false},
+		{"min disabled", 0, 40, false},
+		{"above bcrypt limit with max disabled", 100, 0, true},
+		{"just above bcrypt limit with max disabled", 73, 0, true},
+		{"at bcrypt limit with max disabled", 72, 0, false},
+		{"defaults", 8, 72, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Server.SecretKey = strings.Repeat("k", 64)
+			cfg.Password.MinLength = tt.min
+			cfg.Password.MaxLength = tt.max
+			err := cfg.validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validate() must reject min_length %d > max_length %d, got nil", tt.min, tt.max)
+				}
+				if !strings.Contains(err.Error(), "password.min_length") || !strings.Contains(err.Error(), "password.max_length") {
+					t.Errorf("error must name both password.min_length and password.max_length, got: %v", err)
+				}
+				if tt.max == 0 && !strings.Contains(err.Error(), "bcrypt") {
+					t.Errorf("disabled-max error must explain bcrypt's limit still applies, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate() must accept min_length %d with max_length %d: %v", tt.min, tt.max, err)
+			}
+		})
+	}
+}
+
 // TestLoad_RequireSecretKey pins the multi-replica guard: with
 // server.require_secret_key set, the missing/placeholder secret is a hard
 // error instead of an ephemeral-key warning.
