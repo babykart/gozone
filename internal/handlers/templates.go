@@ -595,7 +595,7 @@ func (h *Handler) substituteTemplateRecords(zoneID, templateLabel string, record
 			// template, the 1-based record index and the template's original
 			// (pre-substitution) name so the operator can locate the line to
 			// fix in the template editor.
-			if err := validateParsedRecord(rtype, name, content, r.Priority); err != nil {
+			if err := validateParsedRecord(rtype, name, content, r.Priority, r.TTL); err != nil {
 				return nil, fmt.Errorf("template %q, record %d (%s %s): %w", templateLabel, i+1, rtype, r.Name, err)
 			}
 
@@ -732,8 +732,8 @@ func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.Zone
 	ttl := 3600
 	if ttlStr != "" {
 		v, err := strconv.Atoi(ttlStr)
-		if err != nil || v <= 0 {
-			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid TTL: must be a positive integer")
+		if err != nil || v <= 0 || v > validators.MaxRecordTTL {
+			return models.ZoneTemplateRecord{}, fmt.Errorf("invalid TTL: must be a positive integer not exceeding %d", validators.MaxRecordTTL)
 		}
 		ttl = v
 	}

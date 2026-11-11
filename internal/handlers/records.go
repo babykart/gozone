@@ -76,8 +76,8 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 	ttl := 0
 	if ttlStr != "" {
 		v, err := strconv.Atoi(ttlStr)
-		if err != nil || v <= 0 {
-			h.renderError(w, r, "Invalid TTL: must be a positive integer")
+		if err != nil || v <= 0 || v > validators.MaxRecordTTL {
+			h.renderError(w, r, "Invalid TTL: must be a positive integer not exceeding "+strconv.Itoa(validators.MaxRecordTTL))
 			return
 		}
 		ttl = v
@@ -591,8 +591,8 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 		if i < len(ttls) {
 			if ttlStr := strings.TrimSpace(ttls[i]); ttlStr != "" {
 				v, err := strconv.Atoi(ttlStr)
-				if err != nil || v <= 0 {
-					return nil, nil, nil, fmt.Errorf("invalid TTL: must be a positive integer")
+				if err != nil || v <= 0 || v > validators.MaxRecordTTL {
+					return nil, nil, nil, fmt.Errorf("invalid TTL: must be a positive integer not exceeding %d", validators.MaxRecordTTL)
 				}
 				ttl = v
 			}
@@ -950,8 +950,8 @@ func parseRecordForm(r *http.Request) (name, recordType, content string, ttl, pr
 	ttl = 0
 	if ttlStr != "" {
 		v, parseErr := strconv.Atoi(ttlStr)
-		if parseErr != nil || v <= 0 {
-			err = &recordValidationError{Message: "Invalid TTL: must be a positive integer"}
+		if parseErr != nil || v <= 0 || v > validators.MaxRecordTTL {
+			err = &recordValidationError{Message: "Invalid TTL: must be a positive integer not exceeding " + strconv.Itoa(validators.MaxRecordTTL)}
 			return
 		}
 		ttl = v

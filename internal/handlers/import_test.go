@@ -866,6 +866,58 @@ www.example.com.,A,192.0.2.1,3600,0,false`
 	}
 }
 
+// TestParseBindZone_SkipsOverBoundTTL pins the RFC 2181 §8 bound in the BIND
+// importer: a record whose effective TTL exceeds 2147483647 must be reported
+// as a skipped line (with the maximum in the reason) while the remaining
+// lines still import. The over-bound TTL is carried explicitly on the record
+// line: parseBindTTLValue already rejects an over-bound $TTL directive, so
+// the record-level gate is exercised via the per-line TTL field.
+func TestParseBindZone_SkipsOverBoundTTL(t *testing.T) {
+	input := strings.Join([]string{
+		"$ORIGIN example.com.",
+		"$TTL 3600",
+		"www 2147483648 IN A 192.0.2.1",
+		"mail IN A 192.0.2.5",
+	}, "\n")
+
+	rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 || rrsets[0].Type != "A" {
+		t.Fatalf("expected only the valid A rrset to import, got %+v", rrsets)
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("expected exactly 1 skipped line (the over-bound TTL), got %+v", skipped)
+	}
+	if !strings.Contains(skipped[0].Reason, "2147483647") {
+		t.Errorf("skip reason should mention the RFC 2181 maximum 2147483647, got %q", skipped[0].Reason)
+	}
+}
+
+// TestParseCSVZone_SkipsOverBoundTTL is the CSV counterpart: a row with a TTL
+// cell above 2147483647 is skipped with a reason naming the maximum; the
+// valid row still imports.
+func TestParseCSVZone_SkipsOverBoundTTL(t *testing.T) {
+	input := `name,type,content,ttl,priority,disabled
+www.example.com.,A,192.0.2.1,2147483648,0,false
+mail.example.com.,A,192.0.2.5,3600,0,false`
+
+	rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rrsets) != 1 || rrsets[0].Type != "A" {
+		t.Fatalf("expected only the valid A rrset to import, got %+v", rrsets)
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("expected exactly 1 skipped row (the over-bound TTL), got %+v", skipped)
+	}
+	if !strings.Contains(skipped[0].Reason, "2147483647") {
+		t.Errorf("skip reason should mention the RFC 2181 maximum 2147483647, got %q", skipped[0].Reason)
+	}
+}
+
 // TestCSVFormulaNeutralizationRoundTrip pins the spreadsheet-formula
 // defence across the full export→import cycle: dangerous prefixes in record
 // content and comments are escaped by the shared renderer (web, REST and

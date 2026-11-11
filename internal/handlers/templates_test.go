@@ -856,6 +856,30 @@ func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
 	}
 }
 
+// TestParseTemplateRecordForm_RejectsOverBoundTTL pins the RFC 2181 §8 bound
+// in the template-record form: a stored template whose TTL exceeds 2147483647
+// would fail at zone-creation time, so it must be refused at storage time.
+func TestParseTemplateRecordForm_RejectsOverBoundTTL(t *testing.T) {
+	body := "name=www&type=A&content=192.0.2.1&ttl=2147483648"
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.ParseForm()
+	if _, err := parseTemplateRecordForm(r, "1"); err == nil {
+		t.Fatal("parseTemplateRecordForm accepted ttl=2147483648 (above the RFC 2181 maximum)")
+	}
+
+	atMax := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("name=www&type=A&content=192.0.2.1&ttl=2147483647"))
+	atMax.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	atMax.ParseForm()
+	rec, err := parseTemplateRecordForm(atMax, "1")
+	if err != nil {
+		t.Fatalf("parseTemplateRecordForm rejected the RFC 2181 maximum TTL 2147483647: %v", err)
+	}
+	if rec.TTL != 2147483647 {
+		t.Errorf("rec.TTL = %d, want 2147483647", rec.TTL)
+	}
+}
+
 // TestParseTemplateRecordForm_AcceptsVariables confirms template variables in
 // name/content bypass validation so legitimate variable-laden templates are
 // preserved.

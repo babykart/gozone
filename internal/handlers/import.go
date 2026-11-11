@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -300,13 +299,15 @@ type skippedLine struct {
 	Reason string
 }
 
-// validateParsedRecord validates a parsed record's type, name, content and
-// priority. contentBare must be the content WITHOUT an embedded priority (the
-// caller must SplitPriority first for MX/SRV). It lets the BIND and CSV
-// importers reject invalid records before they reach PowerDNS, producing a
-// specific reason per line instead of a generic "failed to create records"
-// the validation-before-normalisation contract).
-func validateParsedRecord(rtype, name, contentBare string, priority int) error {
+// validateParsedRecord validates a parsed record's type, name, content,
+// priority and effective TTL (the explicit or $TTL/default-resolved value, so
+// an over-bound TTL is rejected here even when it came from a directive rather
+// than the record line). contentBare must be the content WITHOUT an embedded
+// priority (the caller must SplitPriority first for MX/SRV). It lets the BIND
+// and CSV importers reject invalid records before they reach PowerDNS,
+// producing a specific reason per line instead of a generic "failed to create
+// records" the validation-before-normalisation contract).
+func validateParsedRecord(rtype, name, contentBare string, priority, ttl int) error {
 	if err := validators.ValidateRecordType(rtype); err != nil {
 		return err
 	}
@@ -314,6 +315,9 @@ func validateParsedRecord(rtype, name, contentBare string, priority int) error {
 		return err
 	}
 	if err := validators.ValidateRecordContent(rtype, contentBare); err != nil {
+		return err
+	}
+	if err := validators.ValidateRecordTTL(ttl); err != nil {
 		return err
 	}
 	return validators.ValidateRecordPriority(rtype, priority)
@@ -397,7 +401,7 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 		// format (priority embedded for MX/SRV), so split the priority out
 		// first and validate the bare content.
 		prio, rest, _ := models.SplitPriority(rec.rtype, rec.data)
-		if verr := validateParsedRecord(rec.rtype, rec.name, rest, prio); verr != nil {
+		if verr := validateParsedRecord(rec.rtype, rec.name, rest, prio, rec.ttl); verr != nil {
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: verr.Error()})
 			continue
 		}
@@ -419,7 +423,8 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 // §5.1-style single-unit form): decimal digits with an optional single
 // case-insensitive unit suffix — s=seconds, m=minutes, h=hours, d=days,
 // w=weeks. Bare digits are seconds. The accepted range is clamped to
-// math.MaxInt32 and the unit multiplication is computed in int64: PowerDNS
+// validators.MaxRecordTTL (RFC 2181 maximum) and the unit multiplication is
+// computed in int64: PowerDNS
 // TTLs are uint32, but the parser stays conservative so the value fits every
 // downstream int consumer and overflows are rejected instead of wrapping.
 func parseBindTTLValue(value string) (int, error) {
@@ -454,12 +459,12 @@ func parseBindTTLValue(value string) (int, error) {
 			return 0, invalid
 		}
 		n = n*10 + int64(digits[i]-'0')
-		if n > math.MaxInt32/unit {
+		if n > validators.MaxRecordTTL/unit {
 			return 0, invalid
 		}
 	}
 	n *= unit
-	if n <= 0 || n > math.MaxInt32 {
+	if n <= 0 || n > validators.MaxRecordTTL {
 		return 0, invalid
 	}
 	return int(n), nil
@@ -821,7 +826,7 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 		// CSV content is bare (priority is a separate column). The name
 		// is validated in its raw form (before the zone-relative resolution
 		// below) so the apex shorthand "@" is accepted by ValidateRecordName.
-		if verr := validateParsedRecord(rtype, name, content, priority); verr != nil {
+		if verr := validateParsedRecord(rtype, name, content, priority, ttl); verr != nil {
 			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: verr.Error()})
 			continue
 		}

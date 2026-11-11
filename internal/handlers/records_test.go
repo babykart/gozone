@@ -166,6 +166,73 @@ func TestCreateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
 	}
 }
 
+// TestCreateRecord_RejectsOverBoundTTL pins the RFC 2181 §8 bound at the web
+// create handler: an explicit TTL above 2147483647 renders the friendly
+// "Invalid TTL" error page (400) and never reaches PowerDNS, while the exact
+// maximum is accepted and written through.
+func TestCreateRecord_RejectsOverBoundTTL(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("CreateRecord contacted PowerDNS for an over-bound TTL (%s %s)", r.Method, r.URL.Path)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create",
+		strings.NewReader("name=www.example.com&type=A&content=1.2.3.4&ttl=2147483648"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	h.CreateRecord(w, withUserContext(r, user))
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	for _, needle := range []string{"Invalid TTL", "2147483647"} {
+		if !strings.Contains(w.Body.String(), needle) {
+			t.Errorf("error page should contain %q, got body %q", needle, w.Body.String())
+		}
+	}
+}
+
+// TestCreateRecord_AcceptsMaxTTL is the accept counterpart of the over-bound
+// gate: the exact RFC 2181 maximum TTL flows through validation and reaches
+// the PowerDNS write path.
+func TestCreateRecord_AcceptsMaxTTL(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(models.Zone{
+			ID: "example.com", Name: "example.com", Kind: "Native",
+		})
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create",
+		strings.NewReader("name=www.example.com&type=A&content=1.2.3.4&ttl=2147483647"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	h.CreateRecord(w, withUserContext(r, user))
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect 303, got %d", w.Code)
+	}
+
+	var count int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_record'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 activity log, got %d", count)
+	}
+}
+
 // TestUpdateRecord_RejectsInvalidTTLOrPriority is the parseRecordForm
 // counterpart of the CreateRecord test above (same validation contract).
 func TestUpdateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
@@ -4530,6 +4597,55 @@ func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
 		if !priorities[10] || !priorities[20] {
 			t.Errorf("group %q: merged RRSet must carry priorities 10 (existing) and 20 (new), got %+v", key, priorities)
 		}
+	}
+}
+
+// TestCollectBatchRows_RejectsOverBoundTTL pins the RFC 2181 §8 bound at the
+// batch row parser: an explicit TTL above 2147483647 must be rejected instead
+// of flowing into the merged RRSet. (Message shape is implementation-chosen;
+// only error-vs-nil is asserted here — the exact text lives in
+// validators.ValidateRecordTTL.)
+func TestCollectBatchRows_RejectsOverBoundTTL(t *testing.T) {
+	_, _, _, err := collectBatchRows(
+		[]string{"www"}, []string{"A"}, []string{"192.0.2.1"},
+		[]string{"2147483648"}, nil, nil, nil, "example.com.")
+	if err == nil {
+		t.Fatal("collectBatchRows accepted TTL 2147483648 (above the RFC 2181 maximum)")
+	}
+
+	// The exact maximum is accepted.
+	rrsets, _, _, err := collectBatchRows(
+		[]string{"www"}, []string{"A"}, []string{"192.0.2.1"},
+		[]string{"2147483647"}, nil, nil, nil, "example.com.")
+	if err != nil {
+		t.Fatalf("collectBatchRows rejected the RFC 2181 maximum TTL 2147483647: %v", err)
+	}
+	if len(rrsets) != 1 || rrsets[0].TTL != 2147483647 {
+		t.Fatalf("expected one RRSet with TTL 2147483647, got %+v", rrsets)
+	}
+}
+
+// TestParseRecordForm_RejectsOverBoundTTL is the single-record form
+// counterpart: the ttl form value is range-checked against the RFC 2181 §8
+// maximum, not just "> 0".
+func TestParseRecordForm_RejectsOverBoundTTL(t *testing.T) {
+	body := "name=www&type=A&content=192.0.2.1&ttl=2147483648"
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/new", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, _, _, _, _, _, err := parseRecordForm(r)
+	if err == nil {
+		t.Fatal("parseRecordForm accepted ttl=2147483648 (above the RFC 2181 maximum)")
+	}
+
+	atMax := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/new",
+		strings.NewReader("name=www&type=A&content=192.0.2.1&ttl=2147483647"))
+	atMax.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, _, _, ttl, _, _, err := parseRecordForm(atMax)
+	if err != nil {
+		t.Fatalf("parseRecordForm rejected the RFC 2181 maximum TTL 2147483647: %v", err)
+	}
+	if ttl != 2147483647 {
+		t.Errorf("ttl = %d, want 2147483647", ttl)
 	}
 }
 
