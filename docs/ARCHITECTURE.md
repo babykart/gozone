@@ -147,7 +147,7 @@ and never on a concrete cache implementation.
 2. **`config.Load(path)`** — start with `DefaultConfig()`, overlay YAML file, apply `GOZONE_*` env vars, validate (port range, bcrypt cost, CIDR list, retention/batch sizes, login lock fields)
 3. **`database.New(cfg)`** — validate DSN, create directory if needed, open SQL connection (SQLite uses `SetMaxOpenConns(1)`), run content-hash migrations with `Dialect.LockMigrations`
 4. **`pdns.NewClient(cfg)`** — create HTTP client pointing to PowerDNS API
-5. **`pdns.NewCachedClient(client)`** — wrap with TTL cache (zones, zone info, stats, server info, TSIG keys)
+5. **`pdns.NewCachedClient(client, zoneCacheTTL)`** — wrap with TTL cache (zone list and zone info use `powerdns.zone_cache_ttl_seconds`, default 60s; stats, server info, TSIG keys have fixed TTLs)
 6. **`seedAdminUser(ctx, db, cfg)`** — if `users` table is empty, insert admin/admin (or password from `GOZONE_ADMIN_PASSWORD`)
 7. **Start periodic purge goroutines** via `startPeriodicJob(ctx, name, interval, timeout, job)`:
    - `CleanupRevokedTokens` every 1h (30s timeout)

@@ -58,6 +58,11 @@ powerdns:
   api_url: "http://localhost:8081"
   api_key: "changeme"
   server_id: "localhost"
+  # How long the zone list / zone info caches keep PowerDNS reads (seconds).
+  # Invalidation is process-local: with multiple GoZone instances on one
+  # PowerDNS, lower this (or set 0 to disable retained zone caching) to
+  # shrink the window where a zone added/removed elsewhere is not visible.
+  zone_cache_ttl_seconds: 60
 
 auth:
   session_duration_hours: 24

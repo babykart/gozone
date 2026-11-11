@@ -96,6 +96,9 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 | `powerdns.api_url` | `GOZONE_PDNS_API_URL` | `http://localhost:8081` |
 | `powerdns.api_key` | `GOZONE_PDNS_API_KEY` | `changeme` |
 | `powerdns.server_id` | `GOZONE_PDNS_SERVER_ID` | `localhost` |
+| `powerdns.zone_cache_ttl_seconds` | `GOZONE_PDNS_ZONE_CACHE_TTL_SECONDS` | `60` |
+
+`zone_cache_ttl_seconds` bounds how long the zone list and zone info caches keep PowerDNS read results. Cache invalidations are process-local: with several GoZone instances sharing one PowerDNS, a zone created on another instance can remain invisible, and a zone deleted there can remain visible, for up to this TTL on the other instances — lower it (or set `0` to disable retained zone caching) when that staleness window matters. Server info, statistics and TSIG key caches keep their own fixed TTLs.
 
 ### Authentication
 
