@@ -2093,13 +2093,15 @@ func TestAPIDeleteRecord_PDNSError(t *testing.T) {
 	}
 }
 
-// TestAPIUpdateRecord_CommentsPassedThroughUnchanged pins the REST comment
-// passthrough: the REST path does NOT go through buildCommentsPatch, so the
-// `comments` array is forwarded to PowerDNS exactly as the client sent it
-// (no implicit dedup, no clearing, no padding with existing comments). The
-// client is in full control — same PDNS REPLACE semantics documented in the
-// API section of the README.
-func TestAPIUpdateRecord_CommentsPassedThroughUnchanged(t *testing.T) {
+// TestAPIUpdateRecord_CommentsContentRoundTrip pins the REST comment content
+// round trip: the REST path does NOT go through buildCommentsPatch, so the
+// `comments` array's CONTENT is forwarded to PowerDNS exactly as the client
+// sent it (no implicit dedup, no clearing, no padding with existing
+// comments). Comment METADATA is server-owned, reconciled by the service
+// layer: with no stored comments on the RRSet every item is zeroed
+// (account "" / modified_at 0) so PowerDNS stamps modified_at itself. The
+// client controls the comment list, not its metadata.
+func TestAPIUpdateRecord_CommentsContentRoundTrip(t *testing.T) {
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -2130,6 +2132,122 @@ func TestAPIUpdateRecord_CommentsPassedThroughUnchanged(t *testing.T) {
 	}
 	if patch.Items[0].Content != "dup" || patch.Items[1].Content != "dup" {
 		t.Errorf("expected both comments to be 'dup', got %+v", patch.Items)
+	}
+	// Server-owned metadata: the RRSet has no stored comments (mock GET
+	// returns an empty list), so both items are zeroed for PowerDNS to stamp.
+	for i, c := range patch.Items {
+		if c.Account != "" || c.ModifiedAt != 0 {
+			t.Errorf("comment[%d] metadata = {account:%q modified_at:%d}, want zeroed (server-owned)", i, c.Account, c.ModifiedAt)
+		}
+	}
+}
+
+// TestAPIUpdateRecord_CommentMetadataServerOwned pins the server-ownership
+// invariant at the REST wire boundary: comment Account/ModifiedAt are
+// server-owned. A submitted item whose Content matches a stored comment of
+// the same RRSet keeps the STORED metadata (the client's spoofed values are
+// never forwarded to PowerDNS); a submitted item with no stored match is
+// zeroed so PowerDNS stamps modified_at itself.
+func TestAPIUpdateRecord_CommentMetadataServerOwned(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			// The stored RRSet carries a server-owned comment.
+			json.NewEncoder(w).Encode(map[string]any{
+				"rrsets": []models.RRSet{
+					{
+						Name: "www.example.com.", Type: "A", TTL: 300,
+						Records: []models.RecordInfo{{Content: "1.2.3.4"}},
+						Comments: &models.CommentPatch{Items: []models.Comment{
+							{Content: "ops", Account: "alice", ModifiedAt: 100},
+						}},
+					},
+				},
+			})
+			return
+		}
+		var payload struct {
+			RRSets []models.RRSet `json:"rrsets"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode PATCH body: %v", err)
+		}
+		sent = payload.RRSets
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	// Client spoofs metadata on an echoing item and on a brand-new item.
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}],"comments":[{"content":"ops","account":"evil","modified_at":999},{"content":"new","account":"spoof","modified_at":1}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 rrset sent to PDNS, got %d", len(sent))
+	}
+	patch := sent[0].Comments
+	if patch == nil || patch.Clear {
+		t.Fatalf("expected Items patch (no Clear), got %+v", patch)
+	}
+	want := []models.Comment{
+		{Content: "ops", Account: "alice", ModifiedAt: 100},
+		{Content: "new", Account: "", ModifiedAt: 0},
+	}
+	if len(patch.Items) != len(want) {
+		t.Fatalf("expected %d comments, got %d (%+v)", len(want), len(patch.Items), patch.Items)
+	}
+	for i, c := range want {
+		got := patch.Items[i]
+		if got.Content != c.Content || got.Account != c.Account || got.ModifiedAt != c.ModifiedAt {
+			t.Errorf("comment[%d] = {content:%q account:%q modified_at:%d}, want {content:%q account:%q modified_at:%d}",
+				i, got.Content, got.Account, got.ModifiedAt, c.Content, c.Account, c.ModifiedAt)
+		}
+	}
+}
+
+// TestAPICreateRecord_CommentMetadataServerOwned pins the same invariant on
+// the POST (append) path: a client-supplied comment on content with no
+// stored match is forwarded with zeroed metadata — the content is preserved
+// verbatim, the spoofed Account is dropped and modified_at is left for
+// PowerDNS to stamp.
+func TestAPICreateRecord_CommentMetadataServerOwned(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"5.6.7.8"}],"comments":[{"content":"ops","account":"evil","modified_at":999}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 rrset sent to PDNS, got %d", len(sent))
+	}
+	patch := sent[0].Comments
+	if patch == nil || patch.Clear {
+		t.Fatalf("expected Items patch (no Clear), got %+v", patch)
+	}
+	if len(patch.Items) != 1 {
+		t.Fatalf("expected 1 comment, got %d (%+v)", len(patch.Items), patch.Items)
+	}
+	got := patch.Items[0]
+	if got.Content != "ops" {
+		t.Errorf("content must be preserved verbatim, got %q", got.Content)
+	}
+	if got.Account != "" || got.ModifiedAt != 0 {
+		t.Errorf("spoofed metadata must be zeroed, got account=%q modified_at=%d", got.Account, got.ModifiedAt)
 	}
 }
 

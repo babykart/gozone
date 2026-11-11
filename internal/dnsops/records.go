@@ -205,6 +205,56 @@ func RRSetSnapshot(rrset *models.RRSet) string {
 	return string(b)
 }
 
+// storedComments returns the Items of an RRSet's comment patch, or nil when
+// the RRSet carries no comments (or there is no RRSet to read them from).
+func storedComments(rrset *models.RRSet) []models.Comment {
+	if rrset == nil || rrset.Comments == nil {
+		return nil
+	}
+	return rrset.Comments.Items
+}
+
+// reconcileCommentMetadata enforces the server-ownership invariant for RRSet
+// comment metadata: Account and ModifiedAt are never taken from the client.
+// Each submitted item is matched one-to-one, in order (FIFO), against the
+// stored comments of the same RRSet with EXACTLY equal Content; on a match
+// the item inherits the stored metadata, otherwise both fields are zeroed
+// (""/0) so PowerDNS stamps modified_at for the new comment. Duplicate
+// stored comments are consumed first-match-first-served, so an echoed list
+// keeps each duplicate's own metadata. A nil patch and a Clear patch are
+// strict no-ops.
+//
+// Callers pass the stored comments from the before-image fetch. When that
+// fetch fails or finds nothing, the stored list is empty and every submitted
+// item is zeroed — the degraded path (e.g. UpdateRecord's best-effort
+// pre-read): client-supplied metadata is dropped rather than forwarded
+// verbatim, which is always safe because PowerDNS re-stamps modified_at on
+// write.
+func reconcileCommentMetadata(patch *models.CommentPatch, stored []models.Comment) {
+	if patch == nil || patch.Clear {
+		return
+	}
+	consumed := make([]bool, len(stored))
+	for i := range patch.Items {
+		item := &patch.Items[i]
+		matched := false
+		for j := range stored {
+			if consumed[j] || stored[j].Content != item.Content {
+				continue
+			}
+			consumed[j] = true
+			item.Account = stored[j].Account
+			item.ModifiedAt = stored[j].ModifiedAt
+			matched = true
+			break
+		}
+		if !matched {
+			item.Account = ""
+			item.ModifiedAt = 0
+		}
+	}
+}
+
 // ValidateRecordSet validates and canonicalises an RRSet for a write: the
 // type (uppercase + whitelist), the TTL (non-negative), a non-empty record
 // list (an RRSet with zero records is not a writable object — deleting one
@@ -344,6 +394,11 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 		}
 	}
 
+	// Comment metadata is server-owned: reconcile the submitted comments
+	// against the stored RRSet's (a brand-new RRSet has none, so every item
+	// is zeroed for PowerDNS to stamp).
+	reconcileCommentMetadata(rrset.Comments, storedComments(&existingRRSet))
+
 	if err := s.PDNS.UpdateRecord(ctx, zoneID, rrset); err != nil {
 		return &StageError{Stage: StagePatch, Err: err}
 	}
@@ -411,6 +466,12 @@ func (s *Service) UpdateRecord(ctx context.Context, user *models.User, zoneID st
 			rrset.TTL = oldRRSet.TTL
 		}
 	}
+
+	// Comment metadata is server-owned: reconcile the submitted comments
+	// against the replaced RRSet's stored ones. The pre-read is best-effort —
+	// when it failed or found nothing the stored list is empty and every
+	// submitted item is zeroed (the degraded path, see reconcileCommentMetadata).
+	reconcileCommentMetadata(rrset.Comments, storedComments(oldRRSet))
 
 	if err := s.PDNS.UpdateRecord(ctx, zoneID, rrset); err != nil {
 		return &StageError{Stage: StagePatch, Err: err}

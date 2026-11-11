@@ -177,6 +177,11 @@ func (s *Service) EditRecord(ctx context.Context, user *models.User, zoneID stri
 		Comments: in.RRSet.Comments,
 	}
 
+	// Comment metadata is server-owned: reconcile the submitted comments
+	// against the RRSet fetched above. Web edits send content-only comments,
+	// so an empty stored list (new RRSet) correctly zeroes every item.
+	reconcileCommentMetadata(newRRSet.Comments, storedComments(existingRRSet))
+
 	if err := s.PDNS.UpdateRecord(ctx, zoneID, *newRRSet); err != nil {
 		return nil, models.RecordInfo{}, &StageError{Stage: StagePatch, Err: err}
 	}
