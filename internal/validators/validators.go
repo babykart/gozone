@@ -625,49 +625,30 @@ func ValidateRecordContent(recordType, content string) error {
 		// RFC 8659: <flags> <tag> <value>, where the value is a
 		// character-string that may contain spaces (and is quoted in the
 		// PowerDNS wire format — quoting is added by the codec, not here).
-		// Split the two structural leading fields, then treat everything
-		// after the tag as the value so both `0 issue letsencrypt.org` and
-		// `0 issue "ca.example.net; account=123"` validate.
-		rest := strings.TrimSpace(content)
-		var leading []string
-		for len(leading) < 2 && rest != "" {
-			sp := strings.IndexAny(rest, " \t")
-			if sp < 0 {
-				leading = append(leading, rest)
-				rest = ""
-			} else {
-				leading = append(leading, rest[:sp])
-				rest = strings.TrimSpace(rest[sp+1:])
-			}
+		// One quote-aware tokenization of the whole content keeps the value
+		// a single token: both `0 issue letsencrypt.org` and
+		// `0 issue "ca.example.net; account=123"` validate, while
+		// `"a" "b"` (two strings) and unquoted multi-token values do not.
+		tokens, err := splitQuotedTokens(content)
+		if err != nil {
+			return fmt.Errorf("CAA content: %w", err)
 		}
-		if len(leading) < 2 || rest == "" {
+		if len(tokens) != 3 {
 			return fmt.Errorf("CAA content must have exactly 3 fields: flags tag value")
 		}
-		flags, err := strconv.ParseUint(leading[0], 10, 8)
+		flags, err := strconv.ParseUint(tokens[0], 10, 8)
 		if err != nil {
-			return fmt.Errorf("CAA flags %q must be an 8-bit unsigned integer", leading[0])
+			return fmt.Errorf("CAA flags %q must be an 8-bit unsigned integer", tokens[0])
 		}
 		if flags != 0 && flags != 128 {
 			return fmt.Errorf("CAA flags %d is not supported; use 0 or 128", flags)
 		}
-		switch leading[1] {
+		switch tokens[1] {
 		case "issue", "issuewild", "iodef", "issuemail", "issuevmc":
 			// valid tags (issue/issuewild/iodef per RFC 8659;
 			// issuemail/issuevmc per the IANA CAA property registry)
 		default:
-			return fmt.Errorf("CAA tag %q is not valid; use issue, issuewild, iodef, issuemail or issuevmc", leading[1])
-		}
-		value := rest
-		if strings.HasPrefix(value, `"`) {
-			// A quoted value must be one complete quoted string with a
-			// non-empty interior (spaces inside are fine).
-			if !strings.HasSuffix(value, `"`) || len(value) < 3 {
-				return fmt.Errorf("CAA value %q must be a complete non-empty quoted string", value)
-			}
-		} else if strings.ContainsAny(value, " \t") {
-			// An unquoted value spanning several whitespace-separated tokens
-			// is ambiguous zone-file syntax: the value must be quoted.
-			return fmt.Errorf("CAA value containing spaces must be quoted")
+			return fmt.Errorf("CAA tag %q is not valid; use issue, issuewild, iodef, issuemail or issuevmc", tokens[1])
 		}
 		return nil
 	case "TXT", "SPF":
@@ -699,10 +680,14 @@ func ValidateRecordContent(recordType, content string) error {
 		}
 		return nil
 	case "HINFO":
-		// RFC 1035: <cpu> <os>. Tolerate quoted forms by requiring at least the
-		// two fields be present.
-		parts := strings.Fields(content)
-		if len(parts) < 2 {
+		// RFC 1035: <cpu> <os> — exactly two quote-aware tokens, so a quoted
+		// value containing spaces ("Macintosh Plus") counts as one field and
+		// malformed quoting is rejected instead of silently re-tokenized.
+		tokens, err := splitQuotedTokens(content)
+		if err != nil {
+			return fmt.Errorf("HINFO content: %w", err)
+		}
+		if len(tokens) != 2 {
 			return fmt.Errorf("HINFO content must have 2 fields: cpu os")
 		}
 		return nil
@@ -936,6 +921,84 @@ func ValidateRecordContent(recordType, content string) error {
 	default:
 		return fmt.Errorf("content validation is not implemented for record type %q", recordType)
 	}
+}
+
+// MaxRecordTTL is the upper bound of a DNS TTL per RFC 2181 §8: a TTL is an
+// unsigned 31-bit integer, so a record TTL must not exceed 2147483647.
+const MaxRecordTTL = 2147483647
+
+// ValidateRecordTTL checks that a record TTL is a non-negative integer not
+// exceeding MaxRecordTTL (RFC 2181 §8). The negative-message text is legacy
+// and must not change; callers surface the over-bound message verbatim.
+func ValidateRecordTTL(ttl int) error {
+	if ttl < 0 {
+		return fmt.Errorf("ttl must be a non-negative integer")
+	}
+	if ttl > MaxRecordTTL {
+		return fmt.Errorf("ttl must not exceed %d (RFC 2181 maximum)", MaxRecordTTL)
+	}
+	return nil
+}
+
+// splitQuotedTokens splits content into tokens separated by spaces AND tabs.
+// A token is either a bare run or a double-quoted string. Escape handling
+// mirrors the wire codec in internal/models/recordtype.go
+// (splitQuotedFields/quoteFieldIfNeeded): backslash escapes the next byte
+// ONLY inside a quoted string (\" is an escaped literal quote, \\ a literal
+// backslash); in a bare run a backslash is an ordinary byte and any quote
+// character is an error. A bare-run escape for a separator would otherwise
+// validate here but split into two fields at the wire codec, producing
+// content PowerDNS can reject. Malformed quoting — an unterminated quote, a
+// quote glued inside or onto a bare token, a non-whitespace byte glued after
+// a closing quote, or an empty quoted string — is an error rather than a
+// silent re-tokenization.
+func splitQuotedTokens(content string) ([]string, error) {
+	var tokens []string
+	i := 0
+	for i < len(content) {
+		switch c := content[i]; {
+		case c == ' ' || c == '\t':
+			i++
+		case c == '"':
+			i++
+			var sb strings.Builder
+			closed := false
+			for i < len(content) && !closed {
+				switch inner := content[i]; {
+				case inner == '\\' && i+1 < len(content):
+					sb.WriteByte(inner)
+					sb.WriteByte(content[i+1])
+					i += 2
+				case inner == '"':
+					closed = true
+					i++
+				default:
+					sb.WriteByte(inner)
+					i++
+				}
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated quoted string")
+			}
+			if sb.Len() == 0 {
+				return nil, fmt.Errorf("quoted string must not be empty")
+			}
+			if i < len(content) && content[i] != ' ' && content[i] != '\t' {
+				return nil, fmt.Errorf("quoted strings must be separated by whitespace")
+			}
+			tokens = append(tokens, sb.String())
+		default:
+			start := i
+			for i < len(content) && content[i] != ' ' && content[i] != '\t' && content[i] != '"' {
+				i++
+			}
+			tokens = append(tokens, content[start:i])
+			if i < len(content) && content[i] == '"' {
+				return nil, fmt.Errorf("quote may not appear inside a bare token")
+			}
+		}
+	}
+	return tokens, nil
 }
 
 // ValidateRecordPriority checks that a priority value is valid for the given

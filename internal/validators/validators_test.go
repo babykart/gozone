@@ -266,6 +266,13 @@ func TestValidateRecordContent(t *testing.T) {
 		{"CAA invalid empty quoted value", "CAA", `0 issue ""`, true},
 		{"CAA invalid flag", "CAA", "1 issue ca.example.com", true},
 		{"CAA invalid tag", "CAA", "0 invalid ca.example.com", true},
+		// T1: the value must be EXACTLY ONE token. A value that merely
+		// starts and ends with a quote but contains interior quote
+		// boundaries ("a" "b", "a""b") is not a single character-string.
+		{"CAA invalid two quoted strings", "CAA", `0 issue "a" "b"`, true},
+		{"CAA invalid interior stray quote", "CAA", `0 issue "a""b"`, true},
+		{"CAA invalid glued quote suffix", "CAA", `0 issue "ca"x`, true},
+		{"CAA invalid bare escaped separator", "CAA", `0 issue ca\ example.net`, true},
 		{"empty content", "A", "", true},
 	}
 	for _, tt := range tests {
@@ -295,9 +302,25 @@ func TestValidateRecordContent_StructuredTypes(t *testing.T) {
 		{"AFSDB subtype not numeric", "AFSDB", "abc afsdb.example.com.", true},
 		{"AFSDB bad hostname", "AFSDB", "1 invalid host.", true},
 
-		// HINFO: <cpu> <os>
+		// HINFO: <cpu> <os> — exactly 2 quote-aware tokens. Bare tokens,
+		// quoted strings (with \" escapes) and tab separation are all legal;
+		// 3+ tokens, 1 token, unterminated quotes, interior stray quotes and
+		// empty quoted tokens are not.
 		{"HINFO valid", "HINFO", `"x86" "linux"`, false},
+		{"HINFO two bare tokens", "HINFO", "pc intel", false},
+		{"HINFO two quoted strings", "HINFO", `"Macintosh Plus" "MacOS"`, false},
+		{"HINFO tab separated", "HINFO", "pc\tlinux", false},
+		{"HINFO unicode quoted", "HINFO", `"Máquina" "Linux"`, false},
+		{"HINFO escaped quote in quoted token", "HINFO", `"\"x86\"" "linux"`, false},
+		{"HINFO bare escaped separator stays literal", "HINFO", `pc\ intel`, false},
+		{"HINFO glue after closing quote", "HINFO", `"cpu"x`, true},
+		{"HINFO glue after closing quote two tokens", "HINFO", `"cpu"x "linux"`, true},
 		{"HINFO too few fields", "HINFO", "cpu", true},
+		{"HINFO three bare tokens", "HINFO", "a b c", true},
+		{"HINFO single quoted token", "HINFO", `"only one"`, true},
+		{"HINFO unterminated quote", "HINFO", `"unterminated linux`, true},
+		{"HINFO quote glued to bare token", "HINFO", `a"b c`, true},
+		{"HINFO empty quoted token", "HINFO", `"a" ""`, true},
 
 		// NAPTR: <order> <pref> <flags> <service> <regexp> <replacement>
 		{"NAPTR valid", "NAPTR", `100 50 "s" "z3950+tcp" "" _z3950._tcp.example.com.`, false},
@@ -849,6 +872,44 @@ func TestValidateRecordContent_RootDotTargets(t *testing.T) {
 			err := ValidateRecordContent(c.rtype, c.content)
 			if (err != nil) != c.wantErr {
 				t.Errorf("ValidateRecordContent(%s, %q) error = %v, wantErr %v", c.rtype, c.content, err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateRecordTTL pins the RFC 2181 §8 TTL gate: non-negative and at
+// most 2147483647. The negative-message text is legacy and must not change;
+// the over-bound message names the RFC 2181 maximum.
+func TestValidateRecordTTL(t *testing.T) {
+	if MaxRecordTTL != 2147483647 {
+		t.Fatalf("MaxRecordTTL = %d, want 2147483647 (RFC 2181 §8)", MaxRecordTTL)
+	}
+	tests := []struct {
+		name    string
+		ttl     int
+		wantErr string // "" means nil
+	}{
+		{"negative", -1, "ttl must be a non-negative integer"},
+		{"zero", 0, ""},
+		{"one", 1, ""},
+		{"max", 2147483647, ""},
+		{"max plus one", 2147483648, "ttl must not exceed 2147483647 (RFC 2181 maximum)"},
+		{"uint32 overflow", 4294967296, "ttl must not exceed 2147483647 (RFC 2181 maximum)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRecordTTL(tt.ttl)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRecordTTL(%d) = %v, want nil", tt.ttl, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateRecordTTL(%d) = nil, want error %q", tt.ttl, tt.wantErr)
+			}
+			if err.Error() != tt.wantErr {
+				t.Errorf("ValidateRecordTTL(%d) error = %q, want exact %q", tt.ttl, err.Error(), tt.wantErr)
 			}
 		})
 	}
