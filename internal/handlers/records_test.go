@@ -904,6 +904,16 @@ func TestInlineUpdateRecord_StaleOriginalContentReturns409(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 for a stale original_content on a multi-record RRSet, got %d (%s)", w.Code, w.Body.String())
 	}
+	// reload=true is what authorizes the inline editor to resync the page:
+	// only the stale-before-image conflict carries it (retryable 409s such
+	// as zone-busy omit it so the operator keeps their edits).
+	var conflictResp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&conflictResp); err != nil {
+		t.Fatalf("decode conflict response: %v", err)
+	}
+	if conflictResp["reload"] != "true" {
+		t.Errorf("expected reload=true on the stale-before-image conflict, got %v", conflictResp)
+	}
 	if len(patched) != 0 {
 		t.Errorf("a refused edit must not reach PowerDNS, got PATCH %+v", patched)
 	}
@@ -4520,5 +4530,204 @@ func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
 		if !priorities[10] || !priorities[20] {
 			t.Errorf("group %q: merged RRSet must carry priorities 10 (existing) and 20 (new), got %+v", key, priorities)
 		}
+	}
+}
+
+// TestInlineUpdateRecord_InvalidOriginalPriority is the T4 regression for the
+// silent strconv drop in updateRecordFromForm: a non-empty, non-numeric
+// original_priority must be a 400 JSON validation error, not silently coerced
+// to 0. With the silent 0 the before-image matches no record of the MX RRSet
+// and the handler previously answered 409 conflict — an edit that merely
+// carried a corrupt form field read as a concurrent modification.
+func TestInlineUpdateRecord_InvalidOriginalPriority(t *testing.T) {
+	patched := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPatch {
+			patched = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: "example.com", Name: "example.com", Kind: "Native"},
+				// Wire form; the PDNS client read path splits
+				// priority 10 out of the content.
+				RRSets: []models.RRSet{{Name: "mx.example.com.", Type: "MX", TTL: 300, Records: []models.RecordInfo{{Content: "10 mail.example.com.", Disabled: false}}}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=mx.example.com&type=MX&content=mail.example.com.&ttl=300&priority=20&disabled=false" +
+		"&original_content=mail.example.com.&original_priority=abc"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "Invalid original priority value") {
+		t.Errorf("error should name the invalid original priority, got: %s", resp["error"])
+	}
+	if patched {
+		t.Error("PowerDNS must not receive a PATCH when original_priority is invalid")
+	}
+}
+
+// TestInlineUpdateRecord_EmptyOriginalPriorityStillMatches pins the empty
+// contract of the same fix: an absent original_priority is legal and means 0
+// (the identity of non-priority records) — the validation must only reject
+// non-empty non-numeric values.
+func TestInlineUpdateRecord_EmptyOriginalPriorityStillMatches(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	// No original_priority field at all: must resolve to 0 and match the A record.
+	body := "name=www.example.com&type=A&content=5.6.7.8&ttl=300&original_content=1.2.3.4"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/inline-update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.InlineUpdateRecord(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 patched RRSet, got %d", len(sent))
+	}
+}
+
+// TestDeleteRecord_RejectsInvalidPriority is the T4 regression for the
+// single-record delete form: a non-empty, non-numeric priority must render the
+// 400 error page, not silently become 0. With the silent 0 the delete either
+// missed the intended record ("Record not found") or — when a priority-0
+// record shared the submitted content — deleted the WRONG record and
+// redirected to the zone page as if everything was fine. Here the RRSet holds
+// a real priority-0 MX record with the submitted content, so the pre-fix code
+// happily deletes it (303) while the operator targeted a corrupt form field.
+func TestDeleteRecord_RejectsInvalidPriority(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
+			{Content: "0 mail0.example.com.", Priority: 0, Disabled: false},
+			{Content: "10 mail1.example.com.", Priority: 0, Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=example.com&type=MX&content=mail0.example.com.&priority=abc"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/delete", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.DeleteRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Invalid priority value") {
+		t.Errorf("expected 'Invalid priority value' in the error page, got: %s", w.Body.String())
+	}
+	if len(sent) != 0 {
+		t.Errorf("no PATCH may be sent for an invalid priority, got %+v", sent)
+	}
+}
+
+// TestBulkDeleteRecords_InvalidPriority is the T4 regression for the bulk
+// delete endpoint: a non-empty, non-numeric original_priority of any selected
+// row must abort the whole deletion with 400 {"error": "Invalid priority for
+// row N"} — 1-based row numbering, so the operator can find the offending
+// selection entry — instead of silently coercing to 0 and targeting the wrong
+// record (the pre-fix code answered 200 with the silent 0).
+func TestBulkDeleteRecords_InvalidPriority(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "first row",
+			body: "name=www&type=A&original_content=1.2.3.4&original_priority=abc",
+			want: "Invalid priority for row 1",
+		},
+		{
+			name: "second row",
+			body: "name=www&type=A&original_content=1.2.3.4&original_priority=0" +
+				"&name=api&type=A&original_content=9.9.9.9&original_priority=xyz",
+			want: "Invalid priority for row 2",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []models.RRSet
+			list := []models.RRSet{
+				{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+					{Content: "1.2.3.4", Disabled: false},
+				}},
+				{Name: "api.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
+					{Content: "9.9.9.9", Disabled: false},
+				}},
+			}
+			h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+			defer pdnsSrv.Close()
+
+			testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+			ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/bulk-delete", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.SetPathValue("zone_id", "example.com")
+			r = r.WithContext(ctx)
+			h.BulkDeleteRecords(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+			var resp map[string]string
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			if resp["error"] != tc.want {
+				t.Errorf("error = %q, want %q", resp["error"], tc.want)
+			}
+			if len(sent) != 0 {
+				t.Errorf("no PATCH may be sent when a row carries an invalid priority, got %+v", sent)
+			}
+		})
 	}
 }

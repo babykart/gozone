@@ -2198,3 +2198,47 @@ func TestBuildSearchLikeWhere_LiteralMatchAgainstDB(t *testing.T) {
 		t.Errorf(`the escape character itself must match nothing here (no username contains one), got %d`, n)
 	}
 }
+
+// TestCreateZone_TemplateRecordsDBError is the T5 regression for the
+// zone-create template precheck (zones.go): a database failure while loading
+// the selected template's records must abort the creation with a 500 internal
+// error — NOT be masked by getTemplateRecords' log-and-return-nil as
+// 'Template "x" has no records', which would both refuse the zone creation
+// and send the operator to fix a perfectly healthy template.
+func TestCreateZone_TemplateRecordsDBError(t *testing.T) {
+	created := false
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		created = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(models.Zone{ID: "newzone.com.", Name: "newzone.com.", Kind: "Native"})
+	})
+	defer pdnsSrv.Close()
+
+	templateID := seedTemplate(t, h, "broken-create-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "{{IP}}", 3600)
+
+	if _, err := h.DB.Exec("DROP TABLE zone_template_records"); err != nil {
+		t.Fatalf("drop zone_template_records: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=newzone.com&kind=Native&template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.CreateZone(w, r)
+
+	if created {
+		t.Error("the zone must not be created when the template records cannot be loaded")
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the template-records query fails, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "has no records") {
+		t.Errorf("a database failure must not be reported as an empty template: %s", w.Body.String())
+	}
+}

@@ -1444,3 +1444,56 @@ func TestPasswordHashErrorMessage(t *testing.T) {
 		t.Errorf("unrelated error message = %q, want the generic failure", got)
 	}
 }
+
+// TestUpdateUser_InvalidUserID is the T4 regression for the silent strconv
+// drop in UpdateUser: a non-numeric user_id path value must render the 400
+// "Invalid user ID" error page (mirroring EditUserPage), not proceed with
+// userID 0 and surface a misleading 404 "User not found" for a user the
+// operator never named.
+func TestUpdateUser_InvalidUserID(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	// Otherwise fully valid form: in the fixed code the ID parse is the only
+	// failing check.
+	body := "email=user2@example.com&first_name=&last_name=&role=user"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/abc/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("user_id", "abc")
+	r = r.WithContext(ctx)
+	h.UpdateUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a non-numeric user ID, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Invalid user ID") {
+		t.Errorf("expected 'Invalid user ID' in the error page, got: %s", w.Body.String())
+	}
+}
+
+// TestDeleteUser_InvalidUserID is the T4 twin for DeleteUser: a non-numeric
+// user_id form value must render the 400 "Invalid user ID" error page, not
+// proceed with userID 0 into the existence check and answer 404 "User not
+// found".
+func TestDeleteUser_InvalidUserID(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader("user_id=abc"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.DeleteUser(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a non-numeric user ID, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Invalid user ID") {
+		t.Errorf("expected 'Invalid user ID' in the error page, got: %s", w.Body.String())
+	}
+}

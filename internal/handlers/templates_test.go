@@ -1300,3 +1300,118 @@ func TestTemplateMutationsLogged(t *testing.T) {
 		t.Errorf("add_template_record details must name the record, got %q", d)
 	}
 }
+
+// TestAddTemplateRecord_InvalidTemplateID is the T4 regression for
+// parseTemplateRecordForm: a non-numeric template_id path value must render
+// the 400 "Invalid template ID" error page (the same message the apply and
+// zone-create paths already use), not proceed with template_id 0 — which only
+// hit the foreign key on insert and surfaced an opaque 500 "Failed to add
+// record".
+func TestAddTemplateRecord_InvalidTemplateID(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/templates/abc/records/add", strings.NewReader("name=www&type=A&content=1.2.3.4&ttl=3600"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("template_id", "abc")
+	r = withUserContext(r, user)
+	h.AddTemplateRecord(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a non-numeric template ID, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Invalid template ID") {
+		t.Errorf("expected 'Invalid template ID' in the error page, got: %s", w.Body.String())
+	}
+}
+
+// TestApplyTemplateToZone_TemplateRecordsDBError is the T5 regression for the
+// apply path: a database failure while loading the template records must
+// surface as a 500 internal error, NOT be swallowed by getTemplateRecords'
+// log-and-return-nil into the 400 "Template has no records". A broken table
+// is an outage; telling the operator the template is empty sends them to edit
+// a perfectly healthy template definition.
+func TestApplyTemplateToZone_TemplateRecordsDBError(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "broken-apply-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "{{IP}}", 3600)
+
+	if _, err := h.DB.Exec("DROP TABLE zone_template_records"); err != nil {
+		t.Fatalf("drop zone_template_records: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10) + "&var_IP=10.0.0.1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the template-records query fails, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "Template has no records") {
+		t.Errorf("a database failure must not be reported as an empty template: %s", w.Body.String())
+	}
+}
+
+// TestApplyTemplateToZone_EmptyTemplateStillReportsNoRecords is the T5
+// regression guard for the success path: a template that loads successfully
+// and genuinely has no records keeps the actionable "Template has no records"
+// message — the new internal-error surface is reserved for actual failures.
+func TestApplyTemplateToZone_EmptyTemplateStillReportsNoRecords(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "genuinely-empty-tmpl", "")
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	body := "template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com./apply-template", strings.NewReader(body))
+	r.SetPathValue("zone_id", "example.com.")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = withUserContext(r, user)
+	h.ApplyTemplateToZone(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a genuinely empty template, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Template has no records") {
+		t.Errorf("expected 'Template has no records', got: %s", w.Body.String())
+	}
+}
+
+// TestEditTemplatePage_RecordsDBError is the T5 regression for the template
+// edit view: a failed template-records query must render the 500 internal
+// error page, not an edit form that silently shows "no records" for a
+// template that has them — a misleading page that also hides the database
+// outage behind a successful 200.
+func TestEditTemplatePage_RecordsDBError(t *testing.T) {
+	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
+	defer srv.Close()
+
+	templateID := seedTemplate(t, h, "broken-view-tmpl", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "{{IP}}", 3600)
+
+	if _, err := h.DB.Exec("DROP TABLE zone_template_records"); err != nil {
+		t.Fatalf("drop zone_template_records: %v", err)
+	}
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/templates/"+strconv.FormatInt(templateID, 10)+"/edit", nil)
+	r.SetPathValue("template_id", strconv.FormatInt(templateID, 10))
+	r = withUserContext(r, user)
+	h.EditTemplatePage(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the template-records query fails, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}

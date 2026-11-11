@@ -174,7 +174,11 @@ func (h *Handler) EditTemplatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records := h.getTemplateRecords(r.Context(), templateID)
+	records, err := h.getTemplateRecords(r.Context(), templateID)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch template records", err)
+		return
+	}
 
 	data := map[string]interface{}{
 		"Title":        t.Name + " - " + h.Cfg.Server.AppName,
@@ -324,7 +328,11 @@ func (h *Handler) AddTemplateRecord(w http.ResponseWriter, r *http.Request) {
 	templateIDStr := r.PathValue("template_id")
 	rec, err := parseTemplateRecordForm(r, templateIDStr)
 	if err != nil {
-		h.renderError(w, r, err.Error())
+		if errors.Is(err, errInvalidTemplateID) {
+			h.renderError(w, r, "Invalid template ID")
+		} else {
+			h.renderError(w, r, err.Error())
+		}
 		return
 	}
 
@@ -402,7 +410,11 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records := h.getTemplateRecords(r.Context(), templateID)
+	records, err := h.getTemplateRecords(r.Context(), templateID)
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch template records", err)
+		return
+	}
 	if len(records) == 0 {
 		h.renderError(w, r, "Template has no records")
 		return
@@ -463,15 +475,15 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTemplateRecords returns all records for a template. ctx propagates
-// request cancellation into the query.
-func (h *Handler) getTemplateRecords(ctx context.Context, templateID int64) []models.ZoneTemplateRecord {
+// request cancellation into the query. A database failure is returned to the
+// caller: an outage must not be misreported as "template has no records".
+func (h *Handler) getTemplateRecords(ctx context.Context, templateID int64) ([]models.ZoneTemplateRecord, error) {
 	rows, err := h.DB.QueryContext(ctx,
 		"SELECT id, template_id, name, type, content, ttl, priority, disabled FROM zone_template_records WHERE template_id = ? ORDER BY type, name",
 		templateID,
 	)
 	if err != nil {
-		logger.Error("failed to fetch template records", "error", err)
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -480,13 +492,15 @@ func (h *Handler) getTemplateRecords(ctx context.Context, templateID int64) []mo
 		var r models.ZoneTemplateRecord
 		var disabled int
 		if err := rows.Scan(&r.ID, &r.TemplateID, &r.Name, &r.Type, &r.Content, &r.TTL, &r.Priority, &disabled); err != nil {
-			logger.Error("failed to scan template record", "error", err)
-			continue
+			return nil, err
 		}
 		r.Disabled = disabled != 0
 		records = append(records, r)
 	}
-	return records
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 // getAllTemplates returns all templates (for dropdown selectors). ctx
@@ -700,8 +714,16 @@ func (h *Handler) collectTemplateVars(r *http.Request) map[string]string {
 // invalid until substitution, so name/content validation is skipped when the
 // field contains a "{{" placeholder. Type and TTL/priority are always
 // validated (they never carry variables).
+// errInvalidTemplateID marks a non-numeric template ID on the template-record
+// form path. Go error strings stay lowercase (ST1005); the caller renders the
+// capitalized user-facing message, matching the path-value handlers.
+var errInvalidTemplateID = errors.New("invalid template ID")
+
 func parseTemplateRecordForm(r *http.Request, templateIDStr string) (models.ZoneTemplateRecord, error) {
-	templateID, _ := strconv.ParseInt(templateIDStr, 10, 64)
+	templateID, err := strconv.ParseInt(templateIDStr, 10, 64)
+	if err != nil {
+		return models.ZoneTemplateRecord{}, errInvalidTemplateID
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	rtype := canonicalRecordType(r.FormValue("type"))
 	content := strings.TrimSpace(r.FormValue("content"))

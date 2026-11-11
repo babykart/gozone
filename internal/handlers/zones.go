@@ -399,7 +399,11 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, "Selected template no longer exists. Choose another template and retry.")
 			return
 		}
-		templateRecords = h.getTemplateRecords(r.Context(), templateID)
+		templateRecords, err = h.getTemplateRecords(r.Context(), templateID)
+		if err != nil {
+			h.renderInternalError(w, r, "Failed to fetch template records", err)
+			return
+		}
 		if len(templateRecords) == 0 {
 			h.renderError(w, r, fmt.Sprintf("Template %q has no records. Add records to it or choose another template.", templateLabel))
 			return

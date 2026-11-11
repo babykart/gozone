@@ -341,7 +341,12 @@ func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		case *recordValidationError:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.Message})
 		case *recordConflictError:
-			writeJSON(w, http.StatusConflict, map[string]string{"error": e.Message})
+			// reload=true tells the inline editor this specific 409 is a
+			// stale before-image (nothing was merged) and the page must
+			// resync; other 409s on this endpoint (zone busy, PowerDNS
+			// conflicts) stay informational so the operator keeps their
+			// edits on screen.
+			writeJSON(w, http.StatusConflict, map[string]string{"error": e.Message, "reload": "true"})
 		default:
 			// A PowerDNS category error (e.g. the zone vanished mid-edit)
 			// carries its own status instead of a blanket 500.
@@ -401,7 +406,10 @@ func (e *recordValidationError) Error() string { return e.Message }
 // recordConflictError marks a concurrent-modification conflict — the
 // before-image submitted by the client (original_content/original_priority)
 // no longer matches any record of the stored RRSet — so callers answer 409
-// and the client reloads instead of the edit silently duplicating records.
+// with reload=true and the client reloads instead of the edit silently
+// duplicating records. Other 409s on the same endpoints (zone busy, PowerDNS
+// conflicts) deliberately omit the flag: they are retryable, and the client
+// shows their message instead of discarding the in-progress edit.
 type recordConflictError struct {
 	Message string
 }
@@ -456,7 +464,16 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	}
 
 	originalContent := strings.TrimSpace(r.FormValue("original_content"))
-	originalPriority, _ := strconv.Atoi(r.FormValue("original_priority"))
+	// An empty original_priority is legal (records without a priority);
+	// only a non-empty value that fails to parse is an error.
+	originalPriority := 0
+	if s := strings.TrimSpace(r.FormValue("original_priority")); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			return nil, nil, 0, &recordValidationError{Message: "Invalid original priority value"}
+		}
+		originalPriority = v
+	}
 
 	name = normalizeRecordName(name, zoneID)
 
@@ -1167,7 +1184,18 @@ func (h *Handler) DeleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := strings.TrimSpace(r.FormValue("content"))
-	priority, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("priority")))
+	// Empty priority means "no priority" (non-MX/SRV records); a non-empty
+	// value that fails to parse must not silently fall back to 0 — that would
+	// match the wrong record when two share the same content.
+	priority := 0
+	if s := strings.TrimSpace(r.FormValue("priority")); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			h.renderError(w, r, "Invalid priority value")
+			return
+		}
+		priority = v
+	}
 
 	// removal identifies the single record to drop by content+priority, matching
 	// the recordIdentity used on the PowerDNS read path (SplitPriority has
@@ -1356,7 +1384,17 @@ func (h *Handler) BulkDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		}
 		priority := 0
 		if i < len(priorities) {
-			priority, _ = strconv.Atoi(strings.TrimSpace(priorities[i]))
+			// Empty priority is legal; a non-empty value that fails to parse
+			// aborts the whole bulk op rather than silently deleting with
+			// priority 0 (which would match the wrong record).
+			if s := strings.TrimSpace(priorities[i]); s != "" {
+				v, err := strconv.Atoi(s)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("Invalid priority for row %d", i+1)})
+					return
+				}
+				priority = v
+			}
 		}
 
 		key := dnsops.RRSetKey(name, recordType)

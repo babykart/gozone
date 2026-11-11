@@ -279,7 +279,11 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
 
 	userIDStr := r.PathValue("user_id")
-	userID, _ := strconv.ParseInt(userIDStr, 10, 64)
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid user ID")
+		return
+	}
 
 	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	firstName := strings.TrimSpace(r.FormValue("first_name"))
@@ -312,7 +316,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// Fetch the target user to compare current role/enabled and enforce guards.
 	var target models.User
 	var targetEnabled int
-	err := h.DB.QueryRowContext(r.Context(),
+	err = h.DB.QueryRowContext(r.Context(),
 		`SELECT id, username, email, first_name, last_name, role, enabled
 		 FROM users WHERE id = ?`, userID,
 	).Scan(&target.ID, &target.Username, &target.Email, &target.FirstName, &target.LastName,
@@ -449,7 +453,11 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	admin := middleware.GetUser(r)
 
 	userIDStr := r.FormValue("user_id")
-	userID, _ := strconv.ParseInt(userIDStr, 10, 64)
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		h.renderError(w, r, "Invalid user ID")
+		return
+	}
 
 	// Don't allow deleting yourself
 	if userID == admin.ID {
