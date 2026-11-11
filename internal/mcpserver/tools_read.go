@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/models"
-	"github.com/babykart/gozone/internal/validators"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -228,8 +228,34 @@ func registerReadTools(srv *mcp.Server, ops *dnsops.Service) {
 // ("example.com", "Example.COM.", "example.com.") — without it, two spellings
 // of one zone take different locks and a granted user can be wrongly refused.
 func canonicalZoneArg(zone string) (string, *toolError) {
-	if err := validators.ValidateDomainName(zone); err != nil {
-		return "", toolErrorf("VALIDATION_ERROR", "%s", err.Error())
+	if terr := validZoneArg(zone); terr != nil {
+		return "", terr
 	}
 	return dnsops.NormalizeZoneName(zone), nil
+}
+
+// validZoneArg is the relaxed zone-ID sanity check shared by the tools, the
+// resources and the prompts. RFC 1035 strict domain validation rejects real
+// zone IDs: underscore zones (_dmarc.example.com.) and RFC 2317 reverse
+// delegations with a slash (0/25.2.0.192.in-addr.arpa.) are legitimate
+// zones in PowerDNS. The check is deliberately narrow: non-empty, at most
+// 253 characters, no whitespace or control characters. Anything else is
+// accepted and canonicalised; existence is enforced downstream by the
+// service layer (ZONE_NOT_FOUND, fail-closed).
+func validZoneArg(zone string) *toolError {
+	if zone == "" {
+		return toolErrorf("VALIDATION_ERROR", "zone must not be empty")
+	}
+	// The 253-byte limit applies to the name without the optional trailing
+	// root dot: a maximal-length zone written canonically (with the dot) is
+	// one byte longer and must stay accepted.
+	if len(strings.TrimSuffix(zone, ".")) > 253 {
+		return toolErrorf("VALIDATION_ERROR", "zone exceeds 253 characters")
+	}
+	for _, r := range zone {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return toolErrorf("VALIDATION_ERROR", "zone contains whitespace or control characters")
+		}
+	}
+	return nil
 }

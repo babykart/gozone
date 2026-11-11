@@ -92,7 +92,10 @@ because they are what prevents the most LLM mistakes):
 - `zone` accepts any casing and an optional trailing dot (`Example.COM`,
   `example.com`): it is canonicalised to the lowercase dotted form on entry,
   so authorization, the per-zone write lock and the audit trail always key
-  on the same ID as the web UI and REST.
+  on the same ID as the web UI and REST. Underscore zones
+  (`_dmarc.example.com.`) and RFC 2317 slash zones
+  (`0/25.2.0.192.in-addr.arpa.`) are accepted as-is; existence is still
+  enforced fail-closed downstream (`ZONE_NOT_FOUND`).
 - `name` accepts `@`, a bare label (`www`), an FQDN without the trailing
   dot, or a full FQDN — canonicalisation happens server-side.
 - Every write must carry **at least one record**: `records: []` is rejected

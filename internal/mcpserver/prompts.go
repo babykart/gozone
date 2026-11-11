@@ -28,8 +28,8 @@ func registerPrompts(srv *mcp.Server) {
 		}},
 	}, func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		zone := strings.TrimSpace(req.Params.Arguments["zone"])
-		if err := validators.ValidateDomainName(zone); err != nil {
-			return nil, toolErrorf("VALIDATION_ERROR", "invalid zone: %s", err.Error())
+		if terr := validZoneArg(zone); terr != nil {
+			return nil, terr
 		}
 		return &mcp.GetPromptResult{
 			Description: "DNS audit of " + zone,
@@ -80,8 +80,8 @@ Steps:
 		zone := strings.TrimSpace(args["zone"])
 		name := strings.TrimSpace(args["name"])
 		rtype := strings.ToUpper(strings.TrimSpace(args["type"]))
-		if err := validators.ValidateDomainName(zone); err != nil {
-			return nil, toolErrorf("VALIDATION_ERROR", "invalid zone: %s", err.Error())
+		if terr := validZoneArg(zone); terr != nil {
+			return nil, terr
 		}
 		if err := validators.ValidateRecordName(name); err != nil {
 			return nil, toolErrorf("VALIDATION_ERROR", "invalid name: %s", err.Error())

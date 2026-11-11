@@ -435,3 +435,128 @@ func TestExportZoneTool_UngrantedForbidden(t *testing.T) {
 		t.Fatalf("ungranted export must fail with FORBIDDEN, got %q", resultText(res))
 	}
 }
+
+// TestCanonicalZoneArg_Relaxed pins the relaxed zone-argument validation for
+// zone-addressed tools. RFC 1035 strict domain validation rejects legitimate
+// zone IDs: underscore zones (_dmarc.example.com.) and RFC 2317 reverse
+// delegations with a slash (0/25.2.0.192.in-addr.arpa.) are real zones in
+// PowerDNS. The sanity check is deliberately narrow: non-empty, at most 253
+// characters, no whitespace or control characters. Anything else is accepted
+// and canonicalised (lowercase + trailing dot); existence is enforced
+// downstream by the service (ZONE_NOT_FOUND, fail-closed).
+func TestCanonicalZoneArg_Relaxed(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"underscore zone", "_dmarc.example.com.", "_dmarc.example.com.", false},
+		{"rfc2317 slash zone", "0/25.2.0.192.in-addr.arpa.", "0/25.2.0.192.in-addr.arpa.", false},
+		{"canonicalises casing and dot", "Example.COM", "example.com.", false},
+		{"slash zone canonicalises casing", "0/25.2.0.192.IN-ADDR.ARPA", "0/25.2.0.192.in-addr.arpa.", false},
+		{"empty", "", "", true},
+		{"leading space", " spaced.example.com.", "", true},
+		{"inner whitespace", "not a domain", "", true},
+		{"tab character", "exa\tmple.com.", "", true},
+		{"control character", "exa\x01mple.com.", "", true},
+		{"C1 control character", "exa\u0085mple.com.", "", true},
+		{"newline", "exa\nmple.com.", "", true},
+		{"DEL character", "exa\x7fmple.com.", "", true},
+		{"over 253 chars", strings.Repeat("a", 300), "", true},
+		{"253 chars without dot", strings.Repeat("a", 253), strings.Repeat("a", 253) + ".", false},
+		{"253 chars with trailing dot", strings.Repeat("a", 253) + ".", strings.Repeat("a", 253) + ".", false},
+		{"254 chars without dot", strings.Repeat("a", 254), "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			zone, terr := canonicalZoneArg(c.in)
+			if c.wantErr {
+				if terr == nil {
+					t.Fatalf("canonicalZoneArg(%q) must be rejected, got %q", c.in, zone)
+				}
+				if terr.code != "VALIDATION_ERROR" {
+					t.Fatalf("rejection must carry the VALIDATION_ERROR code, got %q", terr.code)
+				}
+				return
+			}
+			if terr != nil {
+				t.Fatalf("canonicalZoneArg(%q) failed: %v", c.in, terr)
+			}
+			if zone != c.want {
+				t.Errorf("canonicalZoneArg(%q) = %q, want %q", c.in, zone, c.want)
+			}
+		})
+	}
+}
+
+// TestGetZone_SlashZoneAccepted is the session-level counterpart of the
+// relaxation: an RFC 2317 reverse zone (slash in the ID) listed by PowerDNS
+// must be addressable through get_zone. Today the tool argument is rejected
+// up front with VALIDATION_ERROR before any upstream call.
+func TestGetZone_SlashZoneAccepted(t *testing.T) {
+	const slashZone = "0/25.2.0.192.in-addr.arpa."
+	session, db := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/servers/localhost/zones/") {
+			json.NewEncoder(w).Encode(models.Zone{ID: slashZone, Name: slashZone, Kind: "Native", Serial: 2024010100})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	grantZoneToMCPUser(t, db, slashZone)
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_zone",
+		Arguments: map[string]any{"zone": slashZone},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("get_zone on the RFC 2317 slash zone must succeed, got %q", resultText(res))
+	}
+	var out struct {
+		Zone models.Zone `json:"zone"`
+	}
+	b, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode structured output: %v (%s)", err, b)
+	}
+	if out.Zone.ID != slashZone || out.Zone.Serial != 2024010100 {
+		t.Fatalf("get_zone returned %+v, want the slash zone", out.Zone)
+	}
+}
+
+// TestGetPrompt_RelaxedZoneArgs pins the prompt-side relaxation (mirrors the
+// prompts_test.go session patterns): audit_zone / migrate_record reuse the
+// relaxed zone validation, so underscore and RFC 2317 slash zones are valid
+// prompt targets. Whitespace-only violations must still be rejected (that
+// case is covered by TestGetPrompt_InvalidArguments).
+func TestGetPrompt_RelaxedZoneArgs(t *testing.T) {
+	session, _ := newMCPTestEnv(t, true, nil)
+	ctx := context.Background()
+
+	cases := []struct {
+		prompt string
+		zone   string
+	}{
+		{"audit_zone", "_dmarc.example.com."},
+		{"migrate_record", "0/25.2.0.192.in-addr.arpa."},
+	}
+	for _, c := range cases {
+		args := map[string]string{"zone": c.zone}
+		if c.prompt == "migrate_record" {
+			args["name"] = "www"
+			args["type"] = "a"
+		}
+		res, err := session.GetPrompt(ctx, &mcp.GetPromptParams{Name: c.prompt, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s with zone %q: %v", c.prompt, c.zone, err)
+		}
+		text := res.Messages[0].Content.(*mcp.TextContent).Text
+		if !strings.Contains(text, c.zone) {
+			t.Errorf("%s prompt must embed the zone %q, got %q", c.prompt, c.zone, text)
+		}
+	}
+}
