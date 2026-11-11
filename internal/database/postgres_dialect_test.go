@@ -318,8 +318,8 @@ func TestIsPgQueryCanceled(t *testing.T) {
 
 func TestPostgresDialect_InsertIgnore_UsesConflictColumns(t *testing.T) {
 	// The conflict target must come from an explicit
-	// conflictColumns argument so the caller can never accidentally target the
-	// wrong unique index when columns != constraint.
+	// conflictColumns argument so the caller can never accidentally target
+	// the wrong unique index when columns != constraint.
 	d := &postgresDialect{}
 	got := d.InsertIgnore(
 		"zone_group_members",
@@ -730,4 +730,98 @@ func TestPostgresIntegration_APIKeyScopeColumnBackfill(t *testing.T) {
 	if scope != "api:write" {
 		t.Errorf("expected scope default 'api:write', got %q", scope)
 	}
+}
+
+// TestPostgresIntegration_LockZoneSurvivesIdleTxTimeout is a live-server
+// regression test for the mutual-exclusion hazard created by an operator-set
+// idle_in_transaction_session_timeout: the transaction holding the advisory
+// zone lock is IDLE by design while the critical section (the PowerDNS
+// read-modify-write) runs on other connections, so a server-configured idle
+// timeout kills the lock-holding backend mid-critical-section and silently
+// drops the advisory lock.
+//
+// Behavioral shape of the test: on the fixed code the lock-holding
+// transaction survives its idle window (SET LOCAL
+// idle_in_transaction_session_timeout = 0) and the second acquisition below
+// fails on its bounded context. On the unfixed code the idle timeout kills
+// the backend at ~200ms, the advisory lock is silently released, and the
+// second acquisition SUCCEEDS — mutual exclusion lost.
+func TestPostgresIntegration_LockZoneSurvivesIdleTxTimeout(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_POSTGRES_DSN")
+	db := newIntegrationDB(t, "postgres", dsn)
+
+	// Reopen a disposable pool whose sessions carry a 200ms
+	// idle_in_transaction_session_timeout. lib/pq forwards unrecognized URL
+	// query params to the server as startup runtime parameters
+	// (convertURL → Config.Runtime → startup packet), so a URL-form DSN can
+	// set the session GUC without touching the server configuration. The
+	// dialect DSN rewrite keeps unknown params (it only pins TimeZone=UTC).
+	// Only the lock phase runs on this pool, so the aggressive timeout never
+	// leaks into other tests.
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		t.Skip("test DSN is not URL-form; the idle-timeout GUC cannot be set per-session")
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	dialect := &postgresDialect{}
+	testPool, err := sql.Open("postgres", dialect.DSN(dsn+sep+"idle_in_transaction_session_timeout=200"))
+	if err != nil {
+		t.Fatalf("open disposable pool: %v", err)
+	}
+	defer testPool.Close() // #nosec G104 -- best-effort cleanup in test
+	// Two connections: the holder pins one for the whole critical section;
+	// the contender must be able to open its own so it actually reaches
+	// pg_advisory_xact_lock (with a 1-connection pool it would block in
+	// pool.Conn on its deadline instead, and the assertion below would pass
+	// without ever exercising the advisory-lock contention).
+	testPool.SetMaxOpenConns(2)
+
+	ctx := context.Background()
+	release, err := db.dialect.LockZone(ctx, testPool, "idle-tx-test.example.com.")
+	if err != nil {
+		t.Fatalf("LockZone: %v", err)
+	}
+
+	// Idle well past the 200ms session timeout: the lock-holding transaction
+	// does nothing on its pinned connection while the "critical section"
+	// (here: this sleep) runs elsewhere. On the unfixed code the idle
+	// timeout kills the backend here and silently releases the advisory
+	// lock; on the fixed code the SET LOCAL exemption keeps it alive.
+	time.Sleep(500 * time.Millisecond)
+
+	// While the holder still idles, a second acquisition of the SAME zone
+	// with a bounded context must NOT succeed: mutual exclusion must
+	// survive the idle window. On the unfixed code the lock was silently
+	// dropped at ~200ms and this acquisition succeeds — the behavioral RED
+	// this test pins.
+	secondCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
+	secondRelease, err := db.dialect.LockZone(secondCtx, testPool, "idle-tx-test.example.com.")
+	if err == nil {
+		secondRelease()
+		t.Fatal("second LockZone acquired while the holder idled past idle_in_transaction_session_timeout: mutual exclusion lost")
+	}
+	// Only the two expected failure shapes prove the lock was still held:
+	// the contender's own context deadline, or the statement_timeout /
+	// context-cancelation classification the dialect already uses for its
+	// bounded waits. Any other error is a test-environment failure, not
+	// evidence of mutual exclusion.
+	if !errors.Is(err, context.DeadlineExceeded) && !isPgQueryCanceled(err) {
+		t.Fatalf("second LockZone failed with an unexpected error (must be a deadline or a canceled wait): %v", err)
+	}
+
+	// The rollback must succeed cleanly on a live backend; the lock was
+	// genuinely held for the whole idle window if the post-release
+	// acquisition below succeeds.
+	release()
+
+	reacquireCtx, cancelReacquire := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelReacquire()
+	reacquireRelease, err := db.dialect.LockZone(reacquireCtx, testPool, "idle-tx-test.example.com.")
+	if err != nil {
+		t.Fatalf("LockZone after clean release: %v (lock not held through the idle window?)", err)
+	}
+	reacquireRelease()
 }

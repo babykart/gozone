@@ -142,6 +142,11 @@ const (
 //     backoff. The previous unqualified pg_advisory_lock waited FOREVER,
 //     pinning a pooled connection and every replica's startup behind a slow
 //     or stuck holder.
+//   - The lock-holding transaction is exempted from
+//     idle_in_transaction_session_timeout: it is idle by design while the
+//     migration statements run on the shared pool, and a server-configured
+//     idle timeout would otherwise kill the backend mid-migration and
+//     silently drop the advisory lock.
 //   - The key is derived from the module path instead of the banal 42.
 func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 	ctx := context.Background()
@@ -161,6 +166,17 @@ func (p *postgresDialect) LockMigrations(pool *sql.DB) (func(), error) {
 			_ = tx.Rollback()
 			conn.Close() // #nosec G104 -- best-effort cleanup on error path
 			return nil, fmt.Errorf("acquire migration lock (set statement_timeout): %w", err)
+		}
+		// The lock-holding transaction is idle by design while the migration
+		// statements run on the shared pool; a server-configured
+		// idle_in_transaction_session_timeout would kill the backend during
+		// that idle window and silently release the advisory lock. SET LOCAL
+		// is transaction-scoped, so the pooled connection still returns with
+		// the session default intact.
+		if _, err = tx.ExecContext(ctx, "SET LOCAL idle_in_transaction_session_timeout = 0"); err != nil {
+			_ = tx.Rollback()
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire migration lock (set idle timeout): %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", key); err == nil {
 			break // lock held by this open transaction
@@ -206,7 +222,12 @@ func postgresZoneLockKey(zoneID string) int64 {
 // LockZone acquires a transaction-scoped PostgreSQL advisory lock for one
 // zone. The open transaction pins one dedicated pool connection for the whole
 // read-modify-write operation; rolling it back releases the lock. The wait is
-// bounded by statement_timeout and retried, mirroring the migration lock.
+// bounded by statement_timeout and retried, mirroring the migration lock, and
+// the lock-holding transaction is exempted from
+// idle_in_transaction_session_timeout: it is idle by design while the
+// read-modify-write runs on other connections, and a server-configured idle
+// timeout would otherwise kill the backend mid-operation and silently drop
+// the advisory lock.
 func (p *postgresDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID string) (func(), error) {
 	conn, err := pool.Conn(ctx)
 	if err != nil {
@@ -232,6 +253,17 @@ func (p *postgresDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID str
 			_ = tx.Rollback()
 			conn.Close() // #nosec G104 -- best-effort cleanup on error path
 			return nil, fmt.Errorf("acquire zone lock (set statement_timeout): %w", err)
+		}
+		// The lock-holding transaction is idle by design while the
+		// read-modify-write runs on other connections; a server-configured
+		// idle_in_transaction_session_timeout would kill the backend during
+		// that idle window and silently release the advisory lock. SET LOCAL
+		// is transaction-scoped, so the pooled connection still returns with
+		// the session default intact.
+		if _, err = tx.ExecContext(ctx, "SET LOCAL idle_in_transaction_session_timeout = 0"); err != nil {
+			_ = tx.Rollback()
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("acquire zone lock (set idle timeout): %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", key); err == nil {
 			break
