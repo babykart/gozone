@@ -153,6 +153,15 @@ func ValidateZoneCreate(req models.ZoneCreateRequest) (models.ZoneCreateRequest,
 	if err := validators.ValidateZoneKind(req.Kind); err != nil {
 		return req, err
 	}
+	// Nameservers stay optional, but every provided entry must be a valid DNS
+	// name: the check runs on the caller's spelling (before the lowercase +
+	// trailing-dot canonicalisation in CreateZone), so mixed-case or
+	// undotted-but-valid names pass here and are normalized later.
+	for _, ns := range req.Nameservers {
+		if err := validators.ValidateDomainName(ns); err != nil {
+			return req, fmt.Errorf("invalid nameserver %q: must be a valid DNS name", ns)
+		}
+	}
 	for _, m := range req.Masters {
 		if validators.ValidateIPv4(m) != nil && validators.ValidateIPv6(m) != nil {
 			return req, fmt.Errorf("invalid master %q: must be an IPv4 or IPv6 address", m)

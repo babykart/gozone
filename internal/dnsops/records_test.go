@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/babykart/gozone/internal/models"
@@ -112,6 +113,77 @@ func TestRRSetsMatch(t *testing.T) {
 					c.aName, c.aType, c.bName, c.bType, got, c.want)
 			}
 		})
+	}
+}
+
+// TestPrepareRecordContent_QuotedTypesPassThrough pins the validator↔codec
+// parity for the quote-aware types: content accepted by ValidateRecordContent
+// must survive PrepareRecordContent without error, and pre-quoted fields pass
+// through byte-identical (the codec only escapes and wraps bare fields).
+func TestPrepareRecordContent_QuotedTypesPassThrough(t *testing.T) {
+	tests := []struct {
+		name     string
+		rtype    string
+		content  string
+		expected string // "" means byte-identical to the input
+	}{
+		{"HINFO quoted with spaces", "HINFO", `"Macintosh Plus" "MacOS"`, ""},
+		{"HINFO bare tokens get wrapped", "HINFO", "pc intel", `"pc" "intel"`},
+		{"CAA quoted value", "CAA", `0 issue "ca.example.net; account=123"`, ""},
+		{"CAA bare value gets wrapped", "CAA", "0 issue letsencrypt.org", `0 issue "letsencrypt.org"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, prio, err := PrepareRecordContent(tt.rtype, tt.content, 0)
+			if err != nil {
+				t.Fatalf("PrepareRecordContent(%s, %q) failed: %v", tt.rtype, tt.content, err)
+			}
+			want := tt.expected
+			if want == "" {
+				want = tt.content
+			}
+			if content != want {
+				t.Errorf("PrepareRecordContent(%s, %q) = %q, want %q", tt.rtype, tt.content, content, want)
+			}
+			if prio != 0 {
+				t.Errorf("PrepareRecordContent(%s, %q) priority = %d, want 0", tt.rtype, tt.content, prio)
+			}
+		})
+	}
+}
+
+// TestValidateRecordSet_TTLUpperBound pins the RFC 2181 §8 gate at the
+// service layer: a TTL above 2147483647 is rejected before any PowerDNS call
+// (the service accepted any non-negative int before), the exact maximum is
+// accepted, and the legacy negative-TTL message is preserved verbatim.
+func TestValidateRecordSet_TTLUpperBound(t *testing.T) {
+	over := models.RRSet{
+		Name: "www.example.com.", Type: "A", TTL: 2147483648,
+		Records: []models.RecordInfo{{Content: "1.2.3.4"}},
+	}
+	err := ValidateRecordSet(&over, "example.com.")
+	if err == nil {
+		t.Fatal("ValidateRecordSet accepted TTL 2147483648 (above the RFC 2181 maximum)")
+	}
+	if !strings.Contains(err.Error(), "2147483647") {
+		t.Errorf("error should mention the RFC 2181 maximum 2147483647, got: %v", err)
+	}
+
+	atMax := models.RRSet{
+		Name: "www.example.com.", Type: "A", TTL: 2147483647,
+		Records: []models.RecordInfo{{Content: "1.2.3.4"}},
+	}
+	if err := ValidateRecordSet(&atMax, "example.com."); err != nil {
+		t.Errorf("ValidateRecordSet rejected the RFC 2181 maximum TTL 2147483647: %v", err)
+	}
+
+	negative := models.RRSet{
+		Name: "www.example.com.", Type: "A", TTL: -1,
+		Records: []models.RecordInfo{{Content: "1.2.3.4"}},
+	}
+	err = ValidateRecordSet(&negative, "example.com.")
+	if err == nil || err.Error() != "ttl must be a non-negative integer" {
+		t.Errorf("negative TTL must keep the legacy exact message, got: %v", err)
 	}
 }
 

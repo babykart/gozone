@@ -220,8 +220,8 @@ func ValidateRecordSet(rrset *models.RRSet, zoneID string) error {
 	if err := validators.ValidateRecordType(rrset.Type); err != nil {
 		return err
 	}
-	if rrset.TTL < 0 {
-		return fmt.Errorf("ttl must be a non-negative integer")
+	if err := validators.ValidateRecordTTL(rrset.TTL); err != nil {
+		return err
 	}
 	if len(rrset.Records) == 0 {
 		return fmt.Errorf("at least one record is required; use delete_record / DELETE to remove an RRSet")

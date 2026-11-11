@@ -112,6 +112,42 @@ func TestValidateZoneCreate_Masters(t *testing.T) {
 	}
 }
 
+// TestValidateZoneCreate_Nameservers covers the nameserver contract: every
+// entry must be a valid DNS name (checked before normalization, so mixed-case
+// or undotted-but-valid names pass — canonicalisation happens later), while
+// an empty or nil list stays valid (nameservers are optional).
+func TestValidateZoneCreate_Nameservers(t *testing.T) {
+	// Nil nameservers are optional and must pass.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com."}); err != nil {
+		t.Fatalf("nil nameservers: %v", err)
+	}
+	// Valid nameservers, dotted or undotted, pass.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{"ns1.example.com.", "ns2.example.com"}}); err != nil {
+		t.Fatalf("valid nameservers: %v", err)
+	}
+	// Mixed-case FQDN passes: ValidateDomainName is case-tolerant and
+	// normalization (lowercase + trailing dot) happens after validation.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{"NS1.Example.COM."}}); err != nil {
+		t.Fatalf("mixed-case nameserver: %v", err)
+	}
+	// Not a DNS name at all.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{"not a domain!"}}); err == nil || !strings.Contains(err.Error(), `invalid nameserver "not a domain!"`) {
+		t.Fatalf("garbage nameserver: %v", err)
+	}
+	// Leading-dash label violates RFC 1035.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{"-bad.example.com."}}); err == nil {
+		t.Fatal("leading-dash label must be rejected")
+	}
+	// An empty entry is not a valid nameserver.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{""}}); err == nil {
+		t.Fatal("empty nameserver entry must be rejected")
+	}
+	// A mixed list must be rejected, and the error must name the bad entry.
+	if _, err := ValidateZoneCreate(models.ZoneCreateRequest{Name: "example.com.", Nameservers: []string{"ns1.example.com.", "ns..example.com"}}); err == nil || !strings.Contains(err.Error(), "ns..example.com") {
+		t.Fatalf("mixed list: %v", err)
+	}
+}
+
 func TestListRecords_NameFilterAndAuthz(t *testing.T) {
 	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
