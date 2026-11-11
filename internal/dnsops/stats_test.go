@@ -3,6 +3,7 @@ package dnsops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -98,6 +99,41 @@ func TestStats_StripsRingAndMapForNonAdmin(t *testing.T) {
 				t.Errorf("ring/map items leaked to a plain user; got %v", statNames(stats))
 			}
 		})
+	}
+}
+
+// TestStats_StatisticsFailureKeepsZoneCount pins the degradation boundary of
+// the composite: a failed statistics call is reported (StageStatistics) and
+// yields no statistics, but the authorized zone count is still computed — it
+// depends only on the zone list and the zone-access lookup, which stay fatal
+// (the count is unknowable when they fail) and take precedence over the
+// degradable statistics failure.
+func TestStats_StatisticsFailureKeepsZoneCount(t *testing.T) {
+	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/statistics") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"internal server error"}`))
+			return
+		}
+		json.NewEncoder(w).Encode([]models.Zone{
+			{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+			{ID: "b.example.", Name: "b.example.", Kind: "Native"},
+		})
+	})
+	t.Cleanup(srv.Close)
+	s := New(testutil.NewTestDB(t), client)
+
+	stats, zoneCount, err := s.Stats(context.Background(), &models.User{ID: 1, Role: "admin"})
+	var se *StageError
+	if !errors.As(err, &se) || se.Stage != StageStatistics {
+		t.Fatalf("want StageError(StageStatistics), got %v", err)
+	}
+	if stats != nil {
+		t.Errorf("expected no statistics, got %v", statNames(stats))
+	}
+	if zoneCount != 2 {
+		t.Errorf("statistics failure must not zero the zone count: got %d, want 2", zoneCount)
 	}
 }
 

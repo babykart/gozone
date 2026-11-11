@@ -250,7 +250,10 @@ func TestDashboard_GetStatisticsError(t *testing.T) {
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/zones") {
-			w.Write([]byte(`[]`))
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+				{ID: "b.example.", Name: "b.example.", Kind: "Native"},
+			})
 			return
 		}
 		w.Write([]byte(`{"id":"localhost","type":"Server","url":"/api/v1/servers/localhost","daemon_type":"authoritative","version":"4.9.0","config_url":"/api/v1/servers/localhost/config","zones_url":"/api/v1/servers/localhost/zones"}`))
@@ -267,6 +270,37 @@ func TestDashboard_GetStatisticsError(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 even when PDNS statistics fail, got %d", w.Code)
+	}
+	// A statistics outage must not corrupt the zone count: the zones are
+	// healthy and visible, so the degraded page still shows the real number
+	// instead of a fabricated 0.
+	if !strings.Contains(w.Body.String(), "Zones=2") {
+		t.Errorf("expected degraded dashboard to keep the real zone count, got: %s", w.Body.String())
+	}
+}
+
+// TestDashboard_StatisticsAndZoneListErrorSurfaces500 pins the precedence
+// between composite failures: a zone-list outage is fatal even when the
+// statistics call also failed. The degradable statistics failure must never
+// mask the failure that makes the zone count unknowable.
+func TestDashboard_StatisticsAndZoneListErrorSurfaces500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error"}`))
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r = r.WithContext(ctx)
+	h.Dashboard(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when both statistics and the zone list fail, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
@@ -310,6 +344,74 @@ func TestDashboard_NumericStats(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with numeric stats, got %d", w.Code)
+	}
+}
+
+// TestDashboard_ZoneListErrorSurfaces500 guards the semantics of a failed
+// PowerDNS zone-list call on the dashboard: it is an upstream outage and must
+// render the error page (500), not a dashboard showing "0 zones" — which a
+// user would read as their zones having vanished. Note the deliberate
+// contrast with TestDashboard_GetStatisticsError: PowerDNS statistics
+// failures keep the dashboard degraded-but-rendered; an empty-looking tenant
+// caused by a failed zone list does not.
+func TestDashboard_ZoneListErrorSurfaces500(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/zones") {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/statistics") {
+			json.NewEncoder(w).Encode([]map[string]interface{}{})
+			return
+		}
+		w.Write([]byte(`{"id":"localhost","type":"Server","daemon_type":"authoritative","version":"4.9.0"}`))
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/dashboard", nil), user)
+	w := httptest.NewRecorder()
+	h.Dashboard(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for a failed zone list, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestDashboard_ZoneCountComesFromService pins the visible zone count to the
+// composite service result: two zones upstream must render as Zones=2 in the
+// dashboard data, proving the count flows from the shared dnsops.Stats call
+// rather than from a separately computed (and separately faultable) path.
+func TestDashboard_ZoneCountComesFromService(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/zones") {
+			json.NewEncoder(w).Encode([]models.Zone{
+				{ID: "a.example.", Name: "a.example.", Kind: "Native"},
+				{ID: "b.example.", Name: "b.example.", Kind: "Native"},
+			})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/statistics") {
+			json.NewEncoder(w).Encode([]map[string]interface{}{})
+			return
+		}
+		w.Write([]byte(`{"id":"localhost","type":"Server","daemon_type":"authoritative","version":"4.9.0"}`))
+	})
+	defer pdnsSrv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/dashboard", nil), user)
+	w := httptest.NewRecorder()
+	h.Dashboard(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Zones=2") {
+		t.Errorf("expected dashboard to show Zones=2, got: %s", w.Body.String())
 	}
 }
 

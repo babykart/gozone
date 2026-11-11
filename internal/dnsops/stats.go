@@ -10,15 +10,20 @@ import (
 // zones the user is allowed to see (all zones for an admin, the group-granted
 // subset otherwise).
 //
-// The statistics call and the zone list are independent upstream calls; the
-// zone count additionally depends on a zone-access lookup. Either failing
-// makes the composite answer wrong, so each stage wraps its error in a
-// StageError (StageStatistics / StageZoneList / StageZoneAccess) and callers
-// surface the failure instead of presenting, say, an outage as zone_count: 0.
+// The zone count depends only on the zone list and the zone-access lookup,
+// so those two stages are fatal: either failing makes the count unknowable
+// and returns a StageError (StageZoneList / StageZoneAccess). A failed
+// statistics call does not block the count — it is reported as
+// StageStatistics with nil statistics and the still-correct zone count, so a
+// degraded caller can keep an honest number instead of an outage rendered as
+// zone_count: 0. Strict callers (REST, MCP) surface the error and ignore the
+// partial values.
 func (s *Service) Stats(ctx context.Context, user *models.User) ([]models.StatisticItem, int, error) {
-	stats, err := s.PDNS.GetStatistics(ctx)
-	if err != nil {
-		return nil, 0, &StageError{Stage: StageStatistics, Err: err}
+	stats, statsErr := s.PDNS.GetStatistics(ctx)
+	if statsErr != nil {
+		// The zone count below is independent of the statistics; remember
+		// the failure and keep going.
+		statsErr = &StageError{Stage: StageStatistics, Err: statsErr}
 	}
 
 	zones, err := s.PDNS.ListZones(ctx)
@@ -34,6 +39,10 @@ func (s *Service) Stats(ctx context.Context, user *models.User) ([]models.Statis
 	zoneCount := 0
 	if filtered != nil {
 		zoneCount = len(filtered)
+	}
+
+	if statsErr != nil {
+		return nil, zoneCount, statsErr
 	}
 	return filterStatsForUser(stats, user), zoneCount, nil
 }

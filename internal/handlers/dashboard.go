@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/logger"
 	"github.com/babykart/gozone/internal/middleware"
 )
@@ -21,33 +23,42 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		passwordWarnDays = passwordExpiryWarnDays(h.Cfg.Password.MaxAgeDays, h.Cfg.Password.ExpiryWarnDays, user.PasswordChangedAt)
 	}
 
-	// Fetch statistics
-	stats, err := h.PDNS.GetStatistics(r.Context())
+	// Statistics and the visible zone count are one composite service call:
+	// the zone count is meaningless without the zone list, and the upstream
+	// calls are independent, so the service tags the failing stage and the
+	// mapping below decides how far the page may degrade.
+	stats, zoneCount, err := h.Ops.Stats(r.Context(), user)
 	if err != nil {
-		logger.Error("failed to fetch PDNS statistics", "error", err)
+		var se *dnsops.StageError
+		if errors.As(err, &se) {
+			switch se.Stage {
+			case dnsops.StageStatistics:
+				// Statistics stay degraded-by-design: the dashboard remains
+				// useful without the PDNS counter items, so log and render
+				// with nil stats (no counter items, empty serverStats).
+				logger.Error("failed to fetch PDNS statistics", "error", err)
+			case dnsops.StageZoneList:
+				// A failed zone list is an upstream outage, not an empty
+				// result: rendering the dashboard with "0 zones" would
+				// present the outage as if the zones had vanished. Fail
+				// closed with a visible error.
+				h.renderInternalError(w, r, "Failed to list zones", err)
+				return
+			default:
+				// A failed zone-access lookup is a database fault, not an
+				// empty result; fail closed with a visible error rather than
+				// a dashboard that claims zero zones.
+				h.renderInternalError(w, r, "Failed to load zone access", err)
+				return
+			}
+		} else {
+			h.renderInternalError(w, r, "Failed to load zone access", err)
+			return
+		}
 	}
 
 	// Get server info
 	server, _ := h.PDNS.GetServer(r.Context())
-
-	// Get zone count (filtered by user's allowed zones)
-	zones, _ := h.PDNS.ListZones(r.Context())
-	filtered, filterErr := h.filterZonesForUser(r, zones)
-	if filterErr != nil {
-		// A failed zone-access lookup is a database fault, not an empty
-		// result: rendering the dashboard with "0 zones" would present an
-		// outage as if the zones had vanished. Fail closed WITH a visible
-		// error. (PowerDNS statistics failures above stay degraded-by-design
-		// — the dashboard remains useful without them; a broken local
-		// database is a different class of failure.)
-		h.renderInternalError(w, r, "Failed to load zone access", filterErr)
-		return
-	}
-	zones = filtered
-	zoneCount := 0
-	if zones != nil {
-		zoneCount = len(zones)
-	}
 
 	// Get user count
 	var userCount int
@@ -69,12 +80,10 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		dashboardStats = append(dashboardStats, StatItem{Label: "Daemon Type", Value: server.Daemon})
 	}
 
-	if err == nil {
-		for _, s := range stats {
-			switch s.Name {
-			case "udp-queries", "udp-answers", "tcp-queries", "tcp-answers":
-				dashboardStats = append(dashboardStats, StatItem{Label: s.Name, Value: valToString(s.Value)})
-			}
+	for _, s := range stats {
+		switch s.Name {
+		case "udp-queries", "udp-answers", "tcp-queries", "tcp-answers":
+			dashboardStats = append(dashboardStats, StatItem{Label: s.Name, Value: valToString(s.Value)})
 		}
 	}
 

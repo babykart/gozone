@@ -244,7 +244,11 @@ func TestStats_SuccessAndAuthzFilter(t *testing.T) {
 	}
 }
 
-func TestStats_StatisticsStageError(t *testing.T) {
+// TestStats_ZoneListFailureBeatsStatisticsFailure pins the precedence between
+// composite failures: when both upstream calls fail, the fatal stage is
+// reported — the zone list makes the count unknowable, and a degradable
+// statistics failure must not mask it.
+func TestStats_ZoneListFailureBeatsStatisticsFailure(t *testing.T) {
 	srv, client := testutil.NewTestPDNSServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -254,8 +258,8 @@ func TestStats_StatisticsStageError(t *testing.T) {
 
 	_, _, err := s.Stats(context.Background(), &models.User{ID: 1, Role: "admin"})
 	var se *StageError
-	if !errors.As(err, &se) || se.Stage != StageStatistics {
-		t.Fatalf("statistics failure: %v, want StageError(StageStatistics)", err)
+	if !errors.As(err, &se) || se.Stage != StageZoneList {
+		t.Fatalf("both upstreams failing: %v, want StageError(StageZoneList)", err)
 	}
 }
 

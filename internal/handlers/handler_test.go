@@ -64,7 +64,7 @@ func testTemplateSet() *template.Template {
 		{{define "error.html"}}Error: {{.Message}} Back={{.BackURL}}{{end}}
 		{{define "partial_fail.html"}}LEAKED-PREFIX{{template "missing_inner_template"}}{{end}}
 		{{define "login.html"}}Login{{end}}
-		{{define "dashboard.html"}}Dashboard{{end}}
+		{{define "dashboard.html"}}Dashboard Zones={{.Zones}}{{end}}
 		{{define "zones.html"}}Zones{{end}}
 		{{define "zone_create.html"}}Create Zone{{end}}
 		{{define "zone_view.html"}}View Zone: {{.Zone.Name}} Records: {{range .Records}}{{.Record.Content}} {{end}}{{if .RecordPageInfo}} PageInfo={{.RecordPageInfo.Current}}/{{.RecordPageInfo.TotalPages}} PerPage={{.RecordPageInfo.PerPage}} Total={{.RecordPageInfo.Total}}{{end}}{{end}}

@@ -2318,6 +2318,14 @@ func TestAPIStats_PDNSError(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
 	}
+	// When both upstream calls fail, the fatal stage wins: the classification
+	// is the zone-list one (the count is unknowable), not the degradable
+	// statistics one.
+	var resp apiError
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != ErrCodeInternalError {
+		t.Errorf("expected code %s for a dual failure, got %s", ErrCodeInternalError, resp.Code)
+	}
 }
 
 // TestAPIStats_ZoneListErrorSurfaces pins that a failed zone list is an
