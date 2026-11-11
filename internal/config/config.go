@@ -188,6 +188,15 @@ type PowerDNSConfig struct {
 	APIURL   string `yaml:"api_url"`
 	APIKey   string `yaml:"api_key"`
 	ServerID string `yaml:"server_id"`
+	// ZoneCacheTTLSeconds is the TTL (in seconds) for the zone list and zone
+	// info caches (default 60). Lower it when running multiple GoZone
+	// instances against one PowerDNS: invalidations are process-local, so
+	// other instances serve stale zone data up to this TTL. 0 disables
+	// retained caching entirely (every zone read refetches; concurrent
+	// misses are still coalesced by single-flight). Server info, statistics
+	// and TSIG key caches keep their fixed TTLs. Negative values are
+	// rejected at load.
+	ZoneCacheTTLSeconds int `yaml:"zone_cache_ttl_seconds"`
 }
 
 // AuthConfig holds authentication settings.
@@ -422,6 +431,9 @@ func DefaultConfig() *Config {
 			APIURL:   "http://localhost:8081",
 			APIKey:   "changeme",
 			ServerID: "localhost",
+			// Default 60s: process-local invalidations mean peers in a
+			// multi-instance deployment can serve zone data this old.
+			ZoneCacheTTLSeconds: 60,
 		},
 		Auth: AuthConfig{
 			SessionDurationHours: 24,
@@ -504,7 +516,8 @@ func DefaultConfig() *Config {
 //	            GOZONE_SHUTDOWN_TIMEOUT, GOZONE_TRUSTED_PROXIES,
 //	            GOZONE_REQUIRE_SECRET_KEY
 //	database:   GOZONE_DB_DRIVER, GOZONE_DB_DSN
-//	powerdns:   GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID
+//	powerdns:   GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID,
+//	            GOZONE_PDNS_ZONE_CACHE_TTL_SECONDS
 //	auth:       GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
 //	            GOZONE_ABSOLUTE_SESSION_TIMEOUT_HOURS, GOZONE_BCRYPT_COST,
 //	            GOZONE_MAX_API_KEYS
@@ -624,6 +637,10 @@ func Load(path string) (*Config, error) {
 func (cfg *Config) validate() error {
 	if cfg.Server.Port <= 0 {
 		return fmt.Errorf("invalid server port %d: must be a positive integer", cfg.Server.Port)
+	}
+
+	if cfg.PowerDNS.ZoneCacheTTLSeconds < 0 {
+		return fmt.Errorf("invalid powerdns.zone_cache_ttl_seconds %d: must be non-negative", cfg.PowerDNS.ZoneCacheTTLSeconds)
 	}
 
 	if cfg.Server.Port < 1024 {
@@ -1083,6 +1100,7 @@ var envOverrides = []envOverride{
 	strOverride{"GOZONE_PDNS_API_URL", func(c *Config, v string) { c.PowerDNS.APIURL = v }},
 	strOverride{"GOZONE_PDNS_API_KEY", func(c *Config, v string) { c.PowerDNS.APIKey = v }},
 	strOverride{"GOZONE_PDNS_SERVER_ID", func(c *Config, v string) { c.PowerDNS.ServerID = v }},
+	intOverride{"GOZONE_PDNS_ZONE_CACHE_TTL_SECONDS", func(c *Config, n int) { c.PowerDNS.ZoneCacheTTLSeconds = n }},
 	// auth / admin / activity / login-lockout
 	intOverride{"GOZONE_SESSION_DURATION", func(c *Config, n int) { c.Auth.SessionDurationHours = n }},
 	intOverride{"GOZONE_IDLE_TIMEOUT_MINUTES", func(c *Config, n int) { c.Auth.IdleTimeoutMinutes = n }},

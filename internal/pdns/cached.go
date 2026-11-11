@@ -60,15 +60,20 @@ type cachedClient struct {
 //
 // Cache TTLs:
 //
-//	Zone list       1 minute
+//	Zone list       zoneCacheTTL (configurable; see powerdns.zone_cache_ttl_seconds)
+//	Zone info       zoneCacheTTL (configurable; see powerdns.zone_cache_ttl_seconds)
 //	Server info     5 minutes
 //	Statistics     30 seconds
 //	TSIG keys       5 minutes
-func NewCachedClient(client *Client) ZoneService {
+//
+// A zoneCacheTTL of 0 disables retained caching for the zone caches: every
+// zone read refetches, though concurrent misses are still coalesced by
+// single-flight.
+func NewCachedClient(client *Client, zoneCacheTTL time.Duration) ZoneService {
 	return &cachedClient{
 		client:   client,
-		zoneList: cache.New[[]models.Zone](1 * time.Minute),
-		zoneInfo: cache.New[[]models.ZoneWithInfo](1 * time.Minute),
+		zoneList: cache.New[[]models.Zone](zoneCacheTTL),
+		zoneInfo: cache.New[[]models.ZoneWithInfo](zoneCacheTTL),
 		server:   cache.New[*models.ServerInfo](5 * time.Minute),
 		stats:    cache.New[[]models.StatisticItem](30 * time.Second),
 		tsigKeys: cache.New[[]models.TSIGKey](5 * time.Minute),

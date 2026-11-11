@@ -16,7 +16,7 @@ import (
 func newCachedClient(t *testing.T, handler http.HandlerFunc) ZoneService {
 	t.Helper()
 	client, _ := newTestClient(t, handler)
-	return NewCachedClient(client)
+	return NewCachedClient(client, time.Minute)
 }
 
 func TestCachedListZones_Hit(t *testing.T) {
@@ -227,7 +227,7 @@ func TestCachedClientImplementsZoneService(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
 	})
-	c = NewCachedClient(client)
+	c = NewCachedClient(client, time.Minute)
 	if c.ServerID() != "localhost" {
 		t.Errorf("unexpected server ID: %q", c.ServerID())
 	}
@@ -238,7 +238,7 @@ func TestCachedClient_Close_StopsSweepGoroutines(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
 	})
-	cached := NewCachedClient(client)
+	cached := NewCachedClient(client, time.Minute)
 
 	before := runtime.NumGoroutine()
 	cached.Close()
@@ -865,6 +865,109 @@ func TestCachedRead_LeaderCancellationDoesNotFailFollowers(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Errorf("expected exactly 1 PDNS call, got %d", got)
 	}
+}
+
+// TestNewCachedClient_ZoneCacheTTLConfigurable pins the configurable zone
+// cache TTL: both the zone list and zone info caches honour the TTL passed to
+// NewCachedClient, a zero TTL disables retained caching entirely, and a normal
+// TTL serves repeated reads from the cache.
+func TestNewCachedClient_ZoneCacheTTLConfigurable(t *testing.T) {
+	newClientWithTTL := func(t *testing.T, ttl time.Duration, handler http.HandlerFunc) ZoneService {
+		t.Helper()
+		client, _ := newTestClient(t, handler)
+		cached := NewCachedClient(client, ttl)
+		// Stop the sweep goroutines on cleanup so they don't leak across tests.
+		t.Cleanup(cached.Close)
+		return cached
+	}
+
+	t.Run("short TTL refetches", func(t *testing.T) {
+		var calls atomic.Int64
+		cached := newClientWithTTL(t, 10*time.Millisecond, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`))
+		})
+
+		ctx := context.Background()
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("first ListZones: %v", err)
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("expected 1 upstream call, got %d", calls.Load())
+		}
+		time.Sleep(50 * time.Millisecond) // let the 10ms TTL expire
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("second ListZones: %v", err)
+		}
+		if calls.Load() != 2 {
+			t.Errorf("expected 2 upstream calls after TTL expiry, got %d", calls.Load())
+		}
+	})
+
+	t.Run("zone info uses the same TTL", func(t *testing.T) {
+		var calls atomic.Int64
+		cached := newClientWithTTL(t, 10*time.Millisecond, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`))
+		})
+
+		ctx := context.Background()
+		if _, err := cached.ListZonesWithInfo(ctx); err != nil {
+			t.Fatalf("first ListZonesWithInfo: %v", err)
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("expected 1 upstream call, got %d", calls.Load())
+		}
+		time.Sleep(50 * time.Millisecond) // let the 10ms TTL expire
+		if _, err := cached.ListZonesWithInfo(ctx); err != nil {
+			t.Fatalf("second ListZonesWithInfo: %v", err)
+		}
+		if calls.Load() != 2 {
+			t.Errorf("expected 2 upstream calls after TTL expiry, got %d", calls.Load())
+		}
+	})
+
+	t.Run("zero disables retained caching", func(t *testing.T) {
+		var calls atomic.Int64
+		cached := newClientWithTTL(t, 0, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`))
+		})
+
+		ctx := context.Background()
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("first ListZones: %v", err)
+		}
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("second ListZones: %v", err)
+		}
+		if calls.Load() != 2 {
+			t.Errorf("expected 2 upstream calls with zero TTL (caching disabled), got %d", calls.Load())
+		}
+	})
+
+	t.Run("normal TTL serves from cache", func(t *testing.T) {
+		var calls atomic.Int64
+		cached := newClientWithTTL(t, time.Minute, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"z1.","name":"z1.","kind":"Native","serial":0}]`))
+		})
+
+		ctx := context.Background()
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("first ListZones: %v", err)
+		}
+		if _, err := cached.ListZones(ctx); err != nil {
+			t.Fatalf("second ListZones: %v", err)
+		}
+		if calls.Load() != 1 {
+			t.Errorf("expected 1 upstream call (second read hits cache), got %d", calls.Load())
+		}
+	})
 }
 
 func TestCachedListZonesWithInfoFresh_BypassesCache(t *testing.T) {

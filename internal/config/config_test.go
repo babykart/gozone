@@ -55,6 +55,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.ShutdownTimeoutSeconds != 30 {
 		t.Errorf("expected shutdown_timeout_seconds 30, got %d", cfg.Server.ShutdownTimeoutSeconds)
 	}
+	if cfg.PowerDNS.ZoneCacheTTLSeconds != 60 {
+		t.Errorf("expected powerdns.zone_cache_ttl_seconds 60, got %d", cfg.PowerDNS.ZoneCacheTTLSeconds)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -75,6 +78,11 @@ admin:
 activity:
   retention_days: 30
   batch_size: 500
+powerdns:
+  api_url: "http://pdns:8081"
+  api_key: "key"
+  server_id: "localhost"
+  zone_cache_ttl_seconds: 15
 `
 	tmpFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
 	if err != nil {
@@ -123,6 +131,9 @@ activity:
 	}
 	if cfg.Activity.BatchSize != 500 {
 		t.Errorf("expected activity batch size 500, got %d", cfg.Activity.BatchSize)
+	}
+	if cfg.PowerDNS.ZoneCacheTTLSeconds != 15 {
+		t.Errorf("expected powerdns.zone_cache_ttl_seconds 15, got %d", cfg.PowerDNS.ZoneCacheTTLSeconds)
 	}
 }
 
@@ -271,6 +282,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_ADMIN_LAST_NAME", "Admin")
 	t.Setenv("GOZONE_ACTIVITY_RETENTION_DAYS", "60")
 	t.Setenv("GOZONE_ACTIVITY_BATCH_SIZE", "2500")
+	t.Setenv("GOZONE_PDNS_ZONE_CACHE_TTL_SECONDS", "30")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -330,6 +342,33 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Activity.BatchSize != 2500 {
 		t.Errorf("expected activity batch size 2500, got %d", cfg.Activity.BatchSize)
+	}
+	if cfg.PowerDNS.ZoneCacheTTLSeconds != 30 {
+		t.Errorf("expected powerdns.zone_cache_ttl_seconds 30, got %d", cfg.PowerDNS.ZoneCacheTTLSeconds)
+	}
+}
+
+// TestPowerDNSZoneCacheTTLRejectsNegative pins the validation guard on the
+// configurable zone cache TTL: a negative value is meaningless and must fail
+// load with an error naming the key.
+func TestPowerDNSZoneCacheTTLRejectsNegative(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `
+server:
+  secret_key: ` + testSecret + `
+powerdns:
+  api_url: http://localhost:8081
+  api_key: changeme
+  server_id: localhost
+  zone_cache_ttl_seconds: -1
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "zone_cache_ttl_seconds") {
+		t.Fatalf("expected negative zone_cache_ttl_seconds error, got %v", err)
 	}
 }
 

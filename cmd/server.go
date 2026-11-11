@@ -84,7 +84,7 @@ func runServer(cfg *config.Config) error {
 
 	// Create PowerDNS client with read-through cache
 	pdnsClient := pdns.NewClient(&cfg.PowerDNS)
-	cachedClient := pdns.NewCachedClient(pdnsClient)
+	cachedClient := pdns.NewCachedClient(pdnsClient, time.Duration(cfg.PowerDNS.ZoneCacheTTLSeconds)*time.Second)
 	defer cachedClient.Close()
 
 	// Periodically purge expired JWT revocation entries so the revoked_tokens
