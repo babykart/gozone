@@ -21,16 +21,16 @@ func TestParseTemplates(t *testing.T) {
 
 func TestStaticAssetVersion(t *testing.T) {
 	// Cache-busting regression guard: the asset version is a short content hash
-	// of the bundled JS/CSS so a new deployment busts the browser cache via
-	// ?v=… despite the 24h max-age served by fileServer.
+	// of the bundled JS/CSS and favicon.ico so a new deployment busts the
+	// browser cache via ?v=… despite the 24h max-age served by fileServer.
 	got := staticAssetVersion()
 	if len(got) != 16 { // first 8 bytes of SHA-256, hex-encoded
 		t.Fatalf("expected a 16-hex-char content hash, got %q (len %d)", got, len(got))
 	}
 	// Determinism: the version must match an independent computation over the
-	// same embedded bytes.
+	// same embedded bytes (css/js + favicon.ico — see staticAssetVersion).
 	h := sha256.New()
-	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css"} {
+	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css", "static/favicon.ico"} {
 		data, err := web.FS.ReadFile(name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
@@ -61,6 +61,10 @@ func TestAssetVersionRenderedInTemplates(t *testing.T) {
 	// theme is applied before the body paints.
 	if !strings.Contains(head.String(), "/static/js/theme.js?v=") {
 		t.Errorf("head partial missing cache-busted theme.js:\n%s", head.String())
+	}
+	// The favicon is a static asset too: it must be cache-busted like css/js.
+	if !strings.Contains(head.String(), "/static/favicon.ico?v=") {
+		t.Errorf("head partial missing cache-busted favicon.ico:\n%s", head.String())
 	}
 
 	var tail strings.Builder

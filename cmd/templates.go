@@ -47,14 +47,15 @@ func relativeName(recordName, zoneName string) string {
 	return recordName
 }
 
-// staticAssetVersion returns a short content hash of the bundled JS/CSS so
-// templates can append it as ?v=… to asset URLs. Deploying a new build changes
-// the hash, which invalidates browser caches despite the 24h max-age served by
-// fileServer (see static.go for the hash rationale). Computed from the embedded files, so it varies
+// staticAssetVersion returns a short content hash of the bundled static
+// assets (JS, CSS and favicon.ico) so templates can append it as ?v=… to
+// asset URLs. Deploying a new build changes the hash, which invalidates
+// browser caches despite the 24h max-age served by fileServer (see static.go
+// for the hash rationale). Computed from the embedded files, so it varies
 // on every content change regardless of the version label.
 func staticAssetVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css"} {
+	for _, name := range []string{"static/js/theme.js", "static/js/app.js", "static/css/style.css", "static/favicon.ico"} {
 		data, err := web.FS.ReadFile(name)
 		if err != nil {
 			// Embedded files: unreachable in practice. Fall back to the build
