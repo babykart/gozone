@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -100,6 +101,45 @@ func TestLogLevelsWithAttributes(t *testing.T) {
 			t.Errorf("output missing %q\nfull output:\n%s", want, out)
 		}
 	}
+}
+
+// TestLogger_ConcurrentInitAndLog hammers the package-level log functions
+// from several goroutines while another goroutine swaps the logger via Init.
+// It asserts nothing about output; the race detector is the test.
+func TestLogger_ConcurrentInitAndLog(t *testing.T) {
+	oldExit := osExit
+	osExit = func(code int) {}
+	defer func() {
+		osExit = oldExit
+		Init("info") // reset default logger to avoid leaking test state
+	}()
+
+	levels := []string{"debug", "info", "warn", "error"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 500; j++ {
+				Info("info message", "goroutine", "logger", "iteration", j)
+				Warn("warn message", "goroutine", "logger", "iteration", j)
+				Error("error message", "goroutine", "logger", "iteration", j)
+				Debug("debug message", "goroutine", "logger", "iteration", j)
+				if j%100 == 0 {
+					Fatal("fatal message", "goroutine", "logger", "iteration", j)
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 200; j++ {
+			Init(levels[j%len(levels)])
+		}
+	}()
+	wg.Wait()
 }
 
 func TestFatal(t *testing.T) {
