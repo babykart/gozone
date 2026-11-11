@@ -886,19 +886,25 @@ func (h *Handler) getZoneActivityLogs(ctx context.Context, zoneID string, page, 
 	return logs, total
 }
 
-// renderError shows the error page with HTTP 400 (Bad Request), the right
-// status for the validation/bad-input cases that make up most callers. Use
-// renderErrorStatus for not-found (404) or other statuses.
+// renderError writes the given message with HTTP 400 (Bad Request), the
+// right status for the validation/bad-input cases that make up most callers.
+// Use renderErrorStatus for not-found (404) or other statuses.
 func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, msg string) {
 	h.renderErrorStatus(w, r, http.StatusBadRequest, msg)
 }
 
-// renderErrorStatus writes the given HTTP status and renders the error page.
+// renderErrorStatus renders the error page with the given HTTP status.
+// Content-Type and Cache-Control: no-store are set BEFORE anything commits,
+// so both headers reach the wire (an error page is dynamic and user-scoped
+// exactly like a normal page, and must not be cacheable). The template is
+// rendered into a buffer first: if it fails, nothing is committed yet, so the
+// client gets a clean 500 instead of the intended status with a mismatched
+// body.
 func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	// Set Content-Type explicitly: once WriteHeader is called the body write no
-	// longer triggers content sniffing.
+	// Set Content-Type explicitly: once WriteHeader is called the body write
+	// no longer triggers content sniffing.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
+	w.Header().Set("Cache-Control", "no-store")
 	data := map[string]interface{}{
 		"Title":   "Error - " + h.Cfg.Server.AppName,
 		"Message": msg,
@@ -907,7 +913,18 @@ func (h *Handler) renderErrorStatus(w http.ResponseWriter, r *http.Request, stat
 		// dashboard.
 		"BackURL": backURL(r),
 	}
-	h.render(w, r, "error.html", data)
+	buf, ok := h.renderData(r, "error.html", data)
+	if !ok {
+		// Headers are not committed yet, so this is a clean 500 — no
+		// superfluous WriteHeader.
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(status)
+	// #nosec G104 -- writing the fully-rendered error page to the
+	// ResponseWriter; an error here only means the client went away
+	// mid-transfer.
+	_, _ = w.Write(buf)
 }
 
 // backURL returns a safe same-origin URL to send the user back to after an

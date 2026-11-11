@@ -162,8 +162,39 @@ func pdnsUserFacingStatus(err error) (int, string) {
 // here, on the single path all HTML responses go through. Static assets are
 // served by the file server (cmd/static.go) and keep their cacheability —
 // they carry a content-hash version query for cache busting.
+//
+// render never writes an explicit status: the 200 is implicit, committed by
+// the first body Write. Callers that need a non-200 status (the error pages)
+// use renderErrorStatus, which sets the no-store header itself before
+// committing.
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, data map[string]interface{}) {
 	w.Header().Set("Cache-Control", "no-store")
+	buf, ok := h.renderData(r, name, data)
+	if !ok {
+		// Nothing is committed yet (renderData rendered into its own
+		// buffer), so this 500 is clean.
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	// #nosec G104 -- writing the fully-rendered page to the ResponseWriter;
+	// an error here only means the client went away mid-transfer.
+	_, _ = w.Write(buf)
+}
+
+// renderData builds the standard data map (CSRF token, user, admin and
+// DNS-management flags, app name, version, active section — the same
+// injections render has always done) and executes the template into a
+// buffer. Rendering into a buffer first keeps template failures before any
+// response commit, so the caller stays free to choose the status code, and a
+// mid-template error never streams a half-written page to the client (which
+// would also make a subsequent 500 status a no-op, since headers are
+// committed on the first Write).
+//
+// On failure it logs server-side and returns false; the caller owns the error
+// response and, since nothing has been committed yet, can still send any
+// status. The full error is logged; the client gets a generic message so
+// internal details (template paths, field/type names) are not leaked.
+func (h *Handler) renderData(r *http.Request, name string, data map[string]interface{}) ([]byte, bool) {
 	if data == nil {
 		data = make(map[string]interface{})
 	}
@@ -188,18 +219,10 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, name string, da
 	if _, ok := data["Section"]; !ok {
 		data["Section"] = sectionFromTemplate(name)
 	}
-	// Render into a buffer first so a mid-template error never streams a
-	// half-written page to the client (which would also make the subsequent
-	// 500 status a no-op, since headers are committed on the first Write).
-	// The full error is logged server-side; the client gets a generic message
-	// so internal details (template paths, field/type names) are not leaked.
 	var buf bytes.Buffer
 	if err := h.Tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		logger.Error("template render failed", "template", name, "error", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		return nil, false
 	}
-	// #nosec G104 -- writing the fully-rendered page to the ResponseWriter;
-	// an error here only means the client went away mid-transfer.
-	_, _ = w.Write(buf.Bytes())
+	return buf.Bytes(), true
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -302,6 +303,104 @@ func TestRender_MissingTemplate(t *testing.T) {
 // half-rendered page to the client, and the error body must be the generic
 // "Internal Server Error" — not the internal template error (paths, type
 // names). render() pre-renders into a buffer and discards it on failure.
+// committingRecorder mirrors net/http's real ResponseWriter semantics:
+// headers are frozen (snapshotted) at the first WriteHeader and later header
+// mutations never reach the wire. httptest.ResponseRecorder cannot see this
+// (its Header() map keeps mutating after WriteHeader), so cache-header
+// assertions on error paths need this writer to reflect what a real client
+// would receive.
+type committingRecorder struct {
+	header      http.Header
+	body        bytes.Buffer
+	code        int
+	committed   bool
+	superfluous int
+}
+
+func (c *committingRecorder) Header() http.Header {
+	if c.committed {
+		// Post-commit header writes are discarded, like net/http: the wire
+		// already got the snapshot.
+		return make(http.Header)
+	}
+	return c.header
+}
+
+func (c *committingRecorder) Write(b []byte) (int, error) {
+	if !c.committed {
+		c.WriteHeader(http.StatusOK)
+	}
+	return c.body.Write(b)
+}
+
+func (c *committingRecorder) WriteHeader(code int) {
+	if c.committed {
+		c.superfluous++
+		return
+	}
+	c.committed = true
+	c.code = code
+	// Snapshot the header map: post-commit mutations are invisible on the
+	// wire, exactly like net/http.
+	c.header = c.header.Clone()
+}
+
+// TestRenderErrorStatus_NoStoreSurvivesCommit is the error-page cacheability
+// regression: renderErrorStatus must set Cache-Control: no-store BEFORE the
+// status commits, so the header actually reaches the wire on real HTTP.
+func TestRenderErrorStatus_NoStoreSurvivesCommit(t *testing.T) {
+	h := newTestHandler(t)
+	cw := &committingRecorder{header: make(http.Header)}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	h.renderErrorStatus(cw, r, http.StatusBadRequest, "boom")
+
+	if cw.code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400", cw.code)
+	}
+	if cc := cw.header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("committed Cache-Control = %q, want no-store", cc)
+	}
+	if ct := cw.header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("committed Content-Type = %q, want text/html", ct)
+	}
+	if cw.superfluous != 0 {
+		t.Errorf("superfluous WriteHeader calls = %d, want 0", cw.superfluous)
+	}
+}
+
+// TestRenderErrorStatus_TemplateFailureClean500 pins the template-failure
+// path of renderErrorStatus: when error.html itself fails to execute, the
+// response must be a clean 500 (no status committed beforehand, no
+// superfluous WriteHeader) and no-store must still be set pre-commit.
+func TestRenderErrorStatus_TemplateFailureClean500(t *testing.T) {
+	failTmpl := template.Must(template.New("test").Funcs(template.FuncMap{
+		"fail": func() (string, error) { return "", fmt.Errorf("template exploded") },
+	}).Parse(`{{define "error.html"}}{{fail}}{{end}}`))
+	h := &Handler{
+		Cfg:  config.DefaultConfig(),
+		Tmpl: failTmpl,
+	}
+
+	cw := &committingRecorder{header: make(http.Header)}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	h.renderErrorStatus(cw, r, http.StatusBadRequest, "boom")
+
+	if cw.code != http.StatusInternalServerError {
+		t.Errorf("code = %d, want 500", cw.code)
+	}
+	if body := cw.body.String(); body != "Internal Server Error\n" {
+		t.Errorf("body = %q, want generic %q", body, "Internal Server Error\n")
+	}
+	if cw.superfluous != 0 {
+		t.Errorf("superfluous WriteHeader calls = %d, want 0", cw.superfluous)
+	}
+	if cc := cw.header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("committed Cache-Control = %q, want no-store", cc)
+	}
+}
+
 func TestRender_ErrorNoPartialOutputNoLeak(t *testing.T) {
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
