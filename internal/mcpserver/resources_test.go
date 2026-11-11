@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/babykart/gozone/internal/dnsops"
 	"github.com/babykart/gozone/internal/models"
+	"github.com/babykart/gozone/internal/testutil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -132,6 +134,42 @@ func TestReadZoneResource_ZoneURICanonicalised(t *testing.T) {
 	}
 }
 
+// TestResource_ExportBodyMatchesService is the T2 convergence PARITY PIN
+// (green pre- and post-fix; it guards the refactor, it does not drive it).
+// The gozone://zones/{zone} resource body must be byte-identical to
+// dnsops.Service.ExportZone(..., "bind") over the same zone data — after the
+// convergence the resource renders through the shared service path instead
+// of its own ops.GetZone+ops.ListRecords+RenderZoneFile copy, and this test
+// pins that the observable output does not change. The reference string is
+// produced by a parallel dnsops.Service over an identical mock PowerDNS
+// (the test harness does not expose the env's internal service).
+func TestResource_ExportBodyMatchesService(t *testing.T) {
+	fixture := richPDNS(t, &[]models.RRSet{})
+	session, db := newMCPTestEnv(t, true, fixture)
+	grantZoneToMCPUser(t, db, "example.com.")
+
+	res, err := session.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "gozone://zones/example.com."})
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if len(res.Contents) != 1 || res.Contents[0].MIMEType != "text/dns" {
+		t.Fatalf("unexpected contents: %+v", res.Contents)
+	}
+	got := res.Contents[0].Text
+
+	refSrv, refClient := testutil.NewTestPDNSServer(t, fixture)
+	defer refSrv.Close()
+	reference := dnsops.New(testutil.NewTestDB(t), refClient)
+	want, _, err := reference.ExportZone(context.Background(), nil, "example.com.", "bind")
+	if err != nil {
+		t.Fatalf("reference ExportZone: %v", err)
+	}
+
+	if got != want {
+		t.Errorf("resource body diverges from dnsops.ExportZone output\n--- resource ---\n%s\n--- service ---\n%s", got, want)
+	}
+}
+
 func TestTruncateResource(t *testing.T) {
 	small := "$ORIGIN example.com.\nwww IN A 192.0.2.1\n"
 	if got, truncated := truncateResource(small, "example.com.", "bind"); got != small || truncated {
@@ -231,7 +269,12 @@ func TestZoneFromResourceURI(t *testing.T) {
 		{"gozone://zones/example.com.", "example.com.", false},
 		{"gozone://zones/a.example.com.", "a.example.com.", false},
 		{"gozone://zones/", "", true},
-		{"gozone://zones/a/b", "", true},
+		// A slash in the zone ID is legitimate (RFC 2317 reverse zones);
+		// PathUnescape decodes %2F so the remainder carries the raw slash
+		// and the whole path funnels through the relaxed zone check.
+		{"gozone://zones/a/b", "a/b", false},
+		{"gozone://zones/0%2F25.2.0.192.in-addr.arpa.", "0/25.2.0.192.in-addr.arpa.", false},
+		{"gozone://zones/_dmarc.example.com.", "_dmarc.example.com.", false},
 		{"file:///etc/passwd", "", true},
 	}
 	for _, c := range cases {
@@ -245,5 +288,51 @@ func TestZoneFromResourceURI(t *testing.T) {
 		if err != nil || got != c.want {
 			t.Errorf("%q: got (%q, %v), want %q", c.uri, got, err, c.want)
 		}
+	}
+}
+
+// TestReadZoneResource_SlashZone is the session-level relaxation test for
+// resources: gozone://zones/0%2F25.2.0.192.in-addr.arpa. (the %2F escaping a
+// literal slash in the RFC 2317 zone ID) must read the granted zone instead
+// of failing validation.
+func TestReadZoneResource_SlashZone(t *testing.T) {
+	const slashZone = "0/25.2.0.192.in-addr.arpa."
+	session, db := newMCPTestEnv(t, true, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/servers/localhost/zones/") {
+			json.NewEncoder(w).Encode(struct {
+				models.Zone
+				RRSets []models.RRSet `json:"rrsets"`
+			}{
+				Zone: models.Zone{ID: slashZone, Name: slashZone, Kind: "Native", Serial: 42},
+				RRSets: []models.RRSet{
+					{Name: slashZone, Type: "SOA", TTL: 3600, Records: []models.RecordInfo{{Content: "ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600"}}},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	grantZoneToMCPUser(t, db, slashZone)
+
+	res, err := session.ReadResource(context.Background(), &mcp.ReadResourceParams{
+		URI: "gozone://zones/0%2F25.2.0.192.in-addr.arpa.",
+	})
+	if err != nil {
+		t.Fatalf("ReadResource with the RFC 2317 zone URI: %v", err)
+	}
+	if len(res.Contents) != 1 || !strings.Contains(res.Contents[0].Text, "$ORIGIN "+slashZone) {
+		t.Fatalf("expected the granted slash zone's BIND export, got %+v", res.Contents)
+	}
+}
+
+// TestExportRestPath_EscapesSlashZone pins the fallback-banner URL: a slash
+// zone ID in the truncation banner's REST route must be percent-escaped —
+// a raw slash would corrupt the route's {zone_id} path segment.
+func TestExportRestPath_EscapesSlashZone(t *testing.T) {
+	got := exportRestPath("0/25.2.0.192.in-addr.arpa.", "bind")
+	want := "/api/v1/zones/0%2F25.2.0.192.in-addr.arpa./export?format=bind"
+	if got != want {
+		t.Errorf("exportRestPath = %q, want %q", got, want)
 	}
 }

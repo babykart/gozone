@@ -68,14 +68,10 @@ func registerResources(srv *mcp.Server, ops *dnsops.Service) {
 		// addresses the same zone as "example.com.".
 		zone = dnsops.NormalizeZoneName(zone)
 
-		// Both reads go through the service layer, which re-checks the zone
-		// grant (fail-closed): the zone metadata and the record list each
-		// authorize independently.
-		zoneInfo, err := ops.GetZone(ctx, user, zone)
-		if err != nil {
-			return nil, resourceError("read gozone://zones", zone, err)
-		}
-		records, err := ops.ListRecords(ctx, user, zone, "", "")
+		// The export goes through the service layer, which re-checks the
+		// zone grant fail-closed before any PowerDNS fetch and renders the
+		// same byte-identical body as the web and REST exports.
+		body, _, err := ops.ExportZone(ctx, user, zone, "bind")
 		if err != nil {
 			return nil, resourceError("read gozone://zones", zone, err)
 		}
@@ -83,7 +79,7 @@ func registerResources(srv *mcp.Server, ops *dnsops.Service) {
 		// BIND output keeps an in-band truncation banner: zone files have
 		// a comment syntax, so the marker names the REST route serving the
 		// full export.
-		text, _ := truncateResource(dnsops.RenderZoneFile(zoneInfo, records), zone, "bind")
+		text, _ := truncateResource(body, zone, "bind")
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
 			URI:      req.Params.URI,
 			MIMEType: "text/dns",
@@ -99,8 +95,11 @@ func zoneFromResourceURI(uri string) (string, error) {
 		return "", toolErrorf("VALIDATION_ERROR", "unexpected resource URI %q: want gozone://zones/{zone}", uri)
 	}
 	zone, err := url.PathUnescape(strings.TrimPrefix(uri, prefix))
-	if err != nil || zone == "" || strings.Contains(zone, "/") {
+	if err != nil {
 		return "", toolErrorf("VALIDATION_ERROR", "invalid zone in resource URI %q", uri)
+	}
+	if terr := validZoneArg(zone); terr != nil {
+		return "", terr
 	}
 	return zone, nil
 }
@@ -109,7 +108,10 @@ func zoneFromResourceURI(uri string) (string, error) {
 // (untruncated) export; the BIND truncation banner and the tool's
 // structured output point to it as the fallback.
 func exportRestPath(zone, format string) string {
-	return fmt.Sprintf("/api/v1/zones/%s/export?format=%s", zone, format)
+	// url.PathEscape keeps a slash in the zone ID (RFC 2317 reverse zones)
+	// inside the single {zone_id} path segment instead of corrupting the
+	// route with an extra segment.
+	return fmt.Sprintf("/api/v1/zones/%s/export?format=%s", url.PathEscape(zone), format)
 }
 
 // truncateResource caps an export body at maxResourceBytes and reports

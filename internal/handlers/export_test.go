@@ -356,99 +356,6 @@ func TestExportZone_CSV_IncludesComments(t *testing.T) {
 	}
 }
 
-func TestRelativeBindName(t *testing.T) {
-	tests := []struct {
-		name, origin, expected string
-	}{
-		{"example.com.", "example.com.", "@"},
-		{"www.example.com.", "example.com.", "www"},
-		{"test.www.example.com.", "example.com.", "test.www"},
-		{"example.com.", "other.com.", "example.com."},
-		{"example.com", "example.com.", "@"},
-		{"www.example.com", "example.com.", "www"},
-		{"other.com.", "example.com.", "other.com."},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name+"-"+tc.origin, func(t *testing.T) {
-			result := relativeBindName(tc.name, tc.origin)
-			if result != tc.expected {
-				t.Errorf("relativeBindName(%q, %q) = %q, want %q", tc.name, tc.origin, result, tc.expected)
-			}
-		})
-	}
-}
-
-func TestSortRRSets(t *testing.T) {
-	records := []models.RRSet{
-		{Name: "example.com.", Type: "A"},
-		{Name: "example.com.", Type: "NS"},
-		{Name: "example.com.", Type: "SOA"},
-		{Name: "example.com.", Type: "MX"},
-	}
-
-	sortRRSets(records)
-
-	if records[0].Type != "SOA" {
-		t.Errorf("expected SOA first, got %s", records[0].Type)
-	}
-	if records[1].Type != "NS" {
-		t.Errorf("expected NS second, got %s", records[1].Type)
-	}
-}
-
-func TestFindSOATTL(t *testing.T) {
-	records := []models.RRSet{
-		{Name: "example.com.", Type: "SOA", TTL: 7200},
-		{Name: "example.com.", Type: "NS", TTL: 3600},
-	}
-
-	ttl := findSOATTL(records)
-	if ttl != 7200 {
-		t.Errorf("expected 7200, got %d", ttl)
-	}
-}
-
-func TestFindSOATTL_Default(t *testing.T) {
-	records := []models.RRSet{
-		{Name: "example.com.", Type: "NS", TTL: 3600},
-	}
-
-	ttl := findSOATTL(records)
-	if ttl != 3600 {
-		t.Errorf("expected default 3600, got %d", ttl)
-	}
-}
-
-func TestFormatRecordContent(t *testing.T) {
-	tests := []struct {
-		rtype, content string
-		priority       int
-		expected       string
-	}{
-		{"MX", "mail.example.com.", 10, "10 mail.example.com."},
-		{"MX", "mail.example.com.", 0, "0 mail.example.com."},
-		{"SRV", "5 5060 sip.example.com.", 10, "10 5 5060 sip.example.com."},
-		{"SRV", "5 5060 sip.example.com.", 0, "0 5 5060 sip.example.com."},
-		{"TXT", "unquoted", 0, `"unquoted"`},
-		{"TXT", `"already quoted"`, 0, `"already quoted"`},
-		{"A", "192.0.2.1", 0, "192.0.2.1"},
-		{"CNAME", "example.com.", 0, "example.com."},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.rtype, func(t *testing.T) {
-			result := formatRecordContent(tc.rtype, tc.content, tc.priority)
-			if result != tc.expected {
-				t.Errorf("formatRecordContent(%q, %q, %d) = %q, want %q", tc.rtype, tc.content, tc.priority, result, tc.expected)
-			}
-		})
-	}
-}
-
-// TestExportZone_GetZoneError_Returns500 is a PDNS-error regression: a
-// failure on GetZone must surface as HTTP 500 via renderErrorStatus, not be
-// silently downgraded to 400 by a double WriteHeader before renderError.
 func TestExportZone_GetZoneError_Returns500(t *testing.T) {
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -515,36 +422,69 @@ func TestExportZone_ListRecordsError_Returns500(t *testing.T) {
 	}
 }
 
-// TestSortRRSets_TwoSOA and TestSortRRSets_TwoNS mirror the zone-view
-// regressions: comparing two records of the same priority type must not
-// return true in both directions. sortRRSets' SOA branch used to return true
-// regardless of the other element, so two SOAs compared inconsistent — an
-// ill-defined problem handed to the sort algorithm (pdqsort may panic on
-// some inputs). Unreachable in practice (one SOA per zone), but the invariant
-// must stay aligned with the zone-view twin.
-func TestSortRRSets_TwoSOA(t *testing.T) {
-	records := []models.RRSet{
-		{Name: "example.com.", Type: "SOA"},
-		{Name: "example.com.", Type: "SOA"},
+// TestExportZone_AuthorizationRechecked is the T2 convergence RED proof. The
+// web export must delegate FETCH+AUTHZ+RENDER to dnsops.Service.ExportZone,
+// whose authorizeZone re-checks the zone grant fail-closed: a non-admin user
+// WITHOUT a group grant on the zone must be refused with 403 BEFORE any
+// PowerDNS fetch, and the response must not leak zone content. Pre-fix the
+// handler fetched via h.PDNS directly (no in-handler authorization — the
+// route middleware is not part of this unit harness), so it serves the
+// export: this test fails with 200 + a PDNS hit until the handler converges.
+func TestExportZone_AuthorizationRechecked(t *testing.T) {
+	pdnsCalled := false
+	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsCalled = true
+		testExportPDNS()(w, r)
+	})
+	defer srv.Close()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format=bind", nil)
+	r.SetPathValue("zone_id", "example.com.")
+	r = withUserContext(r, &models.User{ID: 2, Username: "plain", Role: "user"})
+	h.ExportZone(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("plain user without a grant: expected 403, got %d (body=%s)", w.Code, w.Body.String())
 	}
-
-	// Should not panic from an invalid comparator.
-	sortRRSets(records)
-
-	if len(records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(records))
+	if pdnsCalled {
+		t.Error("authorization must fail closed before any PowerDNS fetch")
+	}
+	if strings.Contains(w.Body.String(), "$ORIGIN") {
+		t.Error("denied export must not leak zone content")
 	}
 }
 
-func TestSortRRSets_TwoNS(t *testing.T) {
-	records := []models.RRSet{
-		{Name: "ns2.example.com.", Type: "NS"},
-		{Name: "ns1.example.com.", Type: "NS"},
+// TestExportZone_ContentDispositionFilename is a contract PIN (green pre- and
+// post-fix): the converged handler must keep the download contract — an
+// attachment disposition whose filename is derived from the zone name, per
+// format. The existing BIND/CSV tests pin the media types and attachment
+// flag but not the filename itself.
+func TestExportZone_ContentDispositionFilename(t *testing.T) {
+	cases := []struct {
+		format, filename string
+	}{
+		{"bind", "example.com.zone"},
+		{"csv", "example.com.csv"},
 	}
+	for _, tc := range cases {
+		t.Run(tc.format, func(t *testing.T) {
+			h, srv := newTestHandlerWithPDNS(t, testExportPDNS())
+			defer srv.Close()
 
-	sortRRSets(records)
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/zones/example.com./export?format="+tc.format, nil)
+			r.SetPathValue("zone_id", "example.com.")
+			r = withUserContext(r, &models.User{ID: 1, Username: "test", Role: "admin"})
+			h.ExportZone(w, r)
 
-	if records[0].Name != "ns1.example.com." || records[1].Name != "ns2.example.com." {
-		t.Errorf("expected ns1 before ns2, got %v", records)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+			}
+			cd := w.Header().Get("Content-Disposition")
+			if !strings.Contains(cd, `attachment`) || !strings.Contains(cd, `filename="`+tc.filename+`"`) {
+				t.Errorf("Content-Disposition = %q, want attachment with filename %q", cd, tc.filename)
+			}
+		})
 	}
 }
