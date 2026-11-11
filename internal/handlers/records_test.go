@@ -1144,7 +1144,7 @@ func TestInlineUpdateRecord_DedupRePointsUpdatedIndex(t *testing.T) {
 
 func TestInlineUpdateRecord_PDNSErrorNotBlind500(t *testing.T) {
 	// The zone vanishes between page load and save: the PDNS fetch inside
-	// updateRecordFromForm fails with ErrNotFound and the inline endpoint
+	// The record edit flow fails with ErrNotFound and the inline endpoint
 	// must answer 404, not a blanket 500.
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -1284,7 +1284,7 @@ func TestInlineUpdateRecord_PDNSUpdateError_Returns500(t *testing.T) {
 }
 
 // TestInlineUpdateRecord_ListRecordsError_Returns500 covers the other PDNS-listing
-// error path: when updateRecordFromForm fails to fetch the zone from PowerDNS
+// error path: when the record edit flow fails to fetch the zone from PowerDNS
 // (ListRecords), the AJAX handler must respond 500 with a generic message and
 // log the underlying error server-side.
 func TestInlineUpdateRecord_ListRecordsError_Returns500(t *testing.T) {
@@ -4534,7 +4534,7 @@ func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
 }
 
 // TestInlineUpdateRecord_InvalidOriginalPriority is the T4 regression for the
-// silent strconv drop in updateRecordFromForm: a non-empty, non-numeric
+// silent strconv drop in the record edit form: a non-empty, non-numeric
 // original_priority must be a 400 JSON validation error, not silently coerced
 // to 0. With the silent 0 the before-image matches no record of the MX RRSet
 // and the handler previously answered 409 conflict — an edit that merely
@@ -4729,5 +4729,83 @@ func TestBulkDeleteRecords_InvalidPriority(t *testing.T) {
 				t.Errorf("no PATCH may be sent when a row carries an invalid priority, got %+v", sent)
 			}
 		})
+	}
+}
+
+// TestWebCreateRecord_DelegatesToService is the T1 convergence contract for
+// the web create path: the handler delegates the write to the dnsops service
+// (SourceWeb), so the audit row is written by the service and carries the
+// transport label (" via Web") — the pre-convergence handler logged without
+// any label.
+func TestWebCreateRecord_DelegatesToService(t *testing.T) {
+	var sent []models.RRSet
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www.example.com&type=A&content=1.2.3.4&ttl=300"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.CreateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 1 || sent[0].Records[0].Content != "1.2.3.4" {
+		t.Fatalf("expected one PATCH with the new record, got %+v", sent)
+	}
+
+	var details string
+	if err := h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='create_record'").Scan(&details); err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if !strings.Contains(details, " via Web") {
+		t.Errorf("audit details %q must carry the Web transport label written by the service", details)
+	}
+}
+
+// TestWebUpdateRecord_DelegatesToService is the T1 convergence contract for
+// the web update path: the handler delegates to dnsops.EditRecord (SourceWeb)
+// and the service writes the labelled audit row. The edit itself must still
+// merge into the existing RRSet (sibling-preserving REPLACE).
+func TestWebUpdateRecord_DelegatesToService(t *testing.T) {
+	var sent []models.RRSet
+	list := []models.RRSet{
+		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
+			{Content: "1.2.3.4", Disabled: false},
+		}},
+	}
+	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, list))
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, &models.User{ID: 1, Username: "admin", Role: "admin"})
+
+	body := "name=www.example.com&type=A&content=5.6.7.8&ttl=600&original_content=1.2.3.4&original_priority=0"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/update", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.SetPathValue("zone_id", "example.com")
+	r = r.WithContext(ctx)
+	h.UpdateRecord(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect 303, got %d (%s)", w.Code, w.Body.String())
+	}
+	if len(sent) != 1 || len(sent[0].Records) != 1 || sent[0].Records[0].Content != "5.6.7.8" {
+		t.Fatalf("expected one PATCH replacing the record, got %+v", sent)
+	}
+
+	var details string
+	if err := h.DB.QueryRow("SELECT details FROM activity_logs WHERE action='update_record'").Scan(&details); err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if !strings.Contains(details, " via Web") {
+		t.Errorf("audit details %q must carry the Web transport label written by the service", details)
 	}
 }

@@ -50,34 +50,29 @@ func (h *Handler) CreateRecordPage(w http.ResponseWriter, r *http.Request) {
 // Accepts name, type, content, ttl, and priority form values. An empty TTL
 // means "no preference": when the record merges into an existing RRSet the
 // RRSet's current TTL is kept (adding a sibling record must not silently
-// rewrite it), and for a brand-new RRSet the 3600 default applies. An explicit
-// TTL is applied as submitted, including on a merge.
-// Merges into existing RRSet when name+type matches, preserving sibling records.
+// rewrite it), and for a brand-new RRSet the 3600 default applies — the
+// service resolves the TTL, so a deliberately no-cache (TTL 0) RRSet stays 0
+// instead of jumping to the default. An explicit TTL is applied as submitted,
+// including on a merge.
+//
+// The handler only parses and validates the form; the fetch→merge→normalise→
+// dedup→PATCH sequence and the audit trail live in the dnsops service so the
+// web write converges with the REST/MCP ones (same lock, same wire content,
+// same "via Web" audit label).
 func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
-
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
-
-	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone, including writers served by another GoZone instance.
-	release, ok := h.lockZone(w, r, zoneID)
-	if !ok {
-		return
-	}
-	defer release()
 
 	name := strings.TrimSpace(r.FormValue("name"))
 	recordType := canonicalRecordType(r.FormValue("type"))
 	content := strings.TrimSpace(r.FormValue("content"))
 	ttlStr := strings.TrimSpace(r.FormValue("ttl"))
 	priorityStr := strings.TrimSpace(r.FormValue("priority"))
-	comment := r.FormValue("comment")
-	commentClear := r.FormValue("comment_clear") == "1" || r.FormValue("comment_clear") == "true"
 
-	// An empty TTL means "no preference" (kept as 0 until resolution below);
-	// an explicit non-numeric or non-positive value is rejected so the
-	// activity log records what the user actually typed, not a silent
-	// substitution.
+	// An empty TTL means "no preference" (kept as 0 until the service
+	// resolves it); an explicit non-numeric or non-positive value is
+	// rejected so the activity log records what the user actually typed,
+	// not a silent substitution.
 	ttl := 0
 	if ttlStr != "" {
 		v, err := strconv.Atoi(ttlStr)
@@ -126,74 +121,17 @@ func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
-	if err != nil {
-		h.renderInternalError(w, r, "Failed to fetch existing records", err)
-		return
-	}
-
-	var existingRRSet *models.RRSet
-	for _, rr := range allRecords {
-		if dnsops.RRSetsMatch(rr.Name, rr.Type, name, recordType) {
-			existingRRSet = &rr
-			break
-		}
-	}
-
-	// Resolve an unspecified TTL. On a merge the RRSet's current TTL wins:
-	// PowerDNS applies the RRSet-level TTL to every record in the set, so
-	// submitting the form default here would silently rewrite the TTL of the
-	// pre-existing sibling records (e.g. a deliberately short 300s TTL jumps
-	// to 3600 just by adding a second A record). For a brand-new RRSet the
-	// 3600 default applies. An explicitly submitted TTL bypasses this
-	// resolution entirely and is applied as typed.
-	if ttl == 0 {
-		if existingRRSet != nil {
-			ttl = existingRRSet.TTL
-		} else {
-			ttl = defaultRecordTTL
-		}
-	}
-
-	var records []models.RecordInfo
-	newRecord := models.RecordInfo{Content: content, Priority: priority, Disabled: false}
-	if existingRRSet != nil {
-		records = mergeRecordIntoRRSet(existingRRSet.Records, "", 0, newRecord)
-	} else {
-		records = []models.RecordInfo{newRecord}
-	}
-
-	for i := range records {
-		normalized, prio, err := prepareRecordContent(recordType, records[i].Content, records[i].Priority)
-		if err != nil {
-			h.renderError(w, r, err.Error())
-			return
-		}
-		records[i].Content, records[i].Priority = normalized, prio
-	}
-	// Deduplicate after normalisation (batch-path parity, see
-	// finalizeBatchRRSets): a new record whose wire content matches an
-	// existing sibling of the RRSet — e.g. a CNAME target typed with and
-	// without the trailing dot — would otherwise be rejected by PowerDNS
-	// with an opaque 422. The first occurrence wins, so the existing
-	// record's flags are preserved.
-	records = dedupRecordsByContent(records)
-
 	rrset := models.RRSet{
 		Name:     name,
 		Type:     recordType,
 		TTL:      ttl,
-		Records:  records,
-		Comments: buildCommentPatch(comment, commentClear),
+		Records:  []models.RecordInfo{{Content: content, Priority: priority, Disabled: false}},
+		Comments: buildCommentPatch(r.FormValue("comment"), r.FormValue("comment_clear") == "1" || r.FormValue("comment_clear") == "true"),
 	}
 
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, rrset); err != nil {
-		h.renderInternalError(w, r, "Failed to create record", err)
+	if err := h.Ops.CreateRecord(r.Context(), user, zoneID, rrset, dnsops.SourceWeb); err != nil {
+		h.renderRecordServiceError(w, r, err, "create")
 		return
-	}
-
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "create_record", Details: fmt.Sprintf("Created %s record %s -> %s", recordType, name, content), OldValue: rrsetSnapshot(existingRRSet), NewValue: rrsetSnapshot(&rrset)}); err != nil {
-		logger.Error("failed to log create_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
@@ -278,41 +216,24 @@ func (h *Handler) EditRecordPage(w http.ResponseWriter, r *http.Request) {
 
 // UpdateRecord replaces a DNS record in a zone from form data (POST /zones/{zone_id}/records/update).
 //
-// Fetches the existing RRSet from PDNS, merges the edited record identified by
-// original_content + original_priority, and sends the complete RRSet with REPLACE
-// to preserve any sibling records.
+// The edit is identified by original_content + original_priority (the
+// before-image the client rendered); the service merges it into the live
+// RRSet, preserving any sibling records, and refuses with a conflict when the
+// before-image no longer matches. The handler only parses and validates the
+// form — the lock, fetch, merge, PATCH and audit live in the dnsops service.
 func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
-	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone, including writers served by another GoZone instance.
-	release, ok := h.lockZone(w, r, zoneID)
-	if !ok {
-		return
-	}
-	defer release()
-
-	rrset, oldRRSet, _, err := h.updateRecordFromForm(r)
-	if err != nil {
-		switch e := err.(type) {
-		case *recordValidationError:
-			h.renderError(w, r, e.Message)
-		case *recordConflictError:
-			h.renderErrorStatus(w, r, http.StatusConflict, e.Message)
-		default:
-			h.renderInternalError(w, r, "Failed to update record", err)
-		}
+	in, verr := buildEditRecordInput(r)
+	if verr != nil {
+		h.renderError(w, r, verr.Message)
 		return
 	}
 
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
-		h.renderInternalError(w, r, "Failed to update record", err)
+	if _, _, err := h.Ops.EditRecord(r.Context(), user, zoneID, in, dnsops.SourceWeb); err != nil {
+		h.renderRecordServiceError(w, r, err, "update")
 		return
-	}
-
-	user := middleware.GetUser(r)
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "update_record", Details: fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name), OldValue: rrsetSnapshot(oldRRSet), NewValue: rrsetSnapshot(rrset)}); err != nil {
-		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
 	}
 
 	// #nosec G710 -- zoneID from chi r.PathValue, controlled by route pattern
@@ -321,76 +242,30 @@ func (h *Handler) UpdateRecord(w http.ResponseWriter, r *http.Request) {
 
 // InlineUpdateRecord updates a record via AJAX and returns JSON (POST /zones/{zone_id}/records/inline-update).
 //
-// Fetches the existing RRSet from PDNS, merges the edited record identified by
-// original_content + original_priority, and sends the complete RRSet with REPLACE
-// to preserve any sibling records.
+// Same delegation contract as UpdateRecord (see there); the JSON response
+// echoes the saved record in the display form the zone view rows use
+// (SplitPriority applied), not the wire form that was PATCHed — the inline
+// editor resyncs data-original-content/priority and its Delete form from this
+// value.
 func (h *Handler) InlineUpdateRecord(w http.ResponseWriter, r *http.Request) {
+	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
 
-	// Serialize the fetch→merge→PATCH sequence against concurrent writers on
-	// the same zone, including writers served by another GoZone instance.
-	release, ok := h.lockZoneAPI(w, r, zoneID)
-	if !ok {
+	in, verr := buildEditRecordInput(r)
+	if verr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": verr.Message})
 		return
 	}
-	defer release()
 
-	rrset, oldRRSet, updatedIdx, err := h.updateRecordFromForm(r)
+	newRRSet, updated, err := h.Ops.EditRecord(r.Context(), user, zoneID, in, dnsops.SourceWeb)
 	if err != nil {
-		switch e := err.(type) {
-		case *recordValidationError:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": e.Message})
-		case *recordConflictError:
-			// reload=true tells the inline editor this specific 409 is a
-			// stale before-image (nothing was merged) and the page must
-			// resync; other 409s on this endpoint (zone busy, PowerDNS
-			// conflicts) stay informational so the operator keeps their
-			// edits on screen.
-			writeJSON(w, http.StatusConflict, map[string]string{"error": e.Message, "reload": "true"})
-		default:
-			// A PowerDNS category error (e.g. the zone vanished mid-edit)
-			// carries its own status instead of a blanket 500.
-			if status, msg, ok := pdnsPlainStatus(err); ok {
-				logger.Error("InlineUpdateRecord: PowerDNS error", "zone_id", zoneID, "error", err)
-				writeJSON(w, status, map[string]string{"error": msg})
-				return
-			}
-			logger.Error("InlineUpdateRecord: failed to build update", "zone_id", zoneID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
-		}
+		h.writeRecordServiceErrorJSON(w, r, err)
 		return
-	}
-
-	if err := h.PDNS.UpdateRecord(r.Context(), zoneID, *rrset); err != nil {
-		logger.Error("InlineUpdateRecord: UpdateRecord failed", "zone_id", zoneID, "name", rrset.Name, "type", rrset.Type, "error", err)
-		if status, msg, ok := pdnsPlainStatus(err); ok {
-			writeJSON(w, status, map[string]string{"error": msg})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
-		return
-	}
-
-	user := middleware.GetUser(r)
-	if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zoneID, Action: "update_record", Details: fmt.Sprintf("Updated %s record %s", rrset.Type, rrset.Name), OldValue: rrsetSnapshot(oldRRSet), NewValue: rrsetSnapshot(rrset)}); err != nil {
-		logger.Error("failed to log update_record activity", "zone_id", zoneID, "error", err)
-	}
-
-	// Echo the saved record in the display form the zone view rows use
-	// (SplitPriority applied), not the wire form that was PATCHed. The inline
-	// editor resyncs its row from this value: data-original-content/priority
-	// and the Delete form must hold the normalised content (trailing dot,
-	// TXT quoting, MX/SRV priority split back out), otherwise the next edit
-	// of the same row appends a duplicate and Delete misses the record.
-	updated := rrset.Records[updatedIdx]
-	if p, c, ok := models.SplitPriority(rrset.Type, updated.Content); ok {
-		updated.Priority = p
-		updated.Content = c
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
-		"record":  rrset,
+		"record":  newRRSet,
 		"updated": updated,
 	})
 }
@@ -402,19 +277,6 @@ type recordValidationError struct {
 }
 
 func (e *recordValidationError) Error() string { return e.Message }
-
-// recordConflictError marks a concurrent-modification conflict — the
-// before-image submitted by the client (original_content/original_priority)
-// no longer matches any record of the stored RRSet — so callers answer 409
-// with reload=true and the client reloads instead of the edit silently
-// duplicating records. Other 409s on the same endpoints (zone busy, PowerDNS
-// conflicts) deliberately omit the flag: they are retryable, and the client
-// shows their message instead of discarding the in-progress edit.
-type recordConflictError struct {
-	Message string
-}
-
-func (e *recordConflictError) Error() string { return e.Message }
 
 // pdnsPlainStatus maps a PowerDNS failure to a non-500 status and a plain
 // user-facing message for the {"error": ...} JSON endpoints (inline edit,
@@ -439,17 +301,14 @@ func pdnsPlainStatus(err error) (int, string, bool) {
 	}
 }
 
-// updateRecordFromForm parses and validates a record update request, builds the
-// merged RRSet and returns it along with the original RRSet (if any) and the
-// index within rrset.Records of the record the edit replaced (0 for a
-// replacement of the sole record of a single-record RRSet or a brand-new
-// RRSet). The merged RRSet is deduplicated after normalisation: an edit that
-// collapses a record onto a sibling would otherwise send duplicate contents,
-// which PowerDNS rejects. Because dedup keeps the first occurrence, the
-// returned index is re-pointed at the surviving record, which may sit earlier
-// in the slice than the record the edit replaced. It is shared by UpdateRecord
-// and InlineUpdateRecord.
-func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.RRSet, int, error) {
+// buildEditRecordInput parses and validates a record update request into the
+// dnsops.EditRecordInput the service applies: the submitted RRSet carries the
+// one edited record (content, priority, disabled flag, comments patch) and
+// OriginalContent/OriginalPriority identify the record it replaces (empty
+// content designates a create-through-edit). All failures are
+// *recordValidationError so both callers (HTML page and JSON inline editor)
+// can answer 400 without contacting PowerDNS.
+func buildEditRecordInput(r *http.Request) (dnsops.EditRecordInput, *recordValidationError) {
 	zoneID := r.PathValue("zone_id")
 
 	name, recordType, content, ttl, priority, disabled, err := parseRecordForm(r)
@@ -457,10 +316,13 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 		// parseRecordForm returns *recordValidationError for bad TTL/priority;
 		// pass it through so the caller renders a 400 rather than wrapping it
 		// into a generic error that would render as a 500.
-		return nil, nil, 0, err
+		if ve, ok := err.(*recordValidationError); ok {
+			return dnsops.EditRecordInput{}, ve
+		}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: err.Error()}
 	}
 	if name == "" || recordType == "" || content == "" {
-		return nil, nil, 0, &recordValidationError{Message: "Name, type, and content are required"}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: "Name, type, and content are required"}
 	}
 
 	originalContent := strings.TrimSpace(r.FormValue("original_content"))
@@ -470,7 +332,7 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	if s := strings.TrimSpace(r.FormValue("original_priority")); s != "" {
 		v, err := strconv.Atoi(s)
 		if err != nil {
-			return nil, nil, 0, &recordValidationError{Message: "Invalid original priority value"}
+			return dnsops.EditRecordInput{}, &recordValidationError{Message: "Invalid original priority value"}
 		}
 		originalPriority = v
 	}
@@ -478,128 +340,105 @@ func (h *Handler) updateRecordFromForm(r *http.Request) (*models.RRSet, *models.
 	name = normalizeRecordName(name, zoneID)
 
 	if err := validators.ValidateRecordName(name); err != nil {
-		return nil, nil, 0, &recordValidationError{Message: "Invalid record name: " + err.Error()}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: "Invalid record name: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordType(recordType); err != nil {
-		return nil, nil, 0, &recordValidationError{Message: "Invalid record type: " + err.Error()}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: "Invalid record type: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordContent(recordType, content); err != nil {
-		return nil, nil, 0, &recordValidationError{Message: "Invalid record content: " + err.Error()}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: "Invalid record content: " + err.Error()}
 	}
 
 	if err := validators.ValidateRecordPriority(recordType, priority); err != nil {
-		return nil, nil, 0, &recordValidationError{Message: "Invalid priority: " + err.Error()}
+		return dnsops.EditRecordInput{}, &recordValidationError{Message: "Invalid priority: " + err.Error()}
 	}
 
-	allRecords, err := h.PDNS.ListRecords(r.Context(), zoneID)
-	if err != nil {
-		return nil, nil, 0, err
-	}
+	return dnsops.EditRecordInput{
+		RRSet: models.RRSet{
+			Name:     name,
+			Type:     recordType,
+			TTL:      ttl,
+			Records:  []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}},
+			Comments: buildCommentPatch(r.FormValue("comment"), r.FormValue("comment_clear") == "1"),
+		},
+		OriginalContent:  originalContent,
+		OriginalPriority: originalPriority,
+	}, nil
+}
 
-	var existingRRSet *models.RRSet
-	for _, rr := range allRecords {
-		if dnsops.RRSetsMatch(rr.Name, rr.Type, name, recordType) {
-			existingRRSet = &rr
-			break
-		}
+// renderRecordServiceError maps a dnsops service error from the web record
+// write paths onto the HTML error responses. action names the operation for
+// the fallback 500 message ("create"/"update").
+func (h *Handler) renderRecordServiceError(w http.ResponseWriter, r *http.Request, err error, action string) {
+	// A stale before-image is the only conflict that reloads the page:
+	// retryable 409s (zone busy, PowerDNS conflicts) deliberately omit the
+	// flag so the operator keeps their edits on screen.
+	var ce *dnsops.RecordConflictError
+	if errors.As(err, &ce) {
+		h.renderErrorStatus(w, r, http.StatusConflict, ce.Message)
+		return
 	}
-
-	// Index of the record this edit replaces, so the inline editor can be
-	// told which record of the merged RRSet is "the saved one" (it cannot
-	// re-derive it client-side once the content is normalised). A submitted
-	// original identity also distinguishes an edit of an existing record
-	// from a request to create a new RRSet through the update form.
-	updatedIdx := 0
-	originalMatched := false
-	if existingRRSet != nil {
-		for i, rec := range existingRRSet.Records {
-			if rec.Content == originalContent && rec.Priority == originalPriority {
-				originalMatched = true
-				updatedIdx = i
-				break
-			}
-		}
+	var pe *dnsops.PriorityConflictError
+	if errors.As(err, &pe) {
+		h.renderError(w, r, pe.Error())
+		return
 	}
-
-	var updatedRecords []models.RecordInfo
 	switch {
-	case existingRRSet == nil:
-		// An original identity on a missing RRSet means the record was
-		// deleted after the form was rendered. Refuse rather than silently
-		// recreating it; omitting the identity is the explicit create path.
-		if originalContent != "" {
-			return nil, nil, 0, &recordConflictError{
-				Message: "This record was deleted (or its RRSet changed) since the page was loaded. Reload the page and retry your edit.",
-			}
-		}
-		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
-	case originalMatched:
-		updatedRecords = mergeRecordIntoRRSet(existingRRSet.Records, originalContent, originalPriority,
-			models.RecordInfo{Content: content, Priority: priority, Disabled: disabled})
-	case recordType == "SOA" && len(existingRRSet.Records) == 1:
-		// An SOA edit is always stale this way: PowerDNS bumps the serial
-		// via SOA-EDIT between page load and save, so the submitted original
-		// content no longer matches. Replace the sole record instead of
-		// appending a second one, which PowerDNS rejects.
-		updatedRecords = []models.RecordInfo{{Content: content, Priority: priority, Disabled: disabled}}
+	case errors.Is(err, dnsops.ErrForbidden):
+		h.renderErrorStatus(w, r, http.StatusForbidden, "You do not have access to this zone")
+	case errors.Is(err, dnsops.ErrZoneBusy):
+		h.renderErrorStatus(w, r, http.StatusConflict, "The zone is busy with another operation. Retry in a moment.")
 	default:
-		// The live RRSet no longer contains the submitted identity. For a
-		// singleton that means another writer removed or replaced it; for a
-		// multi-record set appending would leave the old record next to the
-		// edited copy. Refuse and ask the client to reload.
-		return nil, nil, 0, &recordConflictError{
-			Message: "This record was modified by someone else (or its content changed) since the page was loaded. Reload the page and retry your edit.",
+		var se *dnsops.StageError
+		if errors.As(err, &se) && se.Stage == dnsops.StageZoneAccess {
+			h.renderInternalError(w, r, "Zone access check failed", err)
+			return
 		}
-	}
-
-	for i := range updatedRecords {
-		normalized, prio, err := prepareRecordContent(recordType, updatedRecords[i].Content, updatedRecords[i].Priority)
-		if err != nil {
-			return nil, nil, 0, &recordValidationError{Message: err.Error()}
+		// A PowerDNS category error (e.g. the zone vanished mid-edit)
+		// carries its own status instead of a blanket 500.
+		if status, msg, ok := pdnsPlainStatus(err); ok {
+			h.renderErrorStatus(w, r, status, msg)
+			return
 		}
-		updatedRecords[i].Content, updatedRecords[i].Priority = normalized, prio
+		h.renderInternalError(w, r, "Failed to "+action+" record", err)
 	}
+}
 
-	// The edit can collapse a record onto a sibling of the same RRSet (e.g.
-	// both A records now hold the same address). RRSets are a set — duplicate
-	// contents are meaningless and PowerDNS rejects them — so dedup exactly
-	// like the create and batch paths do.
-	editedContent := updatedRecords[updatedIdx].Content
-	updatedRecords = dedupRecordsByContent(updatedRecords)
-	// Dedup keeps the first occurrence, so the record the edit saved may now
-	// sit at an earlier index than the one it replaced. Re-point updatedIdx
-	// at the surviving record: InlineUpdateRecord echoes
-	// rrset.Records[updatedIdx] back to the inline editor, and a stale index
-	// would read past the shrunk slice or pick the wrong record.
-	updatedIdx = 0
-	for i, rec := range updatedRecords {
-		if rec.Content == editedContent {
-			updatedIdx = i
-			break
+// writeRecordServiceErrorJSON is the JSON twin of renderRecordServiceError
+// for the inline editor: a stale before-image answers 409 with reload=true
+// (the only 409 that authorizes the client to resync the page); everything
+// else follows the same status mapping in {"error": ...} shape.
+func (h *Handler) writeRecordServiceErrorJSON(w http.ResponseWriter, r *http.Request, err error) {
+	var ce *dnsops.RecordConflictError
+	if errors.As(err, &ce) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": ce.Message, "reload": "true"})
+		return
+	}
+	var pe *dnsops.PriorityConflictError
+	if errors.As(err, &pe) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": pe.Error()})
+		return
+	}
+	switch {
+	case errors.Is(err, dnsops.ErrForbidden):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "You do not have access to this zone"})
+	case errors.Is(err, dnsops.ErrZoneBusy):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "The zone is busy with another operation. Retry in a moment."})
+	default:
+		var se *dnsops.StageError
+		if errors.As(err, &se) && se.Stage == dnsops.StageZoneAccess {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Zone access check failed"})
+			return
 		}
-	}
-
-	// Resolve an unspecified (empty) TTL exactly like CreateRecord: inherit
-	// the existing RRSet's TTL — PowerDNS applies the RRSet-level TTL to
-	// every record of the set, so defaulting here would silently rewrite
-	// the siblings' deliberately short TTL — else the 3600 default.
-	if ttl == 0 {
-		if existingRRSet != nil {
-			ttl = existingRRSet.TTL
-		} else {
-			ttl = defaultRecordTTL
+		if status, msg, ok := pdnsPlainStatus(err); ok {
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
 		}
+		logger.Error("InlineUpdateRecord: service error", "zone_id", r.PathValue("zone_id"), "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to update record"})
 	}
-
-	return &models.RRSet{
-		Name:     name,
-		Type:     recordType,
-		TTL:      ttl,
-		Records:  updatedRecords,
-		Comments: buildCommentPatch(r.FormValue("comment"), r.FormValue("comment_clear") == "1"),
-	}, existingRRSet, updatedIdx, nil
 }
 
 // BatchCreateRecords creates multiple DNS records in a zone (POST /zones/{zone_id}/records/batch-create).
@@ -982,21 +821,6 @@ func rrsetSnapshot(rrset *models.RRSet) string {
 // wire content.
 func prepareRecordContent(recordType, content string, priority int) (string, int, error) {
 	return dnsops.PrepareRecordContent(recordType, content, priority)
-}
-
-// mergeRecordIntoRRSet replaces the record matching originalContent+originalPriority
-// with replacement. If no match is found, replacement is appended.
-func mergeRecordIntoRRSet(existing []models.RecordInfo, originalContent string, originalPriority int, replacement models.RecordInfo) []models.RecordInfo {
-	result := make([]models.RecordInfo, len(existing))
-	copy(result, existing)
-	for i, r := range result {
-		if r.Content == originalContent && r.Priority == originalPriority {
-			result[i] = replacement
-			return result
-		}
-	}
-	result = append(result, replacement)
-	return result
 }
 
 // dedupRecordsByContent removes records with identical wire content within an

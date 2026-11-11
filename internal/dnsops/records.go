@@ -332,11 +332,14 @@ func (s *Service) CreateRecord(ctx context.Context, user *models.User, zoneID st
 	// Resolve an unspecified (zero) TTL: inherit the existing RRSet's TTL on
 	// a merge (PowerDNS applies the RRSet-level TTL to every record of the
 	// set, so submitting 0 would silently zero the TTL of the pre-existing
-	// sibling records), else the 3600 default. Negative values were
-	// rejected at validation.
+	// sibling records), else the 3600 default. The inheritance deliberately
+	// has no positive guard: there is no cache between the caller and this
+	// service, so a deliberate no-cache (TTL 0) RRSet must stay 0 instead of
+	// being silently upgraded to the default. Negative values were rejected
+	// at validation.
 	if rrset.TTL <= 0 {
 		rrset.TTL = DefaultRecordTTL
-		if foundExisting && existingRRSet.TTL > 0 {
+		if foundExisting {
 			rrset.TTL = existingRRSet.TTL
 		}
 	}
