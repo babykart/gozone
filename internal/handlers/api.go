@@ -369,8 +369,10 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 		}
 		// The fetch stage of the service merge maps a missing zone to 404
 		// ZONE_NOT_FOUND (the fetch fails before anything was created, and
-		// the caller can act on the zone); the PATCH stage maps to
-		// RECORD_ERROR like every record write.
+		// the caller can act on the zone). The PATCH-stage fall-through
+		// maps a 404 to RECORD_NOT_FOUND: the RRSet vanished between the
+		// read and the write (a concurrent delete), so the not-found code
+		// names the record — aligned with the MCP transport's mapping.
 		var se *dnsops.StageError
 		if errors.As(err, &se) && se.Stage == dnsops.StageFetch {
 			status, code := pdnsErrorStatus(se.Err, ErrCodeZoneNotFound)
@@ -381,7 +383,7 @@ func (h *Handler) APICreateRecord(w http.ResponseWriter, r *http.Request) {
 			h.writeAPIErrorWithCause(w, r, status, code, label, err)
 			return
 		}
-		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to create record", err)
 		return
 	}
@@ -421,7 +423,7 @@ func (h *Handler) APIUpdateRecord(w http.ResponseWriter, r *http.Request) {
 		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
 			return
 		}
-		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to update record", err)
 		return
 	}
@@ -469,7 +471,7 @@ func (h *Handler) APIDeleteRecord(w http.ResponseWriter, r *http.Request) {
 		if h.writeServiceAuthzError(w, r, err, "zone access check failed") {
 			return
 		}
-		status, code := pdnsErrorStatus(err, ErrCodeRecordError)
+		status, code := pdnsErrorStatus(err, ErrCodeRecordNotFound)
 		h.writeAPIErrorWithCause(w, r, status, code, "failed to delete record", err)
 		return
 	}

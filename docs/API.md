@@ -300,7 +300,7 @@ curl -X POST \
 |-------|------|----------|-------|
 | `name` | string | **yes** | Relative (`www`), absolute (`www.example.com.`), or `@` for apex |
 | `type` | string | **yes** | Any valid DNS record type |
-| `ttl` | int | no | Time-to-live in seconds. `0` or omitted: inherit the TTL of the existing (POST: merged; PUT: replaced) RRSet, else the 3600 default — never sent as 0, which would zero the whole set. Negative values are rejected with a 400. |
+| `ttl` | int | no | Time-to-live in seconds. `0` or omitted: POST inherits the TTL of the existing (merged) RRSet — including an explicit `0` (no-cache RRSet stays no-cache) — else the 3600 default; PUT inherits the replaced RRSet's TTL only when positive, else the 3600 default. Negative values are rejected with a 400. |
 | `records` | array | **yes** | Array of record objects. Must contain at least one record — an empty array is rejected with a 400 (removing an RRSet is `DELETE`'s job, for both POST and PUT) |
 | `records[].content` | string | **yes** | Record content. FQDN targets (CNAME, DNAME, NS, PTR, ALIAS, AFSDB, NAPTR, MX, SRV) get a trailing dot appended automatically if missing. For multi-field types where the FQDN is not the last field (SOA mname/rname, RP mbox/txtname, MINFO rmailbx/emailbx, NSEC next_domain), per-field normalisation is applied. TXT/SPF content is auto-quoted. |
 | `records[].priority` | int | no | For MX and SRV types |
@@ -317,6 +317,8 @@ The `comments` array is omitted from the PATCH payload when left empty or absent
 > The REST API is a pass-through for the `comments` field: the array is forwarded to PowerDNS exactly as the client sent it, with no implicit deduplication, padding, or clearing. If you want to **add** a comment to an existing list, GET the RRSet first (returns the current `comments`), merge your additions client-side, and PUT the combined list back. The web UI's textarea + "Clear all comments" checkbox builds the patch for you on the form path; the API path leaves that work to the caller.
 >
 > **Clearing comments via the API.** The PUT body accepts an additional GoZone-only boolean `clear_comments` (write-only, never returned by GET). Setting `"clear_comments": true` purges every existing comment on the RRSet — it is the API counterpart of the web form's "Clear all comments" checkbox. The sentinel is exclusive: any `comments` array supplied in the same body is discarded. To replace existing comments atomically, GET → modify → PUT without the sentinel. `clear_comments` is consumed by GoZone and never reaches PowerDNS.
+>
+> **404 on record writes distinguishes two codes — on POST only.** POST first lists the zone's RRSets, then PATCHes PowerDNS: a 404 from the zone-list stage carries `ZONE_NOT_FOUND` (nothing was created, and the caller can act on the zone), while a 404 from the PATCH stage carries `RECORD_NOT_FOUND` (the write raced a concurrent delete). PUT and DELETE read the replaced RRSet best-effort only, so their 404s always carry `RECORD_NOT_FOUND`, whether the zone or the RRSet disappeared. Clients matching on the error code should accept both on a 404.
 
 Response `201`:
 

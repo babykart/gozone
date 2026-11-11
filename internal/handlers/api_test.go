@@ -2543,3 +2543,100 @@ func TestAPICreateRecord_SRVPriorityConsistent(t *testing.T) {
 		t.Errorf("PDNS received content=%q priority=%d, want %q and 0", got.Content, got.Priority, "10 5 5060 sip.example.com.")
 	}
 }
+
+// patchStage404PDNS routes GET (fetch / audit snapshot) to a successful empty
+// zone and the PATCH write itself to a PowerDNS 404 — the fixture for the
+// PATCH-stage error-code tests below. The service tags the failure
+// StageError{StagePatch} wrapping pdns.ErrNotFound; the REST mapping must
+// answer 404 RECORD_NOT_FOUND (the fetch-stage 404, tagged StageFetch, is a
+// missing ZONE and maps to ZONE_NOT_FOUND — see
+// TestAPICreateRecord_MissingZoneIs404).
+func patchStage404PDNS(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"rrsets":[]}`)) // #nosec G104 -- test helper
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+	w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
+}
+
+// TestAPICreateRecord_PatchStage404IsRecordNotFound pins the create-path
+// PATCH-stage mapping: the pre-write RRSet fetch succeeds (the zone exists)
+// but the PowerDNS PATCH answers 404, so the client gets 404
+// RECORD_NOT_FOUND — not the fetch stage's ZONE_NOT_FOUND and not the
+// generic RECORD_ERROR.
+func TestAPICreateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":300,"records":[{"content":"1.2.3.4"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APICreateRecord(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Code != ErrCodeRecordNotFound {
+		t.Errorf("PATCH-stage 404 must map to code %s, got %s", ErrCodeRecordNotFound, resp.Code)
+	}
+}
+
+// TestAPIUpdateRecord_PatchStage404IsRecordNotFound is the REPLACE
+// counterpart: the audit before-image fetch succeeds, the PATCH answers 404
+// and the client gets 404 RECORD_NOT_FOUND.
+func TestAPIUpdateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A","ttl":600,"records":[{"content":"5.6.7.8"}]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIUpdateRecord(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Code != ErrCodeRecordNotFound {
+		t.Errorf("PATCH-stage 404 must map to code %s, got %s", ErrCodeRecordNotFound, resp.Code)
+	}
+}
+
+// TestAPIDeleteRecord_PatchStage404IsRecordNotFound closes the triplet: a
+// DELETE whose audit snapshot fetch succeeds but whose PowerDNS write answers
+// 404 maps to 404 RECORD_NOT_FOUND.
+func TestAPIDeleteRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
+	defer pdnsSrv.Close()
+
+	body := `{"name":"www.example.com.","type":"A"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/example.com./records", jsonBody(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("zone_id", "example.com.")
+	h.APIDeleteRecord(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp apiError
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if resp.Code != ErrCodeRecordNotFound {
+		t.Errorf("PATCH-stage 404 must map to code %s, got %s", ErrCodeRecordNotFound, resp.Code)
+	}
+}
