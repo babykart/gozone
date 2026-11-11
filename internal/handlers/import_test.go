@@ -1348,6 +1348,280 @@ txt1 IN TXT "value (parenthetical) inside"
 	}
 }
 
+// TestParseBindZone_TXTEscapedQuotes pins the backslash-escape contract for
+// quoted character-strings: a `\"` inside a TXT value keeps both bytes as
+// data, does NOT toggle the quote state, and the whole string stays one
+// token: `say \"hi\" now` must arrive verbatim (quotes and backslashes) in
+// the RRSet record content.
+func TestParseBindZone_TXTEscapedQuotes(t *testing.T) {
+	data := []byte("$ORIGIN example.com.\n$TTL 3600\ntxt IN TXT \"say \\\"hi\\\" now\"")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	rr := rrsets[0]
+	if rr.Name != "txt.example.com." || rr.Type != "TXT" {
+		t.Fatalf("unexpected rrset name/type: %+v", rr)
+	}
+	if got := rr.Records[0].Content; got != `"say \"hi\" now"` {
+		t.Errorf("TXT content = %q, want %q", got, `"say \"hi\" now"`)
+	}
+}
+
+// TestParseBindZone_TXTEscapedQuoteBeforeComment pins the escape-aware comment
+// scan: the `;` after an escaped quote is INSIDE the character-string and must
+// be kept as data, while the real `; comment` after the closing quote is
+// still stripped.
+func TestParseBindZone_TXTEscapedQuoteBeforeComment(t *testing.T) {
+	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\";b\" ; trailing comment")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	if got := rrsets[0].Records[0].Content; got != `"a\";b"` {
+		t.Errorf("TXT content = %q, want %q", got, `"a\";b"`)
+	}
+}
+
+// TestParseBindZone_TXTEscapedQuoteBeforeParen pins the escape-aware
+// parenthesis scan: a `(` following an escaped quote is inside the
+// character-string and must NOT open a paren continuation — the following
+// plain record must still parse as its own RRSet instead of being merged
+// into the TXT line.
+func TestParseBindZone_TXTEscapedQuoteBeforeParen(t *testing.T) {
+	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\" (paren\"\nwww IN A 1.2.3.4")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+
+	contents := map[string]string{}
+	for _, rr := range rrsets {
+		contents[rr.Type] = rr.Records[0].Content
+	}
+	if got := contents["TXT"]; got != `"a\" (paren"` {
+		t.Errorf("TXT content = %q, want %q", got, `"a\" (paren"`)
+	}
+	if got := contents["A"]; got != "1.2.3.4" {
+		t.Errorf("A content = %q, want %q (record must not be merged into the TXT line)", got, "1.2.3.4")
+	}
+}
+
+// TestParseBindZone_TXTEscapedBackslashBeforeQuote pins the escape-consumes-
+// next-byte rule: in `a\\` the second backslash is escaped, so the following
+// quote really CLOSES the string (the content is the four bytes a + \ + \).
+func TestParseBindZone_TXTEscapedBackslashBeforeQuote(t *testing.T) {
+	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\\\"")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	if got := rrsets[0].Records[0].Content; got != `"a\\"` {
+		t.Errorf("TXT content = %q, want %q", got, `"a\\"`)
+	}
+}
+
+// TestParseBindZone_TTLTabDirective pins first-token directive recognition: a
+// TAB separator (`$TTL\t7200`) must set the default TTL exactly like the
+// space form. The value is chosen to differ from the hardcoded 3600 default
+// so a silently-unrecognized directive cannot pass.
+func TestParseBindZone_TTLTabDirective(t *testing.T) {
+	data := []byte("$TTL\t7200\nwww IN A 1.2.3.4")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	if got := rrsets[0].TTL; got != 7200 {
+		t.Errorf("record TTL = %d, want 7200 (default set by $TTL directive)", got)
+	}
+}
+
+// TestParseBindZone_OriginTabDirective pins first-token recognition for
+// $ORIGIN with a TAB separator: relative names after `$ORIGIN\tsub...` must
+// resolve against the new origin.
+func TestParseBindZone_OriginTabDirective(t *testing.T) {
+	data := []byte("$ORIGIN\tsub.example.com.\nwww A 1.2.3.4")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("no line should be skipped, got %+v", skipped)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	if got := rrsets[0].Name; got != "www.sub.example.com." {
+		t.Errorf("record name = %q, want %q", got, "www.sub.example.com.")
+	}
+}
+
+// TestParseBindZone_TTLTimeUnits pins the BIND time-unit format for $TTL:
+// decimal digits with an optional single case-insensitive unit suffix
+// (s/m/h/d/w) converted to seconds. Bare digits keep their meaning.
+func TestParseBindZone_TTLTimeUnits(t *testing.T) {
+	tests := []struct {
+		name      string
+		directive string
+		wantTTL   int
+	}{
+		{"bare_seconds", "$TTL 45", 45},
+		{"seconds_suffix", "$TTL 30s", 30},
+		{"minutes", "$TTL 90m", 5400},
+		{"hours", "$TTL 1h", 3600},
+		{"hours_distinguishing", "$TTL 2h", 7200},
+		{"weeks", "$TTL 1w", 604800},
+		{"days_uppercase", "$TTL 2D", 172800},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(tc.directive + "\nwww IN A 1.2.3.4")
+
+			rrsets, skipped, err := parseBindZone(data, "example.com.")
+			if err != nil {
+				t.Fatalf("parseBindZone: %v", err)
+			}
+			if len(skipped) != 0 {
+				t.Fatalf("no line should be skipped, got %+v", skipped)
+			}
+			if len(rrsets) != 1 {
+				t.Fatalf("expected 1 rrset, got %+v", rrsets)
+			}
+			if got := rrsets[0].TTL; got != tc.wantTTL {
+				t.Errorf("record TTL = %d, want %d (%s)", got, tc.wantTTL, tc.directive)
+			}
+		})
+	}
+}
+
+// TestParseBindZone_TTLInvalidValues pins the no-silent-ignore contract for
+// $TTL: zero, negative, unparsable and overflowing values are reported as a
+// skipped line naming the directive, not dropped. A valid record next to a
+// bad directive still imports.
+func TestParseBindZone_TTLInvalidValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		directive string
+	}{
+		{"zero", "$TTL 0"},
+		{"negative", "$TTL -5"},
+		{"unparsable", "$TTL 1x"},
+		{"overflow", "$TTL 99999999999999"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(tc.directive + "\nwww IN A 1.2.3.4")
+
+			rrsets, skipped, err := parseBindZone(data, "example.com.")
+			if err != nil {
+				t.Fatalf("parseBindZone: %v", err)
+			}
+			if len(rrsets) != 1 || rrsets[0].Type != "A" {
+				t.Fatalf("the valid A record must still import, got %+v", rrsets)
+			}
+			if len(skipped) != 1 {
+				t.Fatalf("expected exactly 1 skipped line for %q, got %+v", tc.directive, skipped)
+			}
+			if !strings.Contains(skipped[0].Line, "$TTL") {
+				t.Errorf("skipped line must carry the directive text, got %q", skipped[0].Line)
+			}
+			if !strings.Contains(skipped[0].Reason, "$TTL") {
+				t.Errorf("skip reason %q should name the $TTL directive", skipped[0].Reason)
+			}
+		})
+	}
+}
+
+// TestParseBindZone_DirectiveMissingArg pins the missing-argument contract:
+// a bare `$ORIGIN` or `$TTL` directive is reported as a skipped line naming
+// the directive (not a panic, not a silent ignore, not a generic parse
+// error).
+func TestParseBindZone_DirectiveMissingArg(t *testing.T) {
+	for _, directive := range []string{"$ORIGIN", "$TTL"} {
+		t.Run(strings.TrimPrefix(directive, "$"), func(t *testing.T) {
+			data := []byte(directive + "\nwww IN A 1.2.3.4")
+
+			rrsets, skipped, err := parseBindZone(data, "example.com.")
+			if err != nil {
+				t.Fatalf("parseBindZone: %v", err)
+			}
+			if len(rrsets) != 1 || rrsets[0].Type != "A" {
+				t.Fatalf("the valid A record must still import, got %+v", rrsets)
+			}
+			if len(skipped) != 1 {
+				t.Fatalf("expected exactly 1 skipped line for bare %q, got %+v", directive, skipped)
+			}
+			if !strings.Contains(skipped[0].Line, directive) {
+				t.Errorf("skipped line must carry the directive text, got %q", skipped[0].Line)
+			}
+			if !strings.Contains(skipped[0].Reason, directive) {
+				t.Errorf("skip reason %q should name the %s directive", skipped[0].Reason, directive)
+			}
+		})
+	}
+}
+
+// TestParseBindZone_DirectiveSpaceSeparators is the regression pin for the
+// historical space-separated directive form (plain `$TTL 7200` and
+// `$ORIGIN sub.example.com.` must keep working) and for the skipped-lines
+// mechanism staying intact when a file mixes valid records with one bad
+// line.
+func TestParseBindZone_DirectiveSpaceSeparators(t *testing.T) {
+	data := []byte("$ORIGIN sub.example.com.\n$TTL 7200\nwww IN A 1.2.3.4\nbrokenline")
+
+	rrsets, skipped, err := parseBindZone(data, "example.com.")
+	if err != nil {
+		t.Fatalf("parseBindZone: %v", err)
+	}
+	if len(rrsets) != 1 {
+		t.Fatalf("expected 1 rrset, got %+v", rrsets)
+	}
+	if rrsets[0].Name != "www.sub.example.com." {
+		t.Errorf("record name = %q, want %q", rrsets[0].Name, "www.sub.example.com.")
+	}
+	if rrsets[0].TTL != 7200 {
+		t.Errorf("record TTL = %d, want 7200", rrsets[0].TTL)
+	}
+	if len(skipped) != 1 || skipped[0].Line != "brokenline" {
+		t.Errorf("expected only 'brokenline' to be skipped, got %+v", skipped)
+	}
+}
+
 // --- Merge/replace mode tests (web zone import) -----------------------------
 //
 // ImportZone gains a `mode` form field: `merge` (default) merges imported

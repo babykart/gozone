@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -335,25 +336,38 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 
 	for _, bl := range lines {
 		line := bl.text
-		upper := strings.ToUpper(line)
 
-		if strings.HasPrefix(upper, "$ORIGIN ") {
-			origin = strings.TrimSpace(line[8:])
-			if !strings.HasSuffix(origin, ".") {
-				origin += "."
-			}
-			continue
-		}
-		if strings.HasPrefix(upper, "$TTL ") {
-			ttl, err := strconv.Atoi(strings.TrimSpace(line[5:]))
-			if err == nil && ttl > 0 {
+		// Directives are matched on the first token (space- or tab-separated),
+		// case-insensitively. Extra tokens are tolerated; the first argument
+		// is used.
+		if fields := strings.Fields(line); len(fields) > 0 {
+			switch strings.ToUpper(fields[0]) {
+			case "$ORIGIN":
+				if len(fields) < 2 {
+					skipped = append(skipped, skippedLine{Line: bl.text, Reason: "$ORIGIN directive requires a value"})
+					continue
+				}
+				origin = fields[1]
+				if !strings.HasSuffix(origin, ".") {
+					origin += "."
+				}
+				continue
+			case "$TTL":
+				if len(fields) < 2 {
+					skipped = append(skipped, skippedLine{Line: bl.text, Reason: "$TTL directive requires a value"})
+					continue
+				}
+				ttl, err := parseBindTTLValue(fields[1])
+				if err != nil {
+					skipped = append(skipped, skippedLine{Line: bl.text, Reason: err.Error()})
+					continue
+				}
 				defaultTTL = ttl
+				continue
+			case "$INCLUDE":
+				skipped = append(skipped, skippedLine{Line: bl.text, Reason: "$INCLUDE directives are not supported"})
+				continue
 			}
-			continue
-		}
-		if strings.HasPrefix(upper, "$INCLUDE") {
-			skipped = append(skipped, skippedLine{Line: bl.text, Reason: "$INCLUDE directives are not supported"})
-			continue
 		}
 
 		// RFC 1035: a line starting with whitespace omits the owner name and
@@ -401,6 +415,56 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 	return groupBindRecords(raw), skipped, nil
 }
 
+// parseBindTTLValue parses a $TTL value in the BIND time grammar (RFC 1035
+// §5.1-style single-unit form): decimal digits with an optional single
+// case-insensitive unit suffix — s=seconds, m=minutes, h=hours, d=days,
+// w=weeks. Bare digits are seconds. The accepted range is clamped to
+// math.MaxInt32 and the unit multiplication is computed in int64: PowerDNS
+// TTLs are uint32, but the parser stays conservative so the value fits every
+// downstream int consumer and overflows are rejected instead of wrapping.
+func parseBindTTLValue(value string) (int, error) {
+	invalid := fmt.Errorf("invalid $TTL value %q", value)
+	if value == "" {
+		return 0, invalid
+	}
+
+	unit := int64(1)
+	digits := value
+	if last := value[len(value)-1]; last < '0' || last > '9' {
+		switch strings.ToUpper(string(last)) {
+		case "S":
+			unit = 1
+		case "M":
+			unit = 60
+		case "H":
+			unit = 3600
+		case "D":
+			unit = 86400
+		case "W":
+			unit = 604800
+		default:
+			return 0, invalid
+		}
+		digits = value[:len(value)-1]
+	}
+
+	var n int64
+	for i := 0; i < len(digits); i++ {
+		if d := digits[i]; d < '0' || d > '9' {
+			return 0, invalid
+		}
+		n = n*10 + int64(digits[i]-'0')
+		if n > math.MaxInt32/unit {
+			return 0, invalid
+		}
+	}
+	n *= unit
+	if n <= 0 || n > math.MaxInt32 {
+		return 0, invalid
+	}
+	return int(n), nil
+}
+
 // bindLine is one logical zone-file line (paren continuations joined, comments
 // stripped). inheritsOwner records whether its first physical line began with
 // whitespace, i.e. it omits the owner name per RFC 1035.
@@ -432,14 +496,22 @@ func normalizeBindLines(input string) []bindLine {
 		line := strings.TrimSpace(raw)
 
 		// Strip comments and structural parentheses in one quote-aware
-		// scan. Quote handling matches the rest of the parser (no backslash
-		// escapes): a '"' always toggles the in-quote state.
+		// scan. Inside a quoted character-string a backslash escapes the next
+		// byte (RFC 1035 master-file convention): both bytes are kept verbatim
+		// and the escaped byte never toggles the quote state, starts a comment
+		// or counts parens. Outside quotes a backslash is plain data.
 		var cleaned strings.Builder
 		inQuote := false
 		depthDelta := 0
 		for i := 0; i < len(line); i++ {
 			c := line[i]
 			switch {
+			case c == '\\' && inQuote:
+				cleaned.WriteByte(c)
+				if i+1 < len(line) {
+					cleaned.WriteByte(line[i+1])
+					i++
+				}
 			case c == '"':
 				inQuote = !inQuote
 				cleaned.WriteByte(c)
@@ -558,6 +630,18 @@ func tokenizeBindLine(line string) []string {
 
 	for i := 0; i < len(line); i++ {
 		ch := line[i]
+
+		// Inside a quoted character-string a backslash escapes the next
+		// byte: both bytes stay in the token, and the escaped byte never
+		// toggles the quote state or acts as whitespace.
+		if ch == '\\' && inQuote {
+			current += string(ch)
+			if i+1 < len(line) {
+				current += string(line[i+1])
+				i++
+			}
+			continue
+		}
 
 		if ch == '"' {
 			inQuote = !inQuote
