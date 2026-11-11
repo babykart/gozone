@@ -178,3 +178,120 @@ func TestPaginationPartial_AllCap(t *testing.T) {
 		t.Errorf("capped small-page pagination must not select the All (max) option:\n%s", out)
 	}
 }
+
+// controlElement extracts the full element (open tag through close tag) that
+// renders the pagination control carrying the given visible label, e.g.
+// "← Previous". It walks back from the label to its opening "<" and forward
+// to the next "</...>" close tag.
+func controlElement(t *testing.T, out, label string) string {
+	t.Helper()
+	labelIdx := strings.Index(out, ">"+label)
+	if labelIdx < 0 {
+		t.Fatalf("pagination output missing control label %q:\n%s", label, out)
+	}
+	start := strings.LastIndex(out[:labelIdx], "<")
+	closeRel := strings.Index(out[labelIdx:], "</")
+	if closeRel < 0 {
+		t.Fatalf("pagination control %q has no closing tag:\n%s", label, out)
+	}
+	gtRel := strings.Index(out[labelIdx+closeRel:], ">")
+	if gtRel < 0 {
+		t.Fatalf("pagination control %q has malformed closing tag:\n%s", label, out)
+	}
+	end := labelIdx + closeRel + gtRel + 1
+	return out[start:end]
+}
+
+// TestPaginationPartial_BoundaryAccessibility exercises the real
+// pagination.html partial's Previous / Next boundary rendering: at the first
+// or last page the boundary control must be a non-focusable
+// <span aria-disabled="true" class="btn btn-sm btn-secondary disabled">
+// (no href), and only that control may carry aria-disabled; on a middle page
+// both controls stay plain links with no aria-disabled anywhere.
+func TestPaginationPartial_BoundaryAccessibility(t *testing.T) {
+	tmpl, err := parseTemplates()
+	if err != nil {
+		t.Fatalf("parseTemplates: %v", err)
+	}
+
+	render := func(current int) string {
+		t.Helper()
+		var buf strings.Builder
+		data := map[string]interface{}{
+			"PageInfo": handlers.PageInfo{Current: current, PerPage: 10, TotalPages: 3, Total: 25},
+			"Search":   "",
+			"Label":    "records",
+			"Prefix":   "",
+		}
+		if err := tmpl.ExecuteTemplate(&buf, "pagination.html", data); err != nil {
+			t.Fatalf("execute pagination (Current=%d): %v", current, err)
+		}
+		return buf.String()
+	}
+
+	// First page: Previous is the disabled span (no href), Next is a link.
+	out := render(1)
+	prev := controlElement(t, out, "← Previous")
+	if !strings.HasPrefix(prev, `<span aria-disabled="true"`) {
+		t.Errorf("first-page Previous must be <span aria-disabled=\"true\"...>, got:\n%s", prev)
+	}
+	if !strings.Contains(prev, "disabled") {
+		t.Errorf("first-page Previous span must keep the disabled class:\n%s", prev)
+	}
+	if strings.Contains(prev, "href") {
+		t.Errorf("first-page Previous span must not carry an href (stays focusable otherwise):\n%s", prev)
+	}
+	next := controlElement(t, out, "Next →")
+	if !strings.HasPrefix(next, "<a href=") {
+		t.Errorf("first-page Next must stay an <a href=...> link, got:\n%s", next)
+	}
+	if !strings.Contains(next, "Page=2") {
+		t.Errorf("first-page Next link must point at Page=2:\n%s", next)
+	}
+	if strings.Contains(next, "aria-disabled") {
+		t.Errorf("first-page Next link must not carry aria-disabled:\n%s", next)
+	}
+	if n := strings.Count(out, "aria-disabled"); n != 1 {
+		t.Errorf("first-page output must contain exactly one aria-disabled (got %d):\n%s", n, out)
+	}
+
+	// Last page: mirrored — Next is the disabled span, Previous is a link.
+	out = render(3)
+	next = controlElement(t, out, "Next →")
+	if !strings.HasPrefix(next, `<span aria-disabled="true"`) {
+		t.Errorf("last-page Next must be <span aria-disabled=\"true\"...>, got:\n%s", next)
+	}
+	if !strings.Contains(next, "disabled") {
+		t.Errorf("last-page Next span must keep the disabled class:\n%s", next)
+	}
+	if strings.Contains(next, "href") {
+		t.Errorf("last-page Next span must not carry an href (stays focusable otherwise):\n%s", next)
+	}
+	prev = controlElement(t, out, "← Previous")
+	if !strings.HasPrefix(prev, "<a href=") {
+		t.Errorf("last-page Previous must stay an <a href=...> link, got:\n%s", prev)
+	}
+	if !strings.Contains(prev, "Page=2") {
+		t.Errorf("last-page Previous link must point at Page=2:\n%s", prev)
+	}
+	if strings.Contains(prev, "aria-disabled") {
+		t.Errorf("last-page Previous link must not carry aria-disabled:\n%s", prev)
+	}
+	if n := strings.Count(out, "aria-disabled"); n != 1 {
+		t.Errorf("last-page output must contain exactly one aria-disabled (got %d):\n%s", n, out)
+	}
+
+	// Middle page: no disabled control at all, both are plain links.
+	out = render(2)
+	if n := strings.Count(out, "aria-disabled"); n != 0 {
+		t.Errorf("middle-page output must contain no aria-disabled (got %d):\n%s", n, out)
+	}
+	prev = controlElement(t, out, "← Previous")
+	if !strings.HasPrefix(prev, "<a href=") || !strings.Contains(prev, "Page=1") {
+		t.Errorf("middle-page Previous must be a link to Page=1, got:\n%s", prev)
+	}
+	next = controlElement(t, out, "Next →")
+	if !strings.HasPrefix(next, "<a href=") || !strings.Contains(next, "Page=3") {
+		t.Errorf("middle-page Next must be a link to Page=3, got:\n%s", next)
+	}
+}

@@ -26,9 +26,9 @@
 */}}
 {{if gt $info.TotalPages 1}}
 <div class="pagination">
-    <a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current 1}} disabled{{end}}">← Previous</a>
+    {{if eq $info.Current 1}}<span aria-disabled="true" class="btn btn-sm btn-secondary disabled">← Previous</span>{{else}}<a href="?{{$prefix}}Page={{sub $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary">← Previous</a>{{end}}
     <span class="page-info">Page {{$info.Current}} / {{$info.TotalPages}} ({{$info.Total}} {{$label}})</span>
-    <a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary{{if eq $info.Current $info.TotalPages}} disabled{{end}}">Next →</a>
+    {{if eq $info.Current $info.TotalPages}}<span aria-disabled="true" class="btn btn-sm btn-secondary disabled">Next →</span>{{else}}<a href="?{{$prefix}}Page={{add $info.Current 1}}&{{$prefix}}PerPage={{$info.PerPage}}{{if $search}}&search={{$search | urlquery}}{{end}}{{if $hasOther}}&{{$op}}Page={{$opg}}&{{$op}}PerPage={{$opp}}{{end}}{{range $k, $v := $extra}}&{{$k}}={{index $v 0}}{{end}}" class="btn btn-sm btn-secondary">Next →</a>{{end}}
 </div>
 {{end}}
 {{if gt $info.Total 0}}
