@@ -9,7 +9,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"net/url"
 	"os"
@@ -571,7 +573,12 @@ func Load(path string) (*Config, error) {
 			// field now fails config load with its name and line.
 			dec := yaml.NewDecoder(bytes.NewReader(data))
 			dec.KnownFields(true)
-			if err := dec.Decode(cfg); err != nil {
+			// An empty or comments-only file holds no YAML document, so the
+			// decoder reports io.EOF. That is not an error: the file simply
+			// carries no overrides over the defaults, which is a legitimate
+			// way to start from the defaults or keep the file as
+			// documentation. Every other decode error keeps failing.
+			if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 				return nil, err
 			}
 		}

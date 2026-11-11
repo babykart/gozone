@@ -163,6 +163,71 @@ server:
 	}
 }
 
+// TestLoad_EmptyOrCommentsOnlyConfig pins that a config file holding no YAML
+// document (zero bytes or only comments) is not an error: it carries no
+// overrides over the defaults, which is a legitimate way to start from the
+// defaults or keep the file as documentation. yaml.v3 reports io.EOF in that
+// case, which Load must treat as "nothing to merge", not as a failure.
+func TestLoad_EmptyOrCommentsOnlyConfig(t *testing.T) {
+	writeConfig := func(t *testing.T, content string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("empty file", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, ""))
+		if err != nil {
+			t.Fatalf("Load failed on an empty config file: %v", err)
+		}
+		if cfg == nil {
+			t.Fatal("Load returned a nil config")
+		}
+		if cfg.Server.Port != 8080 {
+			t.Errorf("expected default server.port 8080, got %d", cfg.Server.Port)
+		}
+		if cfg.Logging.Level != "info" {
+			t.Errorf("expected default logging.level info, got %s", cfg.Logging.Level)
+		}
+		if cfg.PowerDNS.APIURL != "http://localhost:8081" {
+			t.Errorf("expected default powerdns.api_url http://localhost:8081, got %s", cfg.PowerDNS.APIURL)
+		}
+	})
+
+	t.Run("comments-only file", func(t *testing.T) {
+		cfg, err := Load(writeConfig(t, "# GoZone configuration\n# server:\n#   port: 9999\n"))
+		if err != nil {
+			t.Fatalf("Load failed on a comments-only config file: %v", err)
+		}
+		if cfg.Server.Port != 8080 {
+			t.Errorf("expected default server.port 8080, got %d", cfg.Server.Port)
+		}
+		if cfg.PowerDNS.APIURL != "http://localhost:8081" {
+			t.Errorf("expected default powerdns.api_url http://localhost:8081, got %s", cfg.PowerDNS.APIURL)
+		}
+	})
+
+	t.Run("comments-only file still merges env", func(t *testing.T) {
+		t.Setenv("GOZONE_SERVER_PORT", "9090")
+		cfg, err := Load(writeConfig(t, "# GoZone configuration\n"))
+		if err != nil {
+			t.Fatalf("Load failed on a comments-only config file: %v", err)
+		}
+		if cfg.Server.Port != 9090 {
+			t.Errorf("expected env override server.port 9090, got %d", cfg.Server.Port)
+		}
+	})
+
+	t.Run("malformed file still fails", func(t *testing.T) {
+		if _, err := Load(writeConfig(t, "server:\n  port: not-a-number\n")); err == nil {
+			t.Fatal("a malformed YAML file must still fail config load")
+		}
+	})
+}
+
 // TestValidate_DriverAliases pins that validation accepts every driver the
 // dialect selector accepts: "mariadb" and "postgresql" used to pass
 // selectDialect but die in validate with a misleading message.
