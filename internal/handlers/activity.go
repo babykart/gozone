@@ -29,7 +29,25 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 		logger.Error("failed to fetch activity actions", "error", err)
 	}
 
+	// Invalid dates are not silently dropped: each offending value gets a
+	// warning so the operator sees the filter had no effect. The echoed
+	// value is bounded to the length of a valid date (YYYY-MM-DD) so a
+	// crafted query string cannot smuggle arbitrary text into the banner.
+	var filterWarnings []string
+	if fromDate != "" {
+		if _, err := time.Parse("2006-01-02", fromDate); err != nil {
+			filterWarnings = append(filterWarnings, "From date '"+truncateActivityFilterValue(fromDate)+"' is not a valid date (YYYY-MM-DD)")
+		}
+	}
+	if toDate != "" {
+		if _, err := time.Parse("2006-01-02", toDate); err != nil {
+			filterWarnings = append(filterWarnings, "To date '"+truncateActivityFilterValue(toDate)+"' is not a valid date (YYYY-MM-DD)")
+		}
+	}
 	logs, total := h.getActivityLogs(r.Context(), user, search, action, fromDate, toDate, page, perPage)
+	// Truncated reports the "All" (PerPage=0) cap: total is the uncapped
+	// COUNT, while the query itself already LIMITs rows to activityLogAllCap.
+	truncated := perPage == 0 && total > activityLogAllCap
 	// pageInfoFromTotal clamps Current to the last page, matching the clamp
 	// getActivityLogs applies to the SQL OFFSET — the displayed page is
 	// always the page that was actually fetched ("page 3 / 3", never
@@ -66,7 +84,25 @@ func (h *Handler) ActivityPage(w http.ResponseWriter, r *http.Request) {
 		"ServerTime": time.Now().UTC(),
 		"Extra":      extra,
 	}
+	if len(filterWarnings) > 0 {
+		data["FilterWarnings"] = filterWarnings
+	}
+	data["Truncated"] = truncated
 	h.render(w, r, "activity.html", data)
+}
+
+// truncateActivityFilterValue bounds an invalid filter value echoed in a
+// warning banner to the length of a valid date (YYYY-MM-DD), appending an
+// ellipsis when cut. A valid date always fits whole; an overlong value is
+// typically a mangled or crafted query string, and the banner only needs to
+// hint at what was typed, not reproduce it byte for byte.
+func truncateActivityFilterValue(v string) string {
+	const maxLen = len("2006-01-02")
+	runes := []rune(v)
+	if len(runes) <= maxLen {
+		return v
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // getDistinctActivityActions returns the distinct action values visible to the
@@ -230,10 +266,11 @@ func (h *Handler) buildActivityLogQuery(user *models.User, search, action, fromD
 	}
 	if toDate != "" {
 		if t, err := time.Parse("2006-01-02", toDate); err == nil {
-			// Include the full selected day.
-			end := t.Add(24*time.Hour - time.Second)
-			filters = append(filters, "al.created_at <= ?")
-			args = append(args, end.Format("2006-01-02 15:04:05"))
+			// Include the full selected day: the exclusive next-midnight
+			// bound keeps every entry of the last second (fractional
+			// seconds included) while excluding the following day.
+			filters = append(filters, "al.created_at < ?")
+			args = append(args, t.Add(24*time.Hour).Format("2006-01-02 15:04:05"))
 		}
 	}
 

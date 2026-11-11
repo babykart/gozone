@@ -34,6 +34,10 @@
                 </form>
             </div>
 
+            {{if .FilterWarnings}}
+            <div class="filter-warnings">Warnings: {{range .FilterWarnings}}{{.}} {{end}}</div>
+            {{end}}
+
             {{if .Logs}}
             <div class="card">
                 <div class="table-responsive">
@@ -76,6 +80,9 @@
                     </tbody>
                 </table>
                 </div>
+                {{if .Truncated}}
+                <div class="truncation-notice">Truncated: showing only the most recent entries; refine the filters to narrow the results.</div>
+                {{end}}
                 {{template "pagination.html" dict "PageInfo" .PageInfo "Search" .Search "Label" "entries" "Prefix" "" "Extra" .Extra}}
             </div>
             {{else}}

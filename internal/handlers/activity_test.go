@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -171,5 +173,134 @@ func TestActivityLogs_AllViewCapped(t *testing.T) {
 	if len(zoneLogs) != n-5 {
 		// The zone subset is under the cap, so it must come back whole.
 		t.Errorf("zone \"All\" view under the cap must be complete, got %d want %d", len(zoneLogs), n-5)
+	}
+}
+
+// TestActivityPage_InvalidDateWarning pins the filter-feedback contract:
+// non-empty, unparsable from/to values are not silently dropped — the page
+// must surface one warning per invalid field naming the offending value.
+func TestActivityPage_InvalidDateWarning(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/activity?from=not-a-date&to=also/bad", nil), admin)
+	w := httptest.NewRecorder()
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"Warnings:", "not-a-date", "also/bad", "is not a valid date"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected body to contain %q, got: %s", want, body)
+		}
+	}
+}
+
+// TestActivityPage_ValidDatesNoWarning is the complement: a well-formed date
+// range must not produce any warning banner.
+func TestActivityPage_ValidDatesNoWarning(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/activity?from=2026-01-01&to=2026-01-02", nil), admin)
+	w := httptest.NewRecorder()
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "Warnings:") {
+		t.Errorf("valid date range must not render a warnings banner, got: %s", body)
+	}
+}
+
+// TestActivityToBound_IncludesLastSecond pins the inclusive upper bound of
+// the to-date filter: an entry stored at 2026-03-10 23:59:59.4 (fractional
+// second) belongs to the selected day and must be included, while an entry
+// on the following midnight must stay excluded. The seeds use sub-second
+// fractions that round DOWN on fsp-0 MySQL DATETIME columns (23:59:59.4 →
+// 23:59:59, 00:00:00.2 → 00:00:00) so the pair stays portable across the
+// dialect matrix while still exercising the fractional last second on
+// engines that retain it (SQLite text storage).
+func TestActivityToBound_IncludesLastSecond(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	seedAt := func(createdAt string) {
+		t.Helper()
+		if _, err := h.DB.Exec(
+			`INSERT INTO activity_logs (user_id, zone_id, action, details, created_at) VALUES (?, NULL, 'to_bound', ?, ?)`,
+			admin.ID, "entry at "+createdAt, createdAt,
+		); err != nil {
+			t.Fatalf("seed %s: %v", createdAt, err)
+		}
+	}
+	seedAt("2026-03-10 23:59:59.4") // last second of the selected day (fractional; rounds down to 23:59:59 on fsp-0 MySQL DATETIME)
+	seedAt("2026-03-11 00:00:00.2") // next midnight (rounds to 00:00:00 on fsp-0 MySQL): excluded by the exclusive bound
+
+	logs, total := h.getActivityLogs(context.Background(), admin, "", "", "", "2026-03-10", 1, 0)
+	if total != 1 {
+		t.Fatalf("to=2026-03-10 must include the 23:59:59.4 entry exactly once, got total=%d logs=%v", total, logs)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0].Details, "23:59:59.4") {
+		t.Errorf("expected the 23:59:59.4 entry, got %v", logs)
+	}
+}
+
+// TestActivityPage_TruncationNotice pins the UI feedback for the "All"
+// (PerPage=0) cap: with more rows than activityLogAllCap, the page must tell
+// the operator the listing was truncated instead of silently dropping rows.
+func TestActivityPage_TruncationNotice(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	n := activityLogAllCap + 1
+	for i := 0; i < n; i++ {
+		if _, err := h.DB.Exec(
+			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, NULL, 'trunc_cap', ?)",
+			admin.ID, fmt.Sprintf("row %d", i),
+		); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/activity?PerPage=0", nil), admin)
+	w := httptest.NewRecorder()
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "Truncated") {
+		t.Errorf("All view over the %d-row cap must render a truncation notice, got: %s", activityLogAllCap, body)
+	}
+}
+
+// TestActivityPage_TruncationAbsentUnderCap is the complement: a small log
+// rendered with PerPage=0 must not claim truncation.
+func TestActivityPage_TruncationAbsentUnderCap(t *testing.T) {
+	h := newTestHandler(t)
+	admin := seedAdminUser(t, h)
+
+	for i := 0; i < 5; i++ {
+		if _, err := h.DB.Exec(
+			"INSERT INTO activity_logs (user_id, zone_id, action, details) VALUES (?, NULL, 'trunc_small', ?)",
+			admin.ID, fmt.Sprintf("row %d", i),
+		); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/activity?PerPage=0", nil), admin)
+	w := httptest.NewRecorder()
+	h.ActivityPage(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "Truncated") {
+		t.Errorf("All view under the cap must not render a truncation notice, got: %s", body)
 	}
 }

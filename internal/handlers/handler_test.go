@@ -84,7 +84,7 @@ func testTemplateSet() *template.Template {
 		{{define "templates.html"}}Templates: {{range .Templates}}{{.Name}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} Search={{.Search}}{{end}}{{end}}
 		{{define "template_edit.html"}}TemplateEdit: {{.Template.Name}}{{end}}
 		{{define "dnssec.html"}}DNSSEC: {{.Zone.Name}} Keys: {{range .Keys}}{{.ID}}:{{.Active}}:{{.KeyType}} {{end}}{{end}}
-		{{define "activity.html"}}Activity: {{range .Logs}}{{.Action}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} PerPage={{.PageInfo.PerPage}} Search={{.Search}}{{end}}{{if .Extra}}<a href="?{{range $k, $v := .Extra}}&{{$k}}={{index $v 0}}{{end}}">extra</a>{{end}}{{end}}
+		{{define "activity.html"}}Activity: {{range .Logs}}{{.Action}} {{end}}{{if .PageInfo}} PageInfo={{.PageInfo.Current}}/{{.PageInfo.TotalPages}} PerPage={{.PageInfo.PerPage}} Search={{.Search}}{{end}}{{if .Extra}}<a href="?{{range $k, $v := .Extra}}&{{$k}}={{index $v 0}}{{end}}">extra</a>{{end}}{{if .FilterWarnings}}Warnings: {{range .FilterWarnings}}[{{.}}]{{end}}{{end}}{{if .Truncated}} Truncated{{end}}{{end}}
 	`))
 }
 
