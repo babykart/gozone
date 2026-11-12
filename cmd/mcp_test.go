@@ -237,6 +237,37 @@ func TestStdioBridge_EndToEndAgainstRealServer(t *testing.T) {
 	}
 }
 
+// TestMCPStdioCmd_EmptyAPIKeyFailsBeforeIO characterizes the RunE guard:
+// when the --api-key-env variable resolves to an empty value, the command
+// must fail with an actionable error BEFORE any network or stdin work. The
+// referenced env var is deliberately never set (no t.Setenv): the guard
+// fires purely on the empty lookup, so the test cannot hang on stdin or
+// reach the 127.0.0.1:1 endpoint.
+func TestMCPStdioCmd_EmptyAPIKeyFailsBeforeIO(t *testing.T) {
+	// Pin the precondition: the env var must be empty even if the outer
+	// environment happens to define it, so the guard fires deterministically
+	// before any stdin/network work.
+	t.Setenv("GOZONE_TEST_NO_SUCH_KEY", "")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"mcp", "stdio",
+		"--url", "http://127.0.0.1:1/mcp",
+		"--api-key-env", "GOZONE_TEST_NO_SUCH_KEY",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("an empty API key must fail the command")
+	}
+	if !strings.Contains(err.Error(), "GOZONE_TEST_NO_SUCH_KEY") {
+		t.Errorf("error must name the empty env var, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "is empty") {
+		t.Errorf("error must say the key is empty, got %v", err)
+	}
+}
+
 func TestMCPStdioCmd_MissingURLAndKey(t *testing.T) {
 	if _, err := buildTargetURL("", false); err == nil {
 		t.Fatal("empty url must fail")

@@ -367,6 +367,60 @@ func TestCheckZoneAccess_CanonicalizesZoneIDForAllRoles(t *testing.T) {
 	}
 }
 
+// TestCanonicalizeZoneID_CanonicalizesPathValue characterizes the exported
+// wrapper mounted on admin-only zone routes (which skip CheckZoneAccess):
+// whatever spelling the client used ("Example.COM", "example.com",
+// "Example.COM."), the downstream handler must observe the canonical
+// {zone_id} (lowercase, trailing dot) — it determines the per-zone lock
+// key, the PowerDNS path and the audit key.
+func TestCanonicalizeZoneID_CanonicalizesPathValue(t *testing.T) {
+	serve := func(raw string) (int, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/"+raw, nil)
+		r.SetPathValue("zone_id", raw)
+		var seen string
+		CanonicalizeZoneID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr.Code, seen
+	}
+
+	for _, variant := range []string{"Example.COM", "example.com", "Example.COM.", "example.com."} {
+		code, seen := serve(variant)
+		if code != http.StatusOK {
+			t.Errorf("variant %q: expected 200, got %d", variant, code)
+		}
+		if seen != "example.com." {
+			t.Errorf("variant %q: downstream handler must observe the canonical zone ID, got %q", variant, seen)
+		}
+	}
+}
+
+// TestCanonicalizeZoneID_EmptyZoneID locks the no-op contract for routes
+// without a {zone_id} parameter: the wrapper must pass the request through
+// untouched instead of panicking on the missing path value.
+func TestCanonicalizeZoneID_EmptyZoneID(t *testing.T) {
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/zones", nil)
+
+	called := false
+	CanonicalizeZoneID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if got := r.PathValue("zone_id"); got != "" {
+			t.Errorf("a route without {zone_id} must keep an empty path value, got %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if !called {
+		t.Error("next handler must be called when the route carries no zone_id")
+	}
+}
+
 // TestCheckZoneAccess_OperatorWithoutGrant_Passes is the operator fast-path
 // contract: the DNS operator role may manage every zone, so a zone-scoped
 // route must pass the operator through WITHOUT a group grant — exactly like
