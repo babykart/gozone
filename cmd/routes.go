@@ -117,8 +117,8 @@ func mountMCPRoute(r chi.Router, h *handlers.Handler, db *database.DB, cfg *conf
 	}
 	r.Group(func(r chi.Router) {
 		r.Use(apiIPLimiter.Limit(middleware.ExtractIP))
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
-		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP, cfg.Password.MaxAgeDays))
+		r.Use(apiLimiter.Limit(middleware.APIKeyRateLimitKey))
 		r.Handle(cfg.MCP.Path, mcpserver.New(h.Ops, &cfg.MCP, h.Version.Version))
 	})
 }

@@ -237,8 +237,8 @@ func TestAPIKeyScopeSurfaceRouting(t *testing.T) {
 	// Same composition as the /api/v1 mount in buildRouter.
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(ipLimiter.Limit(middleware.ExtractIP))
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceAPI))
-		r.Use(keyLimiter.Limit(middleware.ExtractAPIKey))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceAPI, 0))
+		r.Use(keyLimiter.Limit(middleware.APIKeyRateLimitKey))
 		r.Use(middleware.RequireWriteScope)
 		r.Get("/zones", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)

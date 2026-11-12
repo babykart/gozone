@@ -244,20 +244,39 @@ func TestExtractIP(t *testing.T) {
 	})
 }
 
-func TestExtractAPIKey(t *testing.T) {
-	t.Run("X-API-Key header", func(t *testing.T) {
+// TestAPIKeyRateLimitKey verifies the API-key rate-limit key derivation:
+// the raw secret must never become a bucket map key — buckets (and the
+// rate-limit log line via maskKey) are keyed by the SHA-256 hex digest.
+// Both header spellings of the same key must land in one stable bucket.
+func TestAPIKeyRateLimitKey(t *testing.T) {
+	t.Run("X-API-Key header returns digest not raw key", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("X-API-Key", "my-api-key")
-		if got := ExtractAPIKey(r); got != "my-api-key" {
-			t.Errorf("expected my-api-key, got %s", got)
+		got := APIKeyRateLimitKey(r)
+		if got == "my-api-key" {
+			t.Error("the raw key must never be the bucket key")
+		}
+		if got != hashAPIKey("my-api-key") {
+			t.Errorf("expected the SHA-256 hex digest, got %q", got)
+		}
+		if len(got) != 64 {
+			t.Errorf("expected a 64-char digest, got %d chars", len(got))
+		}
+		for _, c := range got {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				t.Errorf("digest must be lowercase hex, got %q", got)
+				break
+			}
 		}
 	})
 
-	t.Run("Authorization Bearer", func(t *testing.T) {
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		r.Header.Set("Authorization", "Bearer my-bearer-key")
-		if got := ExtractAPIKey(r); got != "my-bearer-key" {
-			t.Errorf("expected my-bearer-key, got %s", got)
+	t.Run("Authorization Bearer returns same digest as X-API-Key", func(t *testing.T) {
+		viaHeader := httptest.NewRequest(http.MethodGet, "/", nil)
+		viaHeader.Header.Set("X-API-Key", "shared-key")
+		viaBearer := httptest.NewRequest(http.MethodGet, "/", nil)
+		viaBearer.Header.Set("Authorization", "Bearer shared-key")
+		if a, b := APIKeyRateLimitKey(viaHeader), APIKeyRateLimitKey(viaBearer); a != b {
+			t.Errorf("same key via different headers must share one bucket: %q vs %q", a, b)
 		}
 	})
 
@@ -265,15 +284,15 @@ func TestExtractAPIKey(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("X-API-Key", "header-key")
 		r.Header.Set("Authorization", "Bearer bearer-key")
-		if got := ExtractAPIKey(r); got != "header-key" {
-			t.Errorf("expected header-key, got %s", got)
+		if got := APIKeyRateLimitKey(r); got != hashAPIKey("header-key") {
+			t.Errorf("expected the X-API-Key digest, got %q", got)
 		}
 	})
 
-	t.Run("no key", func(t *testing.T) {
+	t.Run("no key returns empty", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		if got := ExtractAPIKey(r); got != "" {
-			t.Errorf("expected empty, got %s", got)
+		if got := APIKeyRateLimitKey(r); got != "" {
+			t.Errorf("expected empty (limiter bypass), got %q", got)
 		}
 	})
 }

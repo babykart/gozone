@@ -1001,15 +1001,16 @@ func TestOidcPostLogoutURL(t *testing.T) {
 	}
 }
 
-// TestLogout_TokenWithoutExpiryDoesNotPanic guards the nil-ExpiresAt path of
-// the logout revocation. Every issuance path embeds an exp today, but a JWT
-// without one parses fine — Logout used to dereference claims.ExpiresAt.Time
-// unconditionally, so a future issuance change would have turned the token
-// cookie into a guaranteed panic (the middleware session-policy path already
-// guards the same field). Such a token never expires on its own, so its
-// revocation row must carry a far-future expiry instead of being pruned with
-// the token still usable.
-func TestLogout_TokenWithoutExpiryDoesNotPanic(t *testing.T) {
+// TestLogout_TokenWithoutExpiryIsDenied guards the hardened ParseToken
+// contract at the logout boundary: every issuance path embeds an exp today,
+// but a JWT without one used to parse fine — Logout then dereferenced
+// claims.ExpiresAt.Time unconditionally, so a future issuance change would
+// have turned the token cookie into a guaranteed panic. ParseToken now
+// REQUIRES exp (and iss/iat), so an exp-less token never parses: the logout
+// handler must absorb the parse error without panicking, complete the local
+// logout (cookie clear, 303) but skip the revocation of a token it could not
+// validate.
+func TestLogout_TokenWithoutExpiryIsDenied(t *testing.T) {
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), 4)
@@ -1021,8 +1022,8 @@ func TestLogout_TokenWithoutExpiryDoesNotPanic(t *testing.T) {
 	user := &models.User{ID: 1, Username: "noexp", Role: "user"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
 
-	// Mint a token with NO ExpiresAt claim, mimicking a hypothetical issuance
-	// path that omits it (ParseToken does not require exp to succeed).
+	// Mint a token with NO ExpiresAt claim: post-hardening ParseToken
+	// refuses it, so Logout must treat it as unauthenticated.
 	noExpToken := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
 		UserID:   user.ID,
 		Username: user.Username,
@@ -1048,21 +1049,13 @@ func TestLogout_TokenWithoutExpiryDoesNotPanic(t *testing.T) {
 		t.Fatalf("expected 303, got %d", w.Code)
 	}
 
-	// The token must still be revoked — with a far-future expiry so the
-	// revoked_tokens purge does not drop the row while the token remains
-	// usable (it never expires on its own).
+	// The exp-less token was denied at the parse layer, so no revocation row
+	// may exist for it.
 	revoked, err := h.DB.IsTokenRevoked(context.Background(), "no-exp-jti")
 	if err != nil {
 		t.Fatalf("check revocation: %v", err)
 	}
-	if !revoked {
-		t.Error("expected the exp-less token to be revoked on logout")
-	}
-	var expiresAt time.Time
-	if err := h.DB.QueryRow("SELECT expires_at FROM revoked_tokens WHERE jti = ?", "no-exp-jti").Scan(&expiresAt); err != nil {
-		t.Fatalf("read revocation row: %v", err)
-	}
-	if time.Until(expiresAt) < 99*365*24*time.Hour {
-		t.Errorf("revocation of an exp-less token must carry a far-future expiry, got %v", expiresAt)
+	if revoked {
+		t.Error("an exp-less token is denied at parse time; it must not be revocable through logout")
 	}
 }

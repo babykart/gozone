@@ -207,7 +207,7 @@ func TestStdioBridge_EndToEndAgainstRealServer(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP, 0))
 		r.Handle("/mcp", mcpserver.New(dnsops.New(db, pdnsClient), &config.MCPConfig{Enabled: true, Path: "/mcp", ReadOnly: true}, "test"))
 	})
 	httpSrv := httptest.NewServer(r)

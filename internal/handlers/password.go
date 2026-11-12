@@ -1,16 +1,19 @@
 package handlers
 
-import "time"
+import (
+	"time"
+
+	"github.com/babykart/gozone/internal/middleware"
+)
 
 // passwordExpired reports whether the password is older than the configured
 // maximum age. maxAgeDays <= 0 (default) means no expiry. A zero changedAt
 // (no recorded change time) is treated as non-expired so legacy rows are not
-// forced en masse.
+// forced en masse. The semantics live in middleware.PasswordExpired, which
+// the API-key middleware shares so web logins and API keys enforce one
+// identical policy.
 func passwordExpired(maxAgeDays int, changedAt time.Time) bool {
-	if maxAgeDays <= 0 || changedAt.IsZero() {
-		return false
-	}
-	return time.Since(changedAt) > time.Duration(maxAgeDays)*24*time.Hour
+	return middleware.PasswordExpired(maxAgeDays, changedAt)
 }
 
 // passwordExpiryWarnDays returns the number of days before the password

@@ -96,7 +96,7 @@ func newMCPTestEnvWithScope(t *testing.T, readOnly bool, pdnsHandler testutil.PD
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP, 0))
 		r.Handle("/mcp", handler)
 	})
 	httpSrv := httptest.NewServer(r)
@@ -627,7 +627,7 @@ func TestUnauthenticatedRequestRejected(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceMCP, 0))
 		r.Handle("/mcp", handler)
 	})
 	srv := httptest.NewServer(r)

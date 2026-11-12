@@ -180,13 +180,19 @@ func ExtractIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// ExtractAPIKey returns the API key from X-API-Key or Authorization header.
-func ExtractAPIKey(r *http.Request) string {
+// APIKeyRateLimitKey returns the rate-limit bucket key for the API key
+// carried by the request (X-API-Key header, else the Authorization Bearer
+// credential), or "" when no key is present — the limiter skips "" requests.
+// The raw secret must never become a bucket map key (the key doubles as the
+// rate-limit log identifier), so the returned value is the SHA-256 hex
+// digest of the credential; both header spellings of the same key land in
+// one stable bucket.
+func APIKeyRateLimitKey(r *http.Request) string {
 	if key := r.Header.Get("X-API-Key"); key != "" {
-		return key
+		return hashAPIKey(key)
 	}
 	if auth := r.Header.Get("Authorization"); len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
+		return hashAPIKey(auth[7:])
 	}
 	return ""
 }

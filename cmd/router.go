@@ -341,8 +341,8 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		// IP-based rate limit BEFORE auth so key-rotation floods hit the limiter
 		// before any DB lookup (M-SEC2). The per-key limiter runs after auth.
 		r.Use(apiIPLimiter.Limit(middleware.ExtractIP))
-		r.Use(middleware.APIKeyAuth(db, models.SurfaceAPI))
-		r.Use(apiLimiter.Limit(middleware.ExtractAPIKey))
+		r.Use(middleware.APIKeyAuth(db, models.SurfaceAPI, cfg.Password.MaxAgeDays))
+		r.Use(apiLimiter.Limit(middleware.APIKeyRateLimitKey))
 		// Read-only scopes stop here: safe methods pass, writes need
 		// api:write. Role and zone authorization still apply in the handlers.
 		r.Use(middleware.RequireWriteScope)

@@ -45,6 +45,11 @@ const (
 	APIKeyScopeContextKey contextKey = "api_key_scope"
 )
 
+// tokenIssuer is the JWT issuer claim every gozone issuance path embeds
+// (generateSessionToken) and the only issuer ParseToken accepts. Keeping the
+// value in one place prevents the signer and the verifier drifting apart.
+const tokenIssuer = "gozone"
+
 // Claims represents the JWT claims for a session.
 type Claims struct {
 	UserID   int64  `json:"user_id"`
@@ -137,7 +142,7 @@ func generateSessionToken(user *models.User, secret []byte, duration time.Durati
 			ID:        jti.String(),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "gozone",
+			Issuer:    tokenIssuer,
 		},
 	}
 
@@ -163,7 +168,18 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return secret, nil
-	})
+	},
+		// A session token without an expiry must never parse: it would be
+		// valid until its jti is revoked, i.e. effectively forever.
+		jwt.WithExpirationRequired(),
+		// Only tokens this gozone instance issued are accepted.
+		jwt.WithIssuer(tokenIssuer),
+		// Deliberately NO WithIssuedAt: the vendored v5 verifyIssuedAt is
+		// optional-presence and enabling it would additionally reject future
+		// iat at zero leeway — a clock-skewed replica minting a token one
+		// second ahead would lock that user out of every other replica.
+		// Presence/non-zero of iat is instead enforced explicitly below.
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +187,14 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
 		return nil, jwt.ErrSignatureInvalid
+	}
+
+	// Every issuance path embeds an iat, and the session-policy/rotation
+	// checks below dereference IssuedAt. A token hand-built without one (or
+	// with the zero NumericDate, which round-trips to a time where
+	// IsZero() is true) must not slip through: reject it outright.
+	if claims.IssuedAt == nil || claims.IssuedAt.Time.IsZero() {
+		return nil, jwt.ErrTokenRequiredClaimMissing
 	}
 
 	return claims, nil
@@ -336,6 +360,19 @@ func applySessionPolicy(w http.ResponseWriter, r *http.Request, db *database.DB,
 	if tracker == nil {
 		return true
 	}
+	// Fail-closed on a missing/zero iat BEFORE any tracker call (which would
+	// otherwise panic on the claims.IssuedAt.Time dereference). Unreachable
+	// through ParseToken since the claim-requirement hardening (exp/iss/iat
+	// are all required there), but applySessionPolicy is also reachable from
+	// tests and any future caller that hands it hand-built claims. The
+	// denial mirrors the policy-failure path: revoke the jti so the token
+	// cannot be replayed, clear the cookie, redirect to /login.
+	if claims.IssuedAt == nil || claims.IssuedAt.Time.IsZero() {
+		revokeOnPolicyDenial(r.Context(), db, claims, user)
+		clearSessionCookie(w, r)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return false
+	}
 	sid := claims.SessionID
 	if sid == "" {
 		sid = claims.ID
@@ -453,6 +490,10 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 // APIKeyAuth returns a middleware that validates API key tokens for the given
 // transport surface (models.SurfaceAPI for /api/v1, models.SurfaceMCP for /mcp).
 //
+// passwordMaxAgeDays is the password.max_age_days policy applied to the key's
+// OWNER (0 disables expiry): a long-lived API key must not outlive the
+// password credential state that should have revoked it.
+//
 // The API key can be provided via:
 //  1. X-API-Key header
 //  2. Authorization header with "Bearer " prefix
@@ -463,23 +504,31 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 // credential rotation (monotonic credential_version recorded at creation, or
 // the tokens_valid_after cutoff as the legacy net), return 401 as well
 // ("api_key_invalidated" for the latter) — an API key must not outlive the
-// credential event that should have revoked it.
-// After those validity controls, the key's stored scope is checked: an
-// unreadable scope fails closed with 401, and a key whose scope belongs to
-// another surface returns HTTP 403 "API_KEY_SCOPE_MISMATCH" — a key only ever
-// works on its own surface, so a REST key cannot drive the MCP and vice versa.
-// The authenticated user is stored in the request context via UserContextKey,
-// the key's scope via APIKeyScopeContextKey, and the API key's last_used_at
-// timestamp is recorded — coarsened to at most one write per key per minute
-// (see apiKeyLastUsedTracker), since the column is informational.
-func APIKeyAuth(db *database.DB, surface models.APIKeySurface) func(http.Handler) http.Handler {
-	return apiKeyAuth(db, newAPIKeyLastUsedTracker(), surface)
+// credential event that should have revoked it. Two further owner-side
+// conditions share the same 401 "api_key_invalidated" envelope: the owner is
+// flagged must_change_password (a forced change is pending, e.g. after an
+// admin reset or password expiry), or the owner's password aged past
+// passwordMaxAgeDays — in both cases the account's password credential is
+// stale and every API key is refused until the password is rotated. The two
+// branches stay distinct internally because they identify different stale
+// states (a pending forced change vs. an aged password), but they deliberately
+// answer one stable public code so clients do not learn which internal
+// condition fired. After those validity controls, the key's stored scope is
+// checked: an unreadable scope fails closed with 401, and a key whose scope
+// belongs to another surface returns HTTP 403 "API_KEY_SCOPE_MISMATCH" — a
+// key only ever works on its own surface, so a REST key cannot drive the MCP
+// and vice versa. The authenticated user is stored in the request context via
+// UserContextKey, the key's scope via APIKeyScopeContextKey, and the API key's
+// last_used_at timestamp is recorded — coarsened to at most one write per key
+// per minute (see apiKeyLastUsedTracker), since the column is informational.
+func APIKeyAuth(db *database.DB, surface models.APIKeySurface, passwordMaxAgeDays int) func(http.Handler) http.Handler {
+	return apiKeyAuth(db, newAPIKeyLastUsedTracker(), surface, passwordMaxAgeDays)
 }
 
 // apiKeyAuth is APIKeyAuth with an explicit last_used_at tracker, so tests
 // can drive the write-coarsening (age entries past the interval, observe the
 // skipped/refreshed writes).
-func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.APIKeySurface) func(http.Handler) http.Handler {
+func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.APIKeySurface, passwordMaxAgeDays int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("X-API-Key")
@@ -545,6 +594,22 @@ func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.
 				return
 			}
 
+			// Owner-side password-policy refusal, two distinct stale-credential
+			// states sharing one public code (see the APIKeyAuth doc comment):
+			//  - MustChangePassword: a forced change is pending (admin reset or
+			//    password expiry flagged the account); the key must not be a
+			//    bypass around it.
+			//  - PasswordExpired: the password aged past password.max_age_days.
+			//    A zero PasswordChangedAt (never recorded, e.g. a legacy row) is
+			//    explicitly NOT expired so old accounts are not locked out
+			//    en masse when an expiry policy is introduced.
+			// Both answer before the scope parse so an invalidated key never
+			// leaks a surface-mismatch answer.
+			if user.MustChangePassword || PasswordExpired(passwordMaxAgeDays, user.PasswordChangedAt) {
+				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "API_KEY_INVALIDATED", "api_key_invalidated")
+				return
+			}
+
 			// Scope control, ordered after every validity control (so an
 			// expired key still answers API_KEY_EXPIRED) and before the
 			// last_used_at touch (so a refused usage does not count as use).
@@ -601,6 +666,18 @@ func RequireWriteScope(next http.Handler) http.Handler {
 func hashAPIKey(rawKey string) string {
 	h := sha256.Sum256([]byte(rawKey))
 	return hex.EncodeToString(h[:])
+}
+
+// PasswordExpired reports whether the password is older than the configured
+// maximum age. maxAgeDays <= 0 (default) means no expiry. A zero changedAt
+// (no recorded change time) is treated as non-expired so legacy rows are not
+// forced en masse. It is exported for the API-key middleware, which applies
+// the same policy to the key's owner.
+func PasswordExpired(maxAgeDays int, changedAt time.Time) bool {
+	if maxAgeDays <= 0 || changedAt.IsZero() {
+		return false
+	}
+	return time.Since(changedAt) > time.Duration(maxAgeDays)*24*time.Hour
 }
 
 // requireRole is the shared implementation behind the role-gating middlewares:

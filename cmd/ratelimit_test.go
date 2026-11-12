@@ -46,7 +46,7 @@ func TestAPIRateLimitRunsBeforeAuth(t *testing.T) {
 	})
 
 	// Compose in the production order: IP limit -> auth -> key limit.
-	stack := ipLimiter.Limit(middleware.ExtractIP)(authMiddleware(keyLimiter.Limit(middleware.ExtractAPIKey)(handler)))
+	stack := ipLimiter.Limit(middleware.ExtractIP)(authMiddleware(keyLimiter.Limit(middleware.APIKeyRateLimitKey)(handler)))
 
 	// Fire one more request than the IP bucket allows, all from the same source
 	// address (httptest always sets RemoteAddr to "192.0.2.1:1234").

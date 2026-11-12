@@ -187,6 +187,207 @@ func TestParseToken_Expired(t *testing.T) {
 	}
 }
 
+// legacyPreHardeningJWT is a FIXED compact JWT minted in the shape every
+// gozone release has produced: HS256 signed with testSecret, iat 1700000000
+// (2023-11-14), exp 4102444800 (2100-01-01), iss "gozone",
+// jti "legacy-jti-fixture". Hardcoding the serialization (rather than minting
+// at test time) pins upgrade compatibility: once ParseToken starts requiring
+// exp/iss/iat, tokens issued by older releases must keep parsing.
+const legacyPreHardeningJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." +
+	"eyJ1c2VyX2lkIjo0MiwidXNlcm5hbWUiOiJsZWdhY3kiLCJyb2xlIjoidXNlciIsImp0aSI6ImxlZ2FjeS1qdGktZml4dHVyZSIsInNpZCI6ImxlZ2FjeS1zaWQtZml4dHVyZSIsImV4cCI6NDEwMjQ0NDgwMCwiaWF0IjoxNzAwMDAwMDAwLCJpc3MiOiJnb3pvbmUifQ." +
+	"mHpqN7Gr-6c4fKtEqGs_B7LCPRnbrWWT_1s5BOuwwLc"
+
+// TestParseToken_LegacyFixedTokenFixture is the valid control for the
+// ParseToken hardening: a token with the exact claim shape pre-hardening
+// releases issued must still parse, with its registered claims intact.
+func TestParseToken_LegacyFixedTokenFixture(t *testing.T) {
+	claims, err := ParseToken(legacyPreHardeningJWT, testSecret)
+	if err != nil {
+		t.Fatalf("pre-hardening token must keep parsing after the claim-requirement hardening: %v", err)
+	}
+	if claims.UserID != 42 || claims.Username != "legacy" || claims.Role != "user" {
+		t.Errorf("identity claims lost: %+v", claims)
+	}
+	if claims.Issuer != "gozone" {
+		t.Errorf("Issuer = %q, want gozone", claims.Issuer)
+	}
+	if claims.ID != "legacy-jti-fixture" {
+		t.Errorf("jti = %q, want legacy-jti-fixture", claims.ID)
+	}
+	if claims.IssuedAt == nil || claims.IssuedAt.Unix() != 1700000000 {
+		t.Errorf("iat = %v, want 1700000000", claims.IssuedAt)
+	}
+	if claims.ExpiresAt == nil || claims.ExpiresAt.Unix() != 4102444800 {
+		t.Errorf("exp = %v, want 4102444800", claims.ExpiresAt)
+	}
+}
+
+// TestParseToken_ClaimRequirements pins the ParseToken hardening: beyond a
+// valid HS256 signature, a session token must carry a non-expired exp, an
+// iss of exactly "gozone" and a present, non-zero iat. GenerateSessionToken
+// always embeds all three, so each malformed shape is hand-built with
+// jwt.NewWithClaims. (A future iat is deliberately NOT tested: the parser
+// options intentionally skip WithIssuedAt to avoid zero-leeway
+// cross-replica failures.)
+func TestParseToken_ClaimRequirements(t *testing.T) {
+	now := time.Now()
+	future := jwt.NewNumericDate(now.Add(time.Hour))
+	past := jwt.NewNumericDate(now.Add(-time.Hour))
+	iat := jwt.NewNumericDate(now)
+
+	tests := []struct {
+		name   string
+		claims Claims
+		wantOK bool
+	}{
+		{
+			"valid control accepted",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: future, IssuedAt: iat, Issuer: "gozone",
+				},
+			},
+			true,
+		},
+		{
+			"missing exp rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					IssuedAt: iat, Issuer: "gozone",
+				},
+			},
+			false,
+		},
+		{
+			"wrong issuer rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: future, IssuedAt: iat, Issuer: "other",
+				},
+			},
+			false,
+		},
+		{
+			"missing issuer rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: future, IssuedAt: iat,
+				},
+			},
+			false,
+		},
+		{
+			"missing iat rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: future, Issuer: "gozone",
+				},
+			},
+			false,
+		},
+		{
+			"zero iat rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: future, IssuedAt: jwt.NewNumericDate(time.Time{}), Issuer: "gozone",
+				},
+			},
+			false,
+		},
+		{
+			"expired token rejected",
+			Claims{
+				UserID: 1, Username: "u", Role: "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: past, IssuedAt: iat, Issuer: "gozone",
+				},
+			},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, tt.claims).SignedString(testSecret)
+			if err != nil {
+				t.Fatalf("sign fixture token: %v", err)
+			}
+			claims, err := ParseToken(token, testSecret)
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("expected acceptance, got error: %v", err)
+				}
+				if claims.UserID != 1 {
+					t.Errorf("UserID = %d, want 1", claims.UserID)
+				}
+				return
+			}
+			if err == nil {
+				t.Errorf("expected rejection, token parsed fine: %+v", claims)
+			}
+		})
+	}
+}
+
+// TestApplySessionPolicy_NilIssuedAtFailsClosed is the tracker-path guard
+// regression: a well-signed token whose Claims carry no iat used to reach
+// applySessionPolicy and panic on the claims.IssuedAt.Time dereference at the
+// tracker call. The guard must deny the request (the standard /login
+// redirect, JWT revoked) before any tracker call, for both a nil and a
+// zero-value iat.
+func TestApplySessionPolicy_NilIssuedAtFailsClosed(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "niliat", "user", true)
+	tr := NewSessionTracker(db, SessionPolicy{Idle: time.Minute})
+	defer tr.Close()
+
+	now := time.Now().UTC()
+	user := &models.User{ID: userID, Username: "niliat", Role: "user"}
+
+	tests := []struct {
+		name string
+		iat  *jwt.NumericDate
+	}{
+		{"nil iat", nil},
+		{"zero iat", jwt.NewNumericDate(time.Time{})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims := &Claims{
+				UserID:   userID,
+				Username: "niliat",
+				Role:     "user",
+				RegisteredClaims: jwt.RegisteredClaims{
+					ID:        "jti-niliat-" + tt.name,
+					Issuer:    "gozone",
+					IssuedAt:  tt.iat,
+					ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+				},
+			}
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+
+			// Pre-fix this panics (nil deref). The guard must deny instead.
+			if applySessionPolicy(rec, req, db, testSecret, tr, time.Hour, claims, user) {
+				t.Error("applySessionPolicy must deny a session with nil/zero iat")
+			}
+			if rec.Code != http.StatusSeeOther {
+				t.Errorf("expected the standard 303 denial, got %d", rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+				t.Errorf("expected redirect to /login, got %q", loc)
+			}
+		})
+	}
+}
+
 func TestGenerateToken_Expired(t *testing.T) {
 	user := &models.User{ID: 1, Username: "u", Role: "user"}
 
@@ -360,7 +561,7 @@ func TestAPIKeyAuth_XAPIKeyHeader(t *testing.T) {
 	userID := seedTestUser(t, db, "apiuser", "user", true)
 	seedTestAPIKey(t, db, userID, "test-api-key", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -387,7 +588,7 @@ func TestAPIKeyAuth_AuthorizationBearer(t *testing.T) {
 	userID := seedTestUser(t, db, "beareruser", "user", true)
 	seedTestAPIKey(t, db, userID, "bearer-key", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -411,7 +612,7 @@ func TestAPIKeyAuth_XAPIKeyPrecedence(t *testing.T) {
 	userID := seedTestUser(t, db, "precedence", "user", true)
 	seedTestAPIKey(t, db, userID, "header-key", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -430,7 +631,7 @@ func TestAPIKeyAuth_XAPIKeyPrecedence(t *testing.T) {
 func TestAPIKeyAuth_MissingKey(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -448,7 +649,7 @@ func TestAPIKeyAuth_MissingKey(t *testing.T) {
 func TestAPIKeyAuth_UnknownKey(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -470,7 +671,7 @@ func TestAPIKeyAuth_ExpiredKey(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	seedTestAPIKey(t, db, userID, "expired-key", &past)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -491,7 +692,7 @@ func TestAPIKeyAuth_LastUsedAtUpdated(t *testing.T) {
 	userID := seedTestUser(t, db, "lastused", "user", true)
 	seedTestAPIKey(t, db, userID, "used-key", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -526,7 +727,7 @@ func TestAPIKeyAuth_DisabledUserDoesNotUpdateLastUsed(t *testing.T) {
 	userID := seedTestUser(t, db, "disableduser2", "user", false)
 	seedTestAPIKey(t, db, userID, "disabled-key2", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -564,7 +765,7 @@ func TestAPIKeyAuth_OrphanKeyDoesNotUpdateLastUsed(t *testing.T) {
 	}
 	db.Exec("PRAGMA foreign_keys = ON")
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -592,7 +793,7 @@ func TestAPIKeyAuth_DisabledUser(t *testing.T) {
 	userID := seedTestUser(t, db, "disableduser", "user", false)
 	seedTestAPIKey(t, db, userID, "disabled-key", nil)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -622,7 +823,7 @@ func TestAPIKeyAuth_NonExistentUser(t *testing.T) {
 	}
 	db.Exec("PRAGMA foreign_keys = ON")
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1386,7 +1587,7 @@ func TestAPIKeyAuth_LastUsedWriteCoarsened(t *testing.T) {
 	seedTestAPIKey(t, db, userID, "coarse-key", nil)
 
 	tracker := newAPIKeyLastUsedTracker()
-	handler := apiKeyAuth(db, tracker, models.SurfaceAPI)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := apiKeyAuth(db, tracker, models.SurfaceAPI, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -1532,7 +1733,7 @@ func TestAPIKeyAuth_ManuallyLockedOwnerDenied(t *testing.T) {
 		t.Fatalf("seed manual lock: %v", err)
 	}
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	reached := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -1579,7 +1780,7 @@ func TestAPIKeyAuth_CredentialVersionRevokesSameSecondKey(t *testing.T) {
 	}
 
 	do := func(key string) *httptest.ResponseRecorder {
-		mw := APIKeyAuth(db, models.SurfaceAPI)
+		mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 		reached := false
 		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reached = true
@@ -1605,7 +1806,7 @@ func TestAPIKeyAuth_CredentialVersionRevokesSameSecondKey(t *testing.T) {
 	if _, err := db.Exec("UPDATE api_keys SET credential_version = 1 WHERE key_hash = ?", hashAPIKey("fresh-after-rotation")); err != nil {
 		t.Fatalf("set key version: %v", err)
 	}
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	reached := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -1645,7 +1846,7 @@ func TestAPIKeyAuth_CredentialRotationCutoffDenied(t *testing.T) {
 		t.Fatalf("bump cutoff: %v", err)
 	}
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	reached := false
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -1683,7 +1884,7 @@ func TestAPIKeyAuth_SurfaceMismatch(t *testing.T) {
 	seedTestAPIKeyScope(t, db, userID, "mcp-key", nil, models.ScopeMCPWrite)
 
 	do := func(key string, surface models.APIKeySurface) *httptest.ResponseRecorder {
-		mw := APIKeyAuth(db, surface)
+		mw := APIKeyAuth(db, surface, 0)
 		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("handler must not be reached on a surface mismatch")
 			w.WriteHeader(http.StatusOK)
@@ -1726,7 +1927,7 @@ func TestAPIKeyAuth_UnknownScopeFailsClosed(t *testing.T) {
 	userID := seedTestUser(t, db, "bogusscope", "user", true)
 	seedTestAPIKeyScope(t, db, userID, "bogus-key", nil, models.APIKeyScope("api:admin"))
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler must not be reached for an unreadable scope")
 		w.WriteHeader(http.StatusOK)
@@ -1751,7 +1952,7 @@ func TestAPIKeyAuth_ScopeInContext(t *testing.T) {
 	seedTestAPIKeyScope(t, db, userID, "mcpread-key", nil, models.ScopeMCPRead)
 
 	do := func(key string, surface models.APIKeySurface) (models.APIKeyScope, bool) {
-		mw := APIKeyAuth(db, surface)
+		mw := APIKeyAuth(db, surface, 0)
 		var scope models.APIKeyScope
 		var ok bool
 		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1778,13 +1979,24 @@ func TestAPIKeyAuth_ScopeInContext(t *testing.T) {
 
 // TestAPIKeyAuth_ExpiredBeatsScope verifies the control order: an expired key
 // answers API_KEY_EXPIRED even when its scope would mismatch the surface too.
+// The owner additionally violates the password policy (forced change pending
+// and password aged past max_age_days) so the test also pins the precedence of
+// the key-level expiry control over the owner password-policy refusals.
 func TestAPIKeyAuth_ExpiredBeatsScope(t *testing.T) {
 	db := newTestAuthDB(t)
 	userID := seedTestUser(t, db, "expiredscope", "user", true)
 	past := time.Now().Add(-time.Hour)
 	seedTestAPIKeyScope(t, db, userID, "expired-mcp-key", &past, models.ScopeMCPWrite)
 
-	mw := APIKeyAuth(db, models.SurfaceAPI)
+	// Owner-side password-policy violations: a forced change pending and a
+	// password older than the 1-day max age. Neither may shadow the key's
+	// own API_KEY_EXPIRED answer.
+	if _, err := db.Exec("UPDATE users SET must_change_password = 1, password_changed_at = ? WHERE id = ?",
+		time.Now().Add(-48*time.Hour).UTC(), userID); err != nil {
+		t.Fatalf("make owner violate the password policy: %v", err)
+	}
+
+	mw := APIKeyAuth(db, models.SurfaceAPI, 1)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler must not be reached for an expired key")
 		w.WriteHeader(http.StatusOK)
@@ -1903,4 +2115,145 @@ func TestRequireDNSAdmin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// serveAPIKeyAuth drives one request through the private apiKeyAuth with an
+// explicit last-used tracker, returning the recorder and whether the wrapped
+// handler ran. The password-policy tests below mirror the tracker-driven
+// harness used by the last_used_at tests.
+func serveAPIKeyAuth(db *database.DB, surface models.APIKeySurface, maxAgeDays int, key string) (*httptest.ResponseRecorder, bool) {
+	tracker := newAPIKeyLastUsedTracker()
+	reached := false
+	handler := apiKeyAuth(db, tracker, surface, maxAgeDays)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", key)
+	handler.ServeHTTP(w, r)
+	return w, reached
+}
+
+// TestAPIKeyAuth_MustChangePasswordRefused locks the new owner-side refusal:
+// an owner flagged must_change_password (forced change pending) must have
+// every API key refused with 401 API_KEY_INVALIDATED — a long-lived API key
+// must not outlive the credential state that should have revoked it. The flag
+// is set directly on the users row AFTER key creation so credential_version
+// still matches: the refusal under test is the must_change branch, not the
+// rotation guard. Exercised through the public APIKeyAuth wrapper.
+func TestAPIKeyAuth_MustChangePasswordRefused(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "mustchange", "user", true)
+	seedTestAPIKey(t, db, userID, "must-change-key", nil)
+
+	if _, err := db.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", userID); err != nil {
+		t.Fatalf("flag must_change_password: %v", err)
+	}
+
+	reached := false
+	mw := APIKeyAuth(db, models.SurfaceAPI, 0)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("X-API-Key", "must-change-key")
+	handler.ServeHTTP(w, r)
+
+	if reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("key of an owner pending a password change must be refused: code=%d reached=%v", w.Code, reached)
+	}
+	assertJSONError(t, w, "api_key_invalidated")
+
+	// Control: clearing the flag (self-service change completed) restores
+	// authentication without touching credential_version.
+	if _, err := db.Exec("UPDATE users SET must_change_password = 0 WHERE id = ?", userID); err != nil {
+		t.Fatalf("clear must_change_password: %v", err)
+	}
+	if w, reached := serveAPIKeyAuth(db, models.SurfaceAPI, 0, "must-change-key"); w.Code != http.StatusOK || !reached {
+		t.Errorf("key must authenticate once the forced change is cleared: code=%d reached=%v", w.Code, reached)
+	}
+}
+
+// TestAPIKeyAuth_PasswordExpiredRefused locks the second owner-side refusal:
+// a password aged past password.max_age_days (here maxAgeDays=1 with
+// password_changed_at 2 days ago) refuses every API key with 401
+// API_KEY_INVALIDATED — the API key must not be a bypass around password
+// expiry.
+func TestAPIKeyAuth_PasswordExpiredRefused(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "agedout", "user", true)
+	seedTestAPIKey(t, db, userID, "aged-password-key", nil)
+
+	if _, err := db.Exec("UPDATE users SET password_changed_at = ? WHERE id = ?",
+		time.Now().Add(-48*time.Hour).UTC(), userID); err != nil {
+		t.Fatalf("backdate password_changed_at: %v", err)
+	}
+
+	w, reached := serveAPIKeyAuth(db, models.SurfaceAPI, 1, "aged-password-key")
+	if reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("key of an owner with an expired password must be refused: code=%d reached=%v", w.Code, reached)
+	}
+	assertJSONError(t, w, "api_key_invalidated")
+}
+
+// TestAPIKeyAuth_PasswordWithinPolicyPasses is the control for the expiry
+// refusal: the same 2-day-old password with a 30-day policy authenticates.
+func TestAPIKeyAuth_PasswordWithinPolicyPasses(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "withinpolicy", "user", true)
+	seedTestAPIKey(t, db, userID, "within-policy-key", nil)
+
+	if _, err := db.Exec("UPDATE users SET password_changed_at = ? WHERE id = ?",
+		time.Now().Add(-48*time.Hour).UTC(), userID); err != nil {
+		t.Fatalf("set password_changed_at: %v", err)
+	}
+
+	if w, reached := serveAPIKeyAuth(db, models.SurfaceAPI, 30, "within-policy-key"); w.Code != http.StatusOK || !reached {
+		t.Errorf("key within the password policy must authenticate: code=%d reached=%v (%s)", w.Code, reached, w.Body.String())
+	}
+}
+
+// TestAPIKeyAuth_PasswordExpiryDisabledPasses pins the disabled-policy
+// semantics: maxAgeDays=0 (password.max_age_days default) means passwords
+// never expire, even with an ancient password_changed_at.
+func TestAPIKeyAuth_PasswordExpiryDisabledPasses(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "expirydisabled", "user", true)
+	seedTestAPIKey(t, db, userID, "expiry-disabled-key", nil)
+
+	if _, err := db.Exec("UPDATE users SET password_changed_at = ? WHERE id = ?",
+		time.Now().Add(-400*24*time.Hour).UTC(), userID); err != nil {
+		t.Fatalf("backdate password_changed_at: %v", err)
+	}
+
+	if w, reached := serveAPIKeyAuth(db, models.SurfaceAPI, 0, "expiry-disabled-key"); w.Code != http.StatusOK || !reached {
+		t.Errorf("maxAgeDays=0 must disable expiry: code=%d reached=%v (%s)", w.Code, reached, w.Body.String())
+	}
+}
+
+// TestAPIKeyAuth_MustChangeBeatsScope locks the control order: the owner-side
+// must_change_password refusal answers API_KEY_INVALIDATED even when the
+// key's scope would also mismatch the surface — the wrong-surface answer
+// (403 API_KEY_SCOPE_MISMATCH) must not leak for a key that is already
+// invalidated.
+func TestAPIKeyAuth_MustChangeBeatsScope(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "mustchangescope", "user", true)
+	// mcp:* scope presented on the REST surface: both a policy violation and
+	// a surface mismatch are in play.
+	seedTestAPIKeyScope(t, db, userID, "must-change-mcp-key", nil, models.ScopeMCPWrite)
+
+	if _, err := db.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", userID); err != nil {
+		t.Fatalf("flag must_change_password: %v", err)
+	}
+
+	w, reached := serveAPIKeyAuth(db, models.SurfaceAPI, 0, "must-change-mcp-key")
+	if reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("owner-side refusal must win over the scope mismatch: code=%d reached=%v", w.Code, reached)
+	}
+	assertJSONError(t, w, "api_key_invalidated")
 }
