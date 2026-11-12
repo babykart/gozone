@@ -50,6 +50,7 @@ func pdnsEmptyHandler() testutil.PDNSHandlerFunc {
 }
 
 func TestListGroups(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -69,6 +70,7 @@ func TestListGroups(t *testing.T) {
 }
 
 func TestListGroups_Empty(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -83,6 +85,7 @@ func TestListGroups_Empty(t *testing.T) {
 }
 
 func TestListGroups_PaginationAndSearch(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -118,6 +121,7 @@ func TestListGroups_PaginationAndSearch(t *testing.T) {
 }
 
 func TestCreateGroupPage(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -137,6 +141,7 @@ func TestCreateGroupPage(t *testing.T) {
 }
 
 func TestCreateGroup_Success(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -158,6 +163,7 @@ func TestCreateGroup_Success(t *testing.T) {
 }
 
 func TestCreateGroup_WithMembersAndZones(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -218,6 +224,7 @@ func TestCreateGroup_WithMembersAndZones(t *testing.T) {
 }
 
 func TestCreateGroup_NoSelections(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -247,6 +254,7 @@ func TestCreateGroup_NoSelections(t *testing.T) {
 // non-existent user_id must be skipped (not silently inserted/ignored) and the
 // redirect must surface a members_skipped warning so the admin is informed.
 func TestCreateGroup_NonExistentMember(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -285,6 +293,7 @@ func TestCreateGroup_NonExistentMember(t *testing.T) {
 }
 
 func TestCreateGroup_EmptyName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -303,6 +312,7 @@ func TestCreateGroup_EmptyName(t *testing.T) {
 }
 
 func TestCreateGroup_DuplicateName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -323,6 +333,7 @@ func TestCreateGroup_DuplicateName(t *testing.T) {
 }
 
 func TestEditGroupPage_Success(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -344,6 +355,7 @@ func TestEditGroupPage_Success(t *testing.T) {
 }
 
 func TestEditGroupPage_NotFound(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -363,6 +375,7 @@ func TestEditGroupPage_NotFound(t *testing.T) {
 }
 
 func TestEditGroupPage_InvalidID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -382,6 +395,7 @@ func TestEditGroupPage_InvalidID(t *testing.T) {
 }
 
 func TestUpdateGroup_Success(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -408,6 +422,7 @@ func TestUpdateGroup_Success(t *testing.T) {
 }
 
 func TestUpdateGroup_EmptyName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -430,6 +445,7 @@ func TestUpdateGroup_EmptyName(t *testing.T) {
 }
 
 func TestUpdateGroup_DuplicateName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -453,6 +469,7 @@ func TestUpdateGroup_DuplicateName(t *testing.T) {
 }
 
 func TestDeleteGroup(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -477,6 +494,7 @@ func TestDeleteGroup(t *testing.T) {
 }
 
 func TestAddMemberToGroup(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -507,6 +525,7 @@ func TestAddMemberToGroup(t *testing.T) {
 }
 
 func TestRemoveMemberFromGroup(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -542,6 +561,7 @@ func TestRemoveMemberFromGroup(t *testing.T) {
 // non-positive) user_id must yield HTTP 400 instead of leaking a driver-level
 // error as 500 on Postgres. No row must be inserted.
 func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -574,6 +594,7 @@ func TestAddMemberToGroup_InvalidUserID(t *testing.T) {
 // a numeric but non-existent user_id must yield a clear 400 and insert nothing,
 // rather than being silently dropped by InsertIgnore (FK violation).
 func TestAddMemberToGroup_NonExistentUser(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -605,6 +626,7 @@ func TestAddMemberToGroup_NonExistentUser(t *testing.T) {
 // TestRemoveMemberFromGroup_InvalidUserID is the remove counterpart: a
 // non-numeric user_id must yield 400, not a 500 driver error.
 func TestRemoveMemberFromGroup_InvalidUserID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -628,6 +650,7 @@ func TestRemoveMemberFromGroup_InvalidUserID(t *testing.T) {
 }
 
 func TestAddZoneToGroup(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -663,6 +686,7 @@ func TestAddZoneToGroup(t *testing.T) {
 // returns 303 without error, leaves exactly one zone_group_zones row, and
 // still writes the request-level add_group_zone audit entry.
 func TestAddZoneToGroup_DuplicateGrantAccepted(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -708,6 +732,7 @@ func TestAddZoneToGroup_DuplicateGrantAccepted(t *testing.T) {
 // would never match — and two spellings of one zone would fragment rights,
 // locks and audit.
 func TestAddZoneToGroup_CanonicalizesZoneID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -734,6 +759,7 @@ func TestAddZoneToGroup_CanonicalizesZoneID(t *testing.T) {
 }
 
 func TestAddZoneToGroup_EmptyZoneID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -759,6 +785,7 @@ func TestAddZoneToGroup_EmptyZoneID(t *testing.T) {
 }
 
 func TestRemoveZoneFromGroup(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -807,6 +834,7 @@ func countActivity(t *testing.T, h *Handler, action string) int {
 // the audit entry was written regardless, so a tampered link looked like a
 // successful grant.
 func TestAddMemberToGroup_MissingGroupRejected(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -843,6 +871,7 @@ func TestAddMemberToGroup_MissingGroupRejected(t *testing.T) {
 // add_group_zone audit entry, instead of the historical silent no-op +
 // success redirect.
 func TestAddZoneToGroup_MissingGroupRejected(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -878,6 +907,7 @@ func TestAddZoneToGroup_MissingGroupRejected(t *testing.T) {
 // mutation and its audit entry must be all-or-nothing. (A missing-group case
 // returns before the INSERT, so it cannot exercise this path.)
 func TestAddMemberToGroup_InsertFailureAborts(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -909,6 +939,7 @@ func TestAddMemberToGroup_InsertFailureAborts(t *testing.T) {
 // INSERT-failure abort: with zone_group_zones missing the grant INSERT fails
 // and the handler must 500 without writing an add_group_zone audit row.
 func TestAddZoneToGroup_InsertFailureAborts(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -940,6 +971,7 @@ func TestAddZoneToGroup_InsertFailureAborts(t *testing.T) {
 // seeding, so the DELETE fails inside the transaction; afterwards neither the
 // association nor its audit row may exist.
 func TestGroupRemovals_DBFailureAbort(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		dropTable   string
@@ -1016,6 +1048,7 @@ func TestGroupRemovals_DBFailureAbort(t *testing.T) {
 // AND the membership row is absent. Previously the insert committed and only
 // the audit error was logged, leaving an unaudited grant.
 func TestAddMemberToGroup_AuditFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1047,6 +1080,7 @@ func TestAddMemberToGroup_AuditFailureRollsBack(t *testing.T) {
 }
 
 func TestFilterZonesForUser_AdminReturnsAll(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1072,6 +1106,7 @@ func TestFilterZonesForUser_AdminReturnsAll(t *testing.T) {
 // every zone would turn that wiring mistake into full disclosure. The filter
 // returns an EMPTY list and logs server-side.
 func TestFilterZonesForUser_NilUserFailsClosed(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1091,6 +1126,7 @@ func TestFilterZonesForUser_NilUserFailsClosed(t *testing.T) {
 }
 
 func TestFilterZonesForUser_UserWithNoGroups(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1113,6 +1149,7 @@ func TestFilterZonesForUser_UserWithNoGroups(t *testing.T) {
 }
 
 func TestFilterZonesForUser_UserWithGroupAccess(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1143,6 +1180,7 @@ func TestFilterZonesForUser_UserWithGroupAccess(t *testing.T) {
 }
 
 func TestFilterZonesWithInfoForUser_AdminReturnsAll(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1167,6 +1205,7 @@ func TestFilterZonesWithInfoForUser_AdminReturnsAll(t *testing.T) {
 // contract as filterZonesForUser — a nil user yields an EMPTY list, never
 // every zone.
 func TestFilterZonesWithInfoForUser_NilUserFailsClosed(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1186,6 +1225,7 @@ func TestFilterZonesWithInfoForUser_NilUserFailsClosed(t *testing.T) {
 }
 
 func TestFilterZonesWithInfoForUser_Filtered(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1215,6 +1255,7 @@ func TestFilterZonesWithInfoForUser_Filtered(t *testing.T) {
 }
 
 func TestGetUserAllowedZoneIDs(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1243,6 +1284,7 @@ func TestGetUserAllowedZoneIDs(t *testing.T) {
 }
 
 func TestGetUserAllowedZoneIDs_NoMemberships(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1258,6 +1300,7 @@ func TestGetUserAllowedZoneIDs_NoMemberships(t *testing.T) {
 }
 
 func TestBulkDeleteGroups_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	g1 := seedGroup(t, h, "g1", "")
 	g2 := seedGroup(t, h, "g2", "")
@@ -1299,6 +1342,7 @@ func TestBulkDeleteGroups_Success(t *testing.T) {
 }
 
 func TestBulkDeleteGroups_AlreadyGoneReported(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	g1 := seedGroup(t, h, "g1", "")
 
@@ -1327,6 +1371,7 @@ func TestBulkDeleteGroups_AlreadyGoneReported(t *testing.T) {
 }
 
 func TestBulkDeleteGroups_NoSelection(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1346,6 +1391,7 @@ func TestBulkDeleteGroups_NoSelection(t *testing.T) {
 // string — a guaranteed 500 on PostgreSQL and a confusing partial result
 // elsewhere. It must be rejected with a 400 before any statement runs.
 func TestDeleteGroup_InvalidID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1365,6 +1411,7 @@ func TestDeleteGroup_InvalidID(t *testing.T) {
 // exist (already deleted, stale link) used to report silent success via the
 // plain redirect. It must surface 404 like EditGroupPage.
 func TestDeleteGroup_NotFound(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1387,6 +1434,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 // achievable within the request body limit — failed wholesale instead of
 // validating; it must now batch and return the correct subset.
 func TestExistingUserIDs_LargeSelectionBatched(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -1413,6 +1461,7 @@ func TestExistingUserIDs_LargeSelectionBatched(t *testing.T) {
 // exactly the batch size (single full batch) and one past it (full batch +
 // remainder of one) both validate correctly.
 func TestExistingUserIDs_BatchBoundary(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -1455,6 +1504,7 @@ func seedBulkUsers(t *testing.T, h *Handler, prefix string, n int) {
 // user row. The list must be capped at maxGroupSelectOptions (with the
 // truncation flag), and a search must narrow it below the cap.
 func TestGetAllUsers_CappedAndSearched(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	seedBulkUsers(t, h, "bulk", maxGroupSelectOptions+5)
 
@@ -1498,6 +1548,7 @@ func TestGetAllUsers_CappedAndSearched(t *testing.T) {
 // user cap test: the dropdown renders at most maxGroupSelectOptions zones,
 // narrowed by a case-insensitive name substring.
 func TestFilterZonesWithInfoForSearch_CappedAndSearched(t *testing.T) {
+	t.Parallel()
 	zones := make([]models.ZoneWithInfo, 0, maxGroupSelectOptions+3)
 	for i := 0; i < maxGroupSelectOptions+3; i++ {
 		zones = append(zones, models.ZoneWithInfo{Zone: models.Zone{
@@ -1528,6 +1579,7 @@ func TestFilterZonesWithInfoForSearch_CappedAndSearched(t *testing.T) {
 // the edit page: ?uq=/?zq= must narrow the add-member/add-zone dropdowns, and
 // each search form must preserve the other field's query parameter.
 func TestEditGroupPage_SearchNarrowsDropdowns(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones") {
@@ -1575,6 +1627,7 @@ func TestEditGroupPage_SearchNarrowsDropdowns(t *testing.T) {
 // the create form must render only the capped slice and expose the
 // truncation flag so the template can point operators at the edit page.
 func TestCreateGroupPage_TruncationHints(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1600,6 +1653,7 @@ func TestCreateGroupPage_TruncationHints(t *testing.T) {
 // the query running (holding SQLite's single serialised connection). With a
 // cancelled context the lookup must abort instead of returning rows.
 func TestGetUserAllowedZoneIDs_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	userID := testutil.SeedTestUser(t, h.DB, "ctxuser", "pass", "user", true)
 	gid := seedGroup(t, h, "ctx-group", "")
@@ -1630,6 +1684,7 @@ func TestGetUserAllowedZoneIDs_ContextCancellation(t *testing.T) {
 // delete) must leave an activity_logs row attributed to the acting admin.
 // Access-control changes used to leave no trace at all.
 func TestGroupMutationsLogged(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1785,6 +1840,7 @@ func zonesSection(body string) string {
 }
 
 func TestEditGroupPage_MemberPagination(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1818,6 +1874,7 @@ func TestEditGroupPage_MemberPagination(t *testing.T) {
 }
 
 func TestEditGroupPage_ZonePagination(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1838,6 +1895,7 @@ func TestEditGroupPage_ZonePagination(t *testing.T) {
 }
 
 func TestEditGroupPage_PerPageAll(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1858,6 +1916,7 @@ func TestEditGroupPage_PerPageAll(t *testing.T) {
 }
 
 func TestEditGroupPage_PaginationBounds(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1884,6 +1943,7 @@ func TestEditGroupPage_PaginationBounds(t *testing.T) {
 }
 
 func TestEditGroupPage_PaginationIndependent(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1904,6 +1964,7 @@ func TestEditGroupPage_PaginationIndependent(t *testing.T) {
 }
 
 func TestEditGroupPage_PaginationPreservesSearches(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones") {
@@ -1932,6 +1993,7 @@ func TestEditGroupPage_PaginationPreservesSearches(t *testing.T) {
 // add/remove actions: the dropdown searches and both paginations ride along in
 // the redirect so the operator lands back on the same view.
 func TestEditGroupPage_ActionRedirectsPreserveState(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1993,6 +2055,7 @@ func TestEditGroupPage_ActionRedirectsPreserveState(t *testing.T) {
 // at the stale page number, and the page clamping brings the view back to the
 // last page that actually has rows.
 func TestEditGroupPage_RemoveLastItemOnPageClamps(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -2036,6 +2099,7 @@ func TestEditGroupPage_RemoveLastItemOnPageClamps(t *testing.T) {
 // total and the page contents reflect the grants actually kept — an orphaned
 // grant (zone absent from PowerDNS) must be gone from both.
 func TestEditGroupPage_ZoneTotalAfterReconciliation(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("kept.example."))
 	defer srv.Close()
 

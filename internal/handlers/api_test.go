@@ -20,6 +20,7 @@ import (
 )
 
 func TestAPIListZones(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]models.Zone{
@@ -56,6 +57,7 @@ func TestAPIListZones(t *testing.T) {
 // middleware never ran — a wiring bug) must yield an EMPTY list, never every
 // zone.
 func TestAPIListZones_NilUserFailsClosed(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]models.Zone{
@@ -81,6 +83,7 @@ func TestAPIListZones_NilUserFailsClosed(t *testing.T) {
 }
 
 func TestAPIListZones_Empty(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`null`))
@@ -99,6 +102,7 @@ func TestAPIListZones_Empty(t *testing.T) {
 }
 
 func TestAPIGetZone(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{
@@ -124,6 +128,7 @@ func TestAPIGetZone(t *testing.T) {
 }
 
 func TestAPICreateZone(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -155,6 +160,7 @@ func TestAPICreateZone(t *testing.T) {
 // matching the UI handler's behaviour. Without this, "example.com" (no dot)
 // causes a PDNS error.
 func TestAPICreateZone_NormalizesNameAndNameservers(t *testing.T) {
+	t.Parallel()
 	var sent models.ZoneCreateRequest
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&sent)
@@ -188,6 +194,7 @@ func TestAPICreateZone_NormalizesNameAndNameservers(t *testing.T) {
 }
 
 func TestAPICreateZone_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -202,6 +209,7 @@ func TestAPICreateZone_InvalidJSON(t *testing.T) {
 }
 
 func TestAPIDeleteZone(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("expected DELETE, got %s", r.Method)
@@ -268,6 +276,7 @@ func apiAuditRow(t *testing.T, h *Handler, action string) (userID sql.NullInt64,
 // creation: an API key holder must not be able to create zones without a
 // trace, mirroring the web CreateZone handler.
 func TestAPICreateZone_LogsActivity(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		var req models.ZoneCreateRequest
 		json.NewDecoder(r.Body).Decode(&req)
@@ -303,6 +312,7 @@ func TestAPICreateZone_LogsActivity(t *testing.T) {
 // creation: before/after snapshots like the web CreateRecord handler (old is
 // empty on a brand-new RRSet, carries the merged-away state on an append).
 func TestAPICreateRecord_LogsActivity(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -347,6 +357,7 @@ func TestAPICreateRecord_LogsActivity(t *testing.T) {
 // TestAPIUpdateRecord_LogsActivity pins the audit trail for the API REPLACE:
 // old_value snapshots the replaced RRSet, new_value the submitted one.
 func TestAPIUpdateRecord_LogsActivity(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
@@ -390,6 +401,7 @@ func TestAPIUpdateRecord_LogsActivity(t *testing.T) {
 // TestAPIDeleteRecord_LogsActivity pins the audit trail for API-driven record
 // deletion: old_value snapshots the RRSet right before it disappears.
 func TestAPIDeleteRecord_LogsActivity(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
@@ -428,6 +440,7 @@ func TestAPIDeleteRecord_LogsActivity(t *testing.T) {
 }
 
 func TestAPIListRecords(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -457,6 +470,7 @@ func TestAPIListRecords(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByName(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.RawQuery
@@ -496,6 +510,7 @@ func TestAPIListRecords_FilteredByName(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByNameAndType(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.RawQuery
@@ -531,6 +546,7 @@ func TestAPIListRecords_FilteredByNameAndType(t *testing.T) {
 }
 
 func TestAPIListRecords_TypeWithoutName_Returns400(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("PDNS should not be called when query params are invalid, but got %s", r.Method)
 	})
@@ -550,6 +566,7 @@ func TestAPIListRecords_TypeWithoutName_Returns400(t *testing.T) {
 }
 
 func TestAPIListRecords_Filtered_EmptyResult(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -580,6 +597,7 @@ func TestAPIListRecords_Filtered_EmptyResult(t *testing.T) {
 }
 
 func TestAPICreateRecord(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// APICreateRecord now issues a GET (ListRecords) to merge with any
 		// existing RRSet before the PATCH.
@@ -612,6 +630,7 @@ func TestAPICreateRecord(t *testing.T) {
 // DELETE method's job) and must be rejected up front, before any PowerDNS
 // call.
 func TestAPICreateRecord_EmptyRecordsRejected(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("no PowerDNS call expected for an empty-records submission, got %s %s", r.Method, r.URL.Path)
 	})
@@ -636,6 +655,7 @@ func TestAPICreateRecord_EmptyRecordsRejected(t *testing.T) {
 // with zero records used to silently delete the RRSet while logging an
 // "update"; it must now be rejected with 400 (DELETE is the explicit path).
 func TestAPIUpdateRecord_EmptyRecordsRejected(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("no PowerDNS call expected for an empty-records submission, got %s %s", r.Method, r.URL.Path)
 	})
@@ -661,6 +681,7 @@ func TestAPIUpdateRecord_EmptyRecordsRejected(t *testing.T) {
 // instead of silently replacing it. The mock serves an existing A record on
 // GET; the POST of a second A record must result in a PATCH carrying both.
 func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -700,6 +721,7 @@ func TestAPICreateRecord_MergesWithExisting(t *testing.T) {
 // collapsed (batch-path parity) instead of producing a duplicate-record PATCH
 // that PowerDNS rejects with an opaque 422.
 func TestAPICreateRecord_DuplicateContentDeduped(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -736,6 +758,7 @@ func TestAPICreateRecord_DuplicateContentDeduped(t *testing.T) {
 // record create against a zone PowerDNS does not know must answer 404
 // ZONE_NOT_FOUND ("zone not found"), not a blanket 500.
 func TestAPICreateRecord_MissingZoneIs404(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
@@ -768,6 +791,7 @@ func TestAPICreateRecord_MissingZoneIs404(t *testing.T) {
 // the PATCH carried a one-record REPLACE that wiped the sibling record — the
 // API counterpart of the form regression.
 func TestAPICreateRecord_LowercaseTypeCanonicalized(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -804,6 +828,7 @@ func TestAPICreateRecord_LowercaseTypeCanonicalized(t *testing.T) {
 // case-insensitively validated type still gets its type-specific wire
 // handling: "mx" embeds the priority into the content, "txt" quotes it.
 func TestAPICreateRecord_LowercaseMXAndTXTWireFormat(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -842,6 +867,7 @@ func TestAPICreateRecord_LowercaseMXAndTXTWireFormat(t *testing.T) {
 // set) and falls back to the default on a brand-new RRSet; a negative value
 // is rejected with a 400 before reaching PowerDNS.
 func TestAPICreateRecord_TTLResolution(t *testing.T) {
+	t.Parallel()
 	post := func(body string) (*httptest.ResponseRecorder, []models.RRSet) {
 		var sent []models.RRSet
 		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -890,6 +916,7 @@ func TestAPICreateRecord_TTLResolution(t *testing.T) {
 // TestAPICreateRecord_TTLDefaultsOnNewRRSet verifies the fresh-RRSet branch:
 // no existing RRSet to inherit from → the 3600 default applies.
 func TestAPICreateRecord_TTLDefaultsOnNewRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -913,6 +940,7 @@ func TestAPICreateRecord_TTLDefaultsOnNewRRSet(t *testing.T) {
 // zero TTL inherits the TTL of the RRSet being replaced instead of zeroing
 // the set; a negative value is rejected.
 func TestAPIUpdateRecord_TTLResolution(t *testing.T) {
+	t.Parallel()
 	put := func(body string) (*httptest.ResponseRecorder, []models.RRSet) {
 		var sent []models.RRSet
 		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -952,6 +980,7 @@ func TestAPIUpdateRecord_TTLResolution(t *testing.T) {
 // reach PowerDNS quoted (it answers 422 to the unquoted form), while an
 // already-quoted value — spaces included — passes through unchanged.
 func TestAPICreateRecord_QuotedFieldTypes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		body  string
@@ -1005,6 +1034,7 @@ func TestAPICreateRecord_QuotedFieldTypes(t *testing.T) {
 }
 
 func TestAPIUpdateRecord(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			// Audit before-snapshot fetch (empty zone: brand-new RRSet).
@@ -1036,6 +1066,7 @@ func TestAPIUpdateRecord(t *testing.T) {
 // is a 400, and a user without the zone grant is refused before any
 // PowerDNS call.
 func TestAPIExportZone(t *testing.T) {
+	t.Parallel()
 	pdnsHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -1163,6 +1194,7 @@ func captureRRSets(t *testing.T, got *[]models.RRSet) func(http.ResponseWriter, 
 }
 
 func TestAPICreateRecord_MXEmbedsPriority(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1188,6 +1220,7 @@ func TestAPICreateRecord_MXEmbedsPriority(t *testing.T) {
 }
 
 func TestAPICreateRecord_PriorityZero(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1210,6 +1243,7 @@ func TestAPICreateRecord_PriorityZero(t *testing.T) {
 // priority outside the 16-bit range (0-65535) must be rejected with a 400
 // before reaching PowerDNS.
 func TestAPICreateRecord_PriorityOutOfRange(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1234,6 +1268,7 @@ func TestAPICreateRecord_PriorityOutOfRange(t *testing.T) {
 // ensures FQDN-target types (CNAME, NS, PTR, ALIAS) and priority types
 // (MX, SRV) get a trailing dot via EnsureTrailingDot in prepareRecordContent.
 func TestAPICreateRecord_CNAMEEnsuresTrailingDot(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1258,6 +1293,7 @@ func TestAPICreateRecord_CNAMEEnsuresTrailingDot(t *testing.T) {
 // TestAPICreateRecord_CNAMEPreservesExistingDot verifies that a CNAME target
 // that already ends with a dot is not double-dotted.
 func TestAPICreateRecord_CNAMEPreservesExistingDot(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1279,6 +1315,7 @@ func TestAPICreateRecord_CNAMEPreservesExistingDot(t *testing.T) {
 // TestAPICreateRecord_AFSDBEnsuresTrailingDot verifies that AFSDB hostname
 // (last field) gets a trailing dot.
 func TestAPICreateRecord_AFSDBEnsuresTrailingDot(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1300,6 +1337,7 @@ func TestAPICreateRecord_AFSDBEnsuresTrailingDot(t *testing.T) {
 // TestAPICreateRecord_NAPTREnsuresTrailingDot verifies that NAPTR replacement
 // (last field) gets a trailing dot.
 func TestAPICreateRecord_NAPTREnsuresTrailingDot(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1321,6 +1359,7 @@ func TestAPICreateRecord_NAPTREnsuresTrailingDot(t *testing.T) {
 // TestAPICreateRecord_DNAMEEnsuresTrailingDot verifies that DNAME target
 // gets a trailing dot.
 func TestAPICreateRecord_DNAMEEnsuresTrailingDot(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1343,6 +1382,7 @@ func TestAPICreateRecord_DNAMEEnsuresTrailingDot(t *testing.T) {
 // rname (fields 0 and 1) each get a trailing dot, while the numeric fields
 // are left untouched.
 func TestAPICreateRecord_SOANormalizesMnameRname(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1365,6 +1405,7 @@ func TestAPICreateRecord_SOANormalizesMnameRname(t *testing.T) {
 // TestAPICreateRecord_RPNormalizesBothFields verifies that RP mbox and
 // txtname (both FQDN fields) each get a trailing dot.
 func TestAPICreateRecord_RPNormalizesBothFields(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1387,6 +1428,7 @@ func TestAPICreateRecord_RPNormalizesBothFields(t *testing.T) {
 // TestAPICreateRecord_NSECNormalizesNextDomain verifies that NSEC next_domain
 // (field 0) gets a trailing dot while type mnemonics are untouched.
 func TestAPICreateRecord_NSECNormalizesNextDomain(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1409,6 +1451,7 @@ func TestAPICreateRecord_NSECNormalizesNextDomain(t *testing.T) {
 // TestAPICreateRecord_MINFONormalizesBothFields verifies that MINFO rmailbx
 // and emailbx (both FQDN fields) each get a trailing dot.
 func TestAPICreateRecord_MINFONormalizesBothFields(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1429,6 +1472,7 @@ func TestAPICreateRecord_MINFONormalizesBothFields(t *testing.T) {
 }
 
 func TestAPICreateRecord_NormalizesName(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1449,6 +1493,7 @@ func TestAPICreateRecord_NormalizesName(t *testing.T) {
 }
 
 func TestAPIUpdateRecord_SRVEmbedsPriority(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1468,6 +1513,7 @@ func TestAPIUpdateRecord_SRVEmbedsPriority(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByName_PreservesFQDN(t *testing.T) {
+	t.Parallel()
 	// When the client already sends a canonical FQDN (with trailing dot) the
 	// handler must pass it through unchanged — no double-dot, no rewrite.
 	var gotPath string
@@ -1495,6 +1541,7 @@ func TestAPIListRecords_FilteredByName_PreservesFQDN(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByRelativeName(t *testing.T) {
+	t.Parallel()
 	// "www" must be expanded against the zone into "www.example.com." — the
 	// same canonicalisation the write path applies in prepareAPIRecordSet.
 	var gotPath string
@@ -1519,6 +1566,7 @@ func TestAPIListRecords_FilteredByRelativeName(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByApex(t *testing.T) {
+	t.Parallel()
 	// "@" is the standard apex shorthand and must resolve to the zone name
 	// with trailing dot, matching the write path's behaviour.
 	var gotPath string
@@ -1543,6 +1591,7 @@ func TestAPIListRecords_FilteredByApex(t *testing.T) {
 }
 
 func TestAPIListRecords_FilteredByName_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	// PDNS canonical names are lowercase; the handler must lowercase before
 	// forwarding so a client asking for "WWW.Example.COM" still matches.
 	var gotPath string
@@ -1567,6 +1616,7 @@ func TestAPIListRecords_FilteredByName_CaseInsensitive(t *testing.T) {
 }
 
 func TestAPIListRecords_NoName_NoNormalization(t *testing.T) {
+	t.Parallel()
 	// Sanity: when no name is given, the handler must call the unfiltered
 	// endpoint and never touch the query string.
 	var gotPath string
@@ -1591,6 +1641,7 @@ func TestAPIListRecords_NoName_NoNormalization(t *testing.T) {
 }
 
 func TestAPIDeleteRecord(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			// Audit before-snapshot fetch (empty zone).
@@ -1621,6 +1672,7 @@ func TestAPIDeleteRecord(t *testing.T) {
 // without a trailing dot must be normalized to the FQDN before reaching
 // PowerDNS.
 func TestAPIDeleteRecord_NormalizesName(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -1645,6 +1697,7 @@ func TestAPIDeleteRecord_NormalizesName(t *testing.T) {
 // because normalizeRecordName("") would otherwise resolve to the zone apex and
 // could delete apex records (SOA/NS).
 func TestAPIDeleteRecord_RejectsEmptyName(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("PDNS should not be called for an empty name")
 		w.WriteHeader(http.StatusNoContent)
@@ -1664,6 +1717,7 @@ func TestAPIDeleteRecord_RejectsEmptyName(t *testing.T) {
 }
 
 func TestAPIDeleteRecord_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1679,6 +1733,7 @@ func TestAPIDeleteRecord_InvalidJSON(t *testing.T) {
 }
 
 func TestAPIStats(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
@@ -1704,6 +1759,7 @@ func TestAPIStats(t *testing.T) {
 }
 
 func TestAPIListZones_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1725,6 +1781,7 @@ func TestAPIListZones_PDNSError(t *testing.T) {
 // to 502 UPSTREAM_AUTH_ERROR on the list endpoint too — the client's key is
 // valid; GoZone's own upstream credential is broken.
 func TestAPIListZones_UpstreamAuthError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	})
@@ -1751,6 +1808,7 @@ func TestAPIListZones_UpstreamAuthError(t *testing.T) {
 // present a database fault as "you have no zones", indistinguishable from a
 // legitimate empty state.
 func TestAPIListZones_FilterErrorFailClosed(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]models.Zone{
@@ -1789,6 +1847,7 @@ func TestAPIListZones_FilterErrorFailClosed(t *testing.T) {
 }
 
 func TestAPIGetZone_NotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Not Found"}`))
@@ -1813,6 +1872,7 @@ func TestAPIGetZone_NotFound(t *testing.T) {
 // TestPdnsErrorStatus_Mapping pins the full PowerDNS error mapping table,
 // including the wrapped-error cases callers actually produce.
 func TestPdnsErrorStatus_Mapping(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		err          error
@@ -1842,6 +1902,7 @@ func TestPdnsErrorStatus_Mapping(t *testing.T) {
 // StageError at StageLock) answers 409 with a retry-later message, while any
 // other lock failure keeps the generic 500.
 func TestZoneLockErrorResponse(t *testing.T) {
+	t.Parallel()
 	status, msg := zoneLockErrorResponse(&dnsops.StageError{Stage: dnsops.StageLock, Err: dnsops.ErrZoneBusy})
 	if status != http.StatusConflict {
 		t.Errorf("zoneLockErrorResponse(ErrZoneBusy) status = %d, want 409", status)
@@ -1862,6 +1923,7 @@ func TestZoneLockErrorResponse(t *testing.T) {
 // is asserted literally because the ErrCodeZoneBusy constant lands in the
 // same change as the sentinel.
 func TestPDNSErrorStatus_ZoneBusy(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  error
@@ -1883,6 +1945,7 @@ func TestPDNSErrorStatus_ZoneBusy(t *testing.T) {
 }
 
 func TestAPIGetZone_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1907,6 +1970,7 @@ func TestAPIGetZone_PDNSError(t *testing.T) {
 // caller their key is invalid. It is a gateway failure: 502
 // UPSTREAM_AUTH_ERROR.
 func TestAPIGetZone_PDNSUnauthorizedIs502(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"error":"unauthorized"}`))
@@ -1929,6 +1993,7 @@ func TestAPIGetZone_PDNSUnauthorizedIs502(t *testing.T) {
 }
 
 func TestAPICreateZone_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1944,6 +2009,7 @@ func TestAPICreateZone_PDNSError(t *testing.T) {
 }
 
 func TestAPIDeleteZone_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1958,6 +2024,7 @@ func TestAPIDeleteZone_PDNSError(t *testing.T) {
 }
 
 func TestAPIListRecords_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -1972,6 +2039,7 @@ func TestAPIListRecords_PDNSError(t *testing.T) {
 }
 
 func TestAPIListRecords_NotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Not Found"}`))
@@ -1994,6 +2062,7 @@ func TestAPIListRecords_NotFound(t *testing.T) {
 }
 
 func TestAPIListRecords_NullResponse(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`null`))
@@ -2016,6 +2085,7 @@ func TestAPIListRecords_NullResponse(t *testing.T) {
 }
 
 func TestAPICreateRecord_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2032,6 +2102,7 @@ func TestAPICreateRecord_PDNSError(t *testing.T) {
 }
 
 func TestAPICreateRecord_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2047,6 +2118,7 @@ func TestAPICreateRecord_InvalidJSON(t *testing.T) {
 }
 
 func TestAPIUpdateRecord_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2063,6 +2135,7 @@ func TestAPIUpdateRecord_PDNSError(t *testing.T) {
 }
 
 func TestAPIUpdateRecord_InvalidJSON(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2078,6 +2151,7 @@ func TestAPIUpdateRecord_InvalidJSON(t *testing.T) {
 }
 
 func TestAPIDeleteRecord_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2102,6 +2176,7 @@ func TestAPIDeleteRecord_PDNSError(t *testing.T) {
 // (account "" / modified_at 0) so PowerDNS stamps modified_at itself. The
 // client controls the comment list, not its metadata.
 func TestAPIUpdateRecord_CommentsContentRoundTrip(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -2149,6 +2224,7 @@ func TestAPIUpdateRecord_CommentsContentRoundTrip(t *testing.T) {
 // never forwarded to PowerDNS); a submitted item with no stored match is
 // zeroed so PowerDNS stamps modified_at itself.
 func TestAPIUpdateRecord_CommentMetadataServerOwned(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2218,6 +2294,7 @@ func TestAPIUpdateRecord_CommentMetadataServerOwned(t *testing.T) {
 // verbatim, the spoofed Account is dropped and modified_at is left for
 // PowerDNS to stamp.
 func TestAPICreateRecord_CommentMetadataServerOwned(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -2256,6 +2333,7 @@ func TestAPICreateRecord_CommentMetadataServerOwned(t *testing.T) {
 // clearing, no implicit padding). The REST API is a pass-through to PDNS,
 // which interprets an absent comments field as "preserve".
 func TestAPIUpdateRecord_CommentsAbsentInBody(t *testing.T) {
+	t.Parallel()
 	var sent []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -2294,6 +2372,7 @@ func TestAPIUpdateRecord_CommentsAbsentInBody(t *testing.T) {
 // `Clear` flag (UnmarshalJSON never sets it — by design, see CommentPatch
 // doc), so we assert against the raw wire form instead.
 func TestAPIUpdateRecord_ClearCommentsTrue(t *testing.T) {
+	t.Parallel()
 	var sent []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -2329,6 +2408,7 @@ func TestAPIUpdateRecord_ClearCommentsTrue(t *testing.T) {
 // body since CommentPatch.UnmarshalJSON normalises `[]` to a nil Items slice
 // (Clear is never set on re-decode).
 func TestAPIUpdateRecord_ClearCommentsTrue_OverridesItems(t *testing.T) {
+	t.Parallel()
 	var sent []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -2363,6 +2443,7 @@ func TestAPIUpdateRecord_ClearCommentsTrue_OverridesItems(t *testing.T) {
 // plain `bool` could not tell "absent" from "false" and would lose the
 // distinction on every PUT.
 func TestAPIUpdateRecord_ClearCommentsFalse(t *testing.T) {
+	t.Parallel()
 	var sent []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -2394,6 +2475,7 @@ func TestAPIUpdateRecord_ClearCommentsFalse(t *testing.T) {
 // preserve, not a purge — i.e. the PATCH body carries `"comments":null`,
 // not `"comments":[]` and not a clear flag.
 func TestAPIUpdateRecord_ClearCommentsAbsentRejectsEmptyComments(t *testing.T) {
+	t.Parallel()
 	var sent []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -2426,6 +2508,7 @@ func TestAPIUpdateRecord_ClearCommentsAbsentRejectsEmptyComments(t *testing.T) {
 }
 
 func TestAPIStats_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, nil)
 	defer pdnsSrv.Close()
 
@@ -2451,6 +2534,7 @@ func TestAPIStats_PDNSError(t *testing.T) {
 // are independent upstream calls) while the zone list 500s — the endpoint
 // must answer 500 instead of presenting an empty tenant.
 func TestAPIStats_ZoneListErrorSurfaces(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/zones") {
@@ -2490,6 +2574,7 @@ func jsonBody(s string) *strings.Reader {
 // failed zone-access lookup must not answer 200 with zone_count: 0, which a
 // caller would read as an empty tenant rather than an outage.
 func TestAPIStats_ZoneFilterErrorSurfaces500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/zones") {
@@ -2530,6 +2615,7 @@ func TestAPIStats_ZoneFilterErrorSurfaces500(t *testing.T) {
 // stripped from /api/v1/stats responses for users who are not DNS admins.
 // Scalar statistics stay visible.
 func TestAPIStats_NonAdminSeesNoRingOrMapItems(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/statistics") {
@@ -2570,6 +2656,7 @@ func TestAPIStats_NonAdminSeesNoRingOrMapItems(t *testing.T) {
 // VALIDATION_ERROR carrying the conflict message (both numbers), and
 // PowerDNS must receive no PATCH.
 func TestAPICreateRecord_SRVPriorityConflict(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -2606,6 +2693,7 @@ func TestAPICreateRecord_SRVPriorityConflict(t *testing.T) {
 // be 400 VALIDATION_ERROR with the conflict message preserved (both numbers)
 // and no PowerDNS contact at all.
 func TestAPIUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("no PowerDNS call expected for a priority conflict, got %s %s", r.Method, r.URL.Path)
 	})
@@ -2640,6 +2728,7 @@ func TestAPIUpdateRecord_SRVPriorityConflict(t *testing.T) {
 // priority field (wire data fed back in) passes through unchanged — embedded
 // once, not twice, not rejected.
 func TestAPICreateRecord_SRVPriorityConsistent(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer pdnsSrv.Close()
@@ -2685,6 +2774,7 @@ func patchStage404PDNS(w http.ResponseWriter, r *http.Request) {
 // RECORD_NOT_FOUND — not the fetch stage's ZONE_NOT_FOUND and not the
 // generic RECORD_ERROR.
 func TestAPICreateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
 	defer pdnsSrv.Close()
 
@@ -2711,6 +2801,7 @@ func TestAPICreateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
 // counterpart: the audit before-image fetch succeeds, the PATCH answers 404
 // and the client gets 404 RECORD_NOT_FOUND.
 func TestAPIUpdateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
 	defer pdnsSrv.Close()
 
@@ -2737,6 +2828,7 @@ func TestAPIUpdateRecord_PatchStage404IsRecordNotFound(t *testing.T) {
 // DELETE whose audit snapshot fetch succeeds but whose PowerDNS write answers
 // 404 maps to 404 RECORD_NOT_FOUND.
 func TestAPIDeleteRecord_PatchStage404IsRecordNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, patchStage404PDNS)
 	defer pdnsSrv.Close()
 

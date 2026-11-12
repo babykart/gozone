@@ -20,6 +20,7 @@ import (
 // critical section for one zone never runs concurrently with itself, while
 // different zones hold independent mutexes.
 func TestZoneLocks_ExclusivePerZone(t *testing.T) {
+	t.Parallel()
 	var z zoneLocks
 	ctx := context.Background()
 
@@ -71,6 +72,7 @@ func TestZoneLocks_ExclusivePerZone(t *testing.T) {
 // delays the fetch slightly to widen the interleave window that the lock
 // closes.
 func TestCreateRecord_ConcurrentSameZoneSerialized(t *testing.T) {
+	t.Parallel()
 	var (
 		mu     sync.Mutex
 		rrsets = map[string][]models.RecordInfo{}

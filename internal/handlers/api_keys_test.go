@@ -20,6 +20,7 @@ import (
 )
 
 func TestCreateAPIKey_SetsFlashCookieNotQueryString(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -64,6 +65,7 @@ func TestCreateAPIKey_SetsFlashCookieNotQueryString(t *testing.T) {
 }
 
 func TestListAPIKeys_ReadsAndClearsFlashCookie(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -102,6 +104,7 @@ func TestListAPIKeys_ReadsAndClearsFlashCookie(t *testing.T) {
 }
 
 func TestListAPIKeys_PaginationAndSearch(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -151,6 +154,7 @@ func seedAPIKey(t *testing.T, db *database.DB, userID int64, desc, hash string) 
 }
 
 func TestBulkDeleteAPIKeys_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -202,6 +206,7 @@ func TestBulkDeleteAPIKeys_Success(t *testing.T) {
 }
 
 func TestBulkDeleteAPIKeys_RejectsNotOwned(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	// A second user owns a key the admin must not be able to delete.
@@ -245,6 +250,7 @@ func TestBulkDeleteAPIKeys_RejectsNotOwned(t *testing.T) {
 }
 
 func TestBulkDeleteAPIKeys_NoSelection(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -263,6 +269,7 @@ func TestBulkDeleteAPIKeys_NoSelection(t *testing.T) {
 }
 
 func TestDeleteAPIKey_OwnKey(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	id := seedAPIKey(t, h.DB, 1, "mine", "h1")
@@ -303,6 +310,7 @@ func TestDeleteAPIKey_OwnKey(t *testing.T) {
 // (the prior ?error=forbidden branch leaked key-id existence regardless of
 // ownership). Mirrors the BulkDeleteAPIKeys ownership-scoped DELETE pattern.
 func TestDeleteAPIKey_NotFoundAndForbiddenCollapsed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	testutil.SeedTestUser(t, h.DB, "other", "other", "user", true)
@@ -361,6 +369,7 @@ func TestDeleteAPIKey_NotFoundAndForbiddenCollapsed(t *testing.T) {
 // Valid codes pass through; crafted codes are dropped at the handler trust
 // boundary.
 func TestListAPIKeys_AllowListsFlashErrorCodes(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -409,6 +418,7 @@ func TestListAPIKeys_AllowListsFlashErrorCodes(t *testing.T) {
 // before counting; on SQLite the single-writer pool serializes, so the race
 // window is closed on every dialect.
 func TestCreateAPIKey_ConcurrentCreationsRespectCap(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Auth.MaxAPIKeysPerUser = 1
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
@@ -459,6 +469,7 @@ func TestCreateAPIKey_ConcurrentCreationsRespectCap(t *testing.T) {
 }
 
 func TestCreateAPIKey_DefaultFormNeverExpires(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -487,6 +498,7 @@ func TestCreateAPIKey_DefaultFormNeverExpires(t *testing.T) {
 // 30-day key gets an expires_at ~30 days in the future, stored in UTC per the
 // project-wide DB timestamp convention.
 func TestCreateAPIKey_WithExpiry(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -519,6 +531,7 @@ func TestCreateAPIKey_WithExpiry(t *testing.T) {
 // closed: a forged duration (not offered by the form's select) is rejected and
 // no key row is inserted.
 func TestCreateAPIKey_RejectsUnknownExpiry(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -545,6 +558,7 @@ func TestCreateAPIKey_RejectsUnknownExpiry(t *testing.T) {
 // cap of 2 the third creation is rejected with error=limit_reached (and no row
 // inserted), and cap=0 disables the limit entirely.
 func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	h.Cfg.Auth.MaxAPIKeysPerUser = 2
@@ -602,6 +616,7 @@ func TestCreateAPIKey_EnforcesPerUserCap(t *testing.T) {
 // a distinct error that would turn the parse outcome into an existence
 // oracle. No activity log may be written.
 func TestDeleteAPIKey_MalformedIDCollapsed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -636,6 +651,7 @@ func TestDeleteAPIKey_MalformedIDCollapsed(t *testing.T) {
 // — previously the raw string was bound against the INTEGER column, aborting
 // the whole batch with a 500 on PostgreSQL.
 func TestBulkDeleteAPIKeys_MalformedIDReportedFailed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	mine := seedAPIKey(t, h.DB, 1, "mine", "h1")
@@ -679,6 +695,7 @@ func TestBulkDeleteAPIKeys_MalformedIDReportedFailed(t *testing.T) {
 // the submitted scope, and mcp:* scopes are refused with ?error=invalid_scope
 // (and no row) while the MCP endpoint is disabled.
 func TestCreateAPIKey_ScopeChoices(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	h.Cfg.MCP.Enabled = true
@@ -729,6 +746,7 @@ func TestCreateAPIKey_ScopeChoices(t *testing.T) {
 // there is no silent default — the form's <select> always submits a value, so
 // an absent field is tampering.
 func TestCreateAPIKey_RejectsMissingOrInvalidScope(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -754,6 +772,7 @@ func TestCreateAPIKey_RejectsMissingOrInvalidScope(t *testing.T) {
 // TestCreateAPIKey_AuditDetailIncludesScope verifies the create_api_key audit
 // entry names the scope, e.g. "Created API key: ci-bot [api:read] (expires in 90 days)".
 func TestCreateAPIKey_AuditDetailIncludesScope(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -784,6 +803,7 @@ func TestCreateAPIKey_AuditDetailIncludesScope(t *testing.T) {
 // TestListAPIKeys_ShowsScope verifies the list handler reads the scope column
 // and hands it to the template (the stub renders "desc [scope]").
 func TestListAPIKeys_ShowsScope(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
@@ -814,6 +834,7 @@ func TestListAPIKeys_ShowsScope(t *testing.T) {
 // TestCreateAPIKey_CapCountsAllScopeTypes verifies the per-user cap is a total
 // across scopes: an existing mcp key consumes quota for an api key creation.
 func TestCreateAPIKey_CapCountsAllScopeTypes(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 	h.Cfg.Auth.MaxAPIKeysPerUser = 1

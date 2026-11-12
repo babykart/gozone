@@ -26,6 +26,7 @@ func seedAdminUser(t *testing.T, h *Handler) *models.User {
 }
 
 func TestListUsers_Admin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -41,6 +42,7 @@ func TestListUsers_Admin(t *testing.T) {
 }
 
 func TestListUsers_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -56,6 +58,7 @@ func TestListUsers_NonAdmin(t *testing.T) {
 }
 
 func TestListUsers_PaginationAndSearch(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	_ = seedAdminUser(t, h)
 	testutil.SeedTestUser(t, h.DB, "alice", "pass", "user", true)
@@ -85,6 +88,7 @@ func TestListUsers_PaginationAndSearch(t *testing.T) {
 }
 
 func TestCreateUserPage_Admin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -100,6 +104,7 @@ func TestCreateUserPage_Admin(t *testing.T) {
 }
 
 func TestCreateUserPage_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -115,6 +120,7 @@ func TestCreateUserPage_NonAdmin(t *testing.T) {
 }
 
 func TestCreateUser_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -148,6 +154,7 @@ func TestCreateUser_Success(t *testing.T) {
 // TestCreateUser_RejectsInvalidRole is a regression test: an unsupported
 // role must be rejected with 400 instead of being silently downgraded to "user".
 func TestCreateUser_RejectsInvalidRole(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -186,6 +193,7 @@ func TestCreateUser_RejectsInvalidRole(t *testing.T) {
 // message instead of a generic 500. Before the fix, the UNIQUE constraint
 // violation surfaced as an undifferentiated internal error.
 func TestCreateUser_DuplicateRejected(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	// admin user already exists with username "admin", email "admin@test.local"
@@ -222,6 +230,7 @@ func TestCreateUser_DuplicateRejected(t *testing.T) {
 }
 
 func TestCreateUser_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -238,6 +247,7 @@ func TestCreateUser_NonAdmin(t *testing.T) {
 }
 
 func TestCreateUser_EmptyFields(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -256,6 +266,7 @@ func TestCreateUser_EmptyFields(t *testing.T) {
 }
 
 func TestEditUserPage_Admin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -277,6 +288,7 @@ func TestEditUserPage_Admin(t *testing.T) {
 }
 
 func TestEditUserPage_NotFound(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -293,6 +305,7 @@ func TestEditUserPage_NotFound(t *testing.T) {
 }
 
 func TestUpdateUser_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -325,6 +338,7 @@ func TestUpdateUser_Success(t *testing.T) {
 // role must be rejected with 400 instead of being silently downgraded to "user".
 // The existing role must be left untouched.
 func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -364,6 +378,7 @@ func TestUpdateUser_RejectsInvalidRole(t *testing.T) {
 // empty email bypassed ValidateEmail entirely and could overwrite a valid
 // address with "".
 func TestUpdateUser_RejectsEmptyEmail(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -397,6 +412,7 @@ func TestUpdateUser_RejectsEmptyEmail(t *testing.T) {
 }
 
 func TestUpdateUser_WithPassword(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -426,6 +442,7 @@ func TestUpdateUser_WithPassword(t *testing.T) {
 }
 
 func TestDeleteUser_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -453,6 +470,7 @@ func TestDeleteUser_Success(t *testing.T) {
 }
 
 func TestUpdateUser_SelfRoleChangeBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -479,6 +497,7 @@ func TestUpdateUser_SelfRoleChangeBlocked(t *testing.T) {
 }
 
 func TestUpdateUser_SelfDisableBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -505,6 +524,7 @@ func TestUpdateUser_SelfDisableBlocked(t *testing.T) {
 }
 
 func TestUpdateUser_LastEnabledAdminBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(
@@ -538,6 +558,7 @@ func TestUpdateUser_LastEnabledAdminBlocked(t *testing.T) {
 // demoting the only enabled admin (role admin→user) must be refused, and
 // the guard must execute inside the transaction (same pattern as DeleteUser).
 func TestUpdateUser_LastAdminDemotionBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -568,6 +589,7 @@ func TestUpdateUser_LastAdminDemotionBlocked(t *testing.T) {
 // and pins the audit detail format: the update_user entry must carry the
 // role/enabled before->after diff, not a bare "Updated user %d".
 func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -612,6 +634,7 @@ func TestUpdateUser_DemotionWithTwoAdminsAllowed(t *testing.T) {
 }
 
 func TestUpdateUser_SelfAllowedFields(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -638,6 +661,7 @@ func TestUpdateUser_SelfAllowedFields(t *testing.T) {
 }
 
 func TestDeleteUser_Self(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -662,6 +686,7 @@ func TestDeleteUser_Self(t *testing.T) {
 }
 
 func TestDeleteUser_LastEnabledAdminBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -691,6 +716,7 @@ func TestDeleteUser_LastEnabledAdminBlocked(t *testing.T) {
 }
 
 func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -727,6 +753,7 @@ func TestDeleteUser_SecondAdminAllowed(t *testing.T) {
 // to fail by dropping the activity_logs table; the target must survive and the
 // handler must return 500 (not a redirect).
 func TestDeleteUser_AuditFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
@@ -760,6 +787,7 @@ func TestDeleteUser_AuditFailureRollsBack(t *testing.T) {
 // UPDATE, so a failure to write the audit trail must roll the role change back
 // — an admin can never be demoted without leaving an audit entry.
 func TestUpdateUser_AuditFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -795,6 +823,7 @@ func TestUpdateUser_AuditFailureRollsBack(t *testing.T) {
 }
 
 func TestLockUser_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
@@ -839,6 +868,7 @@ func TestLockUser_Success(t *testing.T) {
 // compromised account minutes later. The manual horizon is effectively
 // indefinite (~a century) — only Unlock clears it.
 func TestLockUser_ManualLockNotBoundedByAutoLockout(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.LoginLock.LockoutDurationMinutes = 15
 	admin := seedAdminUser(t, h)
@@ -866,6 +896,7 @@ func TestLockUser_ManualLockNotBoundedByAutoLockout(t *testing.T) {
 }
 
 func TestLockUser_RevokesSessions(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
@@ -892,6 +923,7 @@ func TestLockUser_RevokesSessions(t *testing.T) {
 }
 
 func TestLockUser_SelfBlocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -920,6 +952,7 @@ func TestLockUser_SelfBlocked(t *testing.T) {
 }
 
 func TestLockUser_SecondAdminAllowed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	secondAdminID := testutil.SeedTestUser(t, h.DB, "admin2", "p", "admin", true)
@@ -946,6 +979,7 @@ func TestLockUser_SecondAdminAllowed(t *testing.T) {
 }
 
 func TestLockUser_NotFound(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -963,6 +997,7 @@ func TestLockUser_NotFound(t *testing.T) {
 }
 
 func TestLockUser_InvalidID(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -983,6 +1018,7 @@ func TestLockUser_InvalidID(t *testing.T) {
 }
 
 func TestUnlockUser_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	targetID := testutil.SeedTestUser(t, h.DB, "victim", "p", "user", true)
@@ -1020,6 +1056,7 @@ func TestUnlockUser_Success(t *testing.T) {
 }
 
 func TestUnlockUser_NotFound(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -1050,6 +1087,7 @@ func strictPolicyHandler(t *testing.T) *Handler {
 }
 
 func TestCreateUser_WeakPasswordRejected(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
@@ -1073,6 +1111,7 @@ func TestCreateUser_WeakPasswordRejected(t *testing.T) {
 }
 
 func TestCreateUser_StrongPasswordRecordsHistory(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	h.Cfg.Password.HistorySize = 3 // enable history retention
 	admin := seedAdminUser(t, h)
@@ -1098,6 +1137,7 @@ func TestCreateUser_StrongPasswordRecordsHistory(t *testing.T) {
 }
 
 func TestUpdateUser_WeakPasswordRejected(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
@@ -1122,6 +1162,7 @@ func TestUpdateUser_WeakPasswordRejected(t *testing.T) {
 }
 
 func TestUpdateUser_PasswordHistoryReuse(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	h.Cfg.Password.HistorySize = 3
 	admin := seedAdminUser(t, h)
@@ -1168,6 +1209,7 @@ func TestUpdateUser_PasswordHistoryReuse(t *testing.T) {
 // would silently store a different password than the one typed (and the spaced
 // original would then fail at login).
 func TestCreateUser_PasswordVerbatim(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t) // relaxed policy: any non-empty password is valid
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
@@ -1193,6 +1235,7 @@ func TestCreateUser_PasswordVerbatim(t *testing.T) {
 }
 
 func TestUpdateUser_PasswordVerbatim(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
@@ -1220,6 +1263,7 @@ func TestUpdateUser_PasswordVerbatim(t *testing.T) {
 }
 
 func TestBulkDeleteUsers_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	u2 := testutil.SeedTestUser(t, h.DB, "user2", "p", "user", true)
@@ -1262,6 +1306,7 @@ func TestBulkDeleteUsers_Success(t *testing.T) {
 }
 
 func TestBulkDeleteUsers_SelfSkipped(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	u2 := testutil.SeedTestUser(t, h.DB, "user2", "p", "user", true)
@@ -1304,6 +1349,7 @@ func TestBulkDeleteUsers_SelfSkipped(t *testing.T) {
 // guard: deleting 2 of 3 enabled admins is allowed (each check sees count>1),
 // but a disabled-admin actor cannot remove the only enabled admin.
 func TestBulkDeleteUsers_LastAdminGuard(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	enabledAdmin := seedAdminUser(t, h) // id 1, enabled
 	// Disabled admin acts; they reach the handler (RequireAdmin checks role,
@@ -1350,6 +1396,7 @@ func TestBulkDeleteUsers_LastAdminGuard(t *testing.T) {
 // enabled admins still leaves at least one: each successful DELETE lowers the
 // CountEnabledAdmins seen by the next iteration.
 func TestBulkDeleteUsers_MultipleAdminsAllowed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h) // id 1, enabled, the actor (survives)
 	a2 := testutil.SeedTestUser(t, h.DB, "admin2", "p", "admin", true)
@@ -1386,6 +1433,7 @@ func TestBulkDeleteUsers_MultipleAdminsAllowed(t *testing.T) {
 }
 
 func TestBulkDeleteUsers_NoSelection(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -1408,6 +1456,7 @@ func TestBulkDeleteUsers_NoSelection(t *testing.T) {
 // hash and the admin saw an opaque "Failed to hash password" that read like a
 // server fault — for exactly the long passphrases a password manager produces.
 func TestCreateUser_PasswordTooLongGetsClearMessage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Password.MaxLength = 72
 	admin := seedAdminUser(t, h)
@@ -1437,6 +1486,7 @@ func TestCreateUser_PasswordTooLongGetsClearMessage(t *testing.T) {
 // over-long password reads as an actionable limit, anything else stays the
 // generic hashing failure.
 func TestPasswordHashErrorMessage(t *testing.T) {
+	t.Parallel()
 	if got := passwordHashErrorMessage(bcrypt.ErrPasswordTooLong); !strings.Contains(got, "72 bytes") {
 		t.Errorf("ErrPasswordTooLong message = %q, want it to mention the 72-byte limit", got)
 	}
@@ -1451,6 +1501,7 @@ func TestPasswordHashErrorMessage(t *testing.T) {
 // userID 0 and surface a misleading 404 "User not found" for a user the
 // operator never named.
 func TestUpdateUser_InvalidUserID(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -1479,6 +1530,7 @@ func TestUpdateUser_InvalidUserID(t *testing.T) {
 // proceed with userID 0 into the existence check and answer 404 "User not
 // found".
 func TestDeleteUser_InvalidUserID(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 

@@ -61,6 +61,7 @@ func dnssecHandlerWithCounter(rectifyCalls *int) testutil.PDNSHandlerFunc {
 }
 
 func TestCreateCryptokey(t *testing.T) {
+	t.Parallel()
 	var rectifyCalls int
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandlerWithCounter(&rectifyCalls))
 	defer srv.Close()
@@ -92,6 +93,7 @@ func TestCreateCryptokey(t *testing.T) {
 }
 
 func TestToggleCryptokey_Activate(t *testing.T) {
+	t.Parallel()
 	var rectifyCalls int
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandlerWithCounter(&rectifyCalls))
 	defer srv.Close()
@@ -126,6 +128,7 @@ func TestToggleCryptokey_Activate(t *testing.T) {
 }
 
 func TestToggleCryptokey_Deactivate(t *testing.T) {
+	t.Parallel()
 	var rectifyCalls int
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandlerWithCounter(&rectifyCalls))
 	defer srv.Close()
@@ -160,6 +163,7 @@ func TestToggleCryptokey_Deactivate(t *testing.T) {
 }
 
 func TestDeleteCryptokey(t *testing.T) {
+	t.Parallel()
 	var rectifyCalls int
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandlerWithCounter(&rectifyCalls))
 	defer srv.Close()
@@ -195,6 +199,7 @@ func TestDeleteCryptokey(t *testing.T) {
 // 400 rather than forwarded to PowerDNS — mirroring the ParseInt → <= 0 → 400
 // pattern used for user IDs. Validation runs before any PDNS contact.
 func TestToggleDeleteCryptokey_RejectsNonPositiveKeyID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
 
@@ -228,6 +233,7 @@ func TestToggleDeleteCryptokey_RejectsNonPositiveKeyID(t *testing.T) {
 }
 
 func TestCreateCryptokey_InvalidType(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
 
@@ -249,6 +255,7 @@ func TestCreateCryptokey_InvalidType(t *testing.T) {
 // TestCreateCryptokey_InvalidAlgorithm is the m33 regression test: an
 // unsupported DNSSEC algorithm must be rejected before reaching PowerDNS.
 func TestCreateCryptokey_InvalidAlgorithm(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
 
@@ -271,6 +278,7 @@ func TestCreateCryptokey_InvalidAlgorithm(t *testing.T) {
 }
 
 func TestViewZone_IncludesCryptokeys(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
 
@@ -287,6 +295,7 @@ func TestViewZone_IncludesCryptokeys(t *testing.T) {
 }
 
 func TestDNSSECAlgorithms(t *testing.T) {
+	t.Parallel()
 	algos := models.DNSSECAlgorithms()
 	if len(algos) == 0 {
 		t.Fatal("expected non-empty algorithms list")
@@ -302,6 +311,7 @@ func TestDNSSECAlgorithms(t *testing.T) {
 }
 
 func TestGetDNSSECAlgorithms(t *testing.T) {
+	t.Parallel()
 	algos := GetDNSSECAlgorithms()
 	if len(algos) == 0 {
 		t.Fatal("expected non-empty GetDNSSECAlgorithms result")
@@ -309,6 +319,7 @@ func TestGetDNSSECAlgorithms(t *testing.T) {
 }
 
 func TestListCryptokeys_Client(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"type":"Cryptokey","id":1,"keytype":"ksk","active":true,"published":true,"dnskey":"...","ds":["SHA256 abc","SHA384 def"],"algorithm":"ECDSAP256SHA256","bits":256}]`))
@@ -333,6 +344,7 @@ func TestListCryptokeys_Client(t *testing.T) {
 }
 
 func TestClearZoneCache(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, dnssecHandler())
 	defer srv.Close()
 

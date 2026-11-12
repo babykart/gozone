@@ -43,6 +43,7 @@ func seedIntegrationAPIKey(t *testing.T, h *Handler, userID int64, keyHash strin
 }
 
 func TestIntegration_CompleteWebFlow(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"id":"example.com","name":"example.com","kind":"Native"}]`))
@@ -103,6 +104,7 @@ func TestIntegration_CompleteWebFlow(t *testing.T) {
 }
 
 func TestIntegration_CompleteAPIFlow(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"id":"example.com","name":"example.com","kind":"Native"}]`))
@@ -134,6 +136,7 @@ func TestIntegration_CompleteAPIFlow(t *testing.T) {
 }
 
 func TestIntegration_UnauthenticatedAccess(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
@@ -183,6 +186,7 @@ func TestIntegration_UnauthenticatedAccess(t *testing.T) {
 }
 
 func TestIntegration_NonAdminBlockedFromAdminEndpoints(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	tests := []struct {

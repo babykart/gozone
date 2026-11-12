@@ -22,6 +22,7 @@ import (
 )
 
 func TestOIDCLogin_DisabledRedirectsToLogin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = nil
 	w := httptest.NewRecorder()
@@ -37,6 +38,7 @@ func TestOIDCLogin_DisabledRedirectsToLogin(t *testing.T) {
 }
 
 func TestOIDCCallback_DisabledRedirectsToLogin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = nil
 	w := httptest.NewRecorder()
@@ -52,6 +54,7 @@ func TestOIDCCallback_DisabledRedirectsToLogin(t *testing.T) {
 }
 
 func TestOIDCCallback_MissingParams(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	// A service with a provider is needed for the handler to pass the Enabled()
 	// gate; a fake stands in for the real discovered service (no live IdP in
@@ -76,6 +79,7 @@ func TestOIDCCallback_MissingParams(t *testing.T) {
 // state-binding cookie is set so the callback can enforce the login-CSRF
 // check.
 func TestOIDCLogin_RedirectsToProvider(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
 		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
@@ -112,6 +116,7 @@ func (a *authErrSSO) AuthCodeURL(string, string) (string, error) {
 }
 
 func TestOIDCLogin_AuthCodeURLError(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &authErrSSO{fakeSSOService{providers: []*oidc.ProviderInstance{{Name: "gitea"}}}}
 
@@ -134,6 +139,7 @@ func (b *badURLSSO) AuthCodeURL(string, string) (string, error) {
 }
 
 func TestOIDCLogin_NonAbsoluteAuthURLRefused(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &badURLSSO{fakeSSOService{providers: []*oidc.ProviderInstance{{Name: "gitea"}}}}
 
@@ -151,6 +157,7 @@ func TestOIDCLogin_NonAbsoluteAuthURLRefused(t *testing.T) {
 // SSO role-sync path: an IdP claim demoting the ONLY enabled admin keeps the
 // admin role instead of locking the instance out.
 func TestApplySSORole_LastAdminDemotionRefused(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h) // the single enabled admin
 
@@ -168,6 +175,7 @@ func TestApplySSORole_LastAdminDemotionRefused(t *testing.T) {
 // the LAST admin — with another enabled admin present, the IdP's demotion
 // applies.
 func TestApplySSORole_DemotionAllowedWithSecondAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	if _, err := h.DB.Exec(
@@ -192,6 +200,7 @@ func TestApplySSORole_DemotionAllowedWithSecondAdmin(t *testing.T) {
 
 // TestApplySSORole_PromotionApplied covers the user→admin direction.
 func TestApplySSORole_PromotionApplied(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	uid := testutil.SeedTestUser(t, h.DB, "promotee", "p", "user", true)
 
@@ -207,6 +216,7 @@ func TestApplySSORole_PromotionApplied(t *testing.T) {
 }
 
 func TestDeriveSSOUsername(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		preferred   string
@@ -234,6 +244,7 @@ func TestDeriveSSOUsername(t *testing.T) {
 }
 
 func TestSplitName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in              string
 		wantFirst, last string
@@ -253,6 +264,7 @@ func TestSplitName(t *testing.T) {
 }
 
 func TestOidcCallbackURL(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest(http.MethodGet, "/auth/oidc/gitea/callback", nil)
 	r.Host = "gozone.example.com"
 	got := oidcCallbackURL("", r, "gitea")
@@ -271,6 +283,7 @@ func TestOidcCallbackURL(t *testing.T) {
 }
 
 func TestIssueSSOSessionSetsCookieAndLogs(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-test!")
 	ctx := context.Background()
@@ -310,6 +323,7 @@ func TestIssueSSOSessionSetsCookieAndLogs(t *testing.T) {
 // session cookie stays small, carries no id_token_hint claim, and the Logout
 // handler can still retrieve the hint for RP-initiated logout.
 func TestIssueSSOSession_StoresHintServerSide(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-hint-store!")
 	ctx := context.Background()
@@ -359,6 +373,7 @@ func TestIssueSSOSession_StoresHintServerSide(t *testing.T) {
 }
 
 func TestResolveSSOUser_ExistingLink(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	ctx := context.Background()
 	user, err := h.DB.CreateExternalUser(ctx, "linked", "linked@example.com", "", "", "user",
@@ -377,6 +392,7 @@ func TestResolveSSOUser_ExistingLink(t *testing.T) {
 }
 
 func TestResolveSSOUser_NoProvisioning(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = false
 	ctx := context.Background()
@@ -388,6 +404,7 @@ func TestResolveSSOUser_NoProvisioning(t *testing.T) {
 }
 
 func TestResolveSSOUser_EmailLinkWithoutAutoProvision(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = false
 	ctx := context.Background()
@@ -425,6 +442,7 @@ func TestResolveSSOUser_EmailLinkWithoutAutoProvision(t *testing.T) {
 // to claim the same identity — left the loser acting for a user the identity
 // does not map to. The conflict now fails the whole login.
 func TestLinkIdentity_ConflictRefused(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	ctx := context.Background()
 
@@ -453,6 +471,7 @@ func TestLinkIdentity_ConflictRefused(t *testing.T) {
 }
 
 func TestResolveSSOUser_UnverifiedEmailNoAutoProvision(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = false
 	ctx := context.Background()
@@ -485,6 +504,7 @@ func TestResolveSSOUser_UnverifiedEmailNoAutoProvision(t *testing.T) {
 // included) and auto-provisioning. Existing (issuer, subject) links are
 // deliberately exempt — they were established under an earlier policy.
 func TestResolveSSOUser_EmailLinkBlockedByDomainFilter(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = false
 	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
@@ -514,6 +534,7 @@ func TestResolveSSOUser_EmailLinkBlockedByDomainFilter(t *testing.T) {
 }
 
 func TestResolveSSOUser_EmailLinkAllowedDomain(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = false
 	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
@@ -538,6 +559,7 @@ func TestResolveSSOUser_EmailLinkAllowedDomain(t *testing.T) {
 }
 
 func TestResolveSSOUser_ProvisionBlockedByDomainFilter(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
@@ -557,6 +579,7 @@ func TestResolveSSOUser_ProvisionBlockedByDomainFilter(t *testing.T) {
 }
 
 func TestResolveSSOUser_ProvisionWithoutEmailBlockedByFilter(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.AllowedEmailDomains = []string{"corp.example.com"}
@@ -576,6 +599,7 @@ func TestResolveSSOUser_ProvisionWithoutEmailBlockedByFilter(t *testing.T) {
 }
 
 func TestResolveSSOUser_ExistingLinkUnaffectedByDomainFilter(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	// The link predates the filter (or was created by an admin): its e-mail
 	// domain is now outside the allowed list, but an (issuer, subject) link
@@ -604,6 +628,7 @@ func TestResolveSSOUser_ExistingLinkUnaffectedByDomainFilter(t *testing.T) {
 // emit email_verified). Also covers the auto_provision=true case where the
 // unverified gate would otherwise cause an "account provisioning conflict".
 func TestResolveSSOUser_UnverifiedEmailLinksWhenRequireVerifiedEmailFalse(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true // even with provisioning on, the email match must link, not conflict.
 	h.Cfg.OIDC.RequireVerifiedEmail = false
@@ -635,6 +660,7 @@ func TestResolveSSOUser_UnverifiedEmailLinksWhenRequireVerifiedEmailFalse(t *tes
 }
 
 func TestResolveSSOUser_EmailLinkVerified(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	ctx := context.Background()
@@ -668,6 +694,7 @@ func TestResolveSSOUser_EmailLinkVerified(t *testing.T) {
 }
 
 func TestResolveSSOUser_ProvisionNew(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -693,6 +720,7 @@ func TestResolveSSOUser_ProvisionNew(t *testing.T) {
 }
 
 func TestOIDCCallback_FullFlowProvisionsAndRedirects(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-flow!")
 	h.Cfg.OIDC.AutoProvision = true
@@ -746,6 +774,7 @@ func TestOIDCCallback_FullFlowProvisionsAndRedirects(t *testing.T) {
 // the lock was moot. The manual lock must now be enforced (fail closed) like
 // the local Login path.
 func TestOIDCCallback_ManuallyLockedAccountDenied(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-flow!")
 	h.Cfg.OIDC.AutoProvision = false
@@ -803,6 +832,7 @@ func TestOIDCCallback_ManuallyLockedAccountDenied(t *testing.T) {
 // the login-CSRF defence: starting the flow must set a short-lived HttpOnly
 // cookie holding SHA-256(state), scoped to the SSO routes.
 func TestOIDCLogin_SetsStateBindCookie(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &fakeSSOService{
 		providers: []*oidc.ProviderInstance{{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"}},
@@ -850,6 +880,7 @@ func TestOIDCLogin_SetsStateBindCookie(t *testing.T) {
 // browser-binding cookie must fail the injected callback (missing cookie,
 // and mismatched state alike).
 func TestOIDCCallback_StateCookieMismatchDenied(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-sso-flow!")
 	h.Cfg.OIDC.AutoProvision = true
@@ -893,6 +924,7 @@ func TestOIDCCallback_StateCookieMismatchDenied(t *testing.T) {
 }
 
 func TestLoginPageRendersSSOProviders(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
 		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
@@ -916,6 +948,7 @@ func rawClaim(key string, values ...string) map[string]json.RawMessage {
 }
 
 func TestResolveSSOUser_RoleMappingPromotesToAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -938,6 +971,7 @@ func TestResolveSSOUser_RoleMappingPromotesToAdmin(t *testing.T) {
 }
 
 func TestResolveSSOUser_RoleMappingDefaultWhenNoMatch(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -960,6 +994,7 @@ func TestResolveSSOUser_RoleMappingDefaultWhenNoMatch(t *testing.T) {
 }
 
 func TestResolveSSOUser_ExistingUserRoleSync(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.RoleClaim = "groups"
@@ -1000,6 +1035,7 @@ func TestResolveSSOUser_ExistingUserRoleSync(t *testing.T) {
 }
 
 func TestResolveSSOUser_RoleMappingPromotesToOperator(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -1022,6 +1058,7 @@ func TestResolveSSOUser_RoleMappingPromotesToOperator(t *testing.T) {
 }
 
 func TestResolveSSOUser_AdminWinsOverOperator(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -1045,6 +1082,7 @@ func TestResolveSSOUser_AdminWinsOverOperator(t *testing.T) {
 }
 
 func TestResolveSSOUser_ExistingOperatorNotDemoted(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.DefaultRole = "user"
@@ -1086,6 +1124,7 @@ func TestResolveSSOUser_ExistingOperatorNotDemoted(t *testing.T) {
 }
 
 func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.GroupClaim = "groups"
@@ -1160,6 +1199,7 @@ func TestResolveSSOUser_GroupMappingAddsMembership(t *testing.T) {
 }
 
 func TestResolveSSOUser_GroupMappingSkipsMissingGroup(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.GroupClaim = "groups"
@@ -1191,6 +1231,7 @@ func TestResolveSSOUser_GroupMappingSkipsMissingGroup(t *testing.T) {
 // in the same transaction, so a failure to write the audit trail must roll
 // the membership back — a membership can never commit without an audit entry.
 func TestSyncGroups_AuditFailureRollsBackMembership(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.OIDC.AutoProvision = true
 	h.Cfg.OIDC.GroupClaim = "groups"
@@ -1242,6 +1283,7 @@ func TestSyncGroups_AuditFailureRollsBackMembership(t *testing.T) {
 }
 
 func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-rp-logout!")
 	h.OIDC = &fakeSSOService{
@@ -1324,6 +1366,7 @@ func TestLogout_RPInitiatedForSSOSession(t *testing.T) {
 // ID token was embedded in the session JWT itself (≤ v0.16.7): the Logout
 // handler must still forward the claim-carried hint, with no server-side row.
 func TestLogout_RPInitiated_LegacyHintInClaim(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-legacy-hint!")
 	h.OIDC = &fakeSSOService{
@@ -1371,6 +1414,7 @@ func TestLogout_RPInitiated_LegacyHintInClaim(t *testing.T) {
 // identity and must be deleted when the session ends, whether or not the
 // provider advertises an end_session_endpoint to consume it.
 func TestLogout_NoEndSessionEndpoint_StillDeletesHint(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-no-endpoint!")
 	// Provider WITHOUT an end_session_endpoint.
@@ -1424,6 +1468,7 @@ func TestLogout_NoEndSessionEndpoint_StillDeletesHint(t *testing.T) {
 // end-session URL must be HTML-escaped into both attribute contexts, and the
 // page carries no inline style or script (the strict CSP applies to it).
 func TestRPLogoutRedirect_EscapesTarget(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	rpLogoutRedirect(w, `https://idp.example.com/logout?a=1&b=<x>"y"`)
 
@@ -1445,6 +1490,7 @@ func TestRPLogoutRedirect_EscapesTarget(t *testing.T) {
 }
 
 func TestLogout_LocalSessionSkipsRPLogout(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-local-logout!")
 	h.OIDC = &fakeSSOService{

@@ -135,6 +135,7 @@ func newTestHandlerWithPDNS(t *testing.T, handler testutil.PDNSHandlerFunc) (*Ha
 }
 
 func TestGetRecordTypes(t *testing.T) {
+	t.Parallel()
 	types := GetRecordTypes()
 	if len(types) == 0 {
 		t.Fatal("expected non-empty record types")
@@ -156,6 +157,7 @@ func TestGetRecordTypes(t *testing.T) {
 }
 
 func TestGetMetadataKinds(t *testing.T) {
+	t.Parallel()
 	kinds := GetMetadataKinds()
 
 	expected := []string{
@@ -198,6 +200,7 @@ func TestGetMetadataKinds(t *testing.T) {
 }
 
 func TestTSIGAlgorithms(t *testing.T) {
+	t.Parallel()
 	algs := tsigAlgorithms()
 	if len(algs) == 0 {
 		t.Fatal("expected non-empty tsig algorithms")
@@ -219,6 +222,7 @@ func TestTSIGAlgorithms(t *testing.T) {
 }
 
 func TestWriteJSON(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	data := map[string]string{"key": "value"}
 	writeJSON(w, http.StatusOK, data)
@@ -240,6 +244,7 @@ func TestWriteJSON(t *testing.T) {
 }
 
 func TestWriteJSON_StatusCreated(t *testing.T) {
+	t.Parallel()
 	w := httptest.NewRecorder()
 	writeJSON(w, http.StatusCreated, map[string]string{"message": "created"})
 
@@ -249,6 +254,7 @@ func TestWriteJSON_StatusCreated(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -266,6 +272,7 @@ func TestRender(t *testing.T) {
 // secrets (the plaintext API key page) — a shared cache or the browser
 // back/forward cache must never retain them.
 func TestRender_NoStoreHeader(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	w := httptest.NewRecorder()
@@ -284,6 +291,7 @@ func TestRender_NoStoreHeader(t *testing.T) {
 }
 
 func TestRender_MissingTemplate(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -349,6 +357,7 @@ func (c *committingRecorder) WriteHeader(code int) {
 // regression: renderErrorStatus must set Cache-Control: no-store BEFORE the
 // status commits, so the header actually reaches the wire on real HTTP.
 func TestRenderErrorStatus_NoStoreSurvivesCommit(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	cw := &committingRecorder{header: make(http.Header)}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -374,6 +383,7 @@ func TestRenderErrorStatus_NoStoreSurvivesCommit(t *testing.T) {
 // response must be a clean 500 (no status committed beforehand, no
 // superfluous WriteHeader) and no-store must still be set pre-commit.
 func TestRenderErrorStatus_TemplateFailureClean500(t *testing.T) {
+	t.Parallel()
 	failTmpl := template.Must(template.New("test").Funcs(template.FuncMap{
 		"fail": func() (string, error) { return "", fmt.Errorf("template exploded") },
 	}).Parse(`{{define "error.html"}}{{fail}}{{end}}`))
@@ -402,6 +412,7 @@ func TestRenderErrorStatus_TemplateFailureClean500(t *testing.T) {
 }
 
 func TestRender_ErrorNoPartialOutputNoLeak(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)

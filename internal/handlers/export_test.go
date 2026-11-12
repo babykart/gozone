@@ -54,6 +54,7 @@ func testExportPDNSWithDisabled() testutil.PDNSHandlerFunc {
 }
 
 func TestExportZone_BIND(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNS())
 	defer srv.Close()
 
@@ -102,6 +103,7 @@ func TestExportZone_BIND(t *testing.T) {
 }
 
 func TestExportZone_CSV(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNS())
 	defer srv.Close()
 
@@ -138,6 +140,7 @@ func TestExportZone_CSV(t *testing.T) {
 // wrapper), while a multi-string TXT keeps its wire form (the quotes are
 // per-string delimiters — stripping the outer pair corrupts the value).
 func TestExportZone_CSV_TXTStrings(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.RawQuery, "rrsets") {
@@ -186,6 +189,7 @@ func TestExportZone_CSV_TXTStrings(t *testing.T) {
 // exported as a quote-mangled cell that re-imported as one string with
 // literal quote characters — silently breaking e.g. DKIM keys.
 func TestExportZone_CSV_TXTMultiStringRoundTrip(t *testing.T) {
+	t.Parallel()
 	wireSingle := "v=spf1 mx ~all"
 	wireMulti := `"k=rsa; p=MIIBIjANBg" "hqHzaTBj2w"`
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +236,7 @@ func TestExportZone_CSV_TXTMultiStringRoundTrip(t *testing.T) {
 }
 
 func TestExportZone_InvalidFormat(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNS())
 	defer srv.Close()
 
@@ -250,6 +255,7 @@ func TestExportZone_InvalidFormat(t *testing.T) {
 }
 
 func TestExportZone_BIND_ExcludesDisabledRecords(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithDisabled())
 	defer srv.Close()
 
@@ -277,6 +283,7 @@ func TestExportZone_BIND_ExcludesDisabledRecords(t *testing.T) {
 }
 
 func TestExportZone_CSV_IncludesDisabledRecords(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithDisabled())
 	defer srv.Close()
 
@@ -325,6 +332,7 @@ func testExportPDNSWithComments() testutil.PDNSHandlerFunc {
 }
 
 func TestExportZone_CSV_IncludesComments(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, testExportPDNSWithComments())
 	defer srv.Close()
 
@@ -357,6 +365,7 @@ func TestExportZone_CSV_IncludesComments(t *testing.T) {
 }
 
 func TestExportZone_GetZoneError_Returns500(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -377,6 +386,7 @@ func TestExportZone_GetZoneError_Returns500(t *testing.T) {
 // regression: a vanished zone is a 404, not a blanket 500 — the operator
 // can tell "zone gone" from "server broken".
 func TestExportZone_GetZoneNotFound_Returns404(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
@@ -398,6 +408,7 @@ func TestExportZone_GetZoneNotFound_Returns404(t *testing.T) {
 // and ListRecords both hit GET /zones/{id}; the first call (GetZone) succeeds
 // and the second (ListRecords) fails.
 func TestExportZone_ListRecordsError_Returns500(t *testing.T) {
+	t.Parallel()
 	var zoneCalls int
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") && zoneCalls == 0 {
@@ -431,6 +442,7 @@ func TestExportZone_ListRecordsError_Returns500(t *testing.T) {
 // route middleware is not part of this unit harness), so it serves the
 // export: this test fails with 200 + a PDNS hit until the handler converges.
 func TestExportZone_AuthorizationRechecked(t *testing.T) {
+	t.Parallel()
 	pdnsCalled := false
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		pdnsCalled = true
@@ -461,6 +473,7 @@ func TestExportZone_AuthorizationRechecked(t *testing.T) {
 // format. The existing BIND/CSV tests pin the media types and attachment
 // flag but not the filename itself.
 func TestExportZone_ContentDispositionFilename(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		format, filename string
 	}{

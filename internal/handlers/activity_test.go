@@ -16,6 +16,7 @@ import (
 // operator must match literally (paired ESCAPE clause) instead of acting as
 // wildcards — searching "%" used to return every log entry.
 func TestActivityLogSearch_LiteralWildcardMatch(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -57,6 +58,7 @@ func TestActivityLogSearch_LiteralWildcardMatch(t *testing.T) {
 // non-zone entries plus zone-scoped entries for zones in their groups). The
 // distinct-action dropdown must reflect the same split.
 func TestActivityVisibility_ByRole(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	operatorID := seedUserWithHash(t, h, "opuser", "pass", "operator")
@@ -133,6 +135,7 @@ func containsString(list []string, s string) bool {
 // the global view and the per-zone tab, while the total keeps reflecting the
 // real row count.
 func TestActivityLogs_AllViewCapped(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -180,6 +183,7 @@ func TestActivityLogs_AllViewCapped(t *testing.T) {
 // non-empty, unparsable from/to values are not silently dropped — the page
 // must surface one warning per invalid field naming the offending value.
 func TestActivityPage_InvalidDateWarning(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -201,6 +205,7 @@ func TestActivityPage_InvalidDateWarning(t *testing.T) {
 // TestActivityPage_ValidDatesNoWarning is the complement: a well-formed date
 // range must not produce any warning banner.
 func TestActivityPage_ValidDatesNoWarning(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -225,6 +230,7 @@ func TestActivityPage_ValidDatesNoWarning(t *testing.T) {
 // dialect matrix while still exercising the fractional last second on
 // engines that retain it (SQLite text storage).
 func TestActivityToBound_IncludesLastSecond(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -253,6 +259,7 @@ func TestActivityToBound_IncludesLastSecond(t *testing.T) {
 // (PerPage=0) cap: with more rows than activityLogAllCap, the page must tell
 // the operator the listing was truncated instead of silently dropping rows.
 func TestActivityPage_TruncationNotice(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 
@@ -281,6 +288,7 @@ func TestActivityPage_TruncationNotice(t *testing.T) {
 // TestActivityPage_TruncationAbsentUnderCap is the complement: a small log
 // rendered with PerPage=0 must not claim truncation.
 func TestActivityPage_TruncationAbsentUnderCap(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 

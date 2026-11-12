@@ -19,6 +19,7 @@ import (
 )
 
 func TestLoginPage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/login", nil)
@@ -30,6 +31,7 @@ func TestLoginPage(t *testing.T) {
 }
 
 func TestLoginPage_WithError(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/login?error=invalid_credentials", nil)
@@ -41,6 +43,7 @@ func TestLoginPage_WithError(t *testing.T) {
 }
 
 func TestLogin_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("testpass"), 4)
@@ -119,6 +122,7 @@ func hasSessionCookie(rec *httptest.ResponseRecorder) bool {
 // VALID local credentials before any lookup, compare or attempt record —
 // otherwise local passwords offer a path around the IdP (and its MFA).
 func TestLogin_LocalLoginDisabledRefused(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
 		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
@@ -152,6 +156,7 @@ func TestLogin_LocalLoginDisabledRefused(t *testing.T) {
 // TestLogin_LocalLoginStillWorksWithSSOAllowed: with SSO live and
 // allow_local_login=true (default), local credentials keep working.
 func TestLogin_LocalLoginStillWorksWithSSOAllowed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = &fakeSSOService{providers: []*oidc.ProviderInstance{
 		{Name: "gitea", DisplayName: "Gitea", Icon: "gitea"},
@@ -172,6 +177,7 @@ func TestLogin_LocalLoginStillWorksWithSSOAllowed(t *testing.T) {
 // enabled — local login is then the only authentication path and must keep
 // working, whatever the YAML says.
 func TestLogin_AllowLocalLoginFalseWithoutSSO(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.OIDC = nil
 	h.Cfg.OIDC.AllowLocalLogin = false
@@ -195,6 +201,7 @@ func TestLogin_AllowLocalLoginFalseWithoutSSO(t *testing.T) {
 // case-insensitive lookup, Postgres (case-sensitive =) would resolve these to
 // different rows / no row while the rate limiter treats them as one bucket.
 func TestLogin_CaseInsensitiveAndTrimmedUsername(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("testpass"), 4)
@@ -226,6 +233,7 @@ func TestLogin_CaseInsensitiveAndTrimmedUsername(t *testing.T) {
 }
 
 func TestLogin_InvalidCredentials(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	w := httptest.NewRecorder()
@@ -239,6 +247,7 @@ func TestLogin_InvalidCredentials(t *testing.T) {
 }
 
 func TestLogin_FailedAttemptsRecorded(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -278,6 +287,7 @@ func TestLogin_FailedAttemptsRecorded(t *testing.T) {
 // rotation. Le re-lecture de credential_version après bcrypt doit refuser
 // l'émission.
 func TestLogin_CredentialRotatedDuringBcryptDenied(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	// The compare window is set by the HASH's bcrypt cost (not the config):
@@ -320,6 +330,7 @@ func TestLogin_CredentialRotatedDuringBcryptDenied(t *testing.T) {
 }
 
 func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -366,6 +377,7 @@ func TestLogin_LocksAccountAfterThreshold(t *testing.T) {
 }
 
 func TestLogin_SuccessfulLoginResetsCounter(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -400,6 +412,7 @@ func TestLogin_SuccessfulLoginResetsCounter(t *testing.T) {
 }
 
 func TestLogin_UnknownUsername_RecordsAttempt(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	for i := 0; i < 3; i++ {
@@ -419,6 +432,7 @@ func TestLogin_UnknownUsername_RecordsAttempt(t *testing.T) {
 }
 
 func TestLogin_DisabledLockoutWhenZeroThreshold(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.LoginLock.MaxFailedAttempts = 0
 
@@ -455,6 +469,7 @@ func TestLogin_DisabledLockoutWhenZeroThreshold(t *testing.T) {
 }
 
 func TestLogout(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), 4)
@@ -511,6 +526,7 @@ func TestLogout(t *testing.T) {
 }
 
 func TestProfilePage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "testuser", Role: "user", Email: "test@example.com"}
@@ -531,6 +547,7 @@ func TestProfilePage(t *testing.T) {
 // out. The counter is incremented up to maxAttempts-1 (so the next failure
 // still counts) but locked_until stays NULL.
 func TestLogin_LastAdmin_NotLocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
 	uid := insertReturnID(t, h.DB,
@@ -568,6 +585,7 @@ func TestLogin_LastAdmin_NotLocked(t *testing.T) {
 // the last enabled admin. A non-last-admin must still get locked normally
 // once the threshold is reached.
 func TestLogin_NonAdmin_StillLocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
 	// Two admins so neither is "last" + a user to be locked.
@@ -610,6 +628,7 @@ func TestLogin_NonAdmin_StillLocked(t *testing.T) {
 // the targeted admin can still be locked because there is another admin
 // available.
 func TestLogin_TwoAdmins_TargetedAdminLocked(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
 	for _, name := range []string{"admin1", "admin2"} {
@@ -645,6 +664,7 @@ func TestLogin_TwoAdmins_TargetedAdminLocked(t *testing.T) {
 // who triggers a lockout on a guessed username must not be able to
 // distinguish the locked-account response from the wrong-password response.
 func TestLogin_ErrorMessage_NoEnumeration(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -727,6 +747,7 @@ func TestLogin_ErrorMessage_NoEnumeration(t *testing.T) {
 // With the default bcrypt cost (12) the dummy compare takes ~250 ms; we assert
 // a conservative lower bound well above the sub-millisecond no-bcrypt path.
 func TestLogin_LockedAccountPerformsBcrypt(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), h.Cfg.Auth.BcryptCost)
@@ -777,6 +798,7 @@ func TestLogin_LockedAccountPerformsBcrypt(t *testing.T) {
 // attempt on an already-locked account must extend locked_until (sliding
 // expiration) so an attacker cannot get one free guess per lockout window.
 func TestLogin_LockedAccountExtendsLockout(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -825,6 +847,7 @@ func TestLogin_LockedAccountExtendsLockout(t *testing.T) {
 // even with the correct password — otherwise a DB error would bypass the
 // lockout for an account that is actually locked.
 func TestLogin_LockoutCheckErrorFailsClosed(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
@@ -861,6 +884,7 @@ func TestLogin_LockoutCheckErrorFailsClosed(t *testing.T) {
 // error codes cannot accidentally bypass the mapping and echo raw query
 // values into the banner.
 func TestLoginErrorBanner_Mapping(t *testing.T) {
+	t.Parallel()
 	if got := loginErrorBanner(invalidCredentialsError); got == "" {
 		t.Errorf("missing banner for %q", invalidCredentialsError)
 	}
@@ -883,6 +907,7 @@ func TestLoginErrorBanner_Mapping(t *testing.T) {
 }
 
 func TestDebugLogin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/login?error=invalid_credentials", nil)
@@ -909,6 +934,7 @@ func TestDebugLogin(t *testing.T) {
 // the automatic brute-force lockout. Before the fix, 0 de-enforced manual
 // locks too (the whole lockout check was gated on max_failed_attempts > 0).
 func TestLogin_ManualLockHonoredWhenAutoLockoutDisabled(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.LoginLock.MaxFailedAttempts = 0 // disable the automatic lockout feature
 
@@ -947,6 +973,7 @@ func TestLogin_ManualLockHonoredWhenAutoLockoutDisabled(t *testing.T) {
 // login — the manual-lock enforcement added for B3 must not leak into the
 // auto path.
 func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.LoginLock.MaxFailedAttempts = 0
 
@@ -990,6 +1017,7 @@ func TestLogin_StaleAutoLockIgnoredWhenAutoLockoutDisabled(t *testing.T) {
 // must not influence it. When empty, the URL keeps the original per-request
 // derivation (resolved scheme + Host).
 func TestOidcPostLogoutURL(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	r.Host = "spoofed.example.com"
 
@@ -1011,6 +1039,7 @@ func TestOidcPostLogoutURL(t *testing.T) {
 // logout (cookie clear, 303) but skip the revocation of a token it could not
 // validate.
 func TestLogout_TokenWithoutExpiryIsDenied(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), 4)

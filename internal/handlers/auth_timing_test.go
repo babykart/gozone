@@ -266,6 +266,7 @@ func TestLogin_UnknownUserMatchesKnownUserReadShape(t *testing.T) {
 // or one whose cost cannot be parsed (malformed hashes fail before the
 // compare anyway), needs no pad.
 func TestLegacyCostPads(t *testing.T) {
+	t.Parallel()
 	cost4, err := bcrypt.GenerateFromPassword([]byte("goodpass"), 4)
 	if err != nil {
 		t.Fatalf("bcrypt cost 4: %v", err)
@@ -334,9 +335,13 @@ func newTimingTestHandler(t *testing.T, bcryptCost int) *Handler {
 // a cost-4 stored hash must perform exactly 1 + (2^6 - 1) = 64 compares (one
 // real compare plus 63 stored-cost pads, landing the total in the configured
 // band), and a cost-10 stored hash exactly 1 (no pads). The count is pinned
-// through the bcryptCompare seam, so no wall-clock assertion is needed. No
-// test in this package runs in parallel, so the package-level seam swap is
-// live only for the duration of this serial test.
+// through the bcryptCompare seam, so no wall-clock assertion is needed.
+// Almost every test in this package runs in parallel (t.Parallel() sweep);
+// this test and TestLogin_UnknownUserMatchesKnownUserReadShape (owner of the
+// package-level loginSpyQueries spy state) are the two serial exceptions, so
+// the package-level seam swap here is live only for the duration of this
+// serial test — parallel tests have all finished their pause before serial
+// tests complete and never overlap it.
 func TestLogin_LegacyCostPaddingCount(t *testing.T) {
 	orig := bcryptCompare
 	t.Cleanup(func() { bcryptCompare = orig })

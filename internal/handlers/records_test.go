@@ -15,6 +15,7 @@ import (
 )
 
 func TestCreateRecordPage(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{
@@ -38,6 +39,7 @@ func TestCreateRecordPage(t *testing.T) {
 }
 
 func TestCreateRecordPage_ZoneNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
@@ -61,6 +63,7 @@ func TestCreateRecordPage_ZoneNotFound(t *testing.T) {
 // regression: a PowerDNS backend failure on the creation page is a 500 with
 // the generic message, not a misleading "Zone not found".
 func TestCreateRecordPage_PDNSServerError_Not404(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -84,6 +87,7 @@ func TestCreateRecordPage_PDNSServerError_Not404(t *testing.T) {
 }
 
 func TestCreateRecord_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
 			w.WriteHeader(http.StatusNoContent)
@@ -127,6 +131,7 @@ func TestCreateRecord_Success(t *testing.T) {
 // left the audit log showing a TTL/priority the user never typed). Validation
 // runs before any PowerDNS contact.
 func TestCreateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer pdnsSrv.Close()
 
@@ -171,6 +176,7 @@ func TestCreateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
 // "Invalid TTL" error page (400) and never reaches PowerDNS, while the exact
 // maximum is accepted and written through.
 func TestCreateRecord_RejectsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("CreateRecord contacted PowerDNS for an over-bound TTL (%s %s)", r.Method, r.URL.Path)
 	})
@@ -200,6 +206,7 @@ func TestCreateRecord_RejectsOverBoundTTL(t *testing.T) {
 // gate: the exact RFC 2181 maximum TTL flows through validation and reaches
 // the PowerDNS write path.
 func TestCreateRecord_AcceptsMaxTTL(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
 			w.WriteHeader(http.StatusNoContent)
@@ -236,6 +243,7 @@ func TestCreateRecord_AcceptsMaxTTL(t *testing.T) {
 // TestUpdateRecord_RejectsInvalidTTLOrPriority is the parseRecordForm
 // counterpart of the CreateRecord test above (same validation contract).
 func TestUpdateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer pdnsSrv.Close()
 
@@ -274,6 +282,7 @@ func TestUpdateRecord_RejectsInvalidTTLOrPriority(t *testing.T) {
 }
 
 func TestCreateRecord_LogsOldNewSnapshot(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{
@@ -299,6 +308,7 @@ func TestCreateRecord_LogsOldNewSnapshot(t *testing.T) {
 }
 
 func TestUpdateRecord_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPatch {
@@ -336,6 +346,7 @@ func TestUpdateRecord_Success(t *testing.T) {
 }
 
 func TestDeleteRecord_Success(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -373,6 +384,7 @@ func TestDeleteRecord_Success(t *testing.T) {
 // without a trailing dot must be normalized to the FQDN before reaching
 // PowerDNS.
 func TestDeleteRecord_NormalizesName(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -406,6 +418,7 @@ func TestDeleteRecord_NormalizesName(t *testing.T) {
 // bug: deleting one record out of an RRSet that holds several must REPLACE the
 // RRSet with the remaining records, not DELETE the whole RRSet.
 func TestDeleteRecord_PartialRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -448,6 +461,7 @@ func TestDeleteRecord_PartialRRSet(t *testing.T) {
 // TestDeleteRecord_SoleRecordDeletesRRSet verifies that removing the last
 // remaining record of an RRSet falls back to a whole-RRSet DELETE.
 func TestDeleteRecord_SoleRecordDeletesRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -484,6 +498,7 @@ func TestDeleteRecord_SoleRecordDeletesRRSet(t *testing.T) {
 // must be re-encoded with the priority embedded in its content for the PATCH
 // (PowerDNS rejects a separate priority element).
 func TestDeleteRecord_MXReEmbedsPriority(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	// Wire form as PDNS stores it: priority leads. ListRecords splits it.
 	list := []models.RRSet{
@@ -522,6 +537,7 @@ func TestDeleteRecord_MXReEmbedsPriority(t *testing.T) {
 // TestDeleteRecord_NotFound verifies that a content+priority tuple that matches
 // no existing record is rejected (400) instead of silently deleting siblings.
 func TestDeleteRecord_NotFound(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -553,6 +569,7 @@ func TestDeleteRecord_NotFound(t *testing.T) {
 // TestDeleteRecord_RejectsInvalidType verifies the type validation: an
 // unsupported record type is rejected with 400 before PowerDNS is contacted.
 func TestDeleteRecord_RejectsInvalidType(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("PDNS should not be called for an invalid type")
 		w.WriteHeader(http.StatusNoContent)
@@ -577,6 +594,7 @@ func TestDeleteRecord_RejectsInvalidType(t *testing.T) {
 }
 
 func TestEditRecordPage_Success(t *testing.T) {
+	t.Parallel()
 	var callCount int
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -625,6 +643,7 @@ func TestEditRecordPage_Success(t *testing.T) {
 // right member of a multi-record RRSet — without JavaScript and without
 // silently editing the first record of the set.
 func TestEditRecordPage_SelectsRecordByContentAndPriority(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -668,6 +687,7 @@ func TestEditRecordPage_SelectsRecordByContentAndPriority(t *testing.T) {
 // that no longer matches any record — the zone changed since the page was
 // rendered — must be refused (404), not edit another member of the set.
 func TestEditRecordPage_StaleIdentityNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -704,6 +724,7 @@ func TestEditRecordPage_StaleIdentityNotFound(t *testing.T) {
 }
 
 func TestEditRecordPage_ZoneNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Not found"}`))
@@ -728,6 +749,7 @@ func TestEditRecordPage_ZoneNotFound(t *testing.T) {
 }
 
 func TestEditRecordPage_RecordNotFound(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
@@ -758,6 +780,7 @@ func TestEditRecordPage_RecordNotFound(t *testing.T) {
 }
 
 func TestEditRecordPage_RecordRetrievalError(t *testing.T) {
+	t.Parallel()
 	var callCount int
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -792,6 +815,7 @@ func TestEditRecordPage_RecordRetrievalError(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPatch {
@@ -845,6 +869,7 @@ func TestInlineUpdateRecord_Success(t *testing.T) {
 // the next edit of the same row appended a duplicate record and Delete
 // submitted the pre-edit content.
 func TestInlineUpdateRecord_ResponseReturnsNormalizedRecord(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPatch {
@@ -925,6 +950,7 @@ func TestInlineUpdateRecord_ResponseReturnsNormalizedRecord(t *testing.T) {
 // unchanged original — a silent duplicate. The handler must refuse with 409
 // and send nothing to PowerDNS.
 func TestInlineUpdateRecord_StaleOriginalContentReturns409(t *testing.T) {
+	t.Parallel()
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -993,6 +1019,7 @@ func TestInlineUpdateRecord_StaleOriginalContentReturns409(t *testing.T) {
 // a genuinely new RRSet through the update form remains possible when no
 // original identity was submitted.
 func TestUpdateRecord_StaleOriginalIdentityTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		list       []models.RRSet
@@ -1056,6 +1083,7 @@ func TestUpdateRecord_StaleOriginalIdentityTransitions(t *testing.T) {
 // original identity, replacing it blindly could drop a record changed by
 // another writer. The edit must be refused without reaching PowerDNS.
 func TestInlineUpdateRecord_StaleOriginalContentSingleRecordReturns409(t *testing.T) {
+	t.Parallel()
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1108,6 +1136,7 @@ func TestInlineUpdateRecord_StaleOriginalContentSingleRecordReturns409(t *testin
 // RRSet must send a single deduplicated record to PowerDNS — an RRSet carrying
 // the same content twice is rejected with an opaque 422.
 func TestInlineUpdateRecord_DeduplicatesSiblingOnEdit(t *testing.T) {
+	t.Parallel()
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &patched, []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -1161,6 +1190,7 @@ func TestInlineUpdateRecord_DeduplicatesSiblingOnEdit(t *testing.T) {
 // whatever record (or index-out-of-range panic) the stale position would hit
 // on the shrunk slice.
 func TestInlineUpdateRecord_DedupRePointsUpdatedIndex(t *testing.T) {
+	t.Parallel()
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &patched, []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -1210,6 +1240,7 @@ func TestInlineUpdateRecord_DedupRePointsUpdatedIndex(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_PDNSErrorNotBlind500(t *testing.T) {
+	t.Parallel()
 	// The zone vanishes between page load and save: the PDNS fetch inside
 	// The record edit flow fails with ErrNotFound and the inline endpoint
 	// must answer 404, not a blanket 500.
@@ -1240,6 +1271,7 @@ func TestInlineUpdateRecord_PDNSErrorNotBlind500(t *testing.T) {
 }
 
 func TestBulkDeleteRecords_PDNSErrorNotBlind500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"error":"Not Found"}`)) // #nosec G104 -- test helper
@@ -1263,6 +1295,7 @@ func TestBulkDeleteRecords_PDNSErrorNotBlind500(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_EmptyContent(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1282,6 +1315,7 @@ func TestInlineUpdateRecord_EmptyContent(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_InvalidType(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1305,6 +1339,7 @@ func TestInlineUpdateRecord_InvalidType(t *testing.T) {
 // respond 500 with a generic message — the underlying error is logged
 // server-side, never leaked to the client.
 func TestInlineUpdateRecord_PDNSUpdateError_Returns500(t *testing.T) {
+	t.Parallel()
 	const leakMarker = "PDNS-INTERNAL-LEAK-MARKER"
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1355,6 +1390,7 @@ func TestInlineUpdateRecord_PDNSUpdateError_Returns500(t *testing.T) {
 // (ListRecords), the AJAX handler must respond 500 with a generic message and
 // log the underlying error server-side.
 func TestInlineUpdateRecord_ListRecordsError_Returns500(t *testing.T) {
+	t.Parallel()
 	const leakMarker = "PDNS-INTERNAL-LEAK-MARKER"
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1387,6 +1423,7 @@ func TestInlineUpdateRecord_ListRecordsError_Returns500(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_PreservesSiblingRecords(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1468,6 +1505,7 @@ func TestInlineUpdateRecord_PreservesSiblingRecords(t *testing.T) {
 }
 
 func TestUpdateRecord_PreservesSiblingRecords(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1557,6 +1595,7 @@ func TestUpdateRecord_PreservesSiblingRecords(t *testing.T) {
 // append a second one — PowerDNS rejects >1 record for single-record types
 // like SOA and CNAME.
 func TestInlineUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1631,6 +1670,7 @@ func TestInlineUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testi
 // form counterpart of the inline-update test above, exercising the same fix
 // through the UpdateRecord handler (POST redirect path).
 func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1699,6 +1739,7 @@ func TestUpdateRecord_SingleRecordStaleContent_ReplacesNotAppends(t *testing.T) 
 }
 
 func TestBatchCreateRecords_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -1759,6 +1800,7 @@ func TestBatchCreateRecords_Success(t *testing.T) {
 // (→0), contradicting the single-record CreateRecord which rejects them.
 // It must now reject with a 400, and no record must reach PowerDNS.
 func TestBatchCreateRecords_RejectsInvalidTTLOrPriority(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer pdnsSrv.Close()
 
@@ -1801,6 +1843,7 @@ func TestBatchCreateRecords_RejectsInvalidTTLOrPriority(t *testing.T) {
 // valid MX priority) is no longer treated as "not provided" by a > 0 guard —
 // the empty-string presence check accepts it.
 func TestBatchCreateRecords_AcceptsZeroPriorityMX(t *testing.T) {
+	t.Parallel()
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
@@ -1845,6 +1888,7 @@ func TestBatchCreateRecords_AcceptsZeroPriorityMX(t *testing.T) {
 }
 
 func TestBatchCreateRecords_MX(t *testing.T) {
+	t.Parallel()
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
@@ -1908,6 +1952,7 @@ func TestBatchCreateRecords_MX(t *testing.T) {
 }
 
 func TestBatchCreateRecords_SRV(t *testing.T) {
+	t.Parallel()
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
@@ -1968,6 +2013,7 @@ func TestBatchCreateRecords_SRV(t *testing.T) {
 }
 
 func TestCreateRecord_MergesWithExistingRRSet(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2053,6 +2099,7 @@ func TestCreateRecord_MergesWithExistingRRSet(t *testing.T) {
 // that PowerDNS rejects with an opaque 422. Both an exact re-add and a
 // normalisation collision (trailing dot) are covered.
 func TestCreateRecord_DuplicateContentDeduped(t *testing.T) {
+	t.Parallel()
 	var patched []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2116,6 +2163,7 @@ func TestCreateRecord_DuplicateContentDeduped(t *testing.T) {
 // RRSet merge is not, so a lowercase "mx" used to miss the existing MX RRSet
 // and the PATCH carried a one-record REPLACE that wiped the sibling record.
 func TestCreateRecord_LowercaseTypeMergesWithExistingRRSet(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2181,6 +2229,7 @@ func TestCreateRecord_LowercaseTypeMergesWithExistingRRSet(t *testing.T) {
 }
 
 func TestBatchCreateRecords_MergesWithExistingRRSet(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2264,6 +2313,7 @@ func TestBatchCreateRecords_MergesWithExistingRRSet(t *testing.T) {
 // duplicate batch rows (same name/type/content) must collapse to a single
 // record in the RRSet sent to PowerDNS, which otherwise rejects duplicates.
 func TestBatchCreateRecords_DedupIdenticalRows(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2326,6 +2376,7 @@ func TestBatchCreateRecords_DedupIdenticalRows(t *testing.T) {
 // after content normalization: two CNAME rows whose targets differ only by a
 // trailing dot collapse to one record.
 func TestBatchCreateRecords_DedupNormalizesBeforeCompare(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2381,6 +2432,7 @@ func TestBatchCreateRecords_DedupNormalizesBeforeCompare(t *testing.T) {
 
 // TestDedupRecordsByContent is a focused unit test for the dedup helper.
 func TestDedupRecordsByContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   []models.RecordInfo
@@ -2403,6 +2455,7 @@ func TestDedupRecordsByContent(t *testing.T) {
 }
 
 func TestBatchCreateRecords_PDNSError_NoLogs(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -2433,6 +2486,7 @@ func TestBatchCreateRecords_PDNSError_NoLogs(t *testing.T) {
 }
 
 func TestBatchCreateRecords_LuaUpdatesDisabled(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
 			w.Header().Set("Content-Type", "application/json")
@@ -2470,6 +2524,7 @@ func TestBatchCreateRecords_LuaUpdatesDisabled(t *testing.T) {
 }
 
 func TestBatchCreateRecords_EmptyRecords(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -2491,6 +2546,7 @@ func TestBatchCreateRecords_EmptyRecords(t *testing.T) {
 }
 
 func TestBatchCreateRecords_MismatchedArrays(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -2533,6 +2589,7 @@ func TestBatchCreateRecords_MismatchedArrays(t *testing.T) {
 }
 
 func TestPrepareRecordContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		recordType    string
@@ -2581,6 +2638,7 @@ func TestPrepareRecordContent(t *testing.T) {
 }
 
 func TestNormalizeRecordName(t *testing.T) {
+	t.Parallel()
 	zone := "example.com."
 	tests := []struct {
 		name, zoneName, want string
@@ -2611,6 +2669,7 @@ func TestNormalizeRecordName(t *testing.T) {
 }
 
 func TestBuildCommentPatch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		text      string
@@ -2652,6 +2711,7 @@ func TestBuildCommentPatch(t *testing.T) {
 }
 
 func TestBuildCommentsPatch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		existing  []models.Comment
@@ -2755,6 +2815,7 @@ func TestBuildCommentsPatch(t *testing.T) {
 }
 
 func TestCreateRecord_SendsComment(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2806,6 +2867,7 @@ func TestCreateRecord_SendsComment(t *testing.T) {
 }
 
 func TestCreateRecord_NoComment_OmitsField(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2850,6 +2912,7 @@ func TestCreateRecord_NoComment_OmitsField(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_AppendsComment(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2919,6 +2982,7 @@ func TestInlineUpdateRecord_AppendsComment(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
+	t.Parallel()
 	var patchedRRSet []models.RRSet
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -3004,6 +3068,7 @@ func TestInlineUpdateRecord_NoComment_PreservesExisting(t *testing.T) {
 // `omitempty` (or strips the account key for another reason) will fail
 // because the PATCH body will no longer contain the explicit empty account.
 func TestInlineUpdateRecord_AddComment_EmitsExplicitEmptyAccount(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3065,6 +3130,7 @@ func TestInlineUpdateRecord_AddComment_EmitsExplicitEmptyAccount(t *testing.T) {
 }
 
 func TestBatchCreateRecords_SendsCommentsPerRow(t *testing.T) {
+	t.Parallel()
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
@@ -3124,6 +3190,7 @@ func TestBatchCreateRecords_SendsCommentsPerRow(t *testing.T) {
 }
 
 func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
+	t.Parallel()
 	type patchBody struct {
 		RRSets []models.RRSet `json:"rrsets"`
 	}
@@ -3197,6 +3264,7 @@ func TestBatchCreateRecords_PreservesExistingComments(t *testing.T) {
 // GoZone distinguish "field absent" (preserve) from "field present but empty"
 // (purge) on PowerDNS PATCH bodies.
 func TestCommentPatch_MarshalJSON(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		patch *models.CommentPatch
@@ -3235,6 +3303,7 @@ func TestCommentPatch_MarshalJSON(t *testing.T) {
 // "null" and "[]" are normalised to a nil Items slice and Clear is never set
 // by unmarshalling.
 func TestCommentPatch_UnmarshalJSON_RoundTrip(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body string
@@ -3280,6 +3349,7 @@ func TestCommentPatch_UnmarshalJSON_RoundTrip(t *testing.T) {
 }
 
 func TestInlineUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3335,6 +3405,7 @@ func TestInlineUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
 }
 
 func TestUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3389,6 +3460,7 @@ func TestUpdateRecord_ClearsCommentsWithFlag(t *testing.T) {
 }
 
 func TestBatchCreateRecords_ClearFlagPurgesComments(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3444,6 +3516,7 @@ func TestBatchCreateRecords_ClearFlagPurgesComments(t *testing.T) {
 }
 
 func TestBatchCreateRecords_DedupRepeatedComments(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -3555,6 +3628,7 @@ func listAndCapturePDNS(t *testing.T, got *[]models.RRSet, list []models.RRSet) 
 }
 
 func TestBulkDeleteRecords_WholeRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -3599,6 +3673,7 @@ func TestBulkDeleteRecords_WholeRRSet(t *testing.T) {
 }
 
 func TestBulkDeleteRecords_PartialRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -3644,6 +3719,7 @@ func TestBulkDeleteRecords_PartialRRSet(t *testing.T) {
 // embedded in the content (PowerDNS rejects a separate priority element in a
 // PATCH).
 func TestBulkDeleteRecords_MXReEmbedsPriority(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	// Wire content as PDNS stores it: priority leads. ListRecords splits it.
 	list := []models.RRSet{
@@ -3680,6 +3756,7 @@ func TestBulkDeleteRecords_MXReEmbedsPriority(t *testing.T) {
 }
 
 func TestBulkDeleteRecords_MixedWholeAndPartial(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 3600, Records: []models.RecordInfo{
@@ -3730,6 +3807,7 @@ func TestBulkDeleteRecords_MixedWholeAndPartial(t *testing.T) {
 }
 
 func TestBulkDeleteRecords_NoSelection(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
 			t.Errorf("PDNS should not be called for an empty selection")
@@ -3760,6 +3838,7 @@ func TestBulkDeleteRecords_NoSelection(t *testing.T) {
 // string (wire form) — consistent with rrsetSnapshot used by single
 // CreateRecord/UpdateRecord/DeleteRecord.
 func TestBulkDeleteRecords_ActivityLogUsesLogicalFormat(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
@@ -3810,6 +3889,7 @@ func TestBulkDeleteRecords_ActivityLogUsesLogicalFormat(t *testing.T) {
 // PowerDNS wire format (priority embedded in content), and that the input
 // RRSet is not mutated — callers reuse it for the PDNS PATCH.
 func TestRRSetSnapshot_NormalizesMXPriority(t *testing.T) {
+	t.Parallel()
 	rrset := &models.RRSet{
 		Name: "example.com.",
 		Type: "MX",
@@ -3833,6 +3913,7 @@ func TestRRSetSnapshot_NormalizesMXPriority(t *testing.T) {
 // TestRRSetSnapshot_IdempotentOnSplitInput verifies the read-path (already
 // split) snapshot is left untouched, keeping Before and After consistent.
 func TestRRSetSnapshot_IdempotentOnSplitInput(t *testing.T) {
+	t.Parallel()
 	rrset := &models.RRSet{
 		Name: "example.com.",
 		Type: "MX",
@@ -3853,6 +3934,7 @@ func TestRRSetSnapshot_IdempotentOnSplitInput(t *testing.T) {
 // used to be re-parsed as the priority, shifting the real priority and
 // dropping the weight from the before-image.
 func TestRRSetSnapshot_SRVReadPathPreservesWeight(t *testing.T) {
+	t.Parallel()
 	// Read-path form, as returned by ListRecords for the wire
 	// "10 20 5060 sip.example.com.".
 	rrset := &models.RRSet{
@@ -3893,6 +3975,7 @@ func TestRRSetSnapshot_SRVReadPathPreservesWeight(t *testing.T) {
 // TestRRSetSnapshot_NonPriorityUntouched verifies non-priority types pass
 // through unchanged.
 func TestRRSetSnapshot_NonPriorityUntouched(t *testing.T) {
+	t.Parallel()
 	rrset := &models.RRSet{
 		Name: "www.example.com.",
 		Type: "A",
@@ -3912,6 +3995,7 @@ func TestRRSetSnapshot_NonPriorityUntouched(t *testing.T) {
 // applies the RRSet-level TTL to every record in the set, so inheriting a form
 // default here would silently rewrite the TTL of the pre-existing siblings.
 func TestCreateRecord_EmptyTTLKeepsExistingRRSetTTL(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -3950,6 +4034,7 @@ func TestCreateRecord_EmptyTTLKeepsExistingRRSetTTL(t *testing.T) {
 // overriding the existing value — the explicit path stays an intentional
 // TTL change.
 func TestCreateRecord_ExplicitTTLAppliesOnMerge(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -3981,6 +4066,7 @@ func TestCreateRecord_ExplicitTTLAppliesOnMerge(t *testing.T) {
 // empty-TTL resolution: with no existing RRSet to inherit from, the 3600
 // default applies (previously hard-coded both in the handler and in the form).
 func TestCreateRecord_EmptyTTLDefaultsOnNewRRSet(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
 	defer pdnsSrv.Close()
@@ -4008,6 +4094,7 @@ func TestCreateRecord_EmptyTTLDefaultsOnNewRRSet(t *testing.T) {
 // merging into an existing RRSet inherits its TTL, the row creating a new
 // RRSet gets the 3600 default.
 func TestBatchCreateRecords_EmptyTTLPreservesExistingAndDefaultsNew(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -4049,6 +4136,7 @@ func TestBatchCreateRecords_EmptyTTLPreservesExistingAndDefaultsNew(t *testing.T
 // TestBatchCreateRecords_ExplicitTTLAppliesOnMerge verifies the batch
 // counterpart of the explicit-TTL path.
 func TestBatchCreateRecords_ExplicitTTLAppliesOnMerge(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -4081,6 +4169,7 @@ func TestBatchCreateRecords_ExplicitTTLAppliesOnMerge(t *testing.T) {
 // actionable error: PowerDNS applies one TTL per RRSet, and the first row's
 // value used to silently win.
 func TestBatchCreateRecords_ConflictingGroupTTLsRejected(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
 	defer pdnsSrv.Close()
@@ -4111,6 +4200,7 @@ func TestBatchCreateRecords_ConflictingGroupTTLsRejected(t *testing.T) {
 // TTL comes from ANY row with an explicit value, not only the first: a first
 // row with an empty TTL no longer locks the group into the default.
 func TestBatchCreateRecords_LaterRowExplicitTTLAppliesToGroup(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
 	defer pdnsSrv.Close()
@@ -4146,6 +4236,7 @@ func TestBatchCreateRecords_LaterRowExplicitTTLAppliesToGroup(t *testing.T) {
 // PowerDNS applies the RRSet-level TTL to every record, so the previous
 // 3600 default silently rewrote the siblings' deliberately short TTL.
 func TestInlineUpdateRecord_EmptyTTLInheritsExisting(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -4182,6 +4273,7 @@ func TestInlineUpdateRecord_EmptyTTLInheritsExisting(t *testing.T) {
 // a new record into an existing RRSet without a TTL preference must keep the
 // RRSet's TTL instead of jumping to the 3600 default.
 func TestCreateRecord_EmptyTTLInheritsExisting(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -4219,6 +4311,7 @@ func TestCreateRecord_EmptyTTLInheritsExisting(t *testing.T) {
 // PowerDNS with a generic upstream error. It must be refused here, with the
 // precise message, before any PDNS call.
 func TestCreateRecord_RejectsIPv4MappedAAAContent(t *testing.T) {
+	t.Parallel()
 	pdnsCalled := false
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		pdnsCalled = true
@@ -4253,6 +4346,7 @@ func TestCreateRecord_RejectsIPv4MappedAAAContent(t *testing.T) {
 // rows — checking the flag on row 2 purged row 1's comments. The flag now
 // arrives as one hidden 0/1 value per row, aligned with name/type/content.
 func TestBatchCreateRecords_ClearFlagAlignedPerRow(t *testing.T) {
+	t.Parallel()
 	var rawBody []byte
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4334,6 +4428,7 @@ func TestBatchCreateRecords_ClearFlagAlignedPerRow(t *testing.T) {
 // the conflict message (both numbers), not a 500, and no PATCH may reach
 // PowerDNS.
 func TestCreateRecord_SRVPriorityConflict(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -4374,6 +4469,7 @@ func TestCreateRecord_SRVPriorityConflict(t *testing.T) {
 // recordValidationError path (400 error page), not the 500 internal-error
 // path, and nothing may be sent to PowerDNS.
 func TestUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4426,6 +4522,7 @@ func TestUpdateRecord_SRVPriorityConflict(t *testing.T) {
 // update contract: the inline editor must receive a 400 {"error": ...}
 // response carrying the conflict message, not a 500.
 func TestInlineUpdateRecord_SRVPriorityConflict(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4479,6 +4576,7 @@ func TestInlineUpdateRecord_SRVPriorityConflict(t *testing.T) {
 // divergence, the WHOLE pending patch is discarded with a 400 — a partial
 // batch must never reach PowerDNS.
 func TestBatchCreateRecords_SRVPriorityConflictDiscardsPatch(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -4520,6 +4618,7 @@ func TestBatchCreateRecords_SRVPriorityConflictDiscardsPatch(t *testing.T) {
 // sip.example.com.", priority 10), must be written back byte-identically —
 // the update must not be rejected as a priority conflict.
 func TestUpdateRecord_SRVWireRoundTrip(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "_sip._tcp.example.com.", Type: "SRV", TTL: 300, Records: []models.RecordInfo{
@@ -4560,6 +4659,7 @@ func TestUpdateRecord_SRVWireRoundTrip(t *testing.T) {
 // key match misses the RRSet, produces a bare REPLACE of the new row and
 // silently drops the existing sibling (and its TTL).
 func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "Mail.Example.COM.", Type: "MX", TTL: 300,
@@ -4606,6 +4706,7 @@ func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
 // only error-vs-nil is asserted here — the exact text lives in
 // validators.ValidateRecordTTL.)
 func TestCollectBatchRows_RejectsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	_, _, _, err := collectBatchRows(
 		[]string{"www"}, []string{"A"}, []string{"192.0.2.1"},
 		[]string{"2147483648"}, nil, nil, nil, "example.com.")
@@ -4629,6 +4730,7 @@ func TestCollectBatchRows_RejectsOverBoundTTL(t *testing.T) {
 // counterpart: the ttl form value is range-checked against the RFC 2181 §8
 // maximum, not just "> 0".
 func TestParseRecordForm_RejectsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	body := "name=www&type=A&content=192.0.2.1&ttl=2147483648"
 	r := httptest.NewRequest(http.MethodPost, "/zones/example.com/records/new", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -4656,6 +4758,7 @@ func TestParseRecordForm_RejectsOverBoundTTL(t *testing.T) {
 // and the handler previously answered 409 conflict — an edit that merely
 // carried a corrupt form field read as a concurrent modification.
 func TestInlineUpdateRecord_InvalidOriginalPriority(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -4713,6 +4816,7 @@ func TestInlineUpdateRecord_InvalidOriginalPriority(t *testing.T) {
 // (the identity of non-priority records) — the validation must only reject
 // non-empty non-numeric values.
 func TestInlineUpdateRecord_EmptyOriginalPriorityStillMatches(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{
@@ -4751,6 +4855,7 @@ func TestInlineUpdateRecord_EmptyOriginalPriorityStillMatches(t *testing.T) {
 // a real priority-0 MX record with the submitted content, so the pre-fix code
 // happily deletes it (303) while the operator targeted a corrupt form field.
 func TestDeleteRecord_RejectsInvalidPriority(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "example.com.", Type: "MX", TTL: 3600, Records: []models.RecordInfo{
@@ -4790,6 +4895,7 @@ func TestDeleteRecord_RejectsInvalidPriority(t *testing.T) {
 // selection entry — instead of silently coercing to 0 and targeting the wrong
 // record (the pre-fix code answered 200 with the silent 0).
 func TestBulkDeleteRecords_InvalidPriority(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -4854,6 +4960,7 @@ func TestBulkDeleteRecords_InvalidPriority(t *testing.T) {
 // transport label (" via Web") — the pre-convergence handler logged without
 // any label.
 func TestWebCreateRecord_DelegatesToService(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, pdnsSrv := newTestHandlerWithPDNS(t, listAndCapturePDNS(t, &sent, nil))
 	defer pdnsSrv.Close()
@@ -4890,6 +4997,7 @@ func TestWebCreateRecord_DelegatesToService(t *testing.T) {
 // and the service writes the labelled audit row. The edit itself must still
 // merge into the existing RRSet (sibling-preserving REPLACE).
 func TestWebUpdateRecord_DelegatesToService(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	list := []models.RRSet{
 		{Name: "www.example.com.", Type: "A", TTL: 300, Records: []models.RecordInfo{

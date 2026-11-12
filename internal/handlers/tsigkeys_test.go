@@ -18,6 +18,7 @@ import (
 )
 
 func TestListTSIGKeys(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]models.TSIGKey{
@@ -40,6 +41,7 @@ func TestListTSIGKeys(t *testing.T) {
 }
 
 func TestListTSIGKeys_Empty(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
@@ -60,6 +62,7 @@ func TestListTSIGKeys_Empty(t *testing.T) {
 }
 
 func TestListTSIGKeys_PaginationAndSearch(t *testing.T) {
+	t.Parallel()
 	keys := []models.TSIGKey{
 		{Name: "alpha-key.", ID: "alpha-key.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
 		{Name: "beta-key.", ID: "beta-key.", Algorithm: "hmac-sha256", Type: "TSIGKey"},
@@ -99,6 +102,7 @@ func TestListTSIGKeys_PaginationAndSearch(t *testing.T) {
 }
 
 func TestCreateTSIGKeyPage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -115,6 +119,7 @@ func TestCreateTSIGKeyPage(t *testing.T) {
 }
 
 func TestCreateTSIGKey_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var req models.TSIGKey
@@ -152,6 +157,7 @@ func TestCreateTSIGKey_Success(t *testing.T) {
 }
 
 func TestCreateTSIGKey_EmptyName(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -172,6 +178,7 @@ func TestCreateTSIGKey_EmptyName(t *testing.T) {
 }
 
 func TestCreateTSIGKey_EmptyAlgorithm(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -191,6 +198,7 @@ func TestCreateTSIGKey_EmptyAlgorithm(t *testing.T) {
 // TestCreateTSIGKey_InvalidAlgorithm is the m33 regression test: an
 // unsupported TSIG algorithm must be rejected before reaching PowerDNS.
 func TestCreateTSIGKey_InvalidAlgorithm(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -211,6 +219,7 @@ func TestCreateTSIGKey_InvalidAlgorithm(t *testing.T) {
 }
 
 func TestCreateTSIGKey_EmptyKey(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var req models.TSIGKey
@@ -246,6 +255,7 @@ func TestCreateTSIGKey_EmptyKey(t *testing.T) {
 }
 
 func TestCreateTSIGKey_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 2, Username: "user", Role: "user"}
@@ -263,6 +273,7 @@ func TestCreateTSIGKey_NonAdmin(t *testing.T) {
 }
 
 func TestEditTSIGKeyPage(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.TSIGKey{
@@ -295,6 +306,7 @@ func TestEditTSIGKeyPage(t *testing.T) {
 }
 
 func TestUpdateTSIGKey_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
 			w.WriteHeader(http.StatusNoContent)
@@ -331,6 +343,7 @@ func TestUpdateTSIGKey_Success(t *testing.T) {
 // the whole resource, so the handler re-fetches the existing material and
 // forwards it back unchanged (no rotation, no exposure).
 func TestUpdateTSIGKey_BlankKeyKeepsCurrent(t *testing.T) {
+	t.Parallel()
 	var putBody string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -388,6 +401,7 @@ func TestUpdateTSIGKey_BlankKeyKeepsCurrent(t *testing.T) {
 // and unblocks A (rotation lost); with the lock B waits on the per-key
 // lock, the timeout path unblocks A, and B's rotation lands last.
 func TestUpdateTSIGKey_ConcurrentKeepAndRotateSerialized(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	stored := models.TSIGKey{
 		Name: "my-key.", ID: "my-key.", Algorithm: "hmac-sha256",
@@ -469,6 +483,7 @@ func TestUpdateTSIGKey_ConcurrentKeepAndRotateSerialized(t *testing.T) {
 }
 
 func TestUpdateTSIGKey_EmptyAlgorithm(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -489,6 +504,7 @@ func TestUpdateTSIGKey_EmptyAlgorithm(t *testing.T) {
 // TestUpdateTSIGKey_InvalidAlgorithm is the m33 regression test for the update
 // path: an unsupported TSIG algorithm must be rejected before reaching PowerDNS.
 func TestUpdateTSIGKey_InvalidAlgorithm(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -510,6 +526,7 @@ func TestUpdateTSIGKey_InvalidAlgorithm(t *testing.T) {
 }
 
 func TestDeleteTSIGKey_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -538,6 +555,7 @@ func TestDeleteTSIGKey_Success(t *testing.T) {
 }
 
 func TestDeleteTSIGKey_EmptyID(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -555,6 +573,7 @@ func TestDeleteTSIGKey_EmptyID(t *testing.T) {
 }
 
 func TestDeleteTSIGKey_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -575,6 +594,7 @@ func TestDeleteTSIGKey_PDNSError(t *testing.T) {
 }
 
 func TestBulkDeleteTSIGKeys_Success(t *testing.T) {
+	t.Parallel()
 	var deletedPaths []string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -623,6 +643,7 @@ func TestBulkDeleteTSIGKeys_Success(t *testing.T) {
 }
 
 func TestBulkDeleteTSIGKeys_PartialFailure(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if strings.Contains(r.URL.Path, "boom-key.") {
@@ -669,6 +690,7 @@ func TestBulkDeleteTSIGKeys_PartialFailure(t *testing.T) {
 }
 
 func TestBulkDeleteTSIGKeys_NoSelection(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("PDNS should not be called for an empty selection")
 	})
@@ -690,6 +712,7 @@ func TestBulkDeleteTSIGKeys_NoSelection(t *testing.T) {
 }
 
 func TestGenerateTSIGSecret(t *testing.T) {
+	t.Parallel()
 	key1, err := generateTSIGSecret()
 	if err != nil {
 		t.Fatalf("generateTSIGSecret failed: %v", err)
@@ -718,6 +741,7 @@ func TestGenerateTSIGSecret(t *testing.T) {
 }
 
 func TestGenerateTSIGSecret_DeterministicCheck(t *testing.T) {
+	t.Parallel()
 	key, err := generateTSIGSecret()
 	if err != nil {
 		t.Fatalf("generateTSIGSecret failed: %v", err)
@@ -736,6 +760,7 @@ func TestGenerateTSIGSecret_DeterministicCheck(t *testing.T) {
 // client-side Generate button. The secret must now ride a one-time cookie to
 // the listing page, which reads and clears it immediately.
 func TestCreateTSIGKey_ServerGeneratedSecretRevealedOnce(t *testing.T) {
+	t.Parallel()
 	var sentToPDNS models.TSIGKey
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -823,6 +848,7 @@ func TestCreateTSIGKey_ServerGeneratedSecretRevealedOnce(t *testing.T) {
 // secret is already known to them — the reveal channel must stay unused so it
 // never re-displays material the user typed.
 func TestCreateTSIGKey_ProvidedSecretSetsNoRevealCookie(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.Header().Set("Content-Type", "application/json")
@@ -856,6 +882,7 @@ func TestCreateTSIGKey_ProvidedSecretSetsNoRevealCookie(t *testing.T) {
 // convention (the form hints "must end with a dot"); an invalid name must be
 // rejected with a precise message before PowerDNS is contacted.
 func TestCreateTSIGKey_InvalidNameRejected(t *testing.T) {
+	t.Parallel()
 	pdnsCalled := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		pdnsCalled = true

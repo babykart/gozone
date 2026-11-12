@@ -20,6 +20,7 @@ import (
 )
 
 func TestListZones(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/servers/localhost/zones" {
@@ -44,6 +45,7 @@ func TestListZones(t *testing.T) {
 }
 
 func TestListZones_Empty(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[]`))
@@ -64,6 +66,7 @@ func TestListZones_Empty(t *testing.T) {
 }
 
 func TestCreateZonePage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -80,6 +83,7 @@ func TestCreateZonePage(t *testing.T) {
 }
 
 func TestCreateZone_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -120,6 +124,7 @@ func TestCreateZone_Success(t *testing.T) {
 // handler must canonicalise both the zone name and each nameserver to
 // lowercase + trailing dot before sending the request.
 func TestCreateZone_NormalizesNameAndNameservers(t *testing.T) {
+	t.Parallel()
 	var sent models.ZoneCreateRequest
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&sent)
@@ -163,6 +168,7 @@ func TestCreateZone_NormalizesNameAndNameservers(t *testing.T) {
 // exists, or has no records must fail BEFORE the zone is created — not
 // leave a zone without the expected records and redirect to success.
 func TestCreateZone_RejectsInvalidTemplateBeforeCreation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		templateID  string
@@ -232,6 +238,7 @@ func TestCreateZone_RejectsInvalidTemplateBeforeCreation(t *testing.T) {
 // TestCreateZone_WithTemplateAppliesRecords is the positive control: a valid
 // template still applies its records after the zone is created.
 func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
+	t.Parallel()
 	var patched bool
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -275,6 +282,7 @@ func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
 // form: a Slave zone submitted without masters must be refused before any
 // PowerDNS call, and valid masters must be forwarded in the create request.
 func TestCreateZone_SlaveRequiresMasters(t *testing.T) {
+	t.Parallel()
 	var sent models.ZoneCreateRequest
 	var createCalls int
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +335,7 @@ func TestCreateZone_SlaveRequiresMasters(t *testing.T) {
 }
 
 func TestCreateZone_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
@@ -344,6 +353,7 @@ func TestCreateZone_NonAdmin(t *testing.T) {
 }
 
 func TestCreateZone_EmptyName(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -361,6 +371,7 @@ func TestCreateZone_EmptyName(t *testing.T) {
 }
 
 func TestDeleteZone_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("expected DELETE, got %s", r.Method)
@@ -397,6 +408,7 @@ func TestDeleteZone_Success(t *testing.T) {
 // silently restored the old groups' access to the NEW zone. Every delete
 // path (web single, web bulk, REST API) must purge the grants immediately.
 func TestDeleteZone_PurgesGroupGrants(t *testing.T) {
+	t.Parallel()
 	seedGrant := func(t *testing.T, h *Handler, zone string) {
 		t.Helper()
 		gid := insertReturnID(t, h.DB, "INSERT INTO zone_groups (name, description) VALUES ('grp-"+zone+"', '')")
@@ -488,6 +500,7 @@ func TestDeleteZone_PurgesGroupGrants(t *testing.T) {
 }
 
 func TestDeleteZone_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "user", Role: "user"}
@@ -505,6 +518,7 @@ func TestDeleteZone_NonAdmin(t *testing.T) {
 }
 
 func TestDeleteZone_EmptyID(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -522,6 +536,7 @@ func TestDeleteZone_EmptyID(t *testing.T) {
 }
 
 func TestBulkDeleteZones_Success(t *testing.T) {
+	t.Parallel()
 	var deletedPaths []string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -570,6 +585,7 @@ func TestBulkDeleteZones_Success(t *testing.T) {
 }
 
 func TestBulkDeleteZones_PartialFailure(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if strings.Contains(r.URL.Path, "boom.example.com") {
@@ -621,6 +637,7 @@ func TestBulkDeleteZones_PartialFailure(t *testing.T) {
 // "dup.example.com.") must collapse into exactly one PowerDNS DELETE and one
 // audit row keyed on the canonical zone ID.
 func TestBulkDeleteZones_DedupesCanonicalSpellings(t *testing.T) {
+	t.Parallel()
 	var deletePaths []string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -683,6 +700,7 @@ func TestBulkDeleteZones_DedupesCanonicalSpellings(t *testing.T) {
 }
 
 func TestBulkDeleteZones_NoSelection(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("PDNS should not be called for an empty selection")
 	})
@@ -709,6 +727,7 @@ func TestBulkDeleteZones_NoSelection(t *testing.T) {
 // audit details must carry the "via Web" source label, because the handler
 // delegates to dnsops.Service.DeleteZone.
 func TestDeleteZone_CanonicalizesFormValue(t *testing.T) {
+	t.Parallel()
 	var deletePath string
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -752,6 +771,7 @@ func TestDeleteZone_CanonicalizesFormValue(t *testing.T) {
 }
 
 func TestViewZone(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{
@@ -790,6 +810,7 @@ func (p *panicMetadata) GetMetadata(ctx context.Context, zoneID string) ([]model
 // still render successfully. Without the recover in the goroutine this test
 // would crash the test runner.
 func TestViewZone_GoroutinePanicRecovery(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(models.Zone{
@@ -843,6 +864,7 @@ func (p *panicRecords) ListRecords(ctx context.Context, zoneID string) ([]models
 // escapes the handler. Without the recover in the goroutine this test would
 // crash the test runner.
 func TestViewZone_GoroutinePanicRecoveryFatal(t *testing.T) {
+	t.Parallel()
 	newRequest := func(ctx context.Context) (*httptest.ResponseRecorder, *http.Request) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/zones/example.com", nil)
@@ -897,6 +919,7 @@ func TestViewZone_GoroutinePanicRecoveryFatal(t *testing.T) {
 }
 
 func TestRectifyZone_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -925,6 +948,7 @@ func TestRectifyZone_Success(t *testing.T) {
 }
 
 func TestRectifyZone_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 2, Username: "user", Role: "user"}
@@ -942,6 +966,7 @@ func TestRectifyZone_NonAdmin(t *testing.T) {
 }
 
 func TestRectifyZone_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -965,6 +990,7 @@ func TestRectifyZone_PDNSError(t *testing.T) {
 }
 
 func TestNotifyZone_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -1012,6 +1038,7 @@ func TestNotifyZone_Success(t *testing.T) {
 }
 
 func TestNotifyZone_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 2, Username: "user", Role: "user"}
@@ -1029,6 +1056,7 @@ func TestNotifyZone_NonAdmin(t *testing.T) {
 }
 
 func TestNotifyZone_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -1058,6 +1086,7 @@ func TestNotifyZone_PDNSError(t *testing.T) {
 }
 
 func TestCreateMetadata_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusCreated)
@@ -1093,6 +1122,7 @@ func TestCreateMetadata_Success(t *testing.T) {
 }
 
 func TestCreateMetadata_MultiLineValues(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			var req models.Metadata
@@ -1127,6 +1157,7 @@ func TestCreateMetadata_MultiLineValues(t *testing.T) {
 }
 
 func TestCreateMetadata_EmptyKind(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1150,6 +1181,7 @@ func TestCreateMetadata_EmptyKind(t *testing.T) {
 // TestCreateMetadata_InvalidKind is the m33 regression test: a metadata kind
 // not on the PowerDNS whitelist must be rejected before reaching PowerDNS.
 func TestCreateMetadata_InvalidKind(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1171,6 +1203,7 @@ func TestCreateMetadata_InvalidKind(t *testing.T) {
 }
 
 func TestCreateMetadata_EmptyValues(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1192,6 +1225,7 @@ func TestCreateMetadata_EmptyValues(t *testing.T) {
 }
 
 func TestCreateMetadata_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 2, Username: "user", Role: "user"}
@@ -1210,6 +1244,7 @@ func TestCreateMetadata_NonAdmin(t *testing.T) {
 }
 
 func TestDeleteMetadata_Success(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -1239,6 +1274,7 @@ func TestDeleteMetadata_Success(t *testing.T) {
 }
 
 func TestDeleteMetadata_EmptyKind(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1263,6 +1299,7 @@ func TestDeleteMetadata_EmptyKind(t *testing.T) {
 // against the same whitelist as the create path: the kind goes straight into
 // the PowerDNS path and a delete must not accept input a create would refuse.
 func TestDeleteMetadata_InvalidKind(t *testing.T) {
+	t.Parallel()
 	var pdnsCalls atomic.Int64
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		pdnsCalls.Add(1)
@@ -1292,6 +1329,7 @@ func TestDeleteMetadata_InvalidKind(t *testing.T) {
 }
 
 func TestDeleteMetadata_NonAdmin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 2, Username: "user", Role: "user"}
@@ -1310,6 +1348,7 @@ func TestDeleteMetadata_NonAdmin(t *testing.T) {
 }
 
 func TestCreateMetadata_PDNSError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
@@ -1334,6 +1373,7 @@ func TestCreateMetadata_PDNSError(t *testing.T) {
 }
 
 func TestPaginate(t *testing.T) {
+	t.Parallel()
 	items := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 	// Page 1 of 10
@@ -1398,6 +1438,7 @@ func TestPaginate(t *testing.T) {
 }
 
 func TestPageInfoFromTotal(t *testing.T) {
+	t.Parallel()
 	info := pageInfoFromTotal(15, 1, 10)
 	if info.Current != 1 || info.PerPage != 10 || info.TotalPages != 2 || info.Total != 15 {
 		t.Errorf("pageInfoFromTotal(15,1,10) = %+v", info)
@@ -1434,6 +1475,7 @@ func TestPageInfoFromTotal(t *testing.T) {
 }
 
 func TestBuildSearchLikeWhere(t *testing.T) {
+	t.Parallel()
 	clause, args := buildSearchLikeWhere("  ", "name")
 	if clause != "" || len(args) != 0 {
 		t.Errorf("empty search should return empty clause, got %q %v", clause, args)
@@ -1449,6 +1491,7 @@ func TestBuildSearchLikeWhere(t *testing.T) {
 }
 
 func TestListZones_Pagination(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/servers/localhost/zones" {
@@ -1504,6 +1547,7 @@ func TestListZones_Pagination(t *testing.T) {
 // "logPage"/"logPerPage") but the parser read lower-case names, so changing the
 // per-page selector only refreshed the page with no effect.
 func TestParsePaginationParams_QueryNames(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest(http.MethodGet, "/zones?Page=3&PerPage=25", nil)
 	if page, perPage := parsePaginationParams(r, 10); page != 3 || perPage != 25 {
 		t.Errorf("records: got page=%d perPage=%d, want 3 and 25", page, perPage)
@@ -1529,6 +1573,7 @@ func TestParsePaginationParams_QueryNames(t *testing.T) {
 }
 
 func TestListZones_Search(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/servers/localhost/zones" {
@@ -1557,6 +1602,7 @@ func TestListZones_Search(t *testing.T) {
 }
 
 func TestListZones_Search_NoResults(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/servers/localhost/zones" {
@@ -1583,6 +1629,7 @@ func TestListZones_Search_NoResults(t *testing.T) {
 }
 
 func TestListZones_Search_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/servers/localhost/zones" {
@@ -1610,6 +1657,7 @@ func TestListZones_Search_CaseInsensitive(t *testing.T) {
 }
 
 func TestViewZone_ParallelPDNSCalls(t *testing.T) {
+	t.Parallel()
 	var active atomic.Int32
 	var maxConcurrent atomic.Int32
 
@@ -1650,6 +1698,7 @@ func TestViewZone_ParallelPDNSCalls(t *testing.T) {
 }
 
 func TestGetZoneActivityLogs_UsernamePopulated(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "alice", "alice@example.com", "alice", false)
 
@@ -1671,6 +1720,7 @@ func TestGetZoneActivityLogs_UsernamePopulated(t *testing.T) {
 }
 
 func TestViewZone_RecordsSearch(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/records") {
@@ -1697,6 +1747,7 @@ func TestViewZone_RecordsSearch(t *testing.T) {
 }
 
 func TestViewZone_SearchAt(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
@@ -1747,6 +1798,7 @@ func TestViewZone_SearchAt(t *testing.T) {
 }
 
 func TestViewZone_AllPerPageCapped(t *testing.T) {
+	t.Parallel()
 	// The zone carries 1005 single-record A RRSets and nothing else: the
 	// "All" per-page request must clamp to zoneViewAllCap (1000) rows, so
 	// exactly 1000 "192.0.2." rows render on page 1 of 2. (SOA/NS RRSets
@@ -1830,6 +1882,7 @@ func TestViewZone_AllPerPageCapped(t *testing.T) {
 }
 
 func TestViewZone_SortOrder(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
@@ -1892,6 +1945,7 @@ func TestViewZone_SortOrder(t *testing.T) {
 }
 
 func TestSortZoneRecords(t *testing.T) {
+	t.Parallel()
 	zoneName := "example.com."
 	records := []models.RRSet{
 		{Name: "www.example.com.", Type: "A"},
@@ -1928,6 +1982,7 @@ func TestSortZoneRecords(t *testing.T) {
 }
 
 func TestSortZoneRecords_TwoNS(t *testing.T) {
+	t.Parallel()
 	// Regression for the strict-weak-ordering bug: comparing two NS records
 	// must not return true in both directions.
 	zoneName := "example.com."
@@ -1944,6 +1999,7 @@ func TestSortZoneRecords_TwoNS(t *testing.T) {
 }
 
 func TestSortZoneRecords_TwoSOA(t *testing.T) {
+	t.Parallel()
 	zoneName := "example.com."
 	records := []models.RRSet{
 		{Name: "example.com.", Type: "SOA"},
@@ -1964,6 +2020,7 @@ func TestSortZoneRecords_TwoSOA(t *testing.T) {
 // on a single page of 10. flattenRecords expands RRSets into rows so that
 // paginate counts what the user actually sees.
 func TestFlattenRecords(t *testing.T) {
+	t.Parallel()
 	rrsets := []models.RRSet{
 		{
 			Name: "example.com.",
@@ -2041,6 +2098,7 @@ func TestFlattenRecords(t *testing.T) {
 // the result is a non-nil empty slice (so {{if .Records}} works in the
 // template).
 func TestFlattenRecords_Empty(t *testing.T) {
+	t.Parallel()
 	rows := flattenRecords(nil)
 	if rows == nil {
 		t.Fatal("expected non-nil empty slice")
@@ -2068,6 +2126,7 @@ func newBackReq(t *testing.T, host, referer string) *http.Request {
 // back to the last page (never "page 1000 / 3"), and the clamp runs BEFORE
 // the SQL offset math so (page-1)*perPage cannot overflow.
 func TestClampPageToTotal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                 string
 		page, perPage, total int
@@ -2094,6 +2153,7 @@ func TestClampPageToTotal(t *testing.T) {
 // requested page must fetch the LAST page's rows (same as page=totalPages),
 // not an offset past the end computed from an overflowing (page-1)*perPage.
 func TestGetActivityLogs_PageClampedToLast(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	for i := 0; i < 15; i++ {
@@ -2113,6 +2173,7 @@ func TestGetActivityLogs_PageClampedToLast(t *testing.T) {
 // TestGetZoneActivityLogs_PageClampedToLast is the zone-tab twin of the
 // global activity-log clamp test.
 func TestGetZoneActivityLogs_PageClampedToLast(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	for i := 0; i < 12; i++ {
 		h.DB.Exec("INSERT INTO activity_logs (zone_id, action, details) VALUES (?, 'update_record', ?)", "z.", fmt.Sprintf("zrow-%02d", i))
@@ -2129,6 +2190,7 @@ func TestGetZoneActivityLogs_PageClampedToLast(t *testing.T) {
 }
 
 func TestBackURL(t *testing.T) {
+	t.Parallel()
 	const host = "gozone.test"
 	tests := []struct {
 		name    string
@@ -2161,6 +2223,7 @@ func TestBackURL(t *testing.T) {
 // TestRenderError_BackURLWired confirms the error page renders the resolved
 // back URL (the regression: it used to hard-code /dashboard).
 func TestRenderError_BackURLWired(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	t.Run("uses referer", func(t *testing.T) {
@@ -2196,6 +2259,7 @@ func TestRenderError_BackURLWired(t *testing.T) {
 // page (500), not an empty list presented as "no zones" — indistinguishable
 // from a legitimate empty state during an outage.
 func TestListZones_ZoneFilterErrorSurfaces500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]models.Zone{
@@ -2225,6 +2289,7 @@ func TestListZones_ZoneFilterErrorSurfaces500(t *testing.T) {
 // clause in the SQL — previously "%foo%" was bound verbatim, so searching for
 // "%" returned every row and "_" matched any single character.
 func TestBuildSearchLikeWhere_EscapesWildcards(t *testing.T) {
+	t.Parallel()
 	clause, args := buildSearchLikeWhere("100%_!", "name")
 	if !strings.Contains(clause, `LIKE ? ESCAPE '!'`) {
 		t.Errorf("clause must pair the LIKE with the ESCAPE character, got %q", clause)
@@ -2249,6 +2314,7 @@ func TestBuildSearchLikeWhere_EscapesWildcards(t *testing.T) {
 // findable by searching for those characters, while the same search must not
 // degenerate into a match-all.
 func TestBuildSearchLikeWhere_LiteralMatchAgainstDB(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	testutil.SeedTestUser(t, h.DB, "plainuser", "pass", "user", true)
 	testutil.SeedTestUser(t, h.DB, "has_underscore", "pass", "user", true)
@@ -2285,6 +2351,7 @@ func TestBuildSearchLikeWhere_LiteralMatchAgainstDB(t *testing.T) {
 // 'Template "x" has no records', which would both refuse the zone creation
 // and send the operator to fix a perfectly healthy template.
 func TestCreateZone_TemplateRecordsDBError(t *testing.T) {
+	t.Parallel()
 	created := false
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		created = true

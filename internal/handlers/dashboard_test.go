@@ -15,6 +15,7 @@ import (
 )
 
 func TestDashboard(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -31,6 +32,7 @@ func TestDashboard(t *testing.T) {
 }
 
 func TestActivityPage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -47,6 +49,7 @@ func TestActivityPage(t *testing.T) {
 }
 
 func TestActivityPage_DefaultPaginationPerPage10(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	for i := 0; i < 12; i++ {
@@ -73,6 +76,7 @@ func TestActivityPage_DefaultPaginationPerPage10(t *testing.T) {
 }
 
 func TestActivityPage_EscapesDateParams(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -98,6 +102,7 @@ func TestActivityPage_EscapesDateParams(t *testing.T) {
 }
 
 func TestGetActivityLogs_Admin(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -115,6 +120,7 @@ func TestGetActivityLogs_Admin(t *testing.T) {
 }
 
 func TestGetActivityLogs_Search(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -138,6 +144,7 @@ func TestGetActivityLogs_Search(t *testing.T) {
 }
 
 func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	// Seed two users: an admin and a regular member.
@@ -182,6 +189,7 @@ func TestGetActivityLogs_NonAdminSearchRespectsVisibility(t *testing.T) {
 }
 
 func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	adminID := testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
@@ -222,6 +230,7 @@ func TestGetDistinctActivityActions_RespectsVisibility(t *testing.T) {
 }
 
 func TestDashboard_ServerStats(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"name":"uptime","type":"StatisticItem","value":"3600"},{"name":"questions","type":"StatisticItem","value":"12345"},{"name":"packetcache-hit","type":"StatisticItem","value":"5000"},{"name":"packetcache-miss","type":"StatisticItem","value":"100"},{"name":"query-cache-hit","type":"StatisticItem","value":"8000"},{"name":"query-cache-miss","type":"StatisticItem","value":"200"},{"name":"qsize-q","type":"StatisticItem","value":"0"}]`))
@@ -242,6 +251,7 @@ func TestDashboard_ServerStats(t *testing.T) {
 }
 
 func TestDashboard_GetStatisticsError(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/statistics") {
@@ -284,6 +294,7 @@ func TestDashboard_GetStatisticsError(t *testing.T) {
 // statistics call also failed. The degradable statistics failure must never
 // mask the failure that makes the zone count unknowable.
 func TestDashboard_StatisticsAndZoneListErrorSurfaces500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -305,6 +316,7 @@ func TestDashboard_StatisticsAndZoneListErrorSurfaces500(t *testing.T) {
 }
 
 func TestValToString(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input interface{}
 		want  string
@@ -328,6 +340,7 @@ func TestValToString(t *testing.T) {
 }
 
 func TestDashboard_NumericStats(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"name":"uptime","type":"StatisticItem","value":3600},{"name":"questions","type":"StatisticItem","value":12345}]`))
@@ -355,6 +368,7 @@ func TestDashboard_NumericStats(t *testing.T) {
 // failures keep the dashboard degraded-but-rendered; an empty-looking tenant
 // caused by a failed zone list does not.
 func TestDashboard_ZoneListErrorSurfaces500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/zones") {
@@ -385,6 +399,7 @@ func TestDashboard_ZoneListErrorSurfaces500(t *testing.T) {
 // dashboard data, proving the count flows from the shared dnsops.Stats call
 // rather than from a separately computed (and separately faultable) path.
 func TestDashboard_ZoneCountComesFromService(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/zones") {
@@ -422,6 +437,7 @@ func TestDashboard_ZoneCountComesFromService(t *testing.T) {
 // with TestDashboard_GetStatisticsError: PowerDNS statistics failures keep
 // the dashboard degraded-but-rendered; a broken local database does not.
 func TestDashboard_ZoneFilterErrorSurfaces500(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/zones") {

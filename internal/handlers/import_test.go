@@ -39,6 +39,7 @@ func importPDNS() testutil.PDNSHandlerFunc {
 }
 
 func TestImportZone_BIND(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, importPDNS())
 	defer srv.Close()
 
@@ -75,6 +76,7 @@ www IN A 192.0.2.1
 }
 
 func TestImportZone_CSV(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, importPDNS())
 	defer srv.Close()
 
@@ -105,6 +107,7 @@ func TestImportZone_CSV(t *testing.T) {
 }
 
 func TestImportZone_NoFile(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, importPDNS())
 	defer srv.Close()
 
@@ -121,6 +124,7 @@ func TestImportZone_NoFile(t *testing.T) {
 }
 
 func TestImportZone_PDNSError_NoLogs(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// The merge path fetches a before-image first; only the PATCH fails.
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -159,6 +163,7 @@ func TestImportZone_PDNSError_NoLogs(t *testing.T) {
 // fragment), that detail must NOT be surfaced to the user. The cause is logged
 // server-side; the response body carries only a generic message.
 func TestImportZone_PDNSError_NoRawErrorLeak(t *testing.T) {
+	t.Parallel()
 	leak := "Error while executing query: SELECT password_hash FROM users WHERE id=1"
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// The merge path fetches a before-image first; only the PATCH fails.
@@ -201,6 +206,7 @@ func TestImportZone_PDNSError_NoRawErrorLeak(t *testing.T) {
 }
 
 func TestImportZone_PDNSValidationError(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// The merge path fetches a before-image first; only the PATCH fails.
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -240,6 +246,7 @@ func TestImportZone_PDNSValidationError(t *testing.T) {
 }
 
 func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		// The merge path fetches a before-image first; only the PATCH fails.
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -280,6 +287,7 @@ func TestImportZone_PDNSUnauthorizedError(t *testing.T) {
 // REPLACE semantics make a partial import destructive for every RRSet the
 // file touches.
 func TestImportZone_PartialImportsRejected(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		filename    string
@@ -361,6 +369,7 @@ www,A,not-an-ip,3600,0,false`,
 // mémoire et signale l'instant où la création entre dans son fetch, afin de
 // placer l'import strictement dans la fenêtre que le verrou ferme.
 func TestImportZone_ConcurrentCreateSerialized(t *testing.T) {
+	t.Parallel()
 	var (
 		mu     sync.Mutex
 		rrsets = map[string][]models.RecordInfo{}
@@ -462,6 +471,7 @@ func TestImportZone_ConcurrentCreateSerialized(t *testing.T) {
 // PowerDNS: "mail" devient "mail.example.com.", "target.example" devient
 // "target.example.example.com.", les noms absolus passent inchangés.
 func TestImportZone_BindRelativeTargetsResolved(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, srv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer srv.Close()
@@ -512,6 +522,7 @@ func assertImportRedirect(t *testing.T, w *httptest.ResponseRecorder) {
 }
 
 func TestParseBindZone(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
@@ -537,6 +548,7 @@ www IN A 192.0.2.1
 }
 
 func TestParseBindZone_Parens(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 @ IN SOA ns1.example.com. hostmaster.example.com. (
     2024010100
@@ -562,6 +574,7 @@ func TestParseBindZone_Parens(t *testing.T) {
 }
 
 func TestParseBindZone_IncludeDirective(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $INCLUDE /etc/bind/zones/other.zone
 @ IN NS ns1.example.com.`)
@@ -576,6 +589,7 @@ $INCLUDE /etc/bind/zones/other.zone
 }
 
 func TestParseBindZone_OwnerInheritance(t *testing.T) {
+	t.Parallel()
 	// The two NS lines begin with whitespace and omit the owner: per RFC 1035
 	// they inherit the previous owner ("@" -> the zone apex), rather than being
 	// parsed as a record named "IN".
@@ -617,6 +631,7 @@ www IN A 192.0.2.1`)
 }
 
 func TestParseBindZone_ShortLineNoPanic(t *testing.T) {
+	t.Parallel()
 	// "www 300" is name + TTL with no class/type: idx runs past the token list.
 	// The class check used to read tokens[idx] out of bounds (operator
 	// precedence bug) and panic. Parsing must now complete without panicking.
@@ -643,6 +658,7 @@ www 300
 // cannot be parsed into records are returned as skipped feedback instead of
 // being silently dropped.
 func TestParseBindZone_ReportsSkippedLines(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN NS ns1.example.com.
@@ -680,6 +696,7 @@ www IN A 192.0.2.1`)
 // reported explicitly so the caller can reject the upload instead of treating
 // the file as complete.
 func TestParseBindZone_ReportsUnsupportedInclude(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $INCLUDE other.zone
 www IN A 192.0.2.1`)
@@ -700,6 +717,7 @@ www IN A 192.0.2.1`)
 }
 
 func TestParseCSVZone_TXT_Quoting(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 txt.example.com.,TXT,v=DMARC1; p=quarantine,3600,0,false
 spf.example.com.,SPF,v=spf1 -all,3600,0,false
@@ -733,6 +751,7 @@ multi.example.com.,TXT,"""part one"" ""part two""",3600,0,false`
 }
 
 func TestParseCSVZone(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 @,SOA,"ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600",3600,0,false
 example.com.,NS,ns1.example.com.,3600,0,false
@@ -748,6 +767,7 @@ www.example.com.,A,192.0.2.1,3600,0,false`
 }
 
 func TestParseCSVZone_NoData(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled`
 	rrsets, _, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
 	if err != nil {
@@ -763,6 +783,7 @@ func TestParseCSVZone_NoData(t *testing.T) {
 // forwarded to PowerDNS, which would surface a generic "failed to create
 // records". A valid A row alongside is still imported.
 func TestParseCSVZone_SkipsInvalidRecords(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 www.example.com.,A,not-an-ip,3600,0,false
 www.example.com.,FOO,whatever,3600,0,false
@@ -783,6 +804,7 @@ mail.example.com.,A,192.0.2.5,3600,0,false`
 // content and an unknown type are skipped with a reason rather than sent to
 // PowerDNS.
 func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
+	t.Parallel()
 	input := strings.Join([]string{
 		"www.example.com. 300 IN A not-an-ip",
 		"www.example.com. 300 IN FOO whatever",
@@ -808,6 +830,7 @@ func TestParseBindZone_SkipsInvalidRecords(t *testing.T) {
 // line still imports. Silently re-embedding would have dropped the weight
 // token "20" from the wire content.
 func TestParseBindZone_SRVPriorityConflictSkipped(t *testing.T) {
+	t.Parallel()
 	input := strings.Join([]string{
 		"$ORIGIN example.com.",
 		"$TTL 3600",
@@ -841,6 +864,7 @@ func TestParseBindZone_SRVPriorityConflictSkipped(t *testing.T) {
 // priority column must be reported as a skipped row (with both numbers in the
 // reason), not silently rewritten — and the remaining rows still import.
 func TestParseCSVZone_SRVPriorityConflictSkipped(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 _sip._tcp.example.com.,SRV,10 5 5060 sip.example.com.,3600,0,false
 www.example.com.,A,192.0.2.1,3600,0,false`
@@ -873,6 +897,7 @@ www.example.com.,A,192.0.2.1,3600,0,false`
 // line: parseBindTTLValue already rejects an over-bound $TTL directive, so
 // the record-level gate is exercised via the per-line TTL field.
 func TestParseBindZone_SkipsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	input := strings.Join([]string{
 		"$ORIGIN example.com.",
 		"$TTL 3600",
@@ -899,6 +924,7 @@ func TestParseBindZone_SkipsOverBoundTTL(t *testing.T) {
 // cell above 2147483647 is skipped with a reason naming the maximum; the
 // valid row still imports.
 func TestParseCSVZone_SkipsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 www.example.com.,A,192.0.2.1,2147483648,0,false
 mail.example.com.,A,192.0.2.5,3600,0,false`
@@ -924,6 +950,7 @@ mail.example.com.,A,192.0.2.5,3600,0,false`
 // MCP) and restored byte-identically by the importer, including multiline
 // comment cells and literal leading apostrophes.
 func TestCSVFormulaNeutralizationRoundTrip(t *testing.T) {
+	t.Parallel()
 	zone := &models.Zone{ID: "example.com.", Name: "example.com."}
 	records := []models.RRSet{
 		{
@@ -970,6 +997,7 @@ func TestCSVFormulaNeutralizationRoundTrip(t *testing.T) {
 }
 
 func TestDetectFormat(t *testing.T) {
+	t.Parallel()
 	if format := detectFormat("zone.csv"); format != "csv" {
 		t.Errorf("expected csv, got %s", format)
 	}
@@ -982,6 +1010,7 @@ func TestDetectFormat(t *testing.T) {
 }
 
 func TestResolveBindName(t *testing.T) {
+	t.Parallel()
 	origin := "example.com."
 
 	tests := []struct {
@@ -1001,6 +1030,7 @@ func TestResolveBindName(t *testing.T) {
 }
 
 func TestGetCSVField(t *testing.T) {
+	t.Parallel()
 	headers := map[string]int{"name": 0, "type": 1, "content": 2}
 	row := []string{"example.com.", "A", "192.0.2.1"}
 
@@ -1013,6 +1043,7 @@ func TestGetCSVField(t *testing.T) {
 }
 
 func TestParseCSVZone_Comments(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled,comment
 www.example.com.,A,192.0.2.1,3600,0,false,managed by ops
 www.example.com.,A,198.51.100.1,3600,0,false,managed by ops
@@ -1058,6 +1089,7 @@ txt.example.com.,TXT,"v=DMARC1; p=none",3600,0,false,"quoted, comment"`
 }
 
 func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
+	t.Parallel()
 	// A single cell with embedded newlines (CSV-quoted) should split into
 	// multiple Comments — matching the web-UI textarea convention.
 	input := "name,type,content,ttl,priority,disabled,comment\n" +
@@ -1086,6 +1118,7 @@ func TestParseCSVZone_MultiLineCommentCell(t *testing.T) {
 }
 
 func TestAppendIfMissing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   []string
@@ -1121,6 +1154,7 @@ func TestAppendIfMissing(t *testing.T) {
 // append), which PowerDNS rejects — failing the whole PATCH. Names must
 // resolve against the zone like the BIND path and the web/API write paths.
 func TestParseCSVZone_RelativeAndApexNames(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 @,A,192.0.2.1,3600,0,false
 www,A,192.0.2.2,3600,0,false
@@ -1159,6 +1193,7 @@ www.example.com.,A,192.0.2.4,3600,0,false
 }
 
 func TestParseCSVZone_FQDNTargetNormalization(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 www.example.com.,CNAME,target.example.com,3600,0,false
 example.com.,NS,ns1.example.com,3600,0,false
@@ -1193,6 +1228,7 @@ mail.example.com.,MX,mail.example.com,3600,10,false`
 // TestParseCSVZone_MultiFQDNFieldNormalization verifies SOA gets per-field
 // trailing dots on fields 0 and 1 (mname, rname) when imported via CSV.
 func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
+	t.Parallel()
 	input := `name,type,content,ttl,priority,disabled
 @,SOA,"ns1.example.com hostmaster.example.com 2024010100 3600 900 1209600 3600",3600,0,false`
 
@@ -1217,6 +1253,7 @@ func TestParseCSVZone_MultiFQDNFieldNormalization(t *testing.T) {
 // $ORIGIN example.com. means target.example.com.example.com., a bare
 // "mail" means mail.example.com., and absolute names pass through unchanged.
 func TestParseBindZone_FQDNTargetNormalization(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010100 3600 900 1209600 3600
@@ -1280,6 +1317,7 @@ alias IN CNAME target.example.com.
 // their trailing target field while keeping priority/weight/port and the
 // quoted flags/service/regexp tokens intact.
 func TestParseBindZone_RDataOriginResolution(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN SOA ns1 hostmaster 2024010100 3600 900 1209600 3600
@@ -1334,6 +1372,7 @@ _sip._tcp IN SRV 10 20 5060 sip
 // following line was merged into one giant record that got rejected. The
 // depth counter now closes the logical line when the parens balance.
 func TestParseBindZone_SameLineParentheses(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. ( 2024010101 3600 900 1209600 300 )
@@ -1368,6 +1407,7 @@ www IN A 192.0.2.1`)
 // markers. The parser used to count them, opening a logical line that never
 // closed and swallowing the rest of the zone.
 func TestParseBindZone_ParensInsideQuotes(t *testing.T) {
+	t.Parallel()
 	data := []byte(`$ORIGIN example.com.
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 1209600 300
@@ -1406,6 +1446,7 @@ txt1 IN TXT "value (parenthetical) inside"
 // token: `say \"hi\" now` must arrive verbatim (quotes and backslashes) in
 // the RRSet record content.
 func TestParseBindZone_TXTEscapedQuotes(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN example.com.\n$TTL 3600\ntxt IN TXT \"say \\\"hi\\\" now\"")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1432,6 +1473,7 @@ func TestParseBindZone_TXTEscapedQuotes(t *testing.T) {
 // be kept as data, while the real `; comment` after the closing quote is
 // still stripped.
 func TestParseBindZone_TXTEscapedQuoteBeforeComment(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\";b\" ; trailing comment")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1455,6 +1497,7 @@ func TestParseBindZone_TXTEscapedQuoteBeforeComment(t *testing.T) {
 // plain record must still parse as its own RRSet instead of being merged
 // into the TXT line.
 func TestParseBindZone_TXTEscapedQuoteBeforeParen(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\" (paren\"\nwww IN A 1.2.3.4")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1481,6 +1524,7 @@ func TestParseBindZone_TXTEscapedQuoteBeforeParen(t *testing.T) {
 // next-byte rule: in `a\\` the second backslash is escaped, so the following
 // quote really CLOSES the string (the content is the four bytes a + \ + \).
 func TestParseBindZone_TXTEscapedBackslashBeforeQuote(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN example.com.\ntxt IN TXT \"a\\\\\"")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1503,6 +1547,7 @@ func TestParseBindZone_TXTEscapedBackslashBeforeQuote(t *testing.T) {
 // space form. The value is chosen to differ from the hardcoded 3600 default
 // so a silently-unrecognized directive cannot pass.
 func TestParseBindZone_TTLTabDirective(t *testing.T) {
+	t.Parallel()
 	data := []byte("$TTL\t7200\nwww IN A 1.2.3.4")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1524,6 +1569,7 @@ func TestParseBindZone_TTLTabDirective(t *testing.T) {
 // $ORIGIN with a TAB separator: relative names after `$ORIGIN\tsub...` must
 // resolve against the new origin.
 func TestParseBindZone_OriginTabDirective(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN\tsub.example.com.\nwww A 1.2.3.4")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1545,6 +1591,7 @@ func TestParseBindZone_OriginTabDirective(t *testing.T) {
 // decimal digits with an optional single case-insensitive unit suffix
 // (s/m/h/d/w) converted to seconds. Bare digits keep their meaning.
 func TestParseBindZone_TTLTimeUnits(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		directive string
@@ -1585,6 +1632,7 @@ func TestParseBindZone_TTLTimeUnits(t *testing.T) {
 // skipped line naming the directive, not dropped. A valid record next to a
 // bad directive still imports.
 func TestParseBindZone_TTLInvalidValues(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		directive string
@@ -1624,6 +1672,7 @@ func TestParseBindZone_TTLInvalidValues(t *testing.T) {
 // the directive (not a panic, not a silent ignore, not a generic parse
 // error).
 func TestParseBindZone_DirectiveMissingArg(t *testing.T) {
+	t.Parallel()
 	for _, directive := range []string{"$ORIGIN", "$TTL"} {
 		t.Run(strings.TrimPrefix(directive, "$"), func(t *testing.T) {
 			data := []byte(directive + "\nwww IN A 1.2.3.4")
@@ -1654,6 +1703,7 @@ func TestParseBindZone_DirectiveMissingArg(t *testing.T) {
 // mechanism staying intact when a file mixes valid records with one bad
 // line.
 func TestParseBindZone_DirectiveSpaceSeparators(t *testing.T) {
+	t.Parallel()
 	data := []byte("$ORIGIN sub.example.com.\n$TTL 7200\nwww IN A 1.2.3.4\nbrokenline")
 
 	rrsets, skipped, err := parseBindZone(data, "example.com.")
@@ -1800,6 +1850,7 @@ func importAuditRow(t *testing.T, h *Handler) (details, oldValue string) {
 // pre-existing sibling record AND its comments survive — and the audit row
 // carries a before-image plus the mode name.
 func TestImportZone_MergeDefaultKeepsSibling(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 300,
@@ -1850,6 +1901,7 @@ www IN A 5.6.7.8`
 // mode: the imported RRSet fully replaces the existing one (sibling record
 // dropped) and the audit row still snapshots the replaced before-image.
 func TestImportZone_ReplaceModeExplicitAndAudited(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 300,
@@ -1891,6 +1943,7 @@ www IN A 5.6.7.8`
 // NS records merge additively and ordinary RRSets keep their existing
 // records.
 func TestImportZone_SOASingletonMerge(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "example.com.", Type: "SOA", TTL: 3000,
@@ -1952,6 +2005,7 @@ www IN A 5.6.7.8`
 // overlay: an imported SOA carrying comments replaces the whole RRSet
 // including its comments — the previous SOA comment must not survive.
 func TestImportZone_SOACommentOverlay(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "example.com.", Type: "SOA", TTL: 3000,
@@ -1992,6 +2046,7 @@ func TestImportZone_SOACommentOverlay(t *testing.T) {
 // [5.6.7.8, 9.9.9.9, 1.2.3.4] into an existing [1.2.3.4] yields exactly the
 // three distinct records.
 func TestImportZone_MergeMultiRecordAndDuplicates(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 3600,
@@ -2025,6 +2080,7 @@ www IN A 1.2.3.4`
 // content); merge mode must re-embed both the existing and the imported
 // priorities into the wire content sent to the PATCH.
 func TestImportZone_BindMXSRVMergeWithSiblings(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			// PowerDNS wire form, as ListRecords receives it: the priority is
@@ -2074,6 +2130,7 @@ _sip._tcp IN SRV 10 5 5061 sip2.example.com.`
 // read from PowerDNS (bare content + separate priority), and the PATCH
 // carries both priorities re-embedded in the wire content.
 func TestImportZone_CSVMXPriorityMerge(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			// PowerDNS wire form: the priority is embedded in the content.
@@ -2110,6 +2167,7 @@ func TestImportZone_CSVMXPriorityMerge(t *testing.T) {
 // existing RRSet keeps ONLY its pre-existing comments — the imported CSV
 // comment cell is ignored for RRSets that already exist.
 func TestImportZone_CSVCommentOnNewRRSetOnly(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 300,
@@ -2154,6 +2212,7 @@ func TestImportZone_CSVCommentOnNewRRSetOnly(t *testing.T) {
 // enabled), and an exact duplicate with the OPPOSITE disabled flag keeps the
 // EXISTING occurrence — dedup first-occurrence wins.
 func TestImportZone_NewDisabledRecordInExistingRRSet(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 300,
@@ -2223,6 +2282,7 @@ func TestImportZone_NewDisabledRecordInExistingRRSet(t *testing.T) {
 // fetch the before-image under the zone lock before PATCHing, so a ListRecords
 // failure must render an error, send no PATCH and write no audit row.
 func TestImportZone_GETFailureAbortsImport(t *testing.T) {
+	t.Parallel()
 	newMock := func(patched *bool) testutil.PDNSHandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/zones/") {
@@ -2274,6 +2334,7 @@ www IN A 5.6.7.8`
 // name via dnsops.RRSetKey and still capture the before-image for the audit
 // row.
 func TestImportZone_MixedCaseOwnerMergeAndAudit(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "WWW.Example.COM.", Type: "A", TTL: 300,
@@ -2309,6 +2370,7 @@ www.example.com. IN A 5.6.7.8`
 // mode value behaves exactly like the default merge mode (sibling records
 // survive).
 func TestImportZone_InvalidModeFallsBackToMerge(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{
 		{
 			Name: "www.example.com.", Type: "A", TTL: 300,
@@ -2341,6 +2403,7 @@ www IN A 5.6.7.8`
 // snapshot is a single-encoded JSON array capped at 100 entries, and the
 // details name the omitted count when the affected set exceeds the cap.
 func TestImportZone_BeforeImageBoundedAndExcludesUnaffected(t *testing.T) {
+	t.Parallel()
 	// 150 affected RRSets: every name is referenced by the import file, so
 	// all 150 qualify for the before-image — 50 over the 100-entry cap. The
 	// details must report the full affected count, not stop at the cutoff.
@@ -2437,6 +2500,7 @@ func assertBeforeImageJSON(t *testing.T, oldValue string, wantLen int) []map[str
 // affected RRSet whose snapshot lands ~50 bytes under the budget is fully
 // included.
 func TestImportBeforeImage_ByteBudgetJustUnder(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{beforeImageRRSet("a.example.com.", importBeforeImageMaxBytes-50)}
 	imported := []models.RRSet{{Name: "a.example.com.", Type: "A"}}
 
@@ -2451,6 +2515,7 @@ func TestImportBeforeImage_ByteBudgetJustUnder(t *testing.T) {
 // single affected RRSet whose snapshot lands ~50 bytes over the budget fits
 // nothing — oldValue is "" but affected is still reported.
 func TestImportBeforeImage_ByteBudgetJustOver(t *testing.T) {
+	t.Parallel()
 	existing := []models.RRSet{beforeImageRRSet("a.example.com.", importBeforeImageMaxBytes+50)}
 	imported := []models.RRSet{{Name: "a.example.com.", Type: "A"}}
 
@@ -2468,6 +2533,7 @@ func TestImportBeforeImage_ByteBudgetJustOver(t *testing.T) {
 // under the budget but the third would exceed it, the snapshot holds the
 // first two and stays valid JSON.
 func TestImportBeforeImage_ByteBudgetPartialInclusion(t *testing.T) {
+	t.Parallel()
 	perSnap := (importBeforeImageMaxBytes - 3) / 2 // two fit: 2 + 2*perSnap + 1 <= budget
 	existing := []models.RRSet{
 		beforeImageRRSet("r1.example.com.", perSnap),
@@ -2496,6 +2562,7 @@ func TestImportBeforeImage_ByteBudgetPartialInclusion(t *testing.T) {
 // TestImportBeforeImage_CountCap pins the entry cap: 101 tiny affected RRSets
 // yield exactly 100 included snapshots and the correct affected/shown counts.
 func TestImportBeforeImage_CountCap(t *testing.T) {
+	t.Parallel()
 	existing := make([]models.RRSet, 0, 101)
 	imported := make([]models.RRSet, 0, 101)
 	for i := 0; i <= 100; i++ {

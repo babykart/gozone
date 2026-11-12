@@ -31,6 +31,7 @@ func seedTemplateRecord(t *testing.T, h *Handler, templateID int64, name, rtype,
 }
 
 func TestListTemplates(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -50,6 +51,7 @@ func TestListTemplates(t *testing.T) {
 }
 
 func TestListTemplates_Empty(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -64,6 +66,7 @@ func TestListTemplates_Empty(t *testing.T) {
 }
 
 func TestListTemplates_PaginationAndSearch(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -96,6 +99,7 @@ func TestListTemplates_PaginationAndSearch(t *testing.T) {
 }
 
 func TestCreateTemplatePage(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -110,6 +114,7 @@ func TestCreateTemplatePage(t *testing.T) {
 }
 
 func TestCreateTemplate_Success(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -130,6 +135,7 @@ func TestCreateTemplate_Success(t *testing.T) {
 }
 
 func TestCreateTemplate_EmptyName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -148,6 +154,7 @@ func TestCreateTemplate_EmptyName(t *testing.T) {
 }
 
 func TestCreateTemplate_DuplicateName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -168,6 +175,7 @@ func TestCreateTemplate_DuplicateName(t *testing.T) {
 }
 
 func TestEditTemplatePage(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -190,6 +198,7 @@ func TestEditTemplatePage(t *testing.T) {
 }
 
 func TestEditTemplatePage_NotFound(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -209,6 +218,7 @@ func TestEditTemplatePage_NotFound(t *testing.T) {
 }
 
 func TestUpdateTemplate_Success(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -240,6 +250,7 @@ func TestUpdateTemplate_Success(t *testing.T) {
 // dialect-aware database.ErrUniqueViolation sentinel instead of
 // driver-specific text matching.
 func TestUpdateTemplate_DuplicateName(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -276,6 +287,7 @@ func TestUpdateTemplate_DuplicateName(t *testing.T) {
 }
 
 func TestDeleteTemplate(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -300,6 +312,7 @@ func TestDeleteTemplate(t *testing.T) {
 }
 
 func TestDeleteBuiltinTemplate(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -328,6 +341,7 @@ func TestDeleteBuiltinTemplate(t *testing.T) {
 }
 
 func TestAddTemplateRecord(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -354,6 +368,7 @@ func TestAddTemplateRecord(t *testing.T) {
 }
 
 func TestDeleteTemplateRecord(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -380,6 +395,7 @@ func TestDeleteTemplateRecord(t *testing.T) {
 }
 
 func TestApplyTemplateToZone(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
@@ -418,6 +434,7 @@ func TestApplyTemplateToZone(t *testing.T) {
 // (every built-in definition) previously failed to apply at all — while the
 // permissive test mock accepted the duplicate silently.
 func TestApplyTemplateToZone_NoDuplicateRRSets(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, srv := newTestHandlerWithPDNS(t, captureRRSets(t, &sent))
 	defer srv.Close()
@@ -466,6 +483,7 @@ func TestApplyTemplateToZone_NoDuplicateRRSets(t *testing.T) {
 // records preserved, template records appended, exact duplicates collapsed —
 // with MX priorities correctly re-embedded once.
 func TestApplyTemplateToZone_MergesWithExistingRecords(t *testing.T) {
+	t.Parallel()
 	var sent []models.RRSet
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -538,6 +556,7 @@ func TestApplyTemplateToZone_MergesWithExistingRecords(t *testing.T) {
 }
 
 func TestApplyTemplateToZone_ActivityLogged(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
@@ -574,6 +593,7 @@ func TestApplyTemplateToZone_ActivityLogged(t *testing.T) {
 }
 
 func TestSeedBuiltinTemplates(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -610,6 +630,7 @@ func TestSeedBuiltinTemplates(t *testing.T) {
 }
 
 func TestSubstituteTemplateRecords(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -665,6 +686,7 @@ func TestSubstituteTemplateRecords(t *testing.T) {
 // same wire content must collapse (PowerDNS also rejects duplicate records
 // inside an RRSet).
 func TestSubstituteTemplateRecords_GroupsSameNameType(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -711,6 +733,7 @@ func TestSubstituteTemplateRecords_GroupsSameNameType(t *testing.T) {
 }
 
 func TestSubstituteTemplateRecords_AbsoluteName(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -729,6 +752,7 @@ func TestSubstituteTemplateRecords_AbsoluteName(t *testing.T) {
 }
 
 func TestSubstituteTemplateRecords_MissingVariable(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -749,6 +773,7 @@ func TestSubstituteTemplateRecords_MissingVariable(t *testing.T) {
 }
 
 func TestSubstituteTemplateRecords_SOATimerDefaults(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	// The built-in "standard" SOA relies on timer defaults; with only ZONE
@@ -771,6 +796,7 @@ func TestSubstituteTemplateRecords_SOATimerDefaults(t *testing.T) {
 }
 
 func TestCollectTemplateVars(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	body := "var_ZONE=example.com.&var_IP=192.0.2.1&var_MX_HOST=mail.example.com.&var_IGNORED=zzz&var_TTL="
@@ -797,6 +823,7 @@ func TestCollectTemplateVars(t *testing.T) {
 }
 
 func TestParseTemplateRecordForm(t *testing.T) {
+	t.Parallel()
 	body := "name=www&type=CNAME&content={{ZONE}}&ttl=7200&priority=0&disabled=on"
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -834,6 +861,7 @@ func TestParseTemplateRecordForm(t *testing.T) {
 // variables ("{{…}}") bypass name/content validation since they are invalid
 // until substitution.
 func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body string
@@ -860,6 +888,7 @@ func TestParseTemplateRecordForm_RejectsInvalid(t *testing.T) {
 // in the template-record form: a stored template whose TTL exceeds 2147483647
 // would fail at zone-creation time, so it must be refused at storage time.
 func TestParseTemplateRecordForm_RejectsOverBoundTTL(t *testing.T) {
+	t.Parallel()
 	body := "name=www&type=A&content=192.0.2.1&ttl=2147483648"
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -884,6 +913,7 @@ func TestParseTemplateRecordForm_RejectsOverBoundTTL(t *testing.T) {
 // name/content bypass validation so legitimate variable-laden templates are
 // preserved.
 func TestParseTemplateRecordForm_AcceptsVariables(t *testing.T) {
+	t.Parallel()
 	// A record whose content is the {{IP}} variable — invalid as a literal IP,
 	// valid as a template placeholder.
 	body := "name=@&type=A&content={{IP}}&ttl=3600"
@@ -900,6 +930,7 @@ func TestParseTemplateRecordForm_AcceptsVariables(t *testing.T) {
 }
 
 func TestGetAllTemplates(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -916,6 +947,7 @@ func TestGetAllTemplates(t *testing.T) {
 }
 
 func TestBulkDeleteTemplates_Success(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	t1 := seedTemplate(t, h, "t1", "")
 	t2 := seedTemplate(t, h, "t2", "")
@@ -957,6 +989,7 @@ func TestBulkDeleteTemplates_Success(t *testing.T) {
 }
 
 func TestBulkDeleteTemplates_BuiltinRejected(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	normal := seedTemplate(t, h, "normal", "")
 	builtin := insertReturnID(t, h.DB,
@@ -997,6 +1030,7 @@ func TestBulkDeleteTemplates_BuiltinRejected(t *testing.T) {
 }
 
 func TestBulkDeleteTemplates_NoSelection(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
@@ -1022,6 +1056,7 @@ func TestBulkDeleteTemplates_NoSelection(t *testing.T) {
 // "missing template variable(s)". The 20-iteration loop makes this test fail
 // reliably against the old implementation.
 func TestSubstituteTemplateRecords_ValueContainingPlaceholderFailsDeterministically(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -1049,6 +1084,7 @@ func TestSubstituteTemplateRecords_ValueContainingPlaceholderFailsDeterministica
 // order, so an order-sensitive input could in principle flip results between
 // runs.
 func TestSubstituteTemplateRecords_DeterministicAcrossRuns(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -1100,6 +1136,7 @@ func TestSubstituteTemplateRecords_DeterministicAcrossRuns(t *testing.T) {
 // naming the template, the record index and the template's original record —
 // not with a generic PowerDNS rejection after the PATCH.
 func TestSubstituteTemplateRecords_InvalidSubstitutedValue(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -1126,6 +1163,7 @@ func TestSubstituteTemplateRecords_InvalidSubstitutedValue(t *testing.T) {
 // seeded template record resolving to garbage must abort the apply with the
 // labelled validation message, and PowerDNS must never receive the PATCH.
 func TestApplyTemplateToZone_InvalidRecordRejected(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -1170,6 +1208,7 @@ func TestApplyTemplateToZone_InvalidRecordRejected(t *testing.T) {
 // labelling as every other template validation failure), carrying the
 // conflict message with both numbers.
 func TestSubstituteTemplateRecords_SRVPriorityConflictNamesRecord(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -1194,6 +1233,7 @@ func TestSubstituteTemplateRecords_SRVPriorityConflictNamesRecord(t *testing.T) 
 // missing-variable error is the primary diagnosis and must win over the
 // (spurious) priority conflict the unresolved content would otherwise trip.
 func TestSubstituteTemplateRecords_UnresolvedVarsSkipPriorityNormalization(t *testing.T) {
+	t.Parallel()
 	h, _ := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 
 	records := []models.ZoneTemplateRecord{
@@ -1220,6 +1260,7 @@ func TestSubstituteTemplateRecords_UnresolvedVarsSkipPriorityNormalization(t *te
 // abort the apply with the labelled conflict message, and PowerDNS must never
 // receive the PATCH.
 func TestApplyTemplateToZone_SRVPriorityConflictRejected(t *testing.T) {
+	t.Parallel()
 	patched := false
 	h, srv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -1265,6 +1306,7 @@ func TestApplyTemplateToZone_SRVPriorityConflictRejected(t *testing.T) {
 // create, update, record add and delete must each leave an activity_logs row
 // attributed to the acting admin — these mutations previously left no trace.
 func TestTemplateMutationsLogged(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1332,6 +1374,7 @@ func TestTemplateMutationsLogged(t *testing.T) {
 // hit the foreign key on insert and surfaced an opaque 500 "Failed to add
 // record".
 func TestAddTemplateRecord_InvalidTemplateID(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1358,6 +1401,7 @@ func TestAddTemplateRecord_InvalidTemplateID(t *testing.T) {
 // is an outage; telling the operator the template is empty sends them to edit
 // a perfectly healthy template definition.
 func TestApplyTemplateToZone_TemplateRecordsDBError(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1390,6 +1434,7 @@ func TestApplyTemplateToZone_TemplateRecordsDBError(t *testing.T) {
 // and genuinely has no records keeps the actionable "Template has no records"
 // message — the new internal-error surface is reserved for actual failures.
 func TestApplyTemplateToZone_EmptyTemplateStillReportsNoRecords(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 
@@ -1418,6 +1463,7 @@ func TestApplyTemplateToZone_EmptyTemplateStillReportsNoRecords(t *testing.T) {
 // template that has them — a misleading page that also hides the database
 // outage behind a successful 200.
 func TestEditTemplatePage_RecordsDBError(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())
 	defer srv.Close()
 

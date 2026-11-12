@@ -45,6 +45,7 @@ func realPaginationSet(t *testing.T) *template.Template {
 // test: when every result fits on a single page, the
 // per-page <select> must still render so the user can change the page size.
 func TestPagination_PerPageSelect_VisibleWhenTotalPagesIsOne(t *testing.T) {
+	t.Parallel()
 	tmpl := realPaginationSet(t)
 	data := map[string]interface{}{
 		"PageInfo": pageInfo(1, 10, 7),
@@ -71,6 +72,7 @@ func TestPagination_PerPageSelect_VisibleWhenTotalPagesIsOne(t *testing.T) {
 // TestPagination_PerPageSelect_HiddenWhenTotalIsZero makes sure we don't
 // surface a useless empty page-size selector on empty result sets.
 func TestPagination_PerPageSelect_HiddenWhenTotalIsZero(t *testing.T) {
+	t.Parallel()
 	tmpl := realPaginationSet(t)
 	data := map[string]interface{}{
 		"PageInfo": pageInfo(0, 10, 0),
@@ -94,6 +96,7 @@ func TestPagination_PerPageSelect_HiddenWhenTotalIsZero(t *testing.T) {
 // TestPagination_PaginationBlock_VisibleWhenMultiplePages keeps the
 // original behaviour for the multi-page case so the fix does not regress.
 func TestPagination_PaginationBlock_VisibleWhenMultiplePages(t *testing.T) {
+	t.Parallel()
 	tmpl := realPaginationSet(t)
 	data := map[string]interface{}{
 		"PageInfo": pageInfo(2, 10, 47),

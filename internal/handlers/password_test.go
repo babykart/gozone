@@ -17,6 +17,7 @@ import (
 )
 
 func TestPasswordExpired(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	tests := []struct {
 		name      string
@@ -41,6 +42,7 @@ func TestPasswordExpired(t *testing.T) {
 }
 
 func TestPasswordExpiryWarnDays(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	tests := []struct {
 		name      string
@@ -68,6 +70,7 @@ func TestPasswordExpiryWarnDays(t *testing.T) {
 // TestChangePasswordPage renders the self-service form for a signed-in user,
 // with and without the forced-change flag surfaced to the template.
 func TestChangePasswordPage(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -105,6 +108,7 @@ func TestChangePasswordPage(t *testing.T) {
 // user (must_change=1) changes their password; the hash rotates, the policy is
 // enforced, and must_change_password is cleared.
 func TestChangePassword_Success(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -149,6 +153,7 @@ func TestChangePassword_Success(t *testing.T) {
 // and re-submitting it as the "new" password cleared the flag without any
 // rotation. The unconditional same-as-current compare must refuse it.
 func TestChangePassword_SameAsCurrentRejected(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -194,6 +199,7 @@ func TestChangePassword_SameAsCurrentRejected(t *testing.T) {
 // password.history_size is 0: a genuinely different, policy-passing password
 // still rotates the hash and clears the forced-change flag.
 func TestChangePassword_DifferentFromCurrentAcceptedWithHistoryDisabled(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -235,6 +241,7 @@ func TestChangePassword_DifferentFromCurrentAcceptedWithHistoryDisabled(t *testi
 // "  x" and "x  " confirm-match while storing a password different from the
 // one typed.
 func TestChangePassword_PasswordVerbatim(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -269,6 +276,7 @@ func TestChangePassword_PasswordVerbatim(t *testing.T) {
 
 // TestChangePassword_WrongCurrentRejected verifies the current-password check.
 func TestChangePassword_WrongCurrentRejected(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target", "Oldpass1!", "user", true)
@@ -304,6 +312,7 @@ func TestChangePassword_WrongCurrentRejected(t *testing.T) {
 // same way production does (no hash in the context struct) and asserts the
 // flow still succeeds.
 func TestChangePassword_WorksWithoutHashInContext(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target2", "Oldpass1!", "user", true)
@@ -344,6 +353,7 @@ func TestChangePassword_WorksWithoutHashInContext(t *testing.T) {
 // TestLogin_MustChangePassword_RedirectsToChangePassword verifies the login
 // flow redirects a forced-change user to /change-password instead of /dashboard.
 func TestLogin_MustChangePassword_RedirectsToChangePassword(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	uid := testutil.SeedTestUser(t, h.DB, "alice", "Alicepass1!", "user", true)
 	h.DB.Exec("UPDATE users SET must_change_password = 1 WHERE id = ?", uid)
@@ -364,6 +374,7 @@ func TestLogin_MustChangePassword_RedirectsToChangePassword(t *testing.T) {
 // TestLogin_ExpiredPasswordForcesChange verifies that an expired password (per
 // max_age_days) flips must_change_password on login and redirects to change.
 func TestLogin_ExpiredPasswordForcesChange(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	h.Cfg.Password.MaxAgeDays = 90
 	h.Cfg.Password.ExpiryWarnDays = 0
@@ -396,6 +407,7 @@ func TestLogin_ExpiredPasswordForcesChange(t *testing.T) {
 // flagged must_change_password when the "force password change" option is on
 // (admin-set initial password → rotate on first login).
 func TestCreateUser_SetsMustChangePassword(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
@@ -421,6 +433,7 @@ func TestCreateUser_SetsMustChangePassword(t *testing.T) {
 // "force password change on first login" box unchecked, the new account is
 // created without the must_change_password flag so it can log straight in.
 func TestCreateUser_NoForcePasswordChange(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
@@ -450,6 +463,7 @@ func TestCreateUser_NoForcePasswordChange(t *testing.T) {
 // lowercase, and creating a case-variant of an existing account surfaces the
 // friendly "already exists" error instead of a raw constraint violation.
 func TestCreateUser_NormalizesCaseAndRejectsFoldedDuplicates(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, admin)
@@ -490,6 +504,7 @@ func TestCreateUser_NormalizesCaseAndRejectsFoldedDuplicates(t *testing.T) {
 }
 
 func TestUpdateUser_SetsMustChangePassword(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role) VALUES ('user2', 'u2@e.com', 'oldhash', 'user')`)
@@ -518,6 +533,7 @@ func TestUpdateUser_SetsMustChangePassword(t *testing.T) {
 // other session is rejected by the Auth middleware) AND re-issues the current
 // session token so the user stays logged in on this device.
 func TestChangePassword_RevokesOtherSessions(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target3", "Oldpass1!", "user", true)
@@ -572,6 +588,7 @@ func TestChangePassword_RevokesOtherSessions(t *testing.T) {
 // Beyond the in-memory SQLite run here, the dbmatrix jobs replay this
 // against live MySQL and PostgreSQL servers.
 func TestChangePassword_ReissuedCookiePassesAuthCutoff(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	_ = seedAdminUser(t, h)
 	uid := testutil.SeedTestUser(t, h.DB, "target4", "Oldpass1!", "user", true)
@@ -634,6 +651,7 @@ func TestChangePassword_ReissuedCookiePassesAuthCutoff(t *testing.T) {
 // admin reset path: setting a new password bumps tokens_valid_after so the
 // target must re-authenticate on every device.
 func TestUpdateUser_PasswordResetRevokesSessions(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('user2', 'u2@e.com', 'oldhash', 'user', 1)`)
@@ -663,6 +681,7 @@ func TestUpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 // disable path: disabling a user bumps tokens_valid_after so active sessions
 // are cut immediately.
 func TestUpdateUser_DisableRevokesSessions(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('victim', 'victim@example.com', 'hash', 'user', 1)`)
@@ -693,6 +712,7 @@ func TestUpdateUser_DisableRevokesSessions(t *testing.T) {
 // profile-only edit (no password change, account stays enabled) must NOT bump
 // tokens_valid_after, so the user's legitimate sessions survive.
 func TestUpdateUser_ProfileEditDoesNotRevokeSessions(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	admin := seedAdminUser(t, h)
 	h.DB.Exec(`INSERT INTO users (username, email, password_hash, role, enabled) VALUES ('victim', 'victim@example.com', 'hash', 'user', 1)`)
@@ -727,6 +747,7 @@ func TestUpdateUser_ProfileEditDoesNotRevokeSessions(t *testing.T) {
 // is keyed by sid) and the session tracker's idle/absolute budget for any
 // session that just rotated its password.
 func TestChangePassword_PreservesSessionIdentity(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
 	_ = seedAdminUser(t, h)
@@ -810,6 +831,7 @@ func TestChangePassword_PreservesSessionIdentity(t *testing.T) {
 // empty sid would orphan the tracker row, so the handler must fall back to the
 // incoming token's jti (claims.ID) as the effective SessionID.
 func TestChangePassword_LegacyTokenKeepsJtiAsSessionID(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
 	_ = seedAdminUser(t, h)
@@ -884,6 +906,7 @@ func TestChangePassword_LegacyTokenKeepsJtiAsSessionID(t *testing.T) {
 // in the Authorization: Bearer header. ChangePassword must read it from there
 // too and preserve provider/sid on re-issue.
 func TestChangePassword_BearerTokenPreservesIdentity(t *testing.T) {
+	t.Parallel()
 	h := strictPolicyHandler(t)
 	h.Cfg.Server.JWTKey = []byte("test-jwt-signing-key-for-change-pw!")
 	_ = seedAdminUser(t, h)

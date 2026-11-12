@@ -9,6 +9,7 @@ import (
 )
 
 func TestHealthLive(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 
 	w := httptest.NewRecorder()
@@ -32,6 +33,7 @@ func TestHealthLive(t *testing.T) {
 }
 
 func TestHealthReady_AllOK(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"server_id":"localhost","daemon_type":"authoritative","version":"4.8.0"}`))
@@ -65,6 +67,7 @@ func TestHealthReady_AllOK(t *testing.T) {
 }
 
 func TestHealthReady_PDNSFailure(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"error":"internal server error"}`))
@@ -95,6 +98,7 @@ func TestHealthReady_PDNSFailure(t *testing.T) {
 }
 
 func TestHealthReady_DBFailure(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"server_id":"localhost","daemon_type":"authoritative","version":"4.8.0"}`))
@@ -127,6 +131,7 @@ func TestHealthReady_DBFailure(t *testing.T) {
 }
 
 func TestHealthReady_BothFail(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"error":"internal server error"}`))
@@ -163,6 +168,7 @@ func TestHealthReady_BothFail(t *testing.T) {
 // (which can carry driver/connection details). The check reports a generic
 // "error"; the cause is logged server-side only.
 func TestHealthReady_DoesNotLeakDBErrorDetails(t *testing.T) {
+	t.Parallel()
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"server_id":"localhost","daemon_type":"authoritative","version":"4.8.0"}`))
@@ -194,6 +200,7 @@ func TestHealthReady_DoesNotLeakDBErrorDetails(t *testing.T) {
 // path likewise returns a generic "error" without echoing the PDNS response
 // body (which the client embeds in its error message).
 func TestHealthReady_DoesNotLeakPDNSErrorDetails(t *testing.T) {
+	t.Parallel()
 	const leakMarker = "LEAK-MARKER-PDNS-INTERNAL"
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

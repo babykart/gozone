@@ -54,6 +54,7 @@ func groupZoneGrantCount(t *testing.T, h *Handler, zoneID string) int {
 }
 
 func TestReconcileGroupZones_RemovesOrphanedGrants(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("example.com.", "other.example."))
 	defer srv.Close()
 
@@ -86,6 +87,7 @@ func TestReconcileGroupZones_RemovesOrphanedGrants(t *testing.T) {
 }
 
 func TestReconcileGroupZones_PDNSUnreachableKeepsGrants(t *testing.T) {
+	t.Parallel()
 	// nil handler = 500 on every request: an unreachable PowerDNS must never
 	// be interpreted as "all zones gone".
 	h, srv := newTestHandlerWithPDNS(t, nil)
@@ -106,6 +108,7 @@ func TestReconcileGroupZones_PDNSUnreachableKeepsGrants(t *testing.T) {
 // guard: a PowerDNS answering 200 with an empty zone list while grants exist
 // used to revoke every grant irreversibly. The pass must be skipped.
 func TestReconcileGroupZones_EmptyZoneListKeepsGrants(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler()) // 200 []
 	defer srv.Close()
 
@@ -130,6 +133,7 @@ func TestReconcileGroupZones_EmptyZoneListKeepsGrants(t *testing.T) {
 // (a truncated zone list behind an outage) is aborted instead of mass-
 // revoking. Small sets are always processed.
 func TestReconcileGroupZones_MassOrphanRatioAborts(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("keep.example."))
 	defer srv.Close()
 
@@ -156,6 +160,7 @@ func TestReconcileGroupZones_MassOrphanRatioAborts(t *testing.T) {
 }
 
 func TestReconcileGroupZones_NoGrantsIsNoop(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("example.com."))
 	defer srv.Close()
 
@@ -169,6 +174,7 @@ func TestReconcileGroupZones_NoGrantsIsNoop(t *testing.T) {
 }
 
 func TestEditGroupPage_ReconcilesOnView(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsZonesJSONHandler("example.com."))
 	defer srv.Close()
 
@@ -195,6 +201,7 @@ func TestEditGroupPage_ReconcilesOnView(t *testing.T) {
 }
 
 func TestEditGroupPage_PDNSUnreachableKeepsGrants(t *testing.T) {
+	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, nil) // 500 on every request
 	defer srv.Close()
 

@@ -28,6 +28,7 @@ func seedOperatorUser(t *testing.T, h *Handler) *models.User {
 // this asserts the operator user flows through render() and the template
 // without an authorisation stop.
 func TestOperator_CanReachCreateZonePage(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	operator := seedOperatorUser(t, h)
 
@@ -45,6 +46,7 @@ func TestOperator_CanReachCreateZonePage(t *testing.T) {
 // TestOperator_CanListTSIGKeys pins that the TSIG keys listing page renders
 // for an operator-role user (the mock PDNS answers with an empty key list).
 func TestOperator_CanListTSIGKeys(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	operator := seedOperatorUser(t, h)
 
@@ -67,6 +69,7 @@ func TestOperator_CanListTSIGKeys(t *testing.T) {
 // global activity log restricted to zone-scoped rows — non-zone rows
 // (accounts, logins) are outside the role.
 func TestOperator_ActivityPage_ScopedToZoneEntries(t *testing.T) {
+	t.Parallel()
 	h := newTestHandler(t)
 	operator := seedOperatorUser(t, h)
 	otherID := testutil.SeedTestUser(t, h.DB, "bob", "bobpass", "user", true)
