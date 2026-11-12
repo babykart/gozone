@@ -25,6 +25,24 @@ import (
 	"github.com/babykart/gozone/internal/validators"
 )
 
+// ParseTrustedProxies is the single validator for server.trusted_proxies
+// entries. Every entry must be a CIDR prefix: a bare IP without a "/" is a
+// frequent operator typo, and chi's ClientIPFromXFF calls
+// netip.MustParsePrefix on each entry, which panics at startup on plain IPs.
+// Requiring CIDR notation here turns that panic into a clean, actionable
+// startup error. The error names the 1-based index of the offending entry.
+func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, len(entries))
+	for i, entry := range entries {
+		p, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted_proxies entry %d (%q) is not a CIDR prefix — use \"10.0.0.1/32\" for a single host or \"10.0.0.0/8\" for a range (IPv6: \"2001:db8::1/128\"): %w", i+1, entry, err)
+		}
+		prefixes[i] = p
+	}
+	return prefixes, nil
+}
+
 // Config holds all configuration for the application.
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
@@ -816,19 +834,8 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("invalid server.shutdown_timeout_seconds %d: must be positive", cfg.Server.ShutdownTimeoutSeconds)
 	}
 
-	for _, p := range cfg.Server.TrustedProxies {
-		// chi's ClientIPFromXFF calls netip.MustParsePrefix(p) on every
-		// entry, which panics at startup when p is a plain IP without a
-		// "/" (e.g. "172.16.1.27"). Require CIDR notation here so the
-		// error surfaces as a clean config-load failure rather than a
-		// panic stack trace. netip.ParsePrefix also accepts the exact
-		// forms chi needs (no trailing whitespace, valid prefix length),
-		// so we use it as the single source of truth.
-		prefix, err := netip.ParsePrefix(p)
-		if err != nil {
-			return fmt.Errorf("invalid trusted_proxies entry %q: %w (use CIDR notation such as %q or %q)", p, err, "172.16.1.27/32", "::1/128")
-		}
-		_ = prefix // validation only; chi re-parses at middleware setup
+	if _, err := ParseTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+		return fmt.Errorf("invalid server.trusted_proxies: %w", err)
 	}
 
 	// server.external_url: optional canonical base URL for OIDC redirect_uri

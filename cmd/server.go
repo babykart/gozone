@@ -65,7 +65,7 @@ func runServer(cfg *config.Config) error {
 	// malformed entry (a bare IP without "/") previously panicked deep inside
 	// netip.MustParsePrefix; a clean, actionable startup error is the right
 	// fail mode for an operator typo.
-	trustedPrefixes, err := parseTrustedProxies(cfg.Server.TrustedProxies)
+	trustedPrefixes, err := config.ParseTrustedProxies(cfg.Server.TrustedProxies)
 	if err != nil {
 		return fmt.Errorf("invalid server.trusted_proxies: %w", err)
 	}
