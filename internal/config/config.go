@@ -183,6 +183,13 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Driver string `yaml:"driver"`
 	DSN    string `yaml:"dsn"`
+	// MaxOpenConns caps the open connections per pool (application pool and,
+	// on network databases, the zone advisory-lock pool). 0 (default) keeps
+	// the dialect default (25 for mysql/postgres, 1 for sqlite3). Negative
+	// values are rejected at load, as is a non-zero value paired with the
+	// sqlite3 driver in the config file: SQLite's single-connection pool is
+	// a documented correctness design, not a tuning knob.
+	MaxOpenConns int `yaml:"max_open_conns"`
 }
 
 // PowerDNSConfig holds PowerDNS API connection settings.
@@ -517,7 +524,7 @@ func DefaultConfig() *Config {
 //	            GOZONE_SECRET_KEY, GOZONE_SECURE_COOKIES, GOZONE_EXTERNAL_URL,
 //	            GOZONE_SHUTDOWN_TIMEOUT, GOZONE_TRUSTED_PROXIES,
 //	            GOZONE_REQUIRE_SECRET_KEY
-//	database:   GOZONE_DB_DRIVER, GOZONE_DB_DSN
+//	database:   GOZONE_DB_DRIVER, GOZONE_DB_DSN, GOZONE_DB_MAX_OPEN_CONNS
 //	powerdns:   GOZONE_PDNS_API_URL, GOZONE_PDNS_API_KEY, GOZONE_PDNS_SERVER_ID,
 //	            GOZONE_PDNS_ZONE_CACHE_TTL_SECONDS
 //	auth:       GOZONE_SESSION_DURATION, GOZONE_IDLE_TIMEOUT_MINUTES,
@@ -582,6 +589,19 @@ func Load(path string) (*Config, error) {
 				return nil, err
 			}
 		}
+	}
+
+	// SQLite's pool is pinned to a single connection by design (WAL +
+	// serialized writes), so an explicit max_open_conns paired with the
+	// sqlite3 driver in the config file is always an operator mistake.
+	// Checked against the file-loaded values, before env overrides:
+	// GOZONE_DB_MAX_OPEN_CONNS is commonly templated across deployments
+	// (one image for sqlite and mysql), and a stray value there must not
+	// fail a sqlite boot — newWithOpener pins the sqlite pool to the
+	// dialect value regardless of the config. The negative-value check
+	// lives in validate() and runs post-override.
+	if cfg.Database.Driver == "sqlite3" && cfg.Database.MaxOpenConns > 0 {
+		return nil, fmt.Errorf("invalid database.max_open_conns %d: the sqlite3 driver pins the pool to a single connection by design; remove database.max_open_conns from the config file", cfg.Database.MaxOpenConns)
 	}
 
 	// Environment variable overrides
@@ -706,6 +726,10 @@ func (cfg *Config) validate() error {
 		// other at startup with a misleading message.
 	default:
 		return fmt.Errorf("unsupported database driver %q; choose one of sqlite3, mysql, mariadb, postgres, postgresql", cfg.Database.Driver)
+	}
+
+	if cfg.Database.MaxOpenConns < 0 {
+		return fmt.Errorf("invalid database.max_open_conns %d: must be non-negative (0 uses the dialect default)", cfg.Database.MaxOpenConns)
 	}
 
 	if cfg.Activity.RetentionDays < 0 {
@@ -1132,6 +1156,7 @@ var envOverrides = []envOverride{
 	// database / powerdns
 	strOverride{"GOZONE_DB_DRIVER", func(c *Config, v string) { c.Database.Driver = v }},
 	strOverride{"GOZONE_DB_DSN", func(c *Config, v string) { c.Database.DSN = v }},
+	intOverride{"GOZONE_DB_MAX_OPEN_CONNS", func(c *Config, n int) { c.Database.MaxOpenConns = n }},
 	strOverride{"GOZONE_PDNS_API_URL", func(c *Config, v string) { c.PowerDNS.APIURL = v }},
 	strOverride{"GOZONE_PDNS_API_KEY", func(c *Config, v string) { c.PowerDNS.APIKey = v }},
 	strOverride{"GOZONE_PDNS_SERVER_ID", func(c *Config, v string) { c.PowerDNS.ServerID = v }},

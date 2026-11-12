@@ -145,7 +145,7 @@ and never on a concrete cache implementation.
 
 1. Parse `-config` flag (default: `config.yaml`)
 2. **`config.Load(path)`** — start with `DefaultConfig()`, overlay YAML file, apply `GOZONE_*` env vars, validate (port range, bcrypt cost, CIDR list, retention/batch sizes, login lock fields)
-3. **`database.New(cfg)`** — validate DSN, create directory if needed, open SQL connection (SQLite uses `SetMaxOpenConns(1)`), run content-hash migrations with `Dialect.LockMigrations`
+3. **`database.New(cfg)`** — validate DSN, create directory if needed, open SQL connection (SQLite pins `SetMaxOpenConns(1)`; mysql/postgres default to 25 per pool, overridable via `database.max_open_conns`), run content-hash migrations with `Dialect.LockMigrations`
 4. **`pdns.NewClient(cfg)`** — create HTTP client pointing to PowerDNS API
 5. **`pdns.NewCachedClient(client, zoneCacheTTL)`** — wrap with TTL cache (zone list and zone info use `powerdns.zone_cache_ttl_seconds`, default 60s; stats, server info, TSIG keys have fixed TTLs)
 6. **`seedAdminUser(ctx, db, cfg)`** — if `users` table is empty, insert admin/admin (or password from `GOZONE_ADMIN_PASSWORD`)
@@ -651,7 +651,7 @@ SQLite deployments pin the connection pool to a single connection (`SetMaxOpenCo
 
 The cost is a **throughput ceiling**: all queries serialize behind the one connection, so read latency under concurrency and write throughput are bounded by a single conn's round-trip on a local file. For an admin interface's traffic profile this is the right trade (correctness first, no lock-timeout tuning), and the WAL journal mode plus a 5-second busy timeout — both forced into the DSN — already keep cross-process access sane (the recovery CLI `gozone user unlock` / `reset-password` opens the same file a running server may be writing to; readers never block the writer, and transient writer contention waits instead of erroring).
 
-**The escape hatch is a supported one**: deployments that outgrow the ceiling switch `database.driver` to `mysql` or `postgres`, which use a normal connection pool (25 connections) with dialect-appropriate migration locks. No data-model change is needed — the schema and queries are dialect-portable by construction.
+**The escape hatch is a supported one**: deployments that outgrow the ceiling switch `database.driver` to `mysql` or `postgres`, which use a normal connection pool (default 25 per pool, configurable via `database.max_open_conns`; two pools on network databases — the application pool plus the per-zone advisory-lock pool) with dialect-appropriate migration locks. No data-model change is needed — the schema and queries are dialect-portable by construction.
 
 ### No ORM
 

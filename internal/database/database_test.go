@@ -787,6 +787,7 @@ func TestNew_PingFailureClosesPool(t *testing.T) {
 	_, err := newWithOpener(
 		&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"},
 		func(string, string) (*sql.DB, error) { return sql.OpenDB(conn), nil },
+		true,
 	)
 	if err == nil || !strings.Contains(err.Error(), "ping database") {
 		t.Fatalf("expected a ping failure error, got %v", err)
@@ -806,6 +807,7 @@ func TestNew_MigrateFailureClosesPool(t *testing.T) {
 	_, err := newWithOpener(
 		&config.DatabaseConfig{Driver: "sqlite3", DSN: ":memory:"},
 		func(string, string) (*sql.DB, error) { return sql.OpenDB(conn), nil },
+		true,
 	)
 	if err == nil || !strings.Contains(err.Error(), "run migrations") {
 		t.Fatalf("expected a migration failure error, got %v", err)

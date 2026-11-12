@@ -55,6 +55,7 @@ server:
 database:
   driver: "sqlite3"
   dsn: "./data/gozone.db"
+  # max_open_conns: 25  # per pool; network DBs open two pools per replica
 
 powerdns:
   api_url: "http://localhost:8081"

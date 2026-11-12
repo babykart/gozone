@@ -86,6 +86,7 @@ An explicitly passed `--config` path must exist: a typo fails startup with an ac
 |-----------|---------------------|---------|
 | `database.driver` | `GOZONE_DB_DRIVER` | `sqlite3` |
 | `database.dsn` | `GOZONE_DB_DSN` | `./data/gozone.db` |
+| `database.max_open_conns` | `GOZONE_DB_MAX_OPEN_CONNS` | `25` (per pool) |
 
 Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs are automatically redacted in logs.
 
@@ -207,6 +208,8 @@ A `429 Too Many Requests` from a rate limiter is not a lockout and recovers diff
 
 When the only admin account is locked (brute-force storm, manual lock, lost credentials, etc.) the Web UI is no longer reachable: the `Unlock` button on `/admin/users` requires another non-locked admin to act. The emergency recovery path is the `gozone user unlock` CLI subcommand, which opens the configured database directly and clears the lockout without going through the HTTP flow. Note this clears the persistent account lock only — rate-limit counters are not reset (see above). `gozone user reset-password` is the complementary operation: it rotates the credentials but does not unlock the account.
 
+Both commands open the database **without running schema migrations**: an emergency binary built from a newer version must not silently migrate the production database. If the schema is older than the binary (e.g. the data directory was restored from a backup), start the server once first — it migrates on boot — or pass `--migrate` to the command. Against an unmigrated older schema the command fails with a missing table/column error.
+
 ```bash
 # Unlock by username (case-insensitive lookup; default config.yaml).
 gozone user unlock admin
@@ -216,6 +219,9 @@ gozone user unlock 1
 
 # Custom config path (e.g. when running outside the install directory).
 gozone user unlock admin --config /etc/gozone/config.yaml
+
+# Also apply pending schema migrations before the operation.
+gozone user unlock admin --migrate
 ```
 
 In containerised deployments, exec into the running container first:
@@ -360,7 +366,7 @@ GoZone keeps durable auth/security state in the shared database and coordinates 
 - Session idle/absolute lifetime (the `sessions` table) and JWT revocation (`tokens_valid_after`, plus the per-`jti` `revoked_tokens` table).
 - API keys, activity/login-attempt audit, and OIDC account linking (`external_identities`).
 - **OIDC `state` single-use consumption** (`oidc_consumed_states` table) — the anti-replay check for the SSO redirect is cluster-wide: each `state` is consumed exactly once in the shared database, so a captured `state` replayed at any instance is rejected, and a database failure fails the callback closed before the IdP token exchange.
-- **Record read-modify-write serialization** — create/update/delete/batch/template operations take a per-zone advisory lock in the shared MySQL/PostgreSQL database. Every instance serializes the full fetch→merge→PATCH sequence for a zone, preventing concurrent replicas from silently overwriting each other's records.
+- **Record read-modify-write serialization** — create/update/delete/batch/template operations take a per-zone advisory lock in the shared MySQL/PostgreSQL database. Every instance serializes the full fetch→merge→PATCH sequence for a zone, preventing concurrent replicas from silently overwriting each other's records. The advisory locks live on a dedicated second connection pool, so each replica opens up to 2× `database.max_open_conns` connections (application pool + zone-lock pool) — size the setting against the database server's `max_connections` multiplied by the replica count.
 
 **Per-node (in-memory, NOT shared across instances):**
 

@@ -113,7 +113,18 @@ type openFunc func(driverName, dsn string) (*sql.DB, error)
 // sweep goroutines and any pinned migration-lock connection alive for the
 // process lifetime, compounding on callers that retry New.
 func New(cfg *config.DatabaseConfig) (*DB, error) {
-	return newWithOpener(cfg, sql.Open)
+	return newWithOpener(cfg, sql.Open, true)
+}
+
+// NewWithoutMigrations opens a database connection WITHOUT running the
+// schema migrations. Everything else — dialect selection, DSN rewriting,
+// pool tuning, the startup ping and the failure-path cleanup — behaves
+// exactly as New. It exists for emergency CLI tools (`gozone user ...`):
+// such a binary must not silently apply this binary's migrations to a
+// database deployed from a different version, so migrations are opt-in
+// there (the --migrate flag) rather than the default.
+func NewWithoutMigrations(cfg *config.DatabaseConfig) (*DB, error) {
+	return newWithOpener(cfg, sql.Open, false)
 }
 
 // NewWithOpener opens a database using the given opener instead of sql.Open.
@@ -122,10 +133,18 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 // New. It exists so tests can route the connection through an instrumented
 // driver (e.g. a recording driver.Connector); production code uses New.
 func NewWithOpener(cfg *config.DatabaseConfig, open func(driverName, dsn string) (*sql.DB, error)) (*DB, error) {
-	return newWithOpener(cfg, openFunc(open))
+	return newWithOpener(cfg, openFunc(open), true)
 }
 
-func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
+// NewWithoutMigrationsWithOpener is NewWithoutMigrations with the same
+// test-instrumentation seam as NewWithOpener: tests can route the
+// connection through an instrumented driver (e.g. a recording
+// driver.Connector) and assert that no migration statement is emitted.
+func NewWithoutMigrationsWithOpener(cfg *config.DatabaseConfig, open func(driverName, dsn string) (*sql.DB, error)) (*DB, error) {
+	return newWithOpener(cfg, openFunc(open), false)
+}
+
+func newWithOpener(cfg *config.DatabaseConfig, open openFunc, runMigrations bool) (*DB, error) {
 	dialect, err := selectDialect(cfg.Driver)
 	if err != nil {
 		return nil, err
@@ -144,19 +163,31 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 		}
 	}
 
+	// Resolve the effective pool size once: the config override when set,
+	// otherwise the dialect default. SQLite keeps the dialect value (1)
+	// regardless of the config — the single-connection pool is a documented
+	// correctness design, honoured defensively here even when a config
+	// bypasses Load's validation.
+	effective := dialect.MaxOpenConns()
+	if cfg.MaxOpenConns > 0 && cfg.Driver != "sqlite3" {
+		effective = cfg.MaxOpenConns
+	}
+
 	dsn := dialect.DSN(cfg.DSN)
 	conn, err := open(dialect.DriverName(), dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	conn.SetMaxOpenConns(dialect.MaxOpenConns())
+	conn.SetMaxOpenConns(effective)
 	conn.SetMaxIdleConns(dialect.MaxIdleConns())
 	conn.SetConnMaxLifetime(dialect.ConnMaxLifetime())
 
 	// Network databases use a second pool for per-zone advisory locks. The
 	// lock can be held across PowerDNS calls, so it must not share the finite
-	// application pool and risk starving ordinary queries.
+	// application pool and risk starving ordinary queries. Both pools are
+	// sized together: a network deployment opens up to 2× the configured
+	// max_open_conns (application pool + zone-lock pool).
 	var zoneLockPool *sql.DB
 	if cfg.Driver != "sqlite3" {
 		zoneLockPool, err = open(dialect.DriverName(), dsn)
@@ -164,7 +195,7 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 			conn.Close() // #nosec G104 -- best-effort cleanup on error path
 			return nil, fmt.Errorf("open zone-lock pool: %w", err)
 		}
-		zoneLockPool.SetMaxOpenConns(dialect.MaxOpenConns())
+		zoneLockPool.SetMaxOpenConns(effective)
 		zoneLockPool.SetMaxIdleConns(dialect.MaxIdleConns())
 		zoneLockPool.SetConnMaxLifetime(dialect.ConnMaxLifetime())
 	}
@@ -186,12 +217,14 @@ func newWithOpener(cfg *config.DatabaseConfig, open openFunc) (*DB, error) {
 	}
 
 	db := &DB{Conn: conn, dialect: dialect, zoneLockPool: zoneLockPool}
-	if err := db.migrate(); err != nil {
-		if zoneLockPool != nil {
-			zoneLockPool.Close() // #nosec G104 -- best-effort cleanup on error path
+	if runMigrations {
+		if err := db.migrate(); err != nil {
+			if zoneLockPool != nil {
+				zoneLockPool.Close() // #nosec G104 -- best-effort cleanup on error path
+			}
+			conn.Close() // #nosec G104 -- best-effort cleanup on error path
+			return nil, fmt.Errorf("run migrations: %w", err)
 		}
-		conn.Close() // #nosec G104 -- best-effort cleanup on error path
-		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	// The DSN is deliberately not logged: connection strings carry
@@ -931,7 +964,10 @@ func (db *DB) applyMigration(sqlText, version string) error {
 	defer tx.Rollback() // no-op after Commit
 
 	// Claim the version row inside the transaction (dialect-portable
-	// insert-ignore with automatic placeholder rebinding).
+	// insert-ignore with automatic placeholder rebinding). INSERT IGNORE is
+	// kept deliberately: the version is an internally generated fixed-format
+	// content hash with no foreign keys, so there is no FK/truncation error
+	// to stay fatal, and the form is portable across all three dialects.
 	res, err := tx.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version)
 	if err != nil {
 		return fmt.Errorf("claim migration %s: %w", version, err)
@@ -1008,6 +1044,9 @@ func (db *DB) applyMigrationNonAtomic(sqlText, version string) error {
 		}
 	}
 
+	// INSERT IGNORE is kept deliberately (see applyMigration): the version is
+	// an internally generated fixed-format content hash with no foreign keys,
+	// so there is no FK/truncation error to stay fatal.
 	res, err := db.InsertIgnore(ctx, "schema_migrations", []string{"version"}, []string{"version"}, version)
 	if err != nil {
 		return fmt.Errorf("record migration %s: %w", version, err)
@@ -1084,7 +1123,11 @@ func splitStatements(sql string) []string {
 
 // migrateOldVersions converts legacy vNNN version identifiers stored in
 // schema_migrations to content-based hashes. This preserves tracking when
-// upgrading from the previous index-based scheme.
+// upgrading from the previous index-based scheme. The positional vNNN→hash
+// conversion assumes the migrations list is append-only and never reordered;
+// reordering would silently mark the wrong migration applied, so out-of-range
+// rows (unparseable index, negative, or beyond the list) fail startup instead
+// of being skipped. In-range rows convert; hash-versioned rows are untouched.
 func (db *DB) migrateOldVersions() error {
 	rows, err := db.Conn.Query("SELECT version FROM schema_migrations")
 	if err != nil {
@@ -1105,7 +1148,7 @@ func (db *DB) migrateOldVersions() error {
 		}
 		idx, err := strconv.Atoi(matches[1])
 		if err != nil || idx < 0 || idx >= len(migrations) {
-			continue
+			return fmt.Errorf("legacy migration version %s is out of range for this binary's migration list (0..%d): refusing to guess the content-hash mapping", version, len(migrations)-1)
 		}
 		toUpdate = append(toUpdate, struct{ old, new string }{version, migrationVersion(migrations[idx])})
 	}
