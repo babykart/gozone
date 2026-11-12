@@ -814,11 +814,9 @@ func rrsetSnapshot(rrset *models.RRSet) string {
 // cleared, since PDNS rejects it); TXT/SPF content is quoted. When MX/SRV
 // content already embeds a priority that conflicts with the provided one, it
 // returns a *dnsops.PriorityConflictError and zero values. See the codec in
-// internal/models for the per-type rules.
-// prepareRecordContent normalises record content for the PDNS PATCH API;
-// the implementation lives in the dnsops service layer
-// (dnsops.PrepareRecordContent) so REST, web and MCP writes produce the same
-// wire content.
+// internal/models for the per-type rules. The implementation lives in the
+// dnsops service layer (dnsops.PrepareRecordContent) so REST, web and MCP
+// writes produce the same wire content.
 func prepareRecordContent(recordType, content string, priority int) (string, int, error) {
 	return dnsops.PrepareRecordContent(recordType, content, priority)
 }
