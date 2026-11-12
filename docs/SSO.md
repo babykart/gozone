@@ -66,6 +66,12 @@ attempts, nor be exhausted by them (one SSO sign-in costs two route hits).
 - **A stable `server.secret_key`.** The OIDC `state` parameter is encrypted
   (AES-256-GCM) with a key derived from the master secret; an auto-generated
   ephemeral key invalidates in-flight SSO attempts on every restart.
+- **`server.external_url` (required when SSO is enabled).** The OIDC redirect
+  URI is always derived from the canonical base URL GoZone is served at, so an
+  enabled `oidc:` section without `server.external_url` would hand the IdP an
+  unreachable redirect target. Set `server.external_url` (e.g.
+  `https://dns-admin.example.com`) or the `GOZONE_EXTERNAL_URL` environment
+  variable; startup fails validation when `oidc.enabled: true` and it is empty.
 - **The redirect URI** registered at the provider. It is always:
 
   ```
@@ -73,6 +79,10 @@ attempts, nor be exhausted by them (one SSO sign-in costs two route hits).
   ```
 
   where `<provider-name>` is the `name:` you give the provider in `config.yaml`.
+
+> **Upgrade note:** deployments already running with `oidc.enabled: true` must
+> set `server.external_url` (or `GOZONE_EXTERNAL_URL`) — startup now fails
+> validation without it.
 
 ---
 
@@ -115,6 +125,7 @@ overridden with `GOZONE_OIDC_*` environment variables.
 ```yaml
 server:
   secret_key: "<openssl rand -hex 32>"
+  external_url: "https://dns-admin.example.com" # required when oidc.enabled is true
   # behind the TLS-terminating reverse proxy no cookie flags are needed —
   # Secure is derived per request from the TLS context
 
@@ -137,6 +148,7 @@ at the provider, restart GoZone, and a "Sign in with Gitea" button appears on
 
 ```bash
 GOZONE_OIDC_ENABLED=true \
+GOZONE_EXTERNAL_URL=https://dns-admin.example.com \
 GOZONE_OIDC_AUTO_PROVISION=true \
 GOZONE_OIDC_PROVIDER_NAME=gitea \
 GOZONE_OIDC_ISSUER_URL=https://gitea.example.com \
@@ -457,14 +469,14 @@ writes, so cross-instance idle lags by at most ~1 minute).
 > would deadlock an SSO user on `/change-password`. Local login still honours the
 > flag.
 
-> **Multi-instance note:** the session *lifetime* is cluster-wide, but the
-> OIDC `state` **single-use (anti-replay) store is in-process and per-node**.
-> In a multi-instance deployment a captured `state` replayed at a different
-> instance than the one that issued it could succeed within the 10-minute TTL.
-> The OAuth2 authorization-code single-use at the IdP, PKCE, and the `nonce`
-> bound into the id_token keep the practical risk negligible; for a stricter
-> guarantee, enable session affinity on the load balancer. See the README
-> "High Availability / Multi-Instance Deployments" section.
+> **Multi-instance note:** the session *lifetime* and the OIDC `state`
+> **single-use (anti-replay) consumption are both cluster-wide**, backed by the
+> shared database (`sessions` and `oidc_consumed_states` tables). A captured
+> `state` replayed at any instance within its 10-minute TTL is rejected, and a
+> database failure fails the callback closed *before* the IdP token exchange.
+> Expired consumed states are swept opportunistically on every fresh
+> consumption. See the README "High Availability / Multi-Instance
+> Deployments" section.
 
 ---
 

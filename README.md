@@ -78,7 +78,7 @@ Configuration is via `config.yaml` or environment variables:
 
 An explicitly passed `--config` path must exist: a typo fails startup with an actionable error instead of silently booting with all defaults. Omitting the flag keeps the development default (`config.yaml` optional; everything configurable via `GOZONE_*` environment variables).
 | `server.trusted_proxies` | `GOZONE_TRUSTED_PROXIES` | *empty* (TCP source IP only) | Comma-separated CIDR ranges whose X-Forwarded-For headers are trusted. Use `/32` for a single IPv4 host, `/128` for IPv6. Plain IPs without a prefix are rejected at startup. |
-| `server.external_url` | `GOZONE_EXTERNAL_URL` | *empty* | Canonical base URL GoZone is served at (e.g. `https://dns.example.com`). When set, OIDC `redirect_uri` and `post_logout_redirect_uri` values are built from it instead of being derived from the client-controlled `Host` header (defense-in-depth; the IdP already validates both against its registered lists). Must be an absolute `http(s)` URL with a host and no path; validated and normalised to `scheme://host` at startup. When empty, both URLs are derived per-request from the resolved scheme and `Host` header. |
+| `server.external_url` | `GOZONE_EXTERNAL_URL` | *empty* | Canonical base URL GoZone is served at (e.g. `https://dns.example.com`). **Required when `oidc.enabled: true`** — startup fails validation otherwise (existing enabled deployments must set it or `GOZONE_EXTERNAL_URL`). When set, OIDC `redirect_uri` and `post_logout_redirect_uri` values are built from it instead of being derived from the client-controlled `Host` header (defense-in-depth; the IdP already validates both against its registered lists). Must be an absolute `http(s)` URL with a host and no path; validated and normalised to `scheme://host` at startup. When empty (and SSO is disabled), both URLs are derived per-request from the resolved scheme and `Host` header. |
 
 ### Database
 
@@ -359,15 +359,15 @@ GoZone keeps durable auth/security state in the shared database and coordinates 
 - Password policy, password history and password expiry.
 - Session idle/absolute lifetime (the `sessions` table) and JWT revocation (`tokens_valid_after`, plus the per-`jti` `revoked_tokens` table).
 - API keys, activity/login-attempt audit, and OIDC account linking (`external_identities`).
+- **OIDC `state` single-use consumption** (`oidc_consumed_states` table) — the anti-replay check for the SSO redirect is cluster-wide: each `state` is consumed exactly once in the shared database, so a captured `state` replayed at any instance is rejected, and a database failure fails the callback closed before the IdP token exchange.
 - **Record read-modify-write serialization** — create/update/delete/batch/template operations take a per-zone advisory lock in the shared MySQL/PostgreSQL database. Every instance serializes the full fetch→merge→PATCH sequence for a zone, preventing concurrent replicas from silently overwriting each other's records.
 
 **Per-node (in-memory, NOT shared across instances):**
 
 - **Anti-flood throttles** — API per-IP (`300/min`), API per-key (`100/min`) and readiness-probe (`120/min`) rate limiting. The effective ceiling scales with the instance count: with *N* instances a single client can sustain up to roughly *N×* the configured rate (one fresh bucket per instance). These are flood throttles rather than security budgets, and the readiness limiter in particular must not depend on the database it probes; login limiting (above) and account lockout cap the security-relevant traffic regardless of instance count.
-- **OIDC `state` single-use store** — the anti-replay check for the SSO redirect is in-process. A captured `state` replayed at a *different* instance than the one that issued it could succeed within its 10-minute TTL. The existing mitigations (OAuth2 authorization-code single-use at the IdP, PKCE, and the `nonce` bound into the id_token) keep the practical risk negligible.
 - **Session-tracker cache** — an in-memory cache coarsens idle/absolute writes, so cross-instance inactivity detection lags by at most ~1 minute; it always falls back to the shared `sessions` table, so the limit itself is still cluster-wide.
 
-**Mitigations for stricter per-client guarantees:** enable session affinity ("sticky sessions") at the load balancer — hashing on the `gozone_session` cookie routes a given client to one instance, restoring single-node accounting for the per-node anti-flood throttles and pinning the OIDC `state` check to the issuing instance. This reduces horizontal spreading for that traffic, so weigh it against your load-balancing goals.
+**Mitigations for stricter per-client guarantees:** enable session affinity ("sticky sessions") at the load balancer — hashing on the `gozone_session` cookie routes a given client to one instance, restoring single-node accounting for the per-node anti-flood throttles. This reduces horizontal spreading for that traffic, so weigh it against your load-balancing goals.
 
 **Required for any multi-instance setup:**
 
