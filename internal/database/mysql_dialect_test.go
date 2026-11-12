@@ -97,6 +97,50 @@ func TestMySQLDialect_DSN_ParseTimeAlreadySet(t *testing.T) {
 	}
 }
 
+// TestMySQLDialect_DSN_ForcesClientFoundRowsFalse verifies that the DSN
+// rewrite forces ClientFoundRows off even when the operator's DSN carries
+// clientFoundRows=true: with it, MySQL's affected-rows semantics flip
+// (ON DUPLICATE KEY UPDATE no-change returns 1 instead of 0), defeating
+// the RowsAffected-based duplicate detection used by callers of
+// InsertSkipDuplicate. Like parseTime and time_zone, it is a correctness
+// setting, not a tuning knob.
+func TestMySQLDialect_DSN_ForcesClientFoundRowsFalse(t *testing.T) {
+	d := &mysqlDialect{}
+	got := d.DSN("user:pass@tcp(localhost:3306)/gozone?clientFoundRows=true")
+
+	if strings.Contains(got, "clientFoundRows=true") {
+		t.Errorf("clientFoundRows=true must be overridden to false, got %s", got)
+	}
+	cfg, err := mysql.ParseDSN(got)
+	if err != nil {
+		t.Fatalf("re-parse rewritten DSN %q: %v", got, err)
+	}
+	if cfg.ClientFoundRows {
+		t.Error("ClientFoundRows must be false after rewrite")
+	}
+}
+
+// TestMySQLDialect_DSN_FallbackAppendsClientFoundRowsFalse pins the
+// unparseable-DSN fallback: it appends the same correctness pins as the
+// parsed path, including clientFoundRows=false.
+func TestMySQLDialect_DSN_FallbackAppendsClientFoundRowsFalse(t *testing.T) {
+	d := &mysqlDialect{}
+	// Missing the slash separating the database name — mysql.ParseDSN
+	// rejects it (errInvalidDSNNoSlash), exercising the string-append
+	// fallback.
+	got := d.DSN("user:pass@tcp(localhost:3306)")
+
+	if !strings.Contains(got, "clientFoundRows=false") {
+		t.Errorf("fallback DSN must contain clientFoundRows=false, got %s", got)
+	}
+	if !strings.Contains(got, "parseTime=true") {
+		t.Errorf("fallback DSN must still contain parseTime=true, got %s", got)
+	}
+	if !strings.Contains(got, "time_zone=%27%2B00%3A00%27") {
+		t.Errorf("fallback DSN must still contain the UTC time_zone pin, got %s", got)
+	}
+}
+
 func TestMySQLDialect_DriverName(t *testing.T) {
 	d := &mysqlDialect{}
 	if got := d.DriverName(); got != "mysql" {
@@ -520,6 +564,78 @@ func TestMySQLIntegration_InsertIgnore(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 user after InsertIgnore, got %d", count)
+	}
+}
+
+// TestMySQLIntegration_InsertSkipDuplicate verifies the live-MySQL contract
+// of InsertSkipDuplicate: a fresh insert reports RowsAffected == 1, an
+// identical re-insert is a silent no-op (RowsAffected == 0, original row
+// intact), and a foreign-key violation stays fatal — INSERT IGNORE would
+// have downgraded it to a warning and silently accepted the broken
+// association. Skips locally without GOZONE_TEST_MYSQL_DSN; runs in the CI
+// dbmatrix job.
+func TestMySQLIntegration_InsertSkipDuplicate(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO users (username, email, password_hash, first_name, last_name, role, enabled) VALUES (?, ?, ?, '', '', 'user', 1)",
+		"skipdupuser", "skipdup@example.com", "hash",
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	var uid int64
+	if err := db.Conn.QueryRow("SELECT id FROM users WHERE username = ?", "skipdupuser").Scan(&uid); err != nil {
+		t.Fatalf("select user id: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"INSERT INTO zone_groups (name, description) VALUES (?, '')", "skipdup-group",
+	); err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	var gid int64
+	if err := db.Conn.QueryRow("SELECT id FROM zone_groups WHERE name = ?", "skipdup-group").Scan(&gid); err != nil {
+		t.Fatalf("select group id: %v", err)
+	}
+
+	columns := []string{"group_id", "user_id"}
+	conflict := []string{"group_id", "user_id"}
+
+	// Fresh insert: exactly one row affected.
+	res, err := db.InsertSkipDuplicate(ctx, "zone_group_members", columns, conflict, gid, uid)
+	if err != nil {
+		t.Fatalf("fresh InsertSkipDuplicate: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Errorf("fresh insert RowsAffected = %d err=%v, want 1", n, err)
+	}
+
+	// Identical re-insert: the duplicate is a silent no-op.
+	res, err = db.InsertSkipDuplicate(ctx, "zone_group_members", columns, conflict, gid, uid)
+	if err != nil {
+		t.Fatalf("duplicate InsertSkipDuplicate must be a no-op, got: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 0 {
+		t.Errorf("duplicate insert RowsAffected = %d err=%v, want 0", n, err)
+	}
+
+	// The original row is unchanged and still unique.
+	var count int
+	if err := db.Conn.QueryRow(
+		"SELECT COUNT(*) FROM zone_group_members WHERE group_id = ? AND user_id = ?", gid, uid,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 membership row after duplicate re-insert, got %d", count)
+	}
+
+	// A nonexistent parent must stay fatal: ON DUPLICATE KEY UPDATE never
+	// downgrades FK violations to warnings (INSERT IGNORE would).
+	if _, err := db.InsertSkipDuplicate(ctx, "zone_group_members", columns, conflict, 987654321, uid); err == nil {
+		t.Error("InsertSkipDuplicate with a nonexistent group_id must fail (FK violation stays fatal)")
 	}
 }
 

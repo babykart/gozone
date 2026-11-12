@@ -482,7 +482,12 @@ func (h *Handler) syncGroups(ctx context.Context, userID int64, claims *oidc.Cla
 				"group", groupName, "claim_value", v)
 			continue
 		}
-		res, err := tx.InsertIgnore(ctx, "zone_group_members",
+		// InsertSkipDuplicate, not INSERT IGNORE: the RowsAffected==0
+		// "already a member" skip below must only ever mean a duplicate
+		// key — under INSERT IGNORE an FK warning would also yield
+		// RowsAffected==0 and be misread as "already a member", silently
+		// skipping the audit.
+		res, err := tx.InsertSkipDuplicate(ctx, "zone_group_members",
 			[]string{"group_id", "user_id"},
 			[]string{"group_id", "user_id"}, // PK on this table
 			groupID, userID)

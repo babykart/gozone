@@ -53,8 +53,13 @@ func (db *DB) DeleteSSOIDToken(ctx context.Context, sessionID string) error {
 }
 
 // PurgeExpiredSSOIDTokens removes hint rows whose expires_at has passed,
-// bounding the table size. Returns the number of deleted rows.
+// bounding the table size. Returns the number of deleted rows. DB-bound
+// timestamps are always UTC: callers may pass local-clock values, and SQLite
+// compares the serialized strings lexicographically, so the cutoff is
+// normalized to UTC before the comparison (mirroring UpsertSSOIDToken's
+// write-side normalization).
 func (db *DB) PurgeExpiredSSOIDTokens(ctx context.Context, now time.Time) (int64, error) {
+	now = now.UTC()
 	res, err := db.ExecContext(ctx, "DELETE FROM sso_id_tokens WHERE expires_at <= ?", now)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired sso id tokens: %w", err)

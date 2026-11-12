@@ -29,7 +29,7 @@ func (db *DB) HitRateLimit(ctx context.Context, key string, windowStart time.Tim
 	upsert, returnsCount := db.dialect.RateLimitHitUpsert()
 	if returnsCount {
 		var hits int
-		if err := db.QueryRowContext(ctx, db.dialect.Rebind(upsert),
+		if err := db.QueryRowContext(ctx, upsert,
 			key, windowStart.UTC(),
 		).Scan(&hits); err != nil {
 			return false, err
@@ -43,7 +43,7 @@ func (db *DB) HitRateLimit(ctx context.Context, key string, windowStart time.Tim
 	}
 	defer tx.Rollback() // #nosec G104 -- no-op after Commit
 
-	if _, err := tx.ExecContext(ctx, db.dialect.Rebind(upsert),
+	if _, err := tx.ExecContext(ctx, upsert,
 		key, windowStart.UTC(),
 	); err != nil {
 		return false, err

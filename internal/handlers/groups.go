@@ -250,14 +250,16 @@ type groupSelectionStats struct {
 // attachGroupSelections inserts the multi-select members (user_ids) and zones
 // (zone_ids) carried by the create form into the just-created group. User IDs
 // are validated as positive ints and their existence is checked in one batched
-// query before insertion: a stale or tampered user_id would otherwise be
-// silently dropped by InsertIgnore (FK violation) with no feedback to the
+// query before insertion: InsertSkipDuplicate keeps FK violations fatal (it
+// deliberately avoids INSERT IGNORE, which would silently drop a stale or
+// tampered user_id on MySQL), so without the pre-check a non-existent id
+// would surface as a generic error log instead of precise feedback for the
 // admin. Non-existent users are skipped and counted; the counts are returned
 // so CreateGroup can surface a warning and audit the effective membership.
 // Zone IDs are trimmed strings referencing PowerDNS zones (no users-table FK
 // to validate against). Both lists are de-duplicated while preserving order.
-// Each row uses InsertIgnore so a repeated selection is tolerated. Errors are
-// logged, not fatal.
+// Each row uses InsertSkipDuplicate so a repeated selection is tolerated.
+// Errors are logged, not fatal.
 func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) groupSelectionStats {
 	var userIDs []int64
 	seenUsers := make(map[int64]struct{})
@@ -294,7 +296,7 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) groupSel
 				"group_id", groupID, "user_id", uid)
 			continue
 		}
-		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_members",
+		if _, err := h.DB.InsertSkipDuplicate(r.Context(), "zone_group_members",
 			[]string{"group_id", "user_id"},
 			[]string{"group_id", "user_id"},
 			groupID, uid); err != nil {
@@ -318,7 +320,7 @@ func (h *Handler) attachGroupSelections(r *http.Request, groupID int64) groupSel
 			continue
 		}
 		seenZones[zoneID] = struct{}{}
-		if _, err := h.DB.InsertIgnore(r.Context(), "zone_group_zones",
+		if _, err := h.DB.InsertSkipDuplicate(r.Context(), "zone_group_zones",
 			[]string{"group_id", "zone_id"},
 			[]string{"group_id", "zone_id"},
 			groupID, zoneID); err != nil {

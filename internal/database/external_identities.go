@@ -74,20 +74,21 @@ func scanLinkedUser(row rowScanner) (*models.User, error) {
 }
 
 // ErrIdentityLinkedElsewhere reports that the (issuer, subject) pair is
-// already tied to a DIFFERENT local user. The insert-ignore would silently
-// no-op on that conflict; the caller must know the link did not happen,
-// otherwise it keeps acting for a user the identity does not map to.
+// already tied to a DIFFERENT local user. The duplicate-skipping insert
+// would silently no-op on that conflict; the caller must know the link did
+// not happen, otherwise it keeps acting for a user the identity does not
+// map to.
 var ErrIdentityLinkedElsewhere = errors.New("external identity already linked to another user")
 
 // LinkExternalIdentity links an external identity (issuer, subject) to a local
 // user. It is idempotent for an existing (issuer, subject) → user_id mapping.
-// When the pair is already tied to a DIFFERENT user the insert-ignore no-ops;
-// the existing owner is then read back and ErrIdentityLinkedElsewhere is
-// returned, so a conflicting login cannot be silently accepted (and the
-// session issued for a user the identity does not map to). Intended to run
-// inside the provisioning transaction.
+// When the pair is already tied to a DIFFERENT user the duplicate-skipping
+// insert no-ops; the existing owner is then read back and
+// ErrIdentityLinkedElsewhere is returned, so a conflicting login cannot be
+// silently accepted (and the session issued for a user the identity does not
+// map to). Intended to run inside the provisioning transaction.
 func (tx *Tx) LinkExternalIdentity(ctx context.Context, userID int64, issuer, subject string) error {
-	res, err := tx.InsertIgnore(ctx, "external_identities",
+	res, err := tx.InsertSkipDuplicate(ctx, "external_identities",
 		[]string{"user_id", "issuer", "subject"},
 		[]string{"issuer", "subject"},
 		userID, issuer, subject)

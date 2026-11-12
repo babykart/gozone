@@ -22,9 +22,9 @@ import (
 //
 // The insert is idempotent and race-safe: a COUNT(*) fast-path skips the
 // expensive bcrypt hash on an already-populated database, and the actual
-// insert uses InsertIgnore so two instances starting concurrently on a fresh
-// database no longer race — the loser's insert becomes a silent no-op instead
-// of aborting startup with ErrUniqueViolation.
+// insert uses InsertSkipDuplicate so two instances starting concurrently on
+// a fresh database no longer race — the loser's insert becomes a silent
+// no-op instead of aborting startup with ErrUniqueViolation.
 //
 // The seed password hash is recorded in password_history unconditionally
 // (not gated on password.history_size): history may be disabled at bootstrap
@@ -86,13 +86,15 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 		}
 	}()
 
-	// InsertIgnore makes the bootstrap idempotent across instances: the
+	// InsertSkipDuplicate makes the bootstrap idempotent across instances: the
 	// advisory migration lock is no longer held here, so two instances could
 	// both pass the COUNT==0 fast-path above. A plain INSERT would abort the
-	// loser with ErrUniqueViolation; InsertIgnore turns that into a silent
-	// no-op (RowsAffected == 0). The conflict target is the UNIQUE(username)
-	// constraint — the race always seeds the same admin.
-	res, err := tx.InsertIgnore(ctx, "users",
+	// loser with ErrUniqueViolation; InsertSkipDuplicate turns that into a
+	// silent no-op (RowsAffected == 0). The conflict target is the
+	// UNIQUE(username) constraint — the race always seeds the same admin.
+	// Unlike INSERT IGNORE it keeps foreign-key and truncation errors fatal,
+	// so a genuine bootstrap failure is not downgraded to a warning on MySQL.
+	res, err := tx.InsertSkipDuplicate(ctx, "users",
 		[]string{"username", "email", "password_hash", "first_name", "last_name", "role", "password_changed_at"},
 		[]string{"username"},
 		adminUsername, adminEmail, string(hash),
@@ -115,8 +117,8 @@ func SeedAdminUser(ctx context.Context, db *DB, cfg *config.Config) error {
 		return nil
 	}
 
-	// Look up the new admin id portably: InsertIgnore cannot return the id on
-	// the skip path (and LastInsertId is unsupported by lib/pq), so a
+	// Look up the new admin id portably: InsertSkipDuplicate cannot return
+	// the id on the skip path (and LastInsertId is unsupported by lib/pq), so a
 	// targeted SELECT by the UNIQUE username is the portable
 	// choice on the insert path.
 	var adminID int64

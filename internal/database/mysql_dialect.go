@@ -33,9 +33,17 @@ func (m *mysqlDialect) DSN(dsn string) string {
 	// UTC — every cutoff comparison (tokens_valid_after, expires_at purges)
 	// would skew by the zone offset. With them, SQL-side CURRENT_TIMESTAMP
 	// writes and Go-side time.Time round-trip identically as UTC.
+	//
+	// ClientFoundRows is forced off for the same reason: RowsAffected-based
+	// duplicate detection (InsertSkipDuplicate callers: seed idempotency,
+	// identity-link conflict detection, SSO group-sync audit dedup) depends
+	// on the default affected-rows mode — with CLIENT_FOUND_ROWS, an ON
+	// DUPLICATE KEY UPDATE no-change returns 1 instead of 0 and duplicates
+	// would be misread as inserts.
 	if cfg, err := mysql.ParseDSN(dsn); err == nil {
 		cfg.ParseTime = true
 		cfg.Loc = time.UTC
+		cfg.ClientFoundRows = false
 		if cfg.Params == nil {
 			cfg.Params = make(map[string]string)
 		}
@@ -43,14 +51,14 @@ func (m *mysqlDialect) DSN(dsn string) string {
 		return cfg.FormatDSN()
 	}
 
-	// Fallback for unparseable DSNs: append parseTime and the UTC session
-	// time zone without producing '??' (the driver percent-decodes param
-	// values, hence the encoded quoting of '+00:00').
+	// Fallback for unparseable DSNs: append parseTime, the UTC session
+	// time zone and clientFoundRows=false without producing '??' (the driver
+	// percent-decodes param values, hence the encoded quoting of '+00:00').
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"
 	}
-	return dsn + sep + "parseTime=true&time_zone=%27%2B00%3A00%27"
+	return dsn + sep + "parseTime=true&time_zone=%27%2B00%3A00%27&clientFoundRows=false"
 }
 
 func (m *mysqlDialect) MaxOpenConns() int { return 25 }

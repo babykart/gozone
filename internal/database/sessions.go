@@ -30,14 +30,14 @@ func (db *DB) SessionGet(ctx context.Context, sessionID string) (SessionLifetime
 }
 
 // SessionInsert records a new session's lifetime. It is idempotent on the
-// session_id primary key (InsertIgnore): an existing row is left untouched so
-// the earliest first_seen is preserved across instances.
+// session_id primary key (InsertSkipDuplicate): an existing row is left
+// untouched so the earliest first_seen is preserved across instances.
 func (db *DB) SessionInsert(ctx context.Context, sessionID string, firstSeen, lastSeen, expiresAt time.Time) error {
 	// UTC normalization: callers track session windows on the local clock
 	// (time.Now), and the naive timestamp columns must never hold a
 	// non-UTC wall time — SQLite compares those strings lexicographically
 	// and the purge cutoffs are UTC instants.
-	_, err := db.InsertIgnore(ctx, "sessions",
+	_, err := db.InsertSkipDuplicate(ctx, "sessions",
 		[]string{"session_id", "first_seen", "last_seen", "expires_at"},
 		[]string{"session_id"},
 		sessionID, firstSeen.UTC(), lastSeen.UTC(), expiresAt.UTC(),
@@ -80,8 +80,13 @@ func (db *DB) SessionDelete(ctx context.Context, sessionID string) error {
 }
 
 // SessionPurgeExpired removes session rows whose expires_at has passed, bounding
-// the table size. Returns the number of deleted rows.
+// the table size. Returns the number of deleted rows. DB-bound timestamps are
+// always UTC: callers may pass local-clock values, and SQLite compares the
+// serialized strings lexicographically, so the cutoff is normalized to UTC
+// before the comparison (same pattern as SessionInsert's write-side
+// normalization).
 func (db *DB) SessionPurgeExpired(ctx context.Context, now time.Time) (int64, error) {
+	now = now.UTC()
 	res, err := db.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at <= ?", now)
 	if err != nil {
 		return 0, fmt.Errorf("purge expired sessions: %w", err)
