@@ -273,7 +273,7 @@ go tool cover -html=coverage.out
 
 The project tracks coverage goals by package in [ROADMAP.md](ROADMAP.md).
 
-CI enforces a floor on total statement coverage: the test job fails below **80 %**. The floor is a regression guard, not a target — raise it as the suite grows. A quick local check before pushing:
+CI enforces a floor on total statement coverage: the test job fails below **83 %**. The floor is a regression guard, not a target — it was raised to 83 % when the default-suite total stood at 84.2 % after a long test-growth period; raise it as the suite grows. A quick local check before pushing:
 
 ```bash
 go test -count=1 -coverprofile=coverage.out ./...
