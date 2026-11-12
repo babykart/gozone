@@ -955,6 +955,16 @@ func (cfg *Config) validateOIDC() error {
 		return nil
 	}
 
+	// The OIDC redirect URI is always https://<host>/auth/oidc/<name>/callback,
+	// derived from server.external_url when set. Enabling SSO without declaring
+	// the canonical external URL would hand the IdP an unreachable redirect
+	// target, so require it explicitly. Gated on Enabled only: a config that
+	// merely declares providers (enabled=false) stays valid without it.
+	if cfg.OIDC.Enabled && strings.TrimSpace(cfg.Server.ExternalURL) == "" {
+		return fmt.Errorf("oidc.enabled is true but server.external_url is empty: set server.external_url (e.g. %q) or the GOZONE_EXTERNAL_URL environment variable so the IdP can redirect back to GoZone",
+			"https://dns.example.com")
+	}
+
 	if cfg.OIDC.DefaultRole != "" {
 		if err := validators.ValidateRole(cfg.OIDC.DefaultRole); err != nil {
 			return fmt.Errorf("invalid oidc.default_role: %w", err)

@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1585,4 +1586,96 @@ func TestValidate_MCPOrigins(t *testing.T) {
 			t.Errorf("origin %q must be rejected", bad)
 		}
 	}
+}
+
+// TestLoad_OIDCRequiresExternalURL pins the contract between oidc.enabled and
+// server.external_url: the OIDC redirect URI is always
+// https://<host>/auth/oidc/<name>/callback, so a server that enables SSO
+// without declaring its canonical external URL would hand the IdP an
+// unreachable redirect target. The check must be gated explicitly on
+// cfg.OIDC.Enabled — a disabled config that merely declares providers (or
+// nothing at all) with an empty external_url stays valid.
+func TestLoad_OIDCRequiresExternalURL(t *testing.T) {
+	oidcOn := `
+server:
+  secret_key: ` + testSecret + `
+  external_url: "%s"
+oidc:
+  enabled: true
+  providers:
+    - name: gitea
+      issuer_url: "https://gitea.example.com"
+      client_id: cid
+      client_secret: sec
+`
+	oidcOffWithProvider := `
+server:
+  secret_key: ` + testSecret + `
+oidc:
+  enabled: false
+  providers:
+    - name: gitea
+      issuer_url: "https://gitea.example.com"
+      client_id: cid
+      client_secret: sec
+`
+
+	t.Run("enabled with empty external_url is rejected", func(t *testing.T) {
+		_, err := Load(writeTempConfig(t, fmt.Sprintf(oidcOn, "")))
+		if err == nil {
+			t.Fatal("expected an error when oidc.enabled is true and server.external_url is empty")
+		}
+		for _, want := range []string{"oidc.enabled", "server.external_url", "GOZONE_EXTERNAL_URL"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error must mention %q, got: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("enabled with whitespace-only external_url is rejected", func(t *testing.T) {
+		_, err := Load(writeTempConfig(t, fmt.Sprintf(oidcOn, "   ")))
+		if err == nil {
+			t.Fatal("expected an error when oidc.enabled is true and server.external_url is whitespace-only")
+		}
+		if !strings.Contains(err.Error(), "server.external_url") {
+			t.Errorf("error must mention server.external_url, got: %v", err)
+		}
+	})
+
+	t.Run("enabled with external_url set is valid", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, fmt.Sprintf(oidcOn, "https://dns.example.com")))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.ExternalURL != "https://dns.example.com" {
+			t.Errorf("external_url = %q, want https://dns.example.com", cfg.Server.ExternalURL)
+		}
+	})
+
+	t.Run("disabled with declared provider and empty external_url stays valid", func(t *testing.T) {
+		cfg, err := Load(writeTempConfig(t, oidcOffWithProvider))
+		if err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+		if cfg.Server.ExternalURL != "" {
+			t.Errorf("external_url must stay empty, got %q", cfg.Server.ExternalURL)
+		}
+	})
+
+	t.Run("disabled without providers and empty external_url stays valid", func(t *testing.T) {
+		if _, err := Load(writeTempConfig(t, "server:\n  secret_key: "+testSecret+"\n")); err != nil {
+			t.Fatalf("expected valid config, got error: %v", err)
+		}
+	})
+
+	t.Run("env override satisfies the requirement", func(t *testing.T) {
+		t.Setenv("GOZONE_EXTERNAL_URL", "https://dns.example.com")
+		cfg, err := Load(writeTempConfig(t, fmt.Sprintf(oidcOn, "")))
+		if err != nil {
+			t.Fatalf("GOZONE_EXTERNAL_URL must satisfy the requirement, got error: %v", err)
+		}
+		if cfg.Server.ExternalURL != "https://dns.example.com" {
+			t.Errorf("external_url = %q, want https://dns.example.com", cfg.Server.ExternalURL)
+		}
+	})
 }

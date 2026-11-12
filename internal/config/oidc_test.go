@@ -30,6 +30,7 @@ func TestOIDCDefaultDisabled(t *testing.T) {
 
 func TestOIDCValidateOK(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.Providers = []OIDCProviderConfig{
 		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
@@ -41,6 +42,7 @@ func TestOIDCValidateOK(t *testing.T) {
 
 func TestOIDCValidateEnabledNoProviders(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	err := cfg.validateOIDC()
 	if err == nil || !strings.Contains(err.Error(), "no providers") {
@@ -50,6 +52,7 @@ func TestOIDCValidateEnabledNoProviders(t *testing.T) {
 
 func TestOIDCValidateDuplicateProviderName(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.Providers = []OIDCProviderConfig{
 		{Name: "gitea", IssuerURL: "https://gitea.example.com", ClientID: "cid", ClientSecret: "sec"},
@@ -76,6 +79,7 @@ func TestOIDCValidateMissingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultConfig()
+			cfg.Server.ExternalURL = "https://dns.example.com"
 			cfg.OIDC.Enabled = true
 			cfg.OIDC.Providers = []OIDCProviderConfig{tt.p}
 			err := cfg.validateOIDC()
@@ -88,6 +92,7 @@ func TestOIDCValidateMissingFields(t *testing.T) {
 
 func TestOIDCValidateBadDefaultRole(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.DefaultRole = "superadmin"
 	cfg.OIDC.Providers = []OIDCProviderConfig{
@@ -101,6 +106,7 @@ func TestOIDCValidateBadDefaultRole(t *testing.T) {
 
 func TestOIDCValidateRoleClaimWithoutAdminValues(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.RoleClaim = "groups"
 	cfg.OIDC.Providers = []OIDCProviderConfig{
@@ -114,6 +120,7 @@ func TestOIDCValidateRoleClaimWithoutAdminValues(t *testing.T) {
 
 func TestOIDCValidateRoleClaimWithOperatorValuesOnly(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.RoleClaim = "groups"
 	cfg.OIDC.OperatorRoleValues = []string{"dns-operators"}
@@ -127,6 +134,7 @@ func TestOIDCValidateRoleClaimWithOperatorValuesOnly(t *testing.T) {
 
 func TestOIDCValidateGroupClaimWithoutMapping(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.GroupClaim = "groups"
 	cfg.OIDC.Providers = []OIDCProviderConfig{
@@ -140,6 +148,7 @@ func TestOIDCValidateGroupClaimWithoutMapping(t *testing.T) {
 
 func TestOIDCValidateRoleAndGroupMappingOK(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.RoleClaim = "groups"
 	cfg.OIDC.AdminRoleValues = []string{"admins"}
@@ -163,6 +172,7 @@ func TestOIDCRoleGroupEnvOverrides(t *testing.T) {
 	t.Setenv("GOZONE_OIDC_ISSUER_URL", "https://kc.example.com")
 	t.Setenv("GOZONE_OIDC_CLIENT_ID", "cid")
 	t.Setenv("GOZONE_OIDC_CLIENT_SECRET", "sec")
+	t.Setenv("GOZONE_EXTERNAL_URL", "https://dns.example.com")
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
@@ -195,6 +205,7 @@ func TestOIDCValidateDisabledSkipped(t *testing.T) {
 // (a copy-pasted "@corp.example.com" means the domain), drop empty entries.
 func TestOIDCAllowedEmailDomainsNormalization(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.Providers = []OIDCProviderConfig{{Name: "gitea", IssuerURL: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec"}}
 	cfg.OIDC.AllowedEmailDomains = []string{"  Corp.Example.COM  ", "@gitea.example.com", "", "corp.example.com"}
@@ -217,6 +228,7 @@ func TestOIDCAllowedEmailDomainsNormalization(t *testing.T) {
 // config load — it could never match and would silently narrow the filter.
 func TestOIDCAllowedEmailDomainsInvalidEntry(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.ExternalURL = "https://dns.example.com"
 	cfg.OIDC.Enabled = true
 	cfg.OIDC.Providers = []OIDCProviderConfig{{Name: "gitea", IssuerURL: "https://idp.example.com", ClientID: "cid", ClientSecret: "sec"}}
 	cfg.OIDC.AllowedEmailDomains = []string{"user@corp.example.com"}
@@ -238,6 +250,7 @@ func TestOIDCEnvOverridesSingleProvider(t *testing.T) {
 	t.Setenv("GOZONE_OIDC_ISSUER_URL", "https://gitea.example.com")
 	t.Setenv("GOZONE_OIDC_CLIENT_ID", "cid")
 	t.Setenv("GOZONE_OIDC_CLIENT_SECRET", "sec")
+	t.Setenv("GOZONE_EXTERNAL_URL", "https://dns.example.com")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -371,6 +384,7 @@ func TestOIDCJWKSCacheTTLRejectsNegative(t *testing.T) {
 	yaml := `
 server:
   secret_key: ` + testSecret + `
+  external_url: "https://dns.example.com"
 powerdns:
   api_url: http://localhost:8081
   api_key: changeme
@@ -401,6 +415,7 @@ func TestOIDCLoadFromYAML(t *testing.T) {
 	yaml := `
 server:
   secret_key: ` + testSecret + `
+  external_url: "https://dns.example.com"
 powerdns:
   api_url: http://localhost:8081
   api_key: changeme

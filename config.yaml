@@ -47,7 +47,9 @@ server:
   # Host header. Defense-in-depth: the IdP already validates both against its
   # registered lists; this removes the app's reliance on an untrusted header.
   # Must be an absolute http(s) URL with a host and no path (validated and
-  # normalised to scheme://host at startup). Leave empty to derive per-request.
+  # normalised to scheme://host at startup). REQUIRED when oidc.enabled is
+  # true — startup fails validation without it (see the oidc section below).
+  # Leave empty (with SSO disabled) to derive per-request.
   # external_url: "https://dns.example.com"
 
 database:
