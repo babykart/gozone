@@ -306,10 +306,13 @@ func TestForwardedProtoIsHTTPS(t *testing.T) {
 		{"empty", "", false},
 		{"single hop https", "https", true},
 		{"single hop http", "http", false},
-		{"multi-hop https then http", "https, http", true},
-		{"multi-hop http then https", "http, https", false},
+		{"multi-hop https then http", "https, http", false},
+		{"multi-hop http then https", "http, https", true},
 		{"uppercase HTTPS", "HTTPS", true},
-		{"whitespace around value", " https , http ", true},
+		{"whitespace around value", " https , http ", false},
+		{"trailing comma empty rightmost", "https,", false},
+		{"whitespace-only rightmost segment", "https, ", false},
+		{"empty leftmost segment", " ,https", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -12,8 +12,9 @@ import (
 type httpsCtxKey struct{}
 
 // WithHTTPS returns r carrying the resolver-computed effective-HTTPS flag in
-// its context. It is set by the HTTPS resolver middleware installed in the
-// global request stack (cmd/server.go), which honours X-Forwarded-Proto only when
+// its context. It is set by httpsResolverMiddleware (cmd/middleware.go),
+// installed in the global request stack by runServer, which honours
+// X-Forwarded-Proto only when
 // the direct TCP connection comes from a configured trusted proxy (m40/M-SEC4).
 func WithHTTPS(r *http.Request, https bool) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), httpsCtxKey{}, https))
@@ -42,20 +43,33 @@ func IsHTTPS(r *http.Request) bool {
 	return false
 }
 
-// ForwardedProtoIsHTTPS reports whether the leftmost X-Forwarded-Proto value is
-// "https" (case-insensitive), tolerating multi-hop comma-separated chains
-// ("https, http") where the leftmost value is the original client's protocol.
+// ForwardedProtoIsHTTPS reports whether the rightmost X-Forwarded-Proto value
+// is "https" (case-insensitive), tolerating multi-hop comma-separated chains
+// ("https, http") and repeated header lines joined with "," by the caller.
+//
+// The rightmost value carries last-hop semantics: behind the trusted-proxy
+// gate (the direct TCP peer ∈ trusted_proxies, M-SEC4) it is the value the
+// nearest trusted proxy wrote last, whether that proxy overwrites a single
+// header or appends to a chain. The leftmost value is client-controlled
+// whenever a proxy appends rather than overwrites, so it cannot be trusted.
+// This means the result is the protocol of the FINAL hop, not necessarily
+// the original client's; multi-proxy deployments that need the original
+// scheme (e.g. for OIDC URL derivation) should pin server.external_url
+// instead of relying on this header.
 //
 // Callers MUST gate this on the direct TCP connection being a trusted proxy:
 // the header is client-supplied and trivially spoofable. This function performs
-// NO trust check — it only parses the value. The resolver middleware in
-// cmd/server.go calls it after the M-SEC4-style RemoteAddr ∈ trustedProxies gate.
+// NO trust check — it only parses the value. The resolver middleware
+// (httpsResolverMiddleware in cmd/middleware.go) calls it after the
+// M-SEC4-style RemoteAddr ∈ trustedProxies gate.
 func ForwardedProtoIsHTTPS(header string) bool {
 	if header == "" {
 		return false
 	}
-	if i := strings.IndexByte(header, ','); i >= 0 {
-		header = header[:i]
+	// Rightmost wins: an empty or whitespace-only rightmost segment means the
+	// nearest trusted proxy left the value blank — fail closed.
+	if i := strings.LastIndexByte(header, ','); i >= 0 {
+		header = header[i+1:]
 	}
 	return strings.EqualFold(strings.TrimSpace(header), "https")
 }

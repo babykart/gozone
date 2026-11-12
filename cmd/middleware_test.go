@@ -5,56 +5,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"strings"
 	"testing"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 
+	"github.com/babykart/gozone/internal/config"
 	"github.com/babykart/gozone/internal/middleware"
 )
 
 // mustTrustedProxies parses CIDR entries for the resolver tests, failing the
 // test on a malformed fixture (production code validates via
-// parseTrustedProxies and returns the error through runServer).
+// config.ParseTrustedProxies and returns the error through runServer).
 func mustTrustedProxies(t *testing.T, entries ...string) []netip.Prefix {
 	t.Helper()
-	prefixes, err := parseTrustedProxies(entries)
+	prefixes, err := config.ParseTrustedProxies(entries)
 	if err != nil {
 		t.Fatalf("fixture parse: %v", err)
 	}
 	return prefixes
-}
-
-// TestParseTrustedProxies covers the startup validation: CIDR entries parse,
-// and the frequent operator typos (a bare IPv4/IPv6, garbage) return an
-// actionable error instead of the netip.MustParsePrefix panic this replaced.
-func TestParseTrustedProxies(t *testing.T) {
-	prefixes, err := parseTrustedProxies([]string{"10.0.0.0/8", "192.0.2.1/32", "2001:db8::/48"})
-	if err != nil {
-		t.Fatalf("valid CIDR list: %v", err)
-	}
-	if len(prefixes) != 3 {
-		t.Fatalf("expected 3 prefixes, got %d", len(prefixes))
-	}
-	if !prefixes[0].Contains(netip.MustParseAddr("10.1.2.3")) {
-		t.Error("10.0.0.0/8 must contain 10.1.2.3")
-	}
-
-	empty, err := parseTrustedProxies(nil)
-	if err != nil || len(empty) != 0 {
-		t.Errorf("empty list: prefixes=%v err=%v, want empty/nil", empty, err)
-	}
-
-	for _, bad := range []string{"10.0.0.1", "2001:db8::1", "not-an-ip"} {
-		_, err := parseTrustedProxies([]string{"10.0.0.0/8", bad})
-		if err == nil {
-			t.Errorf("entry %q must be rejected", bad)
-			continue
-		}
-		if !strings.Contains(err.Error(), "/32") || !strings.Contains(err.Error(), bad) {
-			t.Errorf("error for %q should quote the entry and suggest the /32 form: %v", bad, err)
-		}
-	}
 }
 
 // TestClientIPMiddleware_TrustedProxyHonorsXFF verifies that when the direct
@@ -152,7 +120,9 @@ func runHTTPSResolver(t *testing.T, trusted []string, remoteAddr, xfp string, tl
 
 // TestHTTPSResolver_TrustedProxyHonorsXFP verifies that when the direct TCP
 // connection arrives from a configured trusted proxy, X-Forwarded-Proto is
-// honoured (single-hop and multi-hop, m6 preserved).
+// honoured. The rightmost comma-separated value — the one written by the last
+// trusted hop — decides; the leftmost value is client-controlled when a proxy
+// appends.
 func TestHTTPSResolver_TrustedProxyHonorsXFP(t *testing.T) {
 	trusted := []string{"10.0.0.0/8"}
 
@@ -162,8 +132,31 @@ func TestHTTPSResolver_TrustedProxyHonorsXFP(t *testing.T) {
 	if got := runHTTPSResolver(t, trusted, "10.0.0.1:1234", "http", nil); got {
 		t.Error("trusted proxy + XFP http: expected IsHTTPS=false")
 	}
-	if got := runHTTPSResolver(t, trusted, "10.0.0.1:1234", "https, http", nil); !got {
-		t.Error("trusted proxy + multi-hop 'https, http': expected IsHTTPS=true (m6 leftmost wins)")
+	if got := runHTTPSResolver(t, trusted, "10.0.0.1:1234", "https, http", nil); got {
+		t.Error("trusted proxy + multi-hop 'https, http': expected IsHTTPS=false (rightmost wins)")
+	}
+	if got := runHTTPSResolver(t, trusted, "10.0.0.1:1234", "http, https", nil); !got {
+		t.Error("trusted proxy + multi-hop 'http, https': expected IsHTTPS=true (rightmost wins)")
+	}
+}
+
+// TestHTTPSResolver_TrustedProxyRepeatedXFPLines verifies that a proxy which
+// appends X-Forwarded-Proto as repeated header lines (not one comma-joined
+// line) is parsed with the same rightmost semantics: the last line decides.
+func TestHTTPSResolver_TrustedProxyRepeatedXFPLines(t *testing.T) {
+	mw := httpsResolverMiddleware(mustTrustedProxies(t, "10.0.0.0/8"))
+	var got bool
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = middleware.IsHTTPS(r)
+	}))
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:1234"
+	r.Header.Add("X-Forwarded-Proto", "http")
+	r.Header.Add("X-Forwarded-Proto", "https")
+	handler.ServeHTTP(w, r)
+	if !got {
+		t.Error("trusted proxy + XFP as two lines 'http' then 'https': expected IsHTTPS=true (rightmost line wins)")
 	}
 }
 

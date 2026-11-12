@@ -5,10 +5,10 @@
 package cmd
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -39,23 +39,6 @@ func requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// parseTrustedProxies validates every server.trusted_proxies entry and
-// returns the parsed prefixes. Entries must be CIDR prefixes; a bare IP (a
-// frequent operator typo) fails with an actionable message instead of the
-// netip.MustParsePrefix panic this used to hit at startup. The error surfaces
-// through runServer, so a typo yields a clean startup failure with guidance.
-func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
-	prefixes := make([]netip.Prefix, len(entries))
-	for i, entry := range entries {
-		p, err := netip.ParsePrefix(entry)
-		if err != nil {
-			return nil, fmt.Errorf("entry %d (%q) is not a CIDR prefix — use \"10.0.0.1/32\" for a single host or \"10.0.0.0/8\" for a range (IPv6: \"2001:db8::1/128\"): %w", i+1, entry, err)
-		}
-		prefixes[i] = p
-	}
-	return prefixes, nil
-}
-
 // clientIPMiddleware returns chi middleware that resolves the client IP into
 // the request context without mutating r.RemoteAddr. When server.trusted_proxies
 // is empty the middleware keys strictly off the TCP source address (fail-closed
@@ -69,7 +52,8 @@ func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 //
 // trustedProxies carries the raw configured entries (chi's ClientIPFromXFF
 // takes strings) and prefixes their parsed form — both come from
-// parseTrustedProxies, called once in runServer, so no parsing happens here.
+// config.ParseTrustedProxies, called once in runServer, so no parsing
+// happens here.
 func clientIPMiddleware(trustedProxies []string, prefixes []netip.Prefix) func(http.Handler) http.Handler {
 	if len(trustedProxies) == 0 {
 		return chimw.ClientIPFromRemoteAddr
@@ -123,7 +107,12 @@ func trustedProxy(ip netip.Addr, prefixes []netip.Prefix) bool {
 // trusted_proxies is empty, X-Forwarded-Proto is ignored entirely and only a
 // genuine r.TLS connection counts.
 //
-// prefixes comes from parseTrustedProxies (runServer validates once at
+// The forwarded value carries last-hop semantics: repeated header lines are
+// joined and the rightmost comma-separated value wins, i.e. the protocol the
+// nearest trusted proxy saw on its inbound side — see
+// middleware.ForwardedProtoIsHTTPS for the full rationale.
+//
+// prefixes comes from config.ParseTrustedProxies (runServer validates once at
 // startup); no parsing happens here.
 func httpsResolverMiddleware(prefixes []netip.Prefix) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
@@ -135,7 +124,7 @@ func httpsResolverMiddleware(prefixes []netip.Prefix) func(http.Handler) http.Ha
 					host = r.RemoteAddr // RemoteAddr may be a bare IP (e.g. in tests).
 				}
 				if ip, perr := netip.ParseAddr(host); perr == nil && trustedProxy(ip.Unmap(), prefixes) {
-					https = middleware.ForwardedProtoIsHTTPS(r.Header.Get("X-Forwarded-Proto"))
+					https = middleware.ForwardedProtoIsHTTPS(strings.Join(r.Header.Values("X-Forwarded-Proto"), ","))
 				}
 			}
 			h.ServeHTTP(w, middleware.WithHTTPS(r, https))
