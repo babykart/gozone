@@ -2,6 +2,8 @@ package oidc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/database"
 	"github.com/babykart/gozone/internal/logger"
 )
 
@@ -83,10 +86,13 @@ type Service struct {
 	// in a stable, operator-defined sequence. Go map iteration is
 	// deliberately randomized, so the map alone cannot honour that contract.
 	// Kept in sync with providers by addProvider.
-	order      []*ProviderInstance
-	stateKey   []byte
-	keySets    []*cachedKeySet // started background refresh goroutines; Close stops them
-	usedStates *stateStore     // L-3: server-side single-use enforcement for OIDC state tokens
+	order    []*ProviderInstance
+	stateKey []byte
+	keySets  []*cachedKeySet // started background refresh goroutines; Close stops them
+	// db backs the cluster-wide single-use consumption of OIDC state tokens
+	// (oidc_consumed_states). A nil db is only possible on a disabled service
+	// or a hand-built test Service; HandleCallback fails closed in that case.
+	db *database.DB
 }
 
 // ErrDisabled is returned by NewService/Service methods when OIDC is not
@@ -118,16 +124,19 @@ const discoveryTimeout = 15 * time.Second
 // boot — the remaining providers and local login still work. Operators are
 // expected to fix the unreachable IdP; the provider can be made available by
 // restarting once it is back. Each attempt is bounded by discoveryTimeout.
-func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Service {
-	svc := &Service{stateKey: stateKey}
+func NewService(ctx context.Context, cfg *config.Config, stateKey []byte, db *database.DB) (*Service, error) {
+	svc := &Service{stateKey: stateKey, db: db}
 	if cfg == nil || !cfg.OIDC.Enabled || len(cfg.OIDC.Providers) == 0 {
-		return svc
+		return svc, nil
+	}
+	// L-3: single-use state consumption is a fail-closed, DB-backed operation.
+	// An enabled service that silently skipped consumption would re-open the
+	// replay gap, so refuse to start instead of degrading.
+	if db == nil {
+		return nil, errors.New("oidc: enabled configuration requires a database for state consumption")
 	}
 	jwksTTL := time.Duration(cfg.OIDC.JWKSCacheTTLMinutes) * time.Minute
 	svc.providers = make(map[string]*ProviderInstance)
-	// L-3: track consumed state tokens so a captured state cannot be replayed
-	// within its TTL. Started only when OIDC is actually configured.
-	svc.usedStates = newStateStore()
 	for i := range cfg.OIDC.Providers {
 		pc := &cfg.OIDC.Providers[i]
 		// Bound every attempt individually: a caller-supplied context (or
@@ -149,7 +158,7 @@ func NewService(ctx context.Context, cfg *config.Config, stateKey []byte) *Servi
 			"provider", pc.Name, "issuer", pc.IssuerURL,
 			"jwks_ttl_minutes", cfg.OIDC.JWKSCacheTTLMinutes)
 	}
-	return svc
+	return svc, nil
 }
 
 // Close stops every provider's JWKS background refresh goroutine. It is safe to
@@ -162,9 +171,6 @@ func (s *Service) Close() {
 		k.Close()
 	}
 	s.keySets = nil
-	if s.usedStates != nil {
-		s.usedStates.Close()
-	}
 }
 
 // Enabled reports whether at least one provider was successfully discovered.
@@ -391,12 +397,17 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 		return nil, fmt.Errorf("state provider mismatch: got %q want %q", payload.Provider, provider)
 	}
 
-	// L-3: enforce single-use semantics. A captured state token would otherwise
-	// be replayable within its TTL. Once consumed, any replay is rejected before
-	// the token exchange begins. The existing mitigations (OAuth2 authorization-
-	// code single-use at the IdP, PKCE, nonce binding) make the practical risk
-	// negligible, but consuming the state closes the gap entirely.
-	if !s.usedStates.consume(state) {
+	// L-3: enforce single-use semantics cluster-wide. A captured state token
+	// would otherwise be replayable within its TTL. Once consumed, any replay
+	// is rejected before the token exchange begins. The DB insert is the
+	// single source of truth: it is atomic across instances, so a replay
+	// hitting any replica is rejected. A store failure fails the callback
+	// closed rather than risking a non-enforcing callback.
+	fresh, err := s.consumeState(ctx, state)
+	if err != nil {
+		return nil, fmt.Errorf("state: consumption failed: %w", err)
+	}
+	if !fresh {
 		return nil, fmt.Errorf("state: already consumed (possible replay)")
 	}
 
@@ -454,4 +465,45 @@ func (s *Service) HandleCallback(ctx context.Context, provider, code, state, cal
 	// iss/aud/exp/nonce).
 	claims.IDToken = rawIDToken
 	return claims, nil
+}
+
+// hashState returns the hex-encoded SHA-256 digest of the state string. The
+// hash avoids storing the raw state token in the database; the payload it
+// carries is AES-GCM encrypted, so only the digest is retained.
+func hashState(state string) string {
+	sum := sha256.Sum256([]byte(state))
+	return hex.EncodeToString(sum[:])
+}
+
+// consumeState marks the given state token as consumed, cluster-wide, and
+// reports whether the consumption was fresh. The first consumer of a state
+// gets (true, nil); a duplicate insert is the replay signal and yields
+// (false, nil); any other insert error — including a missing table or an
+// unreachable database — yields (false, err) so the caller fails closed
+// before the IdP token exchange. A nil db (only possible on a hand-built
+// Service) fails closed the same way.
+//
+// After a successful fresh consumption an opportunistic sweep removes expired
+// rows; sweep errors are logged and ignored — retention is best-effort and a
+// failed sweep must not fail the login.
+func (s *Service) consumeState(ctx context.Context, state string) (fresh bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("oidc: state consumption requires a database")
+	}
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO oidc_consumed_states (state_hash, consumed_at, expires_at) VALUES (?, ?, ?)`,
+		hashState(state), now, now.Add(stateTTL),
+	); err != nil {
+		if errors.Is(err, database.ErrUniqueViolation) {
+			return false, nil // replay
+		}
+		return false, fmt.Errorf("insert consumed state: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM oidc_consumed_states WHERE expires_at < ?`, now,
+	); err != nil {
+		logger.Warn("oidc consumed-state sweep failed", "error", err)
+	}
+	return true, nil
 }

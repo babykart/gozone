@@ -548,5 +548,15 @@ func (m *mysqlDialect) Migrations() []string {
 		// comparison (a rotation and a token minted in the same second were
 		// previously both accepted, in issuance order).
 		`ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
+		// Cluster-wide single-use enforcement for OIDC state tokens (L-3
+		// replay defence). See sqlite_dialect.go for the rationale. The
+		// expires_at index is an inline KEY because MySQL has no CREATE
+		// INDEX IF NOT EXISTS.
+		`CREATE TABLE IF NOT EXISTS oidc_consumed_states (
+			state_hash VARCHAR(64) PRIMARY KEY,
+			consumed_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL,
+			KEY idx_oidc_consumed_states_expires_at (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }

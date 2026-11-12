@@ -477,5 +477,19 @@ func (s *sqliteDialect) Migrations() []string {
 		// store it per key so a key minted before a rotation can be refused
 		// without the second-granularity window of a timestamp comparison.
 		`ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
+		// Cluster-wide single-use enforcement for OIDC state tokens (L-3
+		// replay defence): a captured state is no longer replayable within
+		// its TTL, even across instances. state_hash is the sha256 hex
+		// digest of the state token; the primary key makes consumption
+		// atomic cluster-wide — a duplicate INSERT is the replay signal,
+		// dialect-normalized to ErrUniqueViolation by the Exec wrapper.
+		// expires_at is computed in Go (consumed_at + the state TTL) and
+		// swept opportunistically on every fresh consumption.
+		`CREATE TABLE IF NOT EXISTS oidc_consumed_states (
+			state_hash VARCHAR(64) PRIMARY KEY,
+			consumed_at DATETIME NOT NULL,
+			expires_at DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_oidc_consumed_states_expires_at ON oidc_consumed_states(expires_at)`,
 	}
 }

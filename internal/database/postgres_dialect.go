@@ -564,5 +564,15 @@ func (p *postgresDialect) Migrations() []string {
 		// comparison (a rotation and a token minted in the same second were
 		// previously both accepted, in issuance order).
 		`ALTER TABLE users ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 0`,
+		// Cluster-wide single-use enforcement for OIDC state tokens (L-3
+		// replay defence). See sqlite_dialect.go for the rationale.
+		// TIMESTAMP (not DATETIME) per the schema_migrations regression:
+		// PostgreSQL has no DATETIME.
+		`CREATE TABLE IF NOT EXISTS oidc_consumed_states (
+			state_hash VARCHAR(64) PRIMARY KEY,
+			consumed_at TIMESTAMP NOT NULL,
+			expires_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_oidc_consumed_states_expires_at ON oidc_consumed_states(expires_at)`,
 	}
 }

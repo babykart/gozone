@@ -16,6 +16,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 // integrationStateKey is the AES-256 key used to encrypt/decrypt state tokens
@@ -202,6 +203,20 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// mustNewService wires a Service from NewService with an in-memory test
+// database, failing the test on error. NewService requires a DB for enabled
+// configs (state consumption is DB-backed); discovery itself is exercised
+// against the fake IdP.
+func mustNewService(t *testing.T, cfg *config.Config) *Service {
+	t.Helper()
+	svc, err := NewService(context.Background(), cfg, []byte(integrationStateKey), testutil.NewTestDB(t))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(svc.Close)
+	return svc
+}
+
 // newIntegrationService wires a Service whose single provider points at the
 // fake IdP. JWKS background refresh is disabled (TTL 0) to keep the test
 // deterministic and free of background goroutines.
@@ -221,9 +236,7 @@ func newIntegrationService(t *testing.T, idp *fakeIdP, name string) *Service {
 			JWKSCacheTTLMinutes: 0,
 		},
 	}
-	svc := NewService(context.Background(), cfg, []byte(integrationStateKey))
-	t.Cleanup(svc.Close)
-	return svc
+	return mustNewService(t, cfg)
 }
 
 // extractState pulls the encrypted state parameter out of an authorization URL.
@@ -300,8 +313,7 @@ func TestNewService_DisplayNameOverride(t *testing.T) {
 	cfg := &config.Config{OIDC: config.OIDCConfig{Enabled: true, JWKSCacheTTLMinutes: 0, Providers: []config.OIDCProviderConfig{
 		{Name: "fake", DisplayName: "Custom Label", IssuerURL: idp.issuer, ClientID: "cid", ClientSecret: "s"},
 	}}}
-	svc := NewService(context.Background(), cfg, []byte(integrationStateKey))
-	t.Cleanup(svc.Close)
+	svc := mustNewService(t, cfg)
 
 	inst, _ := svc.Provider("fake")
 	if inst.DisplayName != "Custom Label" {
@@ -336,8 +348,7 @@ func TestNewService_UnreachableProviderSkipped(t *testing.T) {
 	cfg := &config.Config{OIDC: config.OIDCConfig{Enabled: true, JWKSCacheTTLMinutes: 0, Providers: []config.OIDCProviderConfig{
 		{Name: "dead", IssuerURL: bad.URL, ClientID: "c", ClientSecret: "s"},
 	}}}
-	svc := NewService(context.Background(), cfg, []byte(integrationStateKey))
-	t.Cleanup(svc.Close)
+	svc := mustNewService(t, cfg)
 
 	if svc.Enabled() {
 		t.Error("service must be disabled when the only provider is unreachable")
@@ -460,8 +471,7 @@ func TestNewService_ProvidersConfigurationOrder(t *testing.T) {
 			JWKSCacheTTLMinutes: 0,
 		},
 	}
-	svc := NewService(context.Background(), cfg, []byte(integrationStateKey))
-	t.Cleanup(svc.Close)
+	svc := mustNewService(t, cfg)
 
 	want := []string{"zeta", "alpha", "mid"}
 	for attempt := 0; attempt < 20; attempt++ {
@@ -492,8 +502,7 @@ func TestNewService_ProvidersConfigurationOrder(t *testing.T) {
 			JWKSCacheTTLMinutes: 0,
 		},
 	}
-	svc2 := NewService(context.Background(), cfg2, []byte(integrationStateKey))
-	t.Cleanup(svc2.Close)
+	svc2 := mustNewService(t, cfg2)
 	ps2 := svc2.Providers()
 	if len(ps2) != 2 || ps2[0].Name != "zeta" || ps2[1].Name != "mid" {
 		names := make([]string, len(ps2))

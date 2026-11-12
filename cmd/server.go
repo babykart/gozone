@@ -191,8 +191,13 @@ func runServer(cfg *config.Config) error {
 	// Initialize OpenID Connect / OAuth2 single sign-on. Discovery is best-effort
 	// per provider (a temporarily unreachable IdP is skipped, not fatal); the
 	// returned service is disabled when OIDC is not configured or no provider
-	// could be discovered.
-	oidcSvc := oidc.NewService(context.Background(), cfg, cfg.Server.OIDCStateKey)
+	// could be discovered. An enabled configuration is fail-closed: state
+	// consumption is DB-backed, so a missing database is a startup error, not a
+	// log-and-disable.
+	oidcSvc, err := oidc.NewService(context.Background(), cfg, cfg.Server.OIDCStateKey, db)
+	if err != nil {
+		return fmt.Errorf("initialize oidc: %w", err)
+	}
 	h.OIDC = oidcSvc
 	// Stop the per-provider JWKS background refresh goroutines on shutdown.
 	defer oidcSvc.Close()

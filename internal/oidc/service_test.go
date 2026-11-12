@@ -12,6 +12,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/babykart/gozone/internal/config"
+	"github.com/babykart/gozone/internal/testutil"
 )
 
 // newTestService builds a minimal Service with a single provider whose oauth2
@@ -100,15 +101,17 @@ func TestAuthCodeURL_EmbedsProviderInState(t *testing.T) {
 }
 
 // TestService_StateReplayRejected is the L-3 integration test: a Service with
-// a stateStore must reject a replayed state token at the consumption step. The
-// test exercises the real newStateToken → consume path on the Service's store,
-// verifying the wiring is correct without needing a live IdP (HandleCallback's
-// token exchange would fail against the dummy endpoint, but consume runs before
-// the exchange, so the second call is rejected by the store, not the network).
+// a DB-backed state store must reject a replayed state token at the
+// consumption step. The test exercises the real newStateToken → consumeState
+// path on the Service's store, verifying the wiring is correct without
+// needing a live IdP (HandleCallback's token exchange would fail against the
+// dummy endpoint, but consumption runs before the exchange, so the second
+// call is rejected by the store, not the network).
 func TestService_StateReplayRejected(t *testing.T) {
 	svc := newTestService(t)
-	svc.usedStates = newStateStore()
+	svc.db = testutil.NewTestDB(t)
 	t.Cleanup(svc.Close)
+	ctx := context.Background()
 
 	// Build a real state token for the "test" provider.
 	state, _, _, _, err := newStateToken(svc.stateKey, "test")
@@ -117,12 +120,14 @@ func TestService_StateReplayRejected(t *testing.T) {
 	}
 
 	// First consumption — must succeed.
-	if !svc.usedStates.consume(state) {
-		t.Fatal("first consume should succeed (fresh state)")
+	fresh, err := svc.consumeState(ctx, state)
+	if err != nil || !fresh {
+		t.Fatalf("first consume = (%v, %v), want (true, nil)", fresh, err)
 	}
-	// Replay — must be rejected.
-	if svc.usedStates.consume(state) {
-		t.Error("replayed state must be rejected")
+	// Replay — must be reported as not fresh.
+	fresh, err = svc.consumeState(ctx, state)
+	if err != nil || fresh {
+		t.Errorf("replayed state = (%v, %v), want (false, nil)", fresh, err)
 	}
 }
 
@@ -182,13 +187,17 @@ func TestAuthCodeURL_ConcurrentNoRace(t *testing.T) {
 }
 
 // TestNewService_DisabledPaths covers the early-out branches of NewService: a
-// nil config, OIDC not enabled, and enabled with no providers must all return a
-// disabled service without touching the network.
+// nil config, OIDC not enabled, and enabled with no providers must all return
+// a disabled service without touching the network.
 func TestNewService_DisabledPaths(t *testing.T) {
 	key := []byte("test-state-key-32-bytes-long-000")
+	db := testutil.NewTestDB(t)
 
 	t.Run("nil config", func(t *testing.T) {
-		svc := NewService(context.Background(), nil, key)
+		svc, err := NewService(context.Background(), nil, key, db)
+		if err != nil {
+			t.Fatalf("NewService(nil config): %v", err)
+		}
 		t.Cleanup(svc.Close)
 		if svc.Enabled() {
 			t.Error("nil config must yield a disabled service")
@@ -196,7 +205,10 @@ func TestNewService_DisabledPaths(t *testing.T) {
 	})
 
 	t.Run("not enabled", func(t *testing.T) {
-		svc := NewService(context.Background(), &config.Config{}, key)
+		svc, err := NewService(context.Background(), &config.Config{}, key, db)
+		if err != nil {
+			t.Fatalf("NewService(disabled): %v", err)
+		}
 		t.Cleanup(svc.Close)
 		if svc.Enabled() {
 			t.Error("disabled OIDC must yield a disabled service")
@@ -205,12 +217,40 @@ func TestNewService_DisabledPaths(t *testing.T) {
 
 	t.Run("enabled but no providers", func(t *testing.T) {
 		cfg := &config.Config{OIDC: config.OIDCConfig{Enabled: true}}
-		svc := NewService(context.Background(), cfg, key)
+		svc, err := NewService(context.Background(), cfg, key, db)
+		if err != nil {
+			t.Fatalf("NewService(enabled, no providers): %v", err)
+		}
 		t.Cleanup(svc.Close)
 		if svc.Enabled() {
 			t.Error("enabled with no providers must yield a disabled service")
 		}
 	})
+}
+
+// TestNewService_EnabledNilDB verifies the startup guard: an ENABLED OIDC
+// config with a nil database must make NewService return an error, because
+// single-use state consumption is a fail-closed, DB-backed operation — an
+// enabled service that silently skipped consumption would re-open the L-3
+// replay gap. The provider's issuer uses the reserved ".invalid" TLD so that
+// a missing guard fails this test via discovery-skip (service constructed
+// with nil DB, no error) rather than via network I/O.
+func TestNewService_EnabledNilDB(t *testing.T) {
+	key := []byte("test-state-key-32-bytes-long-000")
+	cfg := &config.Config{OIDC: config.OIDCConfig{
+		Enabled: true,
+		Providers: []config.OIDCProviderConfig{
+			{Name: "fake", IssuerURL: "https://unreachable.invalid", ClientID: "c", ClientSecret: "s"},
+		},
+	}}
+
+	svc, err := NewService(context.Background(), cfg, key, nil)
+	if err == nil {
+		if svc != nil {
+			svc.Close()
+		}
+		t.Fatal("enabled OIDC config with nil DB must fail NewService (fail closed at startup)")
+	}
 }
 
 // TestEnabled covers the nil-receiver and zero-value guards plus the
@@ -405,7 +445,6 @@ func TestHandleCallback_UnknownProvider(t *testing.T) {
 // before the token exchange.
 func TestHandleCallback_InvalidState(t *testing.T) {
 	svc := newTestService(t)
-	svc.usedStates = newStateStore()
 	t.Cleanup(svc.Close)
 	_, err := svc.HandleCallback(context.Background(), "test", "code", "not-a-state", "https://cb.example.com/cb")
 	if err == nil {
@@ -418,7 +457,6 @@ func TestHandleCallback_InvalidState(t *testing.T) {
 // identity on a mismatched/replayed callback).
 func TestHandleCallback_StateProviderMismatch(t *testing.T) {
 	svc := newTestService(t)
-	svc.usedStates = newStateStore()
 	t.Cleanup(svc.Close)
 	state, _, _, _, err := newStateToken(svc.stateKey, "other")
 	if err != nil {
@@ -435,18 +473,48 @@ func TestHandleCallback_StateProviderMismatch(t *testing.T) {
 // exchange (so the network is never hit).
 func TestHandleCallback_StateReplayRejected(t *testing.T) {
 	svc := newTestService(t)
-	svc.usedStates = newStateStore()
+	svc.db = testutil.NewTestDB(t)
 	t.Cleanup(svc.Close)
 	state, _, _, _, err := newStateToken(svc.stateKey, "test")
 	if err != nil {
 		t.Fatalf("newStateToken: %v", err)
 	}
 	// Simulate a prior consumption (a first callback that started processing).
-	if !svc.usedStates.consume(state) {
-		t.Fatal("first consume should succeed")
+	fresh, err := svc.consumeState(context.Background(), state)
+	if err != nil || !fresh {
+		t.Fatalf("first consume = (%v, %v), want (true, nil)", fresh, err)
 	}
 	_, err = svc.HandleCallback(context.Background(), "test", "code", state, "https://cb.example.com/cb")
 	if err == nil || !strings.Contains(err.Error(), "already consumed") {
 		t.Errorf("expected replay (already consumed) error, got %v", err)
+	}
+}
+
+// TestHandleCallback_ConsumeFailureFailsClosed pins the fail-closed wiring in
+// the callback: if the DB-backed consumption returns an error (as opposed to
+// a clean replay), HandleCallback must abort BEFORE the IdP token exchange.
+// The IdP endpoint on the dummy provider is unreachable, so a callback that
+// reaches the exchange fails with a token-exchange error — distinguishable
+// from the consumption error asserted here.
+func TestHandleCallback_ConsumeFailureFailsClosed(t *testing.T) {
+	svc := newTestService(t)
+	svc.db = testutil.NewTestDB(t)
+	t.Cleanup(svc.Close)
+
+	db := svc.db
+	if _, err := db.ExecContext(context.Background(), `DROP TABLE oidc_consumed_states`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	state, _, _, _, err := newStateToken(svc.stateKey, "test")
+	if err != nil {
+		t.Fatalf("newStateToken: %v", err)
+	}
+	_, err = svc.HandleCallback(context.Background(), "test", "code", state, "https://cb.example.com/cb")
+	if err == nil {
+		t.Fatal("callback with a broken state store must fail")
+	}
+	if strings.Contains(err.Error(), "token exchange") {
+		t.Errorf("callback reached the token exchange despite a state-store failure: %v", err)
 	}
 }
