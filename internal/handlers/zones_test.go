@@ -817,6 +817,85 @@ func TestViewZone_GoroutinePanicRecovery(t *testing.T) {
 	}
 }
 
+// panicZone wraps a ZoneService and panics on GetZone; panicRecords panics on
+// ListRecords. Both feed TestViewZone_GoroutinePanicRecoveryFatal: the fatal
+// fetch paths must convert the panic into the internal-error branch (HTTP 500
+// via renderInternalError) instead of crashing the process.
+type panicZone struct {
+	pdns.ZoneService
+}
+
+func (p *panicZone) GetZone(ctx context.Context, zoneID string) (*models.Zone, error) {
+	panic("simulated PDNS client panic")
+}
+
+type panicRecords struct {
+	pdns.ZoneService
+}
+
+func (p *panicRecords) ListRecords(ctx context.Context, zoneID string) ([]models.RRSet, error) {
+	panic("simulated PDNS client panic")
+}
+
+// TestViewZone_GoroutinePanicRecoveryFatal pins the fatal half of the M-BIZ3
+// contract: a panic in the GetZone or ListRecords goroutines is recovered into
+// the fatal error branch — renderInternalError with HTTP 500 — and never
+// escapes the handler. Without the recover in the goroutine this test would
+// crash the test runner.
+func TestViewZone_GoroutinePanicRecoveryFatal(t *testing.T) {
+	newRequest := func(ctx context.Context) (*httptest.ResponseRecorder, *http.Request) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/example.com", nil)
+		r.SetPathValue("zone_id", "example.com")
+		r = r.WithContext(ctx)
+		return w, r
+	}
+
+	t.Run("GetZone panic renders internal error", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(models.Zone{
+				ID: "example.com", Name: "example.com", Kind: "Native",
+			})
+		})
+		defer pdnsSrv.Close()
+
+		h.PDNS = &panicZone{ZoneService: h.PDNS}
+
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+		w, r := newRequest(ctx)
+		h.ViewZone(w, r)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("expected 500 (panic recovered into fatal branch), got %d", w.Code)
+		}
+	})
+
+	t.Run("ListRecords panic renders internal error", func(t *testing.T) {
+		h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(models.Zone{
+				ID: "example.com", Name: "example.com", Kind: "Native",
+			})
+		})
+		defer pdnsSrv.Close()
+
+		h.PDNS = &panicRecords{ZoneService: h.PDNS}
+
+		user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+		ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+		w, r := newRequest(ctx)
+		h.ViewZone(w, r)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("expected 500 (panic recovered into fatal branch), got %d", w.Code)
+		}
+	})
+}
+
 func TestRectifyZone_Success(t *testing.T) {
 	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

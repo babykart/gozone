@@ -521,102 +521,91 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// fetchResult carries one concurrent fetch's outcome to ViewZone.
+type fetchResult[T any] struct {
+	value T
+	err   error
+}
+
+// fetchAsync runs fn in its own goroutine and delivers its result on a
+// buffered one-shot channel. The channel has capacity 1 and the goroutine
+// sends exactly once and never closes it: the receiver simply reads the
+// single value in the order it drains the results, and an early fatal-error
+// return leaves the remaining goroutines finishing into their buffered
+// channels without blocking.
+//
+// A panic in fn (nil deref in the PDNS client, JSON decode, …) is recovered,
+// logged with the op name and zone ID, and converted into an error carrying
+// the zero value — otherwise the receiver would block forever and the panic
+// would crash the process (the request-level ErrorHandler middleware does
+// not cover spawned goroutines). ViewZone's fatal receivers propagate that
+// error to renderInternalError; the degradable receivers read only the value
+// (nil on panic), so the section degrades gracefully.
+func fetchAsync[T any](op, zoneID string, fn func() (T, error)) <-chan fetchResult[T] {
+	ch := make(chan fetchResult[T], 1)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic in ViewZone goroutine", "op", op, "panic", rec, "zone_id", zoneID)
+				var zero T
+				ch <- fetchResult[T]{zero, fmt.Errorf("internal error: %v", rec)}
+			}
+		}()
+		v, err := fn()
+		ch <- fetchResult[T]{v, err}
+	}()
+	return ch
+}
+
 // ViewZone renders a zone detail page with its records, activity logs, and
 // metadata (GET /zones/{zone_id}).
 func (h *Handler) ViewZone(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUser(r)
 	zoneID := r.PathValue("zone_id")
+	ctx := r.Context()
 
 	// GetZone and ListRecords share the same path dependency (zoneID) but are
-	// independent of each other. GetMetadata and GetServer are also independent.
-	// Run all four concurrently to reduce total latency from ~4× RTT to ~1× RTT.
-	type zoneRes struct {
-		v   *models.Zone
-		err error
-	}
-	type recordsRes struct {
-		v   []models.RRSet
-		err error
-	}
-	zoneCh := make(chan zoneRes, 1)
-	recordsCh := make(chan recordsRes, 1)
-	metadataCh := make(chan []models.Metadata, 1)
-	serverCh := make(chan *models.ServerInfo, 1)
-	cryptoCh := make(chan []models.Cryptokey, 1)
-
-	// Each goroutine has a defer/recover so a panic (nil deref in the PDNS
-	// client, JSON decode, …) is logged and the channel still receives a
-	// fallback value — otherwise the receiver would block forever and the
-	// panic would crash the process (the request-level ErrorHandler middleware
-	// does not cover spawned goroutines). (M-BIZ3)
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("panic in ViewZone goroutine", "op", "GetZone", "panic", rec, "zone_id", zoneID)
-				zoneCh <- zoneRes{nil, fmt.Errorf("internal error: %v", rec)}
-			}
-		}()
-		z, err := h.PDNS.GetZone(r.Context(), zoneID)
-		zoneCh <- zoneRes{z, err}
-	}()
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("panic in ViewZone goroutine", "op", "ListRecords", "panic", rec, "zone_id", zoneID)
-				recordsCh <- recordsRes{nil, fmt.Errorf("internal error: %v", rec)}
-			}
-		}()
-		recs, err := h.PDNS.ListRecords(r.Context(), zoneID)
-		recordsCh <- recordsRes{recs, err}
-	}()
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("panic in ViewZone goroutine", "op", "GetMetadata", "panic", rec, "zone_id", zoneID)
-				metadataCh <- nil
-			}
-		}()
-		m, _ := h.PDNS.GetMetadata(r.Context(), zoneID)
-		metadataCh <- m
-	}()
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("panic in ViewZone goroutine", "op", "GetServer", "panic", rec)
-				serverCh <- nil
-			}
-		}()
-		s, _ := h.PDNS.GetServer(r.Context())
-		serverCh <- s
-	}()
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("panic in ViewZone goroutine", "op", "ListCryptokeys", "panic", rec, "zone_id", zoneID)
-				cryptoCh <- nil
-			}
-		}()
-		ck, _ := h.PDNS.ListCryptokeys(r.Context(), zoneID)
-		cryptoCh <- ck
-	}()
+	// independent of each other. GetMetadata, GetServer and ListCryptokeys are
+	// also independent. Run all five concurrently to reduce total latency
+	// from ~5× RTT to ~1× RTT. GetZone/ListRecords errors are fatal;
+	// the degradable fetches swallow fetch errors inside the closure so a
+	// failing section never takes the whole page down.
+	zoneCh := fetchAsync("GetZone", zoneID, func() (*models.Zone, error) {
+		return h.PDNS.GetZone(ctx, zoneID)
+	})
+	recordsCh := fetchAsync("ListRecords", zoneID, func() ([]models.RRSet, error) {
+		return h.PDNS.ListRecords(ctx, zoneID)
+	})
+	metadataCh := fetchAsync("GetMetadata", zoneID, func() ([]models.Metadata, error) {
+		m, _ := h.PDNS.GetMetadata(ctx, zoneID)
+		return m, nil
+	})
+	serverCh := fetchAsync("GetServer", zoneID, func() (*models.ServerInfo, error) {
+		s, _ := h.PDNS.GetServer(ctx)
+		return s, nil
+	})
+	cryptoCh := fetchAsync("ListCryptokeys", zoneID, func() ([]models.Cryptokey, error) {
+		ck, _ := h.PDNS.ListCryptokeys(ctx, zoneID)
+		return ck, nil
+	})
 
 	zr := <-zoneCh
 	if zr.err != nil {
 		h.renderInternalError(w, r, "Zone not found", zr.err)
 		return
 	}
-	zone := zr.v
+	zone := zr.value
 
 	rr := <-recordsCh
 	if rr.err != nil {
 		h.renderInternalError(w, r, "Failed to fetch records", rr.err)
 		return
 	}
-	records := rr.v
+	records := rr.value
 
-	metadata := <-metadataCh
-	srv := <-serverCh
-	cryptokeys := <-cryptoCh
+	metadata := (<-metadataCh).value
+	srv := (<-serverCh).value
+	cryptokeys := (<-cryptoCh).value
 
 	search := strings.TrimSpace(r.URL.Query().Get("search"))
 	if search != "" {
