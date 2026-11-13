@@ -1315,14 +1315,28 @@ details summary {
     }
 }
 
-/* Activity log diff display (not BIND format) */
-.activity-diff {
-    margin-top: 0.5rem;
-}
-.activity-diff summary {
-    cursor: pointer;
+/* Activity log change display: the Before/After diff lives in a full-width
+   row (colspan=5) toggled below the log row, so opening a change cannot
+   re-flow the ACTION/ZONE/USER/TIME columns of the auto-layout table. */
+.activity-diff-toggle {
+    display: inline-block;
+    margin-top: 0.25rem;
+    padding: 0;
+    border: none;
+    background: none;
     color: var(--primary);
     font-size: 0.875rem;
+    cursor: pointer;
+}
+.activity-change-row td {
+    background: var(--bg);
+}
+/* Zero-width + min-width:100% on the spanning cell's content: the cell then
+   contributes no intrinsic width to the auto table layout, so even very long
+   payloads cannot redistribute the ACTION/ZONE/USER/TIME columns. */
+.activity-change-row .diff-grid {
+    width: 0;
+    min-width: 100%;
 }
 .diff-grid {
     display: grid;

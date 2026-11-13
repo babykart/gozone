@@ -975,6 +975,18 @@ function filterOptions(input) {
     }
 }
 
+// Activity log: "View change" toggles the entry's full-width diff row
+// (colspan=5, start-hidden via the .hidden class) below its log row. The
+// button keeps aria-expanded/aria-controls in sync; the table's main
+// columns never re-flow because the diff is not inside a cell.
+function toggleActivityChange(btn) {
+    var panel = document.getElementById(btn.getAttribute('aria-controls'));
+    if (!panel) return;
+    var show = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !show);
+    btn.setAttribute('aria-expanded', show ? 'true' : 'false');
+}
+
 function initDelegatedListeners() {
     document.addEventListener('click', function(e) {
         var actionTarget = e.target.closest('[data-action]');
@@ -1014,6 +1026,10 @@ function initDelegatedListeners() {
                 case 'bulk-edit-selected':
                     e.preventDefault();
                     bulkEditSelected();
+                    return;
+                case 'toggle-activity-change':
+                    e.preventDefault();
+                    toggleActivityChange(actionTarget);
                     return;
             }
             // Bulk-delete buttons dispatch through the factory-built controllers.
@@ -1143,6 +1159,7 @@ if (typeof module !== 'undefined' && module.exports) {
         storageSet: storageSet,
         syncCommentClearValue: syncCommentClearValue,
         syncSiblingRows: syncSiblingRows,
+        toggleActivityChange: toggleActivityChange,
         updateRowComments: updateRowComments
     };
 }

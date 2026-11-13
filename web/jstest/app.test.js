@@ -1214,3 +1214,71 @@ test('saveRecordRow success path still shows a success notification and does not
     assert.ok(ctx.notificationEl.className.indexOf('notification-success') !== -1);
     assert.ok(ctx.notificationEl.className.indexOf('notification-error') === -1);
 });
+
+// --- Activity log "View change" toggle (toggleActivityChange) -----------------
+//
+// The Before/After diff of an activity entry lives in a full-width sibling row
+// (colspan=5) that starts hidden via the .hidden class; the toggle button is
+// wired through the delegated click listener so opening a change never
+// re-flows the log row's cells (the old in-cell <details> did).
+
+// stubActivityToggle models the <button data-action="toggle-activity-change"
+// aria-controls="…" aria-expanded="false"> element. closest() reports the
+// element itself for the delegated [data-action] probe and null otherwise,
+// so the click handler does not mistake the button for a confirm form.
+function stubActivityToggle(panelId) {
+    const attrs = { 'data-action': 'toggle-activity-change', 'aria-controls': panelId, 'aria-expanded': 'false' };
+    return {
+        attrs,
+        getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+        setAttribute(name, value) { attrs[name] = value; },
+        closest(sel) { return sel === '[data-action]' ? this : null; }
+    };
+}
+
+// driveToggle wires the delegated listeners against doc and clicks the button
+// while the stub document is still installed (the handler runs at dispatch).
+function driveToggle(doc, btn) {
+    withDocument(doc, () => {
+        app.initDelegatedListeners();
+        doc.dispatch('click', btn);
+    });
+}
+
+test('toggleActivityChange shows the hidden change row and flips aria-expanded', () => {
+    const doc = stubDocument();
+    const panel = withClassList({ className: 'activity-change-row hidden' });
+    doc.setElement('activity-change-7', panel);
+    const btn = stubActivityToggle('activity-change-7');
+
+    driveToggle(doc, btn);
+
+    assert.strictEqual(panel.classList.contains('hidden'), false, 'first click removes .hidden from the change row');
+    assert.strictEqual(btn.attrs['aria-expanded'], 'true', 'aria-expanded reflects the open row');
+});
+
+test('toggleActivityChange hides the change row again on the second click', () => {
+    const doc = stubDocument();
+    const panel = withClassList({ className: 'activity-change-row hidden' });
+    doc.setElement('activity-change-7', panel);
+    const btn = stubActivityToggle('activity-change-7');
+
+    withDocument(doc, () => {
+        app.initDelegatedListeners();
+        doc.dispatch('click', btn);
+        doc.dispatch('click', btn);
+    });
+
+    assert.strictEqual(panel.classList.contains('hidden'), true, 'second click re-adds .hidden');
+    assert.strictEqual(btn.attrs['aria-expanded'], 'false', 'aria-expanded reflects the closed row');
+});
+
+test('toggleActivityChange is a no-op when the change row is missing', () => {
+    const doc = stubDocument();
+    // No element registered for the id: getElementById returns null.
+    const btn = stubActivityToggle('activity-change-7');
+
+    driveToggle(doc, btn);
+
+    assert.strictEqual(btn.attrs['aria-expanded'], 'false', 'a missing panel leaves aria-expanded untouched');
+});

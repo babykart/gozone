@@ -53,29 +53,33 @@
                             <td>
                                 {{.Details}}
                                 {{if or .OldValue .NewValue}}
-                                <details class="activity-diff">
-                                    <summary>View change</summary>
-                                    <div class="diff-grid">
-                                        {{if .OldValue}}
-                                        <div class="diff-panel diff-removed">
-                                            <h4>Before</h4>
-                                            <pre>{{.OldValue}}</pre>
-                                        </div>
-                                        {{end}}
-                                        {{if .NewValue}}
-                                        <div class="diff-panel diff-added">
-                                            <h4>After</h4>
-                                            <pre>{{.NewValue}}</pre>
-                                        </div>
-                                        {{end}}
-                                    </div>
-                                </details>
+                                <button type="button" class="activity-diff-toggle" data-action="toggle-activity-change" aria-expanded="false" aria-controls="activity-change-{{.ID}}">View change</button>
                                 {{end}}
                             </td>
                             <td>{{if .ZoneID}}<code>{{.ZoneID}}</code>{{end}}</td>
                             <td>{{.Username}}</td>
                             <td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
                         </tr>
+                        {{if or .OldValue .NewValue}}
+                        <tr class="activity-change-row hidden" id="activity-change-{{.ID}}">
+                            <td colspan="5">
+                                <div class="diff-grid">
+                                    {{if .OldValue}}
+                                    <div class="diff-panel diff-removed">
+                                        <h4>Before</h4>
+                                        <pre>{{.OldValue}}</pre>
+                                    </div>
+                                    {{end}}
+                                    {{if .NewValue}}
+                                    <div class="diff-panel diff-added">
+                                        <h4>After</h4>
+                                        <pre>{{.NewValue}}</pre>
+                                    </div>
+                                    {{end}}
+                                </div>
+                            </td>
+                        </tr>
+                        {{end}}
                         {{end}}
                     </tbody>
                 </table>
