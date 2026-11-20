@@ -4673,7 +4673,7 @@ func TestMergeBatchRRSets_CaseVariantExisting(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeBatchRRSets(newRRSets, existing)
+	merged, err := mergeBatchRRSets(newRRSets, existing, false)
 	if err != nil {
 		t.Fatalf("mergeBatchRRSets: %v", err)
 	}

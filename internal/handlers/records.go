@@ -492,12 +492,12 @@ func (h *Handler) BatchCreateRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mergedMap, err := mergeBatchRRSets(rrsets, existing)
+	mergedMap, err := mergeBatchRRSets(rrsets, existing, false)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return
 	}
-	merged, err := finalizeBatchRRSets(mergedMap, pendingComments)
+	merged, err := finalizeBatchRRSets(mergedMap, pendingComments, false)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return
@@ -659,9 +659,12 @@ func collectBatchRows(names, types, contents, ttls, priorities, comments, commen
 // as an error instead of the first row's value silently winning. When any row
 // of the group carries an explicit TTL it applies to the merged RRSet; when
 // none does, the existing RRSet's TTL is kept — inheriting the submission
-// default here would silently rewrite the siblings' TTL. Returns the merged
-// RRSets keyed by "name|type".
-func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[string]*models.RRSet, error) {
+// default here would silently rewrite the siblings' TTL. The explicitTTL flag
+// marks callers whose rows ALWAYS carry a deliberate, validated TTL (zone
+// imports resolve absent TTLs to an effective value upstream): there, a
+// parsed 0 is a real no-cache TTL, not the batch-form "unset" sentinel.
+// Returns the merged RRSets keyed by "name|type".
+func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet, explicitTTL bool) (map[string]*models.RRSet, error) {
 	existingMap := make(map[string]*models.RRSet)
 	for i := range existing {
 		existingMap[dnsops.RRSetKey(existing[i].Name, existing[i].Type)] = &existing[i]
@@ -677,8 +680,8 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 		key := dnsops.RRSetKey(newRR.Name, newRR.Type)
 		if _, seen := explicit[key]; seen {
 			// Subsequent row of an already-started group.
-			if newRR.TTL > 0 {
-				if e := explicit[key]; e > 0 && newRR.TTL != e {
+			if explicitTTL || newRR.TTL > 0 {
+				if e := explicit[key]; !explicitTTL && e > 0 && newRR.TTL != e {
 					return nil, fmt.Errorf("conflicting TTLs (%d and %d) for %s record %s: records in one RRSet share a single TTL — use the same value on every row", e, newRR.TTL, newRR.Type, newRR.Name)
 				}
 				explicit[key] = newRR.TTL
@@ -701,7 +704,7 @@ func mergeBatchRRSets(newRRSets []models.RRSet, existing []models.RRSet) (map[st
 			records = append(records, clone.Records...)
 			records = append(records, newRR.Records...)
 			clone.Records = records
-			if newRR.TTL > 0 {
+			if explicitTTL || newRR.TTL > 0 {
 				clone.TTL = newRR.TTL
 			}
 			merged[key] = &clone
@@ -746,13 +749,14 @@ func splitEmbeddedPriorities(rrsets []models.RRSet) []models.RRSet {
 // reflects the finalised, post-normalisation record set. Map iteration order
 // is non-deterministic, but each RRSet is sent as an independent PATCH so the
 // order does not matter.
-func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment) ([]models.RRSet, error) {
+func finalizeBatchRRSets(merged map[string]*models.RRSet, pending map[string][]batchPendingComment, explicitTTL bool) ([]models.RRSet, error) {
 	var out []models.RRSet
 	for key, rr := range merged {
 		// Last-resort TTL resolution: a merged RRSet that neither inherited an
 		// existing TTL (new RRSet) nor carried an explicit one still needs a
-		// positive value for PowerDNS.
-		if rr.TTL <= 0 {
+		// positive value for PowerDNS. Callers with explicitTTL rows resolve
+		// their TTLs upstream, so a 0 there is deliberate and must be kept.
+		if rr.TTL <= 0 && !explicitTTL {
 			rr.TTL = defaultRecordTTL
 		}
 		for i := range rr.Records {

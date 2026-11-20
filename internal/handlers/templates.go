@@ -450,12 +450,12 @@ func (h *Handler) ApplyTemplateToZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	templateReadForm := splitEmbeddedPriorities(rrsets)
-	merged, err := mergeBatchRRSets(templateReadForm, existing)
+	merged, err := mergeBatchRRSets(templateReadForm, existing, false)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return
 	}
-	patch, err := finalizeBatchRRSets(merged, nil)
+	patch, err := finalizeBatchRRSets(merged, nil, false)
 	if err != nil {
 		h.renderError(w, r, err.Error())
 		return

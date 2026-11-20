@@ -189,7 +189,7 @@ func (h *Handler) ImportZone(w http.ResponseWriter, r *http.Request) {
 // sent state consistent).
 func buildImportMergePatch(rrsets, existing []models.RRSet) ([]models.RRSet, error) {
 	converted := splitEmbeddedPriorities(rrsets)
-	mergedMap, err := mergeBatchRRSets(converted, existing)
+	mergedMap, err := mergeBatchRRSets(converted, existing, true)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func buildImportMergePatch(rrsets, existing []models.RRSet) ([]models.RRSet, err
 		mergedMap[key] = &clone
 	}
 
-	return finalizeBatchRRSets(mergedMap, nil)
+	return finalizeBatchRRSets(mergedMap, nil, true)
 }
 
 const (
@@ -341,6 +341,12 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 	raw := make([]bindRecord, 0)
 	var skipped []skippedLine
 	lastOwner := "" // owner of the previous record, for RFC 1035 inheritance
+	// rrsetTTLs tracks the effective TTL already accepted per (name, type)
+	// so a divergent TTL inside one RRSet is rejected line-attributed here,
+	// before grouping (the grouping step cannot attribute a conflict to a
+	// line). Same rule as the CSV importer.
+	type key struct{ name, rtype string }
+	rrsetTTLs := make(map[key]int)
 
 	for _, bl := range lines {
 		line := bl.text
@@ -425,6 +431,18 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 		if _, _, perr := prepareRecordContent(rec.rtype, rest, prio); perr != nil {
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: perr.Error()})
 			continue
+		}
+		// The whole RRSet shares one TTL: a record whose TTL differs from an
+		// earlier record of the same name/type is rejected with a
+		// line-attributed reason instead of silently winning or losing (the
+		// grouping step cannot attribute a conflict to a line). Same rule as
+		// the CSV path.
+		gk := key{rec.name, rec.rtype}
+		if first, seen := rrsetTTLs[gk]; seen && first != rec.ttl {
+			skipped = append(skipped, skippedLine{Line: bl.text, Reason: fmt.Sprintf("ttl %d differs from the %d already set for %s/%s", rec.ttl, first, rec.name, rec.rtype)})
+			continue
+		} else if !seen {
+			rrsetTTLs[gk] = rec.ttl
 		}
 		raw = append(raw, rec)
 	}
@@ -786,6 +804,9 @@ func groupBindRecords(raw []bindRecord) []models.RRSet {
 	rrsets := make([]models.RRSet, 0, len(order))
 	for _, k := range order {
 		recs := groups[k]
+		// Unreachable-for-divergence: parseBindZone rejects any record
+		// whose TTL differs from its group's first accepted TTL, so every
+		// record here already shares one TTL and this loop keeps it.
 		ttl := recs[0].ttl
 		for _, r := range recs {
 			if r.ttl != ttl {
@@ -859,15 +880,45 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 		// Reverse the export's formula-injection escaping so the stored
 		// value is the operator's original text (see dnsops.SanitizeCSVField).
 		content := dnsops.RestoreCSVField(getCSVField(row, headers, "content"))
+		// A PRESENT but unparseable value is a data-entry error: reject the
+		// row like the BIND parser rejects its lines instead of silently
+		// substituting defaults. Absent/empty fields keep their defaults
+		// (ttl 3600, priority 0, disabled false); ranges are then enforced
+		// by validateParsedRecord below.
+		ttlText := strings.TrimSpace(getCSVField(row, headers, "ttl"))
 		ttl := 3600
-		if v, err := strconv.Atoi(getCSVField(row, headers, "ttl")); err == nil && v > 0 {
+		if ttlText != "" {
+			v, err := strconv.Atoi(ttlText)
+			if err != nil {
+				skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: fmt.Sprintf("invalid ttl value %q", ttlText)})
+				continue
+			}
 			ttl = v
 		}
+
+		priorityText := strings.TrimSpace(getCSVField(row, headers, "priority"))
 		priority := 0
-		if v, err := strconv.Atoi(getCSVField(row, headers, "priority")); err == nil {
+		if priorityText != "" {
+			v, err := strconv.Atoi(priorityText)
+			if err != nil {
+				skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: fmt.Sprintf("invalid priority value %q", priorityText)})
+				continue
+			}
 			priority = v
 		}
-		disabled := getCSVField(row, headers, "disabled") == "true"
+
+		disabledText := strings.TrimSpace(getCSVField(row, headers, "disabled"))
+		disabled := false
+		if disabledText != "" {
+			switch strings.ToLower(disabledText) {
+			case "true":
+				disabled = true
+			case "false":
+			default:
+				skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: fmt.Sprintf("invalid disabled value %q (want true or false)", disabledText)})
+				continue
+			}
+		}
 
 		if name == "" || rtype == "" || content == "" {
 			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: "missing required name, type or content field"})
@@ -907,6 +958,9 @@ func parseCSVZone(reader *csv.Reader, zoneID string) ([]models.RRSet, []skippedL
 		if _, exists := groups[k]; !exists {
 			order = append(order, k)
 			groupTTLs[k] = ttl
+		} else if groupTTLs[k] != ttl {
+			skipped = append(skipped, skippedLine{Line: strings.Join(row, ","), Reason: fmt.Sprintf("ttl %d differs from the %d already set for %s/%s", ttl, groupTTLs[k], name, rtype)})
+			continue
 		}
 
 		groups[k] = append(groups[k], models.RecordInfo{

@@ -2468,6 +2468,95 @@ www IN A 5.6.7.8`
 	t.Run("replace", func(t *testing.T) { run(t, "replace") })
 }
 
+// TestImportZone_ExplicitZeroTTLSurvivesMergeMode pins the authoritative-TTL
+// contract of the import merge path: the importers resolve every TTL to an
+// effective value (default 3600 when the cell/directive is absent, explicit
+// value otherwise — including a deliberate 0), so the merge must treat the
+// parsed TTL as authoritative instead of applying the batch-form "0 = unset"
+// convention (which silently rewrote a zero-TTL import to the default or the
+// existing RRSet's TTL depending on zone state).
+func TestImportZone_ExplicitZeroTTLSurvivesMergeMode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		existing   []models.RRSet
+		mode       string
+		csvContent string
+	}{
+		{
+			name:       "merge into a new rrset keeps ttl 0",
+			mode:       "merge",
+			csvContent: "name,type,content,ttl,priority,disabled\nwww,A,192.0.2.1,0,0,false",
+		},
+		{
+			name: "merge into an existing rrset overrides its ttl with 0",
+			existing: []models.RRSet{{
+				Name: "www.example.com.", Type: "A", TTL: 300,
+				Records: []models.RecordInfo{{Content: "1.2.3.4", Disabled: false}},
+			}},
+			mode:       "merge",
+			csvContent: "name,type,content,ttl,priority,disabled\nwww,A,5.6.7.8,0,0,false",
+		},
+		{
+			name:       "replace mode keeps ttl 0",
+			mode:       "replace",
+			csvContent: "name,type,content,ttl,priority,disabled\nwww,A,192.0.2.1,0,0,false",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var patched []models.RRSet
+			h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, tc.existing, &patched))
+			defer srv.Close()
+
+			testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+			w := postImport(t, h, "example.com.", importBody("test.csv", "text/csv", tc.csvContent, tc.mode))
+			assertImportRedirect(t, w)
+
+			www := findPatchedRRSet(patched, "www.example.com.", "A")
+			if www == nil {
+				t.Fatalf("PATCH carries no www/A RRSet: %+v", patched)
+			}
+			if www.TTL != 0 {
+				t.Fatalf("explicit ttl 0 must survive the import, got ttl %d", www.TTL)
+			}
+		})
+	}
+}
+
+// TestImportZone_ZeroTTLExportRoundTrip pins the lossless round trip: a
+// zero-TTL RRSet exported with RenderZoneCSV (ttl cell "0") re-imports in the
+// default merge mode with ttl 0 — not the batch-form default 3600.
+func TestImportZone_ZeroTTLExportRoundTrip(t *testing.T) {
+	t.Parallel()
+	exported := dnsops.RenderZoneCSV(&models.Zone{Name: "example.com."}, []models.RRSet{{
+		Name: "www.example.com.", Type: "A", TTL: 0,
+		Records: []models.RecordInfo{{Content: "192.0.2.1", Disabled: false}},
+	}})
+	if !strings.Contains(exported, ",0,") {
+		t.Fatalf("test setup: export must carry the ttl 0 cell, got %q", exported)
+	}
+
+	var patched []models.RRSet
+	h, srv := newTestHandlerWithPDNS(t, importCaptureMock(t, nil, &patched))
+	defer srv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	w := postImport(t, h, "example.com.", importBody("export.csv", "text/csv", exported, ""))
+	assertImportRedirect(t, w)
+
+	www := findPatchedRRSet(patched, "www.example.com.", "A")
+	if www == nil {
+		t.Fatalf("PATCH carries no www/A RRSet: %+v", patched)
+	}
+	if www.TTL != 0 {
+		t.Fatalf("exported ttl 0 must re-import as ttl 0, got ttl %d", www.TTL)
+	}
+}
+
 // TestImportZone_MixedCaseOwnerMergeAndAudit pins canonical key matching: the
 // pre-import zone state may carry a differently-cased owner name (PowerDNS
 // preserves case); the merge must match it against the imported canonical
@@ -2832,6 +2921,228 @@ func TestParseBindZone_TTLClassOrderAndZero(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestParseCSVZone_RejectsInvalidFieldValues pins strict CSV value parsing: a
+// PRESENT but unparseable ttl/priority/disabled cell is a data-entry error and
+// the row is skipped with a specific reason, exactly like the BIND parser
+// rejects its lines. Empty cells keep their defaults (ttl 3600, priority 0,
+// disabled false); an explicit ttl 0 stays an explicit zero; TRUE/False
+// casing is accepted.
+func TestParseCSVZone_RejectsInvalidFieldValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		row         string
+		wantRRSets  int
+		wantSkipped int
+		wantReason  string
+		wantTTL     int
+		wantPrio    int
+		wantDisable bool
+	}{
+		{
+			name:        "invalid ttl is rejected",
+			row:         "www,A,192.0.2.1,abc,0,false",
+			wantRRSets:  0,
+			wantSkipped: 1,
+			wantReason:  `invalid ttl value "abc"`,
+		},
+		{
+			name:        "empty ttl keeps default",
+			row:         "www,A,192.0.2.1,,0,false",
+			wantRRSets:  1,
+			wantSkipped: 0,
+			wantTTL:     3600,
+		},
+		{
+			name:        "explicit zero ttl honored",
+			row:         "www,A,192.0.2.1,0,0,false",
+			wantRRSets:  1,
+			wantSkipped: 0,
+			wantTTL:     0,
+		},
+		{
+			name:        "invalid priority is rejected",
+			row:         "mail.example.com.,MX,mail.example.com.,3600,abc,false",
+			wantRRSets:  0,
+			wantSkipped: 1,
+			wantReason:  `invalid priority value "abc"`,
+		},
+		{
+			name:        "empty priority keeps default",
+			row:         "mail.example.com.,MX,mail.example.com.,3600,,false",
+			wantRRSets:  1,
+			wantSkipped: 0,
+			wantTTL:     3600,
+			wantPrio:    0,
+		},
+		{
+			name:        "invalid disabled is rejected",
+			row:         "www,A,192.0.2.1,3600,0,ture",
+			wantRRSets:  0,
+			wantSkipped: 1,
+			wantReason:  `invalid disabled value "ture" (want true or false)`,
+		},
+		{
+			name:        "uppercase TRUE accepted",
+			row:         "www,A,192.0.2.1,3600,0,TRUE",
+			wantRRSets:  1,
+			wantSkipped: 0,
+			wantTTL:     3600,
+			wantDisable: true,
+		},
+		{
+			name:        "empty disabled keeps default",
+			row:         "www,A,192.0.2.1,3600,0,",
+			wantRRSets:  1,
+			wantSkipped: 0,
+			wantTTL:     3600,
+			wantDisable: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := "name,type,content,ttl,priority,disabled\n" + tc.row
+			rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+			if err != nil {
+				t.Fatalf("parseCSVZone: %v", err)
+			}
+			if len(rrsets) != tc.wantRRSets {
+				t.Fatalf("rrsets = %d, want %d (skipped: %+v)", len(rrsets), tc.wantRRSets, skipped)
+			}
+			if len(skipped) != tc.wantSkipped {
+				t.Fatalf("skipped = %d, want %d: %+v", len(skipped), tc.wantSkipped, skipped)
+			}
+			if tc.wantSkipped > 0 && !strings.Contains(skipped[0].Reason, tc.wantReason) {
+				t.Errorf("skip reason = %q, want substring %q", skipped[0].Reason, tc.wantReason)
+			}
+			if tc.wantRRSets > 0 {
+				rr := rrsets[0]
+				if rr.TTL != tc.wantTTL {
+					t.Errorf("rrset TTL = %d, want %d", rr.TTL, tc.wantTTL)
+				}
+				if len(rr.Records) != 1 {
+					t.Fatalf("rrset records = %d, want 1", len(rr.Records))
+				}
+				if rr.Records[0].Priority != tc.wantPrio {
+					t.Errorf("record priority = %d, want %d", rr.Records[0].Priority, tc.wantPrio)
+				}
+				if rr.Records[0].Disabled != tc.wantDisable {
+					t.Errorf("record disabled = %v, want %v", rr.Records[0].Disabled, tc.wantDisable)
+				}
+			}
+		})
+	}
+}
+
+// TestParseZone_RejectsDivergentRRSetTTL pins the shared RRSet TTL contract on
+// BOTH import paths: the whole RRSet shares one TTL, so a record whose TTL
+// differs from an earlier record of the same name/type is REJECTED with a
+// line-attributed reason instead of silently winning (BIND last-wins) or
+// losing (CSV first-wins). Same-TTL rows still merge into one RRSet, and the
+// BIND check is on the EFFECTIVE TTL (explicit or $TTL/default-resolved).
+func TestParseZone_RejectsDivergentRRSetTTL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CSV divergent ttl rejected", func(t *testing.T) {
+		input := "name,type,content,ttl,priority,disabled\n" +
+			"www,A,192.0.2.1,3600,0,false\n" +
+			"www,A,192.0.2.2,900,0,false"
+		rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+		if err != nil {
+			t.Fatalf("parseCSVZone: %v", err)
+		}
+		if len(rrsets) != 1 {
+			t.Fatalf("rrsets = %d, want 1 (skipped: %+v)", len(rrsets), skipped)
+		}
+		if len(skipped) != 1 {
+			t.Fatalf("skipped = %d, want 1: %+v", len(skipped), skipped)
+		}
+		if !strings.Contains(skipped[0].Reason, "ttl 900 differs from the 3600") {
+			t.Errorf("skip reason = %q, want ttl-divergence message", skipped[0].Reason)
+		}
+		if rrsets[0].TTL != 3600 || len(rrsets[0].Records) != 1 {
+			t.Errorf("first-row RRSet must survive untouched: ttl=%d records=%+v", rrsets[0].TTL, rrsets[0].Records)
+		}
+	})
+
+	t.Run("CSV same ttl merges", func(t *testing.T) {
+		input := "name,type,content,ttl,priority,disabled\n" +
+			"www,A,192.0.2.1,3600,0,false\n" +
+			"www,A,192.0.2.2,3600,0,false"
+		rrsets, skipped, err := parseCSVZone(csv.NewReader(strings.NewReader(input)), "example.com.")
+		if err != nil {
+			t.Fatalf("parseCSVZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no row should be skipped, got %+v", skipped)
+		}
+		if len(rrsets) != 1 || len(rrsets[0].Records) != 2 {
+			t.Fatalf("want 1 RRSet with 2 records, got %+v", rrsets)
+		}
+	})
+
+	t.Run("BIND divergent ttl rejected", func(t *testing.T) {
+		input := strings.Join([]string{
+			"www 3600 IN A 192.0.2.1",
+			"www 900 IN A 192.0.2.2",
+		}, "\n")
+		rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(rrsets) != 1 {
+			t.Fatalf("rrsets = %d, want 1 (skipped: %+v)", len(rrsets), skipped)
+		}
+		if len(skipped) != 1 {
+			t.Fatalf("skipped = %d, want 1: %+v", len(skipped), skipped)
+		}
+		if !strings.Contains(skipped[0].Reason, "ttl 900 differs from the 3600") {
+			t.Errorf("skip reason = %q, want ttl-divergence message", skipped[0].Reason)
+		}
+		if rrsets[0].TTL != 3600 || len(rrsets[0].Records) != 1 {
+			t.Errorf("first-row RRSet must survive untouched: ttl=%d records=%+v", rrsets[0].TTL, rrsets[0].Records)
+		}
+	})
+
+	t.Run("BIND effective-default divergence rejected", func(t *testing.T) {
+		input := strings.Join([]string{
+			"www 300 IN A 192.0.2.1",
+			"www IN A 192.0.2.2",
+		}, "\n")
+		rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(rrsets) != 1 {
+			t.Fatalf("rrsets = %d, want 1 (skipped: %+v)", len(rrsets), skipped)
+		}
+		if len(skipped) != 1 {
+			t.Fatalf("skipped = %d, want 1: %+v", len(skipped), skipped)
+		}
+		if !strings.Contains(skipped[0].Reason, "ttl 3600 differs from the 300") {
+			t.Errorf("skip reason = %q, want ttl-divergence message (default 3600 vs explicit 300)", skipped[0].Reason)
+		}
+	})
+
+	t.Run("BIND same ttl merges", func(t *testing.T) {
+		input := strings.Join([]string{
+			"www 3600 IN A 192.0.2.1",
+			"www 3600 IN A 192.0.2.2",
+		}, "\n")
+		rrsets, skipped, err := parseBindZone([]byte(input), "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		if len(rrsets) != 1 || len(rrsets[0].Records) != 2 {
+			t.Fatalf("want 1 RRSet with 2 records, got %+v", rrsets)
+		}
+	})
 }
 
 // TestParseBindZone_OwnerNamesCaseFolded pins RFC 4343 folding at the BIND
