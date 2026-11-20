@@ -1628,16 +1628,16 @@ func TestParseBindZone_TTLTimeUnits(t *testing.T) {
 }
 
 // TestParseBindZone_TTLInvalidValues pins the no-silent-ignore contract for
-// $TTL: zero, negative, unparsable and overflowing values are reported as a
-// skipped line naming the directive, not dropped. A valid record next to a
-// bad directive still imports.
+// $TTL: negative, unparsable and overflowing values are reported as a skipped
+// line naming the directive, not dropped. A valid record next to a bad
+// directive still imports. (Bare 0 is a valid $TTL since RFC 2181 allows
+// TTL 0; it is covered by TestParseBindZone_TTLClassOrderAndZero.)
 func TestParseBindZone_TTLInvalidValues(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
 		directive string
 	}{
-		{"zero", "$TTL 0"},
 		{"negative", "$TTL -5"},
 		{"unparsable", "$TTL 1x"},
 		{"overflow", "$TTL 99999999999999"},
@@ -2586,3 +2586,110 @@ func TestImportBeforeImage_CountCap(t *testing.T) {
 // (Key-matching coverage lives at handler level: mixed-case canonical keys in
 // TestImportZone_MixedCaseOwnerMergeAndAudit, unaffected-exclusion in
 // TestImportZone_BeforeImageBoundedAndExcludesUnaffected.)
+
+// TestParseBindZone_TTLClassOrderAndZero pins the RFC 1035 §5.1 preamble
+// grammar: after the owner name, the TTL and class may appear in either order
+// ([<TTL>] [<class>] or [<class>] [<TTL>]), each at most once, and an explicit
+// TTL of 0 is legal and must beat the $TTL/default fallback. Lines with more
+// than one TTL or class token, or composed durations like "1h30m", stay
+// rejected so a malformed line is reported instead of silently imported.
+func TestParseBindZone_TTLClassOrderAndZero(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		zone      string
+		wantTTL   int
+		wantSkip  bool
+		wantSkips int
+	}{
+		{
+			name:    "class_then_ttl",
+			zone:    "$TTL 3600\nwww IN 300 A 192.0.2.1",
+			wantTTL: 300,
+		},
+		{
+			name:    "unit_ttl_then_class",
+			zone:    "$TTL 3600\nwww 1h IN A 192.0.2.1",
+			wantTTL: 3600,
+		},
+		{
+			name:    "explicit_zero_ttl",
+			zone:    "$TTL 3600\nwww 0 IN A 192.0.2.1",
+			wantTTL: 0,
+		},
+		{
+			name:    "ttl_then_class_regression",
+			zone:    "$TTL 3600\nwww 300 IN A 192.0.2.1",
+			wantTTL: 300,
+		},
+		{
+			name:    "no_ttl_inherits_directive",
+			zone:    "$TTL 900\nwww IN A 192.0.2.1",
+			wantTTL: 900,
+		},
+		{
+			name:    "no_ttl_no_directive_builtin_default",
+			zone:    "www IN A 192.0.2.1",
+			wantTTL: 3600,
+		},
+		{
+			name:    "zero_directive_inherited",
+			zone:    "$TTL 0\nwww A 192.0.2.1",
+			wantTTL: 0,
+		},
+		{
+			name:    "lowercase_class_and_type",
+			zone:    "$TTL 3600\nwww in 300 a 192.0.2.1",
+			wantTTL: 300,
+		},
+		{
+			name:      "two_ttls_rejected",
+			zone:      "$TTL 3600\nwww 300 IN 7200 A 192.0.2.1",
+			wantSkip:  true,
+			wantSkips: 1,
+		},
+		{
+			name:      "composed_duration_rejected",
+			zone:      "$TTL 3600\nwww 1h30m IN A 192.0.2.1",
+			wantSkip:  true,
+			wantSkips: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rrsets, skipped, err := parseBindZone([]byte(tc.zone), "example.com.")
+			if err != nil {
+				t.Fatalf("parseBindZone: %v", err)
+			}
+			if tc.wantSkip {
+				if len(rrsets) != 0 {
+					t.Fatalf("expected no rrsets, got %+v", rrsets)
+				}
+				if len(skipped) != tc.wantSkips {
+					t.Fatalf("expected %d skipped lines, got %+v", tc.wantSkips, skipped)
+				}
+				return
+			}
+			if len(skipped) != 0 {
+				t.Fatalf("no line should be skipped, got %+v", skipped)
+			}
+			if len(rrsets) != 1 {
+				t.Fatalf("expected 1 rrset, got %+v", rrsets)
+			}
+			rr := rrsets[0]
+			if rr.Name != "www.example.com." {
+				t.Errorf("rrset name = %q, want %q", rr.Name, "www.example.com.")
+			}
+			if rr.Type != "A" {
+				t.Errorf("rrset type = %q, want A", rr.Type)
+			}
+			if rr.TTL != tc.wantTTL {
+				t.Errorf("rrset TTL = %d, want %d", rr.TTL, tc.wantTTL)
+			}
+			if len(rr.Records) != 1 || rr.Records[0].Content != "192.0.2.1" {
+				t.Errorf("rrset records = %+v, want one A record 192.0.2.1", rr.Records)
+			}
+		})
+	}
+}

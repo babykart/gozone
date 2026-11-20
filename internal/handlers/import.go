@@ -422,7 +422,9 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 // parseBindTTLValue parses a $TTL value in the BIND time grammar (RFC 1035
 // §5.1-style single-unit form): decimal digits with an optional single
 // case-insensitive unit suffix — s=seconds, m=minutes, h=hours, d=days,
-// w=weeks. Bare digits are seconds. The accepted range is clamped to
+// w=weeks. Bare digits are seconds. A bare 0 is a valid TTL (RFC 2181 allows
+// TTL 0); a unit suffix with no digits ("h") is not. Composed forms like
+// "1h30m" are out of scope and rejected. The accepted range is clamped to
 // validators.MaxRecordTTL (RFC 2181 maximum) and the unit multiplication is
 // computed in int64: PowerDNS
 // TTLs are uint32, but the parser stays conservative so the value fits every
@@ -452,6 +454,10 @@ func parseBindTTLValue(value string) (int, error) {
 		}
 		digits = value[:len(value)-1]
 	}
+	if digits == "" {
+		// A bare unit suffix with no number ("h") is not a TTL.
+		return 0, invalid
+	}
 
 	var n int64
 	for i := 0; i < len(digits); i++ {
@@ -464,7 +470,7 @@ func parseBindTTLValue(value string) (int, error) {
 		}
 	}
 	n *= unit
-	if n <= 0 || n > validators.MaxRecordTTL {
+	if n > validators.MaxRecordTTL {
 		return 0, invalid
 	}
 	return int(n), nil
@@ -571,6 +577,19 @@ func normalizeBindLines(input string) []bindLine {
 	return result
 }
 
+// allDigits reports whether s is non-empty and contains only ASCII digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // errSkipBindLine marks a line that carries no usable record and must be
 // dropped by the caller rather than turned into an empty (Name=="") RRSet.
 var errSkipBindLine = errors.New("bind line has no record")
@@ -586,21 +605,37 @@ func parseBindLine(line, origin string, defaultTTL int) (bindRecord, error) {
 	idx++
 
 	ttl := 0
+	ttlSet := false
 
-	ttlNum, err := strconv.Atoi(tokens[idx])
-	if err == nil && ttlNum > 0 {
-		ttl = ttlNum
-		idx++
-	}
-
-	if idx < len(tokens) && (strings.ToUpper(tokens[idx]) == "IN" || strings.ToUpper(tokens[idx]) == "CH" || strings.ToUpper(tokens[idx]) == "HS") {
-		idx++
-	} else if ttl == 0 && idx < len(tokens) {
-		ttlNum, err := strconv.Atoi(tokens[idx])
-		if err == nil && ttlNum > 0 {
-			ttl = ttlNum
+	// RFC 1035 §5.1: after the owner name, [<TTL>] and [<class>] may appear
+	// in either order. Consume at most one of each; the first token that is
+	// neither ends the preamble and starts the record type.
+	classSeen := false
+	for i := 0; i < 2 && idx < len(tokens); i++ {
+		tok := strings.ToUpper(tokens[idx])
+		if !classSeen && (tok == "IN" || tok == "CH" || tok == "HS") {
+			classSeen = true
 			idx++
+			continue
 		}
+		if !ttlSet {
+			if v, err := parseBindTTLValue(tokens[idx]); err == nil {
+				ttl = v
+				ttlSet = true
+				idx++
+				continue
+			}
+			// An all-digits token the unit grammar refuses is an over-bound
+			// TTL, not a record type: consume it and let record validation
+			// reject it with the RFC 2181 maximum message.
+			if allDigits(tokens[idx]) {
+				ttl = validators.MaxRecordTTL + 1
+				ttlSet = true
+				idx++
+				continue
+			}
+		}
+		break
 	}
 
 	if idx >= len(tokens) {
@@ -614,7 +649,7 @@ func parseBindLine(line, origin string, defaultTTL int) (bindRecord, error) {
 		data = strings.Join(tokens[idx:], " ")
 	}
 
-	if ttl == 0 {
+	if !ttlSet {
 		ttl = defaultTTL
 	}
 
