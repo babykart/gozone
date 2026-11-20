@@ -384,19 +384,25 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 		// RFC 1035: a line starting with whitespace omits the owner name and
 		// reuses the previous record's owner. Prepend it so parseBindLine,
 		// which always expects an owner as the first token, stays simple.
+		// lastOwner holds the previous record's RESOLVED owner (absolute,
+		// folded) — not a relative token: inheritance must survive a later
+		// $ORIGIN switch, and an absolute owner passes through
+		// resolveBindName unchanged, so inherited lines are never re-suffixed
+		// against the current origin.
 		if bl.inheritsOwner {
 			if lastOwner == "" {
 				continue
 			}
 			line = lastOwner + " " + line
-		} else if f := strings.Fields(line); len(f) > 0 {
-			lastOwner = f[0]
 		}
 
 		rec, err := parseBindLine(line, origin, defaultTTL)
 		if err != nil {
 			skipped = append(skipped, skippedLine{Line: bl.text, Reason: err.Error()})
 			continue
+		}
+		if !bl.inheritsOwner {
+			lastOwner = rec.name
 		}
 		// Resolve the RDATA domain-name fields against the current origin
 		// before validation: per RFC 1035 §5.1 a name that does not end with

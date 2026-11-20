@@ -630,6 +630,146 @@ www IN A 192.0.2.1`)
 	}
 }
 
+// findRRSetByName locates an RRSet by exact (folded) name and type.
+func findRRSetByName(rrsets []models.RRSet, name, rtype string) *models.RRSet {
+	for i := range rrsets {
+		if rrsets[i].Name == name && rrsets[i].Type == rtype {
+			return &rrsets[i]
+		}
+	}
+	return nil
+}
+
+// TestParseBindZone_InheritedOwnerSurvivesOriginSwitch pins RFC 1035 §5.1
+// owner inheritance across a $ORIGIN switch: the inherited owner is the
+// previous record's RESOLVED (absolute) owner, not the raw relative token, so
+// it must not be re-suffixed against the current origin.
+func TestParseBindZone_InheritedOwnerSurvivesOriginSwitch(t *testing.T) {
+	t.Parallel()
+
+	// Case 1: single indented line after a $ORIGIN switch — it inherits
+	// www.a.example.com., NOT www.b.example.com.
+	t.Run("single_indented_line_after_origin_switch", func(t *testing.T) {
+		data := []byte("$ORIGIN a.example.com.\nwww 300 IN A 192.0.2.1\n\n$ORIGIN b.example.com.\n    300 IN A 192.0.2.2")
+
+		rrsets, skipped, err := parseBindZone(data, "a.example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		if findRRSetByName(rrsets, "www.b.example.com.", "A") != nil {
+			t.Fatalf("inherited line must NOT resolve to www.b.example.com. (re-suffixed against the new origin): %+v", rrsets)
+		}
+		a := findRRSetByName(rrsets, "www.a.example.com.", "A")
+		if a == nil {
+			t.Fatalf("expected an RRSet www.a.example.com./A, got %+v", rrsets)
+		}
+		if a.TTL != 300 {
+			t.Errorf("TTL = %d, want 300", a.TTL)
+		}
+		assertRecordContents(t, a, []string{"192.0.2.1", "192.0.2.2"})
+	})
+
+	// Case 2: two indented lines after the switch — both inherit the
+	// resolved owner of the record before the switch.
+	t.Run("two_indented_lines_after_origin_switch", func(t *testing.T) {
+		data := []byte("$ORIGIN a.example.com.\nwww 300 IN A 192.0.2.1\n$ORIGIN b.example.com.\n    300 IN A 192.0.2.2\n    300 IN A 192.0.2.3")
+
+		rrsets, skipped, err := parseBindZone(data, "a.example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		a := findRRSetByName(rrsets, "www.a.example.com.", "A")
+		if a == nil {
+			t.Fatalf("expected an RRSet www.a.example.com./A, got %+v", rrsets)
+		}
+		assertRecordContents(t, a, []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"})
+		if len(rrsets) != 1 {
+			t.Errorf("expected exactly 1 rrset, got %+v", rrsets)
+		}
+	})
+
+	// Case 3 (regression): inheritance without an origin switch still works —
+	// prepending the resolved absolute owner must re-resolve to itself.
+	t.Run("inheritance_without_origin_switch", func(t *testing.T) {
+		data := []byte("$ORIGIN example.com.\nwww 300 IN A 192.0.2.1\n    300 IN A 192.0.2.2")
+
+		rrsets, skipped, err := parseBindZone(data, "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		www := findRRSetByName(rrsets, "www.example.com.", "A")
+		if www == nil {
+			t.Fatalf("expected an RRSet www.example.com./A, got %+v", rrsets)
+		}
+		assertRecordContents(t, www, []string{"192.0.2.1", "192.0.2.2"})
+	})
+
+	// Case 4 (regression): the resolved owner is case-folded, so an uppercase
+	// owner followed by an indented line still lands on the folded name.
+	t.Run("case_folded_inheritance", func(t *testing.T) {
+		data := []byte("$ORIGIN example.com.\nWWW 300 IN A 192.0.2.1\n    300 IN A 192.0.2.2")
+
+		rrsets, skipped, err := parseBindZone(data, "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		www := findRRSetByName(rrsets, "www.example.com.", "A")
+		if www == nil {
+			t.Fatalf("expected an RRSet www.example.com./A, got %+v", rrsets)
+		}
+		assertRecordContents(t, www, []string{"192.0.2.1", "192.0.2.2"})
+	})
+
+	// Case 5 (regression): an indented FIRST line has no previous owner and
+	// is dropped by the unchanged empty-lastOwner guard (silently — the guard
+	// is a bare continue, no skipped entry).
+	t.Run("indented_first_line_skipped", func(t *testing.T) {
+		data := []byte("$ORIGIN example.com.\n    300 IN A 192.0.2.1")
+
+		rrsets, skipped, err := parseBindZone(data, "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(rrsets) != 0 {
+			t.Fatalf("expected no rrsets, got %+v", rrsets)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("the empty-lastOwner guard silently drops the line, got skipped %+v", skipped)
+		}
+	})
+
+	// Case 6 (regression): a $TTL directive between records must not break
+	// inheritance — directive lines never touch lastOwner.
+	t.Run("ttl_directive_between_records", func(t *testing.T) {
+		data := []byte("$ORIGIN example.com.\nwww 300 IN A 192.0.2.1\n$TTL 900\n    300 IN A 192.0.2.2")
+
+		rrsets, skipped, err := parseBindZone(data, "example.com.")
+		if err != nil {
+			t.Fatalf("parseBindZone: %v", err)
+		}
+		if len(skipped) != 0 {
+			t.Fatalf("no line should be skipped, got %+v", skipped)
+		}
+		www := findRRSetByName(rrsets, "www.example.com.", "A")
+		if www == nil {
+			t.Fatalf("expected an RRSet www.example.com./A, got %+v", rrsets)
+		}
+		assertRecordContents(t, www, []string{"192.0.2.1", "192.0.2.2"})
+	})
+}
+
 func TestParseBindZone_ShortLineNoPanic(t *testing.T) {
 	t.Parallel()
 	// "www 300" is name + TTL with no class/type: idx runs past the token list.
