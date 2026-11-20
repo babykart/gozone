@@ -438,6 +438,13 @@ func (h *Handler) CreateZone(w http.ResponseWriter, r *http.Request) {
 				err)
 			return
 		}
+		recordCount := 0
+		for _, rr := range rrsets {
+			recordCount += len(rr.Records)
+		}
+		if err := logActivity(r.Context(), h.DB, activityEntry{UserID: user.ID, ZoneID: zone.ID, Action: "apply_template", Details: fmt.Sprintf("Applied template %q (%d records)", templateLabel, recordCount)}); err != nil {
+			logger.Error("failed to log apply_template activity", "zone_id", zone.ID, "error", err)
+		}
 	}
 
 	http.Redirect(w, r, "/zones", http.StatusSeeOther)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -259,7 +260,12 @@ func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
 	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
 
 	templateID := seedTemplate(t, h, "apply-on-create", "")
+	// Two records on the SAME name/type: grouping collapses them into ONE
+	// RRSet with two records, so the audited record count (2) is distinct
+	// from the RRSet count (1) — an implementation counting groups instead
+	// of records fails this test.
 	seedTemplateRecord(t, h, templateID, "@", "A", "192.0.2.1", 3600)
+	seedTemplateRecord(t, h, templateID, "@", "A", "192.0.2.2", 3600)
 
 	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
 	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
@@ -276,6 +282,81 @@ func TestCreateZone_WithTemplateAppliesRecords(t *testing.T) {
 	}
 	if !patched {
 		t.Error("expected the template records to be applied (PATCH) after zone creation")
+	}
+
+	// Applying a template on zone creation writes ONE aggregated
+	// apply_template audit row for the new zone: the Details carry the
+	// template label and the applied RECORD count (2 — the sum of the
+	// records across the substituted RRSets, not the RRSet group count),
+	// alongside the create_zone row.
+	var applyCount int
+	var details string
+	h.DB.QueryRow("SELECT COUNT(*), COALESCE(MAX(details), '') FROM activity_logs WHERE action='apply_template' AND zone_id='newzone.com.'").Scan(&applyCount, &details)
+	if applyCount != 1 {
+		t.Fatalf("expected exactly 1 apply_template audit row, got %d", applyCount)
+	}
+	if !strings.Contains(details, "apply-on-create") {
+		t.Errorf("apply_template details must contain the template label, got: %s", details)
+	}
+	if !regexp.MustCompile(`\b2\b`).MatchString(details) {
+		t.Errorf("apply_template details must contain the applied record count 2, got: %s", details)
+	}
+	var createCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_zone' AND zone_id='newzone.com.'").Scan(&createCount)
+	if createCount != 1 {
+		t.Errorf("expected the create_zone row alongside apply_template, got %d rows", createCount)
+	}
+}
+
+// TestCreateZone_TemplateApplyFailureNoAuditRow pins the partial-failure
+// contract: when the zone is created but applying the template fails, the
+// response is the 500 partial-failure page, activity_logs holds the
+// create_zone row, and NO apply_template row is written for a template that
+// never landed.
+func TestCreateZone_TemplateApplyFailureNoAuditRow(t *testing.T) {
+	t.Parallel()
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(models.Zone{ID: "failzone.com.", Name: "failzone.com.", Kind: "Native"})
+		default:
+			// PATCH (record creation) fails.
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	templateID := seedTemplate(t, h, "failing-template", "")
+	seedTemplateRecord(t, h, templateID, "@", "A", "192.0.2.1", 3600)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	body := "name=failzone.com&kind=Native&template_id=" + strconv.FormatInt(templateID, 10)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/create", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.CreateZone(w, r.WithContext(ctx))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected the 500 partial-failure response, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "applying the template failed") {
+		t.Errorf("expected the partial-failure message, got: %s", w.Body.String())
+	}
+
+	var createCount, applyCount int
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='create_zone' AND zone_id='failzone.com.'").Scan(&createCount)
+	h.DB.QueryRow("SELECT COUNT(*) FROM activity_logs WHERE action='apply_template' AND zone_id='failzone.com.'").Scan(&applyCount)
+	if createCount != 1 {
+		t.Errorf("expected 1 create_zone row, got %d", createCount)
+	}
+	if applyCount != 0 {
+		t.Errorf("a failed template apply must not log apply_template, got %d rows", applyCount)
 	}
 }
 
