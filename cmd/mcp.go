@@ -80,7 +80,7 @@ Logs go to stderr only — stdout is reserved for the protocol.`,
 			bridge := &stdioBridge{
 				endpoint: endpoint,
 				apiKey:   apiKey,
-				client:   &http.Client{Timeout: 120 * time.Second},
+				client:   newMCPBridgeClient(),
 			}
 			return bridge.Run(context.Background(), os.Stdin, os.Stdout)
 		},
@@ -90,6 +90,20 @@ Logs go to stderr only — stdout is reserved for the protocol.`,
 	cmd.Flags().Bool("insecure", false, "allow plaintext http:// to a non-loopback host (the API key travels unencrypted; prefer https)")
 	_ = cmd.MarkFlagRequired("url")
 	return cmd
+}
+
+// newMCPBridgeClient returns the HTTP client for the stdio bridge. Redirects
+// are refused (http.ErrUseLastResponse): the GoZone API key travels in the
+// X-API-Key header, which net/http does not strip on cross-host redirects, so
+// following one — e.g. a 30x to another host, possibly downgraded to
+// http:// — would replay the credential to the redirect target. The /mcp
+// endpoint has no legitimate redirect use; a 3xx reaches relay()'s default
+// branch and is reported to the MCP client as an upstream HTTP error.
+func newMCPBridgeClient() *http.Client {
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // buildTargetURL normalises the --url flag: a base URL without a path gets

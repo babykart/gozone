@@ -1058,3 +1058,49 @@ func TestPatchZone_OmitsPriorityEvenWhenNonZero(t *testing.T) {
 		t.Errorf("PATCH body missing disabled element, got: %s", body)
 	}
 }
+
+// TestClient_RedirectNotFollowed pins the credential-leak guard: the PowerDNS
+// API key travels in the X-API-Key header, which net/http does NOT strip when
+// following a cross-host redirect (only Authorization/Cookie/WWW-Authenticate
+// are stripped). A 302/307 to another host — possibly downgraded to plaintext
+// http:// — would otherwise replay the key verbatim to the redirect target.
+// The client must refuse redirects so the 3xx surfaces as a plain response
+// and the existing non-2xx error path (httpError) handles it.
+func TestClient_RedirectNotFollowed(t *testing.T) {
+	var targetHits atomic.Int64
+	var capturedKey atomic.Value
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		capturedKey.Store(r.Header.Get("X-API-Key"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL+"/anywhere")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	// Real client via NewClient, pointed at the redirector (cross-host: two
+	// separate httptest servers have different host:port).
+	client := NewClient(&config.PowerDNSConfig{
+		APIURL:   redirector.URL,
+		APIKey:   "test-api-key",
+		ServerID: "localhost",
+	})
+
+	_, status, err := client.do(context.Background(), http.MethodGet, "/servers", nil)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	if status != http.StatusFound {
+		t.Fatalf("the 302 must come back instead of being followed, got status %d", status)
+	}
+	if targetHits.Load() != 0 {
+		t.Fatalf("redirect target must never be contacted, got %d hits (key replay risk)", targetHits.Load())
+	}
+	if k := capturedKey.Load(); k != nil && k.(string) != "" {
+		t.Fatalf("redirect target captured the API key: %q", k.(string))
+	}
+}

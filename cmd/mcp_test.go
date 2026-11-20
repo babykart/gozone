@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -280,5 +281,60 @@ func TestMCPStdioCmd_MissingURLAndKey(t *testing.T) {
 	}
 	if f := cmd.Flags().Lookup("insecure"); f == nil || f.DefValue != "false" {
 		t.Fatalf("insecure must exist and default to false, got %+v", f)
+	}
+}
+
+// TestStdioBridge_RedirectNotFollowed pins the credential-leak guard on the
+// production bridge client: the API key travels in the X-API-Key header,
+// which net/http does not strip on cross-host redirects, so following a 307 —
+// e.g. to another host, possibly downgraded to http:// — would replay the
+// credential to the redirect target. The client must refuse redirects; the
+// 3xx then reaches relay()'s default branch and surfaces as a JSON-RPC error
+// instead of a silent credential leak.
+func TestStdioBridge_RedirectNotFollowed(t *testing.T) {
+	var targetHits atomic.Int64
+	var capturedKey atomic.Value
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		capturedKey.Store(r.Header.Get("X-API-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"followed":true}}`) // #nosec G104 -- test helper
+	}))
+	t.Cleanup(target.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL+"/mcp")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	// Production client (not srv.Client()): the guard must live in the client
+	// the RunE actually uses.
+	b := &stdioBridge{
+		endpoint: redirector.URL + "/mcp",
+		apiKey:   "sekret",
+		client:   newMCPBridgeClient(),
+	}
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n")
+
+	if targetHits.Load() != 0 {
+		t.Fatalf("redirect target must never be contacted, got %d hits (key replay risk)", targetHits.Load())
+	}
+	if k := capturedKey.Load(); k != nil && k.(string) != "" {
+		t.Fatalf("redirect target captured the API key: %q", k.(string))
+	}
+	var resp struct {
+		ID    int `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &resp); err != nil {
+		t.Fatalf("stdout must carry a JSON-RPC error, got %q: %v", out, err)
+	}
+	if resp.ID != 1 || resp.Error.Code != -32000 || !strings.Contains(resp.Error.Message, "HTTP 307") {
+		t.Fatalf("expected id 1 / -32000 / HTTP 307, got id=%d code=%d msg=%q", resp.ID, resp.Error.Code, resp.Error.Message)
 	}
 }

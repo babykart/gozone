@@ -87,6 +87,14 @@ func NewClient(cfg *config.PowerDNSConfig) *Client {
 		http: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
+			// Refuse redirects: the PowerDNS API key travels in X-API-Key,
+			// which net/http does NOT strip on cross-host redirects (only
+			// Authorization/Cookie/WWW-Authenticate are). Following one —
+			// possibly an http:// downgrade — would replay the credential
+			// verbatim to the redirect target. The PowerDNS API has no
+			// legitimate redirect use, so a 3xx is returned as-is and the
+			// non-2xx error path below turns it into an httpError.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
