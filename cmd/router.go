@@ -197,7 +197,7 @@ func buildRouter(cfg *config.Config, db *database.DB, h *handlers.Handler, trust
 		AccessTTL: accessTTL,
 	}
 	sessionTracker := middleware.NewSessionTracker(db, sessionPolicy)
-	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL)
+	authMiddleware := middleware.AuthWithPolicy(db, cfg.Server.JWTKey, sessionTracker, accessTTL, cfg.Password.MaxAgeDays)
 
 	// CSRF-protected web UI routes (login + authenticated)
 	r.Group(func(r chi.Router) {

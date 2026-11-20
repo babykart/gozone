@@ -121,7 +121,7 @@ func TestParseToken_Revoked(t *testing.T) {
 		t.Fatalf("revoke token: %v", err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for revoked token")
 		w.WriteHeader(http.StatusOK)
@@ -490,7 +490,7 @@ func TestAuthMiddleware_NoToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -522,9 +522,12 @@ func seedTestUser(t *testing.T, db *database.DB, username, role string, enabled 
 	}
 	// ExecReturnID, never a raw LastInsertId: lib/pq does not implement it,
 	// and these seeds must run on the PostgreSQL dialect matrix.
+	// password_changed_at is set explicitly (UTC, per the project timestamp
+	// convention): the SQLite column default is an epoch filler, which would
+	// make every seeded password look expired to PasswordExpired.
 	id, err := db.ExecReturnID(context.Background(),
-		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, ?)`,
-		username, username+"@test.local", "$2a$12$test", role, enabledVal,
+		`INSERT INTO users (username, email, password_hash, role, enabled, password_changed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		username, username+"@test.local", "$2a$12$test", role, enabledVal, time.Now().UTC(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -859,7 +862,7 @@ func TestAuth_SuccessViaCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -890,7 +893,7 @@ func TestAuth_SuccessViaAuthorizationBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -922,7 +925,7 @@ func TestAuth_CookiePreferredOverHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := GetUser(r)
 		if user == nil {
@@ -948,7 +951,7 @@ func TestAuth_CookiePreferredOverHeader(t *testing.T) {
 func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 		w.WriteHeader(http.StatusOK)
@@ -981,7 +984,7 @@ func TestAuth_InvalidTokenClearsCookie(t *testing.T) {
 func TestAuth_InvalidTokenClearsCookieSecureBehindTrustedProxy(t *testing.T) {
 	db := newTestAuthDB(t)
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 		w.WriteHeader(http.StatusOK)
@@ -1033,7 +1036,7 @@ func TestAuth_RevokedTokenClearsCookieSecureBehindTrustedProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for revoked token")
 		w.WriteHeader(http.StatusOK)
@@ -1073,7 +1076,7 @@ func TestAuth_ExpiredTokenClearsCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for expired token")
 		w.WriteHeader(http.StatusOK)
@@ -1105,7 +1108,7 @@ func TestAuth_UserNotFoundAfterValidToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for non-existent user")
 		w.WriteHeader(http.StatusOK)
@@ -1119,6 +1122,16 @@ func TestAuth_UserNotFoundAfterValidToken(t *testing.T) {
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected 303 redirect, got %d", w.Code)
 	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+	// The user row is gone (loadUser returns sql.ErrNoRows): the middleware
+	// must clear the session cookie so the browser stops resending a token
+	// that can never authenticate again.
+	setCookie := w.Header().Get("Set-Cookie")
+	if setCookie == "" || !strings.Contains(setCookie, constants.SessionCookieName+"=") {
+		t.Error("expected clearing Set-Cookie for the session cookie when the user row is gone")
+	}
 }
 
 func TestAuth_DisabledUserRejected(t *testing.T) {
@@ -1130,7 +1143,7 @@ func TestAuth_DisabledUserRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for disabled user")
 		w.WriteHeader(http.StatusOK)
@@ -1143,6 +1156,111 @@ func TestAuth_DisabledUserRejected(t *testing.T) {
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+	// A disabled account invalidates the session: the middleware must clear
+	// the session cookie, mirroring the credential-rotation and revoked-token
+	// branches.
+	setCookie := w.Header().Get("Set-Cookie")
+	if setCookie == "" || !strings.Contains(setCookie, constants.SessionCookieName+"=") {
+		t.Error("expected clearing Set-Cookie for the session cookie when the account is disabled")
+	}
+}
+
+// TestAuth_EmptyJTIClearsCookie locks the claims.ID == "" branch of Auth: a
+// well-signed token without a jti (no issuance path produces one, but a
+// hand-minted or regressed signer could) must redirect to /login AND clear
+// the session cookie — otherwise the browser keeps resending the dead token
+// on every request.
+func TestAuth_EmptyJTIClearsCookie(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "empty-jti", "user", true)
+
+	claims := Claims{
+		UserID:   userID,
+		Username: "empty-jti",
+		Role:     "user",
+		RegisteredClaims: jwt.RegisteredClaims{
+			// ID deliberately empty: the Auth branch under test.
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			Issuer:    tokenIssuer,
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret, 0)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for an empty-jti token")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+	setCookie := w.Header().Get("Set-Cookie")
+	if setCookie == "" || !strings.Contains(setCookie, constants.SessionCookieName+"=") {
+		t.Error("expected clearing Set-Cookie for the session cookie when the jti is empty")
+	}
+}
+
+// TestAuth_TransientUserLoadErrorKeepsCookie is the keep-green side of the
+// loadUser error split (TestAuth_UserNotFoundAfterValidToken covers the
+// sql.ErrNoRows side, which must CLEAR the cookie).
+//
+// SPLIT-DEPENDENT: when loadUser fails with an error other than
+// sql.ErrNoRows — a transient DB outage — the middleware must redirect to
+// /login WITHOUT clearing the session cookie: the token is still valid, so
+// the same session must resume once the outage passes. The fault-injection
+// driver (see session_policy_test.go) fails every SELECT touching the users
+// table while armed. This test is GREEN before the split and must stay
+// GREEN after it — it pins that the split does not regress the transient
+// branch into clearing cookies.
+func TestAuth_TransientUserLoadErrorKeepsCookie(t *testing.T) {
+	db := newFlakyAuthDB(t)
+	userID := seedTestUser(t, db, "transient-web", "user", true)
+
+	token, err := GenerateToken(&models.User{ID: userID, Username: "transient-web", Role: "user"}, testSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mw := Auth(db, testSecret, 0)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called while the user load fails transiently")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	r.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	armUsersReadFault()
+	handler.ServeHTTP(w, r)
+	disarmUsersReadFault()
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect during transient user-load failure, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); !strings.HasSuffix(loc, "/login") {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == constants.SessionCookieName {
+			t.Error("transient user-load failure must NOT clear the session cookie")
+		}
 	}
 }
 
@@ -1235,7 +1353,7 @@ func TestAuth_MustChangePasswordGate(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
@@ -1283,7 +1401,7 @@ func TestAuth_MustChangePasswordGate_SSOBypass(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
@@ -1394,7 +1512,7 @@ func TestAuth_TokensValidAfterRevokesStaleToken(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
@@ -1447,7 +1565,7 @@ func TestAuth_CredentialVersionRevokesRotatedToken(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
@@ -1501,7 +1619,7 @@ func TestAuth_ManualLockFreezesSession(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
@@ -1557,7 +1675,7 @@ func TestAuth_TokensValidAfterAllowsFreshToken(t *testing.T) {
 	}
 
 	reached := false
-	mw := Auth(db, testSecret)
+	mw := Auth(db, testSecret, 0)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)

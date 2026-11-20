@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -202,11 +203,13 @@ func ParseToken(tokenString string, secret []byte) (*Claims, error) {
 
 // Auth returns a middleware that validates JWT tokens for web UI requests,
 // with no session lifetime policy (a token is valid until its exp, unless
-// revoked). It is a thin wrapper around AuthWithPolicy with a nil tracker.
+// revoked) but with the given password-expiry enforcement
+// (password.max_age_days; 0 disables it). It is a thin wrapper around
+// AuthWithPolicy with a nil tracker.
 // Callers that configure idle/absolute session limits use AuthWithPolicy with a
 // SessionTracker.
-func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
-	return AuthWithPolicy(db, secret, nil, 0)
+func Auth(db *database.DB, secret []byte, passwordMaxAgeDays int) func(http.Handler) http.Handler {
+	return AuthWithPolicy(db, secret, nil, 0, passwordMaxAgeDays)
 }
 
 // AuthWithPolicy is the session-aware Auth middleware. When tracker is nil (or
@@ -220,7 +223,12 @@ func Auth(db *database.DB, secret []byte) func(http.Handler) http.Handler {
 //
 // accessTTL is the access-token lifetime (auth.session_duration_hours) used to
 // compute the refresh threshold; pass 0 to disable refresh.
-func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, accessTTL time.Duration) func(http.Handler) http.Handler {
+//
+// passwordMaxAgeDays is the password.max_age_days policy (0 disables): a local
+// session whose password aged past the limit is flagged must_change_password
+// once and forced through /change-password, matching the Login and APIKeyAuth
+// enforcement of the same policy.
+func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, accessTTL time.Duration, passwordMaxAgeDays int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var tokenString string
@@ -252,6 +260,7 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 			}
 
 			if claims.ID == "" {
+				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -268,9 +277,24 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 				return
 			}
 
-			// Load full user from database
+			// Load full user from database. A missing row (ErrNoRows) or a
+			// disabled account proves the session's subject is gone: clear
+			// the cookie so the stale token is not replayed. Any OTHER error
+			// is a transient database failure — the token itself is still
+			// valid, so redirect without clearing: the user must survive an
+			// outage without losing their session.
 			user, err := loadUser(r.Context(), db, claims.UserID)
-			if err != nil || !user.Enabled {
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					clearSessionCookie(w, r)
+				} else {
+					logger.Error("failed to load user for session", "user_id", claims.UserID, "error", err)
+				}
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			if !user.Enabled {
+				clearSessionCookie(w, r)
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -316,6 +340,21 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 				return
 			}
 
+			isSSOSession := claims.AuthProvider != "" && claims.AuthProvider != "local"
+
+			// Password expiry policy: an open LOCAL session must not outlive
+			// the password that minted it. Login and the API-key path already
+			// enforce password.max_age_days; here the expired password flips
+			// the must-change flag once (the loaded flag short-circuits every
+			// later request) and the force-change gate below redirects.
+			if !isSSOSession && !user.MustChangePassword && passwordMaxAgeDays > 0 &&
+				PasswordExpired(passwordMaxAgeDays, user.PasswordChangedAt) {
+				user.MustChangePassword = true
+				if _, err := db.ExecContext(r.Context(), "UPDATE users SET must_change_password = 1 WHERE id = ?", user.ID); err != nil {
+					logger.Error("failed to flag expired password for forced change", "user_id", user.ID, "error", err)
+				}
+			}
+
 			// Force-change gate: a LOCAL-login user flagged must_change_password
 			// (admin reset or password expiry) may only reach the change-password
 			// page and logout until they set a new password. The gate is skipped
@@ -325,7 +364,6 @@ func AuthWithPolicy(db *database.DB, secret []byte, tracker *SessionTracker, acc
 			// an SSO user on /change-password — they cannot complete it without
 			// the temp password. Local login still enforces the flag via the
 			// Login handler.
-			isSSOSession := claims.AuthProvider != "" && claims.AuthProvider != "local"
 			if user.MustChangePassword && !isSSOSession && !mustChangeAllowedPath(r.URL.Path) {
 				http.Redirect(w, r, "/change-password", http.StatusSeeOther)
 				return

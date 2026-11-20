@@ -634,7 +634,7 @@ func TestChangePassword_ReissuedCookiePassesAuthCutoff(t *testing.T) {
 	// The re-issued cookie must pass the Auth middleware instead of being
 	// treated as a pre-rotation token.
 	reached := false
-	handler := middleware.Auth(h.DB, h.Cfg.Server.JWTKey)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware.Auth(h.DB, h.Cfg.Server.JWTKey, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	}))
