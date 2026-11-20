@@ -101,6 +101,8 @@ Supported drivers: `sqlite3`, `mysql`, `postgres`. Database passwords in DSNs ar
 
 `zone_cache_ttl_seconds` bounds how long the zone list and zone info caches keep PowerDNS read results. Cache invalidations are process-local: with several GoZone instances sharing one PowerDNS, a zone created on another instance can remain invisible, and a zone deleted there can remain visible, for up to this TTL on the other instances — lower it (or set `0` to disable retained zone caching) when that staleness window matters. Server info, statistics and TSIG key caches keep their own fixed TTLs.
 
+The PowerDNS client never follows HTTP redirects: the API key travels in the `X-API-Key` header, which `net/http` does not strip on cross-host redirects, so following one could replay the credential to the redirect target (possibly over plaintext). Configure the final `powerdns.api_url` directly — a proxy that answers a 3xx instead of proxying makes the request fail with that status as an API error.
+
 ### Authentication
 
 | YAML Path | Environment Variable | Default |

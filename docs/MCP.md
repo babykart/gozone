@@ -225,7 +225,12 @@ bridge holds no session state and no business logic — it
 forwards each newline-delimited JSON-RPC message as one authenticated HTTP
 POST and writes responses back on stdout (logs go to stderr). Upstream
 failures answered with a JSON-RPC error body are relayed verbatim so the
-client sees the real code and message. A typical
+client sees the real code and message. HTTP redirects are never followed:
+the API key travels in a header that is not stripped on cross-host
+redirects, so a 3xx — including a downgrade to plaintext — is reported to
+the client as an upstream HTTP error instead of being replayed to the
+redirect target. Point `--url` at the final endpoint, never at a URL that
+redirects. A typical
 client entry points at the bridge as a local command:
 
 ```json
