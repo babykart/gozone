@@ -2693,3 +2693,92 @@ func TestParseBindZone_TTLClassOrderAndZero(t *testing.T) {
 		})
 	}
 }
+
+// TestParseBindZone_OwnerNamesCaseFolded pins RFC 4343 folding at the BIND
+// parse boundary: case-variant owner spellings (`WWW` vs `www`) must collapse
+// into ONE RRSet whose emitted owner name is canonical lowercase — as the CSV
+// importer already produces via normalizeRecordName. Ungrouped, replace mode
+// would PATCH two conflicting REPLACE sections for the same case-insensitive
+// RRSet (a 422 or silent last-wins record loss).
+func TestParseBindZone_OwnerNamesCaseFolded(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		zone     string
+		zoneID   string
+		wantName string
+		wantType string
+		wantData []string
+	}{
+		{
+			name:     "case_variant_relative_owners_merge",
+			zone:     "$ORIGIN example.com.\nWWW 300 IN A 192.0.2.1\nwww 300 IN A 192.0.2.2",
+			zoneID:   "example.com.",
+			wantName: "www.example.com.",
+			wantType: "A",
+			wantData: []string{"192.0.2.1", "192.0.2.2"},
+		},
+		{
+			name:     "absolute_mixed_case_owner_merges_with_relative",
+			zone:     "$ORIGIN example.com.\nWWW 300 IN A 192.0.2.1\nwww 300 IN A 192.0.2.2\nWwW.Example.COM. 300 IN A 192.0.2.3",
+			zoneID:   "example.com.",
+			wantName: "www.example.com.",
+			wantType: "A",
+			wantData: []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"},
+		},
+		{
+			name:     "uppercase_origin_directive_folded",
+			zone:     "$ORIGIN Sub.Example.COM.\nmail 300 IN A 192.0.2.4",
+			zoneID:   "example.com.",
+			wantName: "mail.sub.example.com.",
+			wantType: "A",
+			wantData: []string{"192.0.2.4"},
+		},
+		{
+			name:     "apex_at_regression",
+			zone:     "$ORIGIN example.com.\n@ 300 IN TXT \"hello\"",
+			zoneID:   "example.com.",
+			wantName: "example.com.",
+			wantType: "TXT",
+			wantData: []string{`"hello"`},
+		},
+		{
+			name:     "lowercase_only_regression",
+			zone:     "$ORIGIN example.com.\nwww 300 IN A 192.0.2.1",
+			zoneID:   "example.com.",
+			wantName: "www.example.com.",
+			wantType: "A",
+			wantData: []string{"192.0.2.1"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rrsets, skipped, err := parseBindZone([]byte(tc.zone), tc.zoneID)
+			if err != nil {
+				t.Fatalf("parseBindZone: %v", err)
+			}
+			if len(skipped) != 0 {
+				t.Fatalf("no line should be skipped, got %+v", skipped)
+			}
+			if len(rrsets) != 1 {
+				t.Fatalf("case-variant owners must collapse into exactly one RRSet, got %+v", rrsets)
+			}
+			rr := rrsets[0]
+			if rr.Name != tc.wantName {
+				t.Errorf("rrset name = %q, want %q", rr.Name, tc.wantName)
+			}
+			if rr.Type != tc.wantType {
+				t.Errorf("rrset type = %q, want %q", rr.Type, tc.wantType)
+			}
+			if len(rr.Records) != len(tc.wantData) {
+				t.Fatalf("rrset has %d records, want %d: %+v", len(rr.Records), len(tc.wantData), rr.Records)
+			}
+			for i, want := range tc.wantData {
+				if rr.Records[i].Content != want {
+					t.Errorf("record %d content = %q, want %q", i, rr.Records[i].Content, want)
+				}
+			}
+		})
+	}
+}

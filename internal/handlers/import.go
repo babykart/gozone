@@ -331,6 +331,10 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 	if !strings.HasSuffix(origin, ".") {
 		origin += "."
 	}
+	// The zone id arrives canonicalised lowercase in practice, but the
+	// import must not depend on the caller: fold at the source so every
+	// derived name and every relative-name resolution keys on one spelling.
+	origin = dnsops.FoldName(origin)
 	defaultTTL := 3600
 
 	lines := normalizeBindLines(string(data))
@@ -355,6 +359,9 @@ func parseBindZone(data []byte, zoneID string) ([]models.RRSet, []skippedLine, e
 				if !strings.HasSuffix(origin, ".") {
 					origin += "."
 				}
+				// Case-variant $ORIGIN spellings must not split one zone
+				// into two owner-name spellings.
+				origin = dnsops.FoldName(origin)
 				continue
 			case "$TTL":
 				if len(fields) < 2 {
@@ -653,7 +660,12 @@ func parseBindLine(line, origin string, defaultTTL int) (bindRecord, error) {
 		ttl = defaultTTL
 	}
 
-	recName := resolveBindName(name, origin)
+	// RFC 4343 folding: emit canonical lowercase owners so case-variant
+	// spellings (`WWW` vs `www`) group into ONE RRSet. Two REPLACE patches
+	// for the same case-insensitive RRSet would otherwise be sent in
+	// replace mode (422 or silent last-wins record loss). The CSV path
+	// already lowercases via normalizeRecordName; this aligns BIND with it.
+	recName := dnsops.FoldName(resolveBindName(name, origin))
 
 	return bindRecord{
 		name:  recName,

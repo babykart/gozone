@@ -72,6 +72,15 @@ func asciiFold(s string) string {
 	}, s)
 }
 
+// FoldName returns s with only its ASCII A-Z letters lowercased — the same
+// RFC 4343 DNS case folding RRSetKey and RRSetsMatch apply. It is exposed
+// for import paths that must EMIT canonical owner names: two case-variant
+// spellings of one name have to collapse into a single RRSet, or a replace
+// PATCH carries two conflicting REPLACE sections for the same RRSet.
+func FoldName(s string) string {
+	return asciiFold(s)
+}
+
 // RRSetsMatch reports whether two RRSets are the same set, comparing name
 // and type case-insensitively with DNS folding (ASCII only). DNS names are
 // case-insensitive; case-preserving backends return original casing while
