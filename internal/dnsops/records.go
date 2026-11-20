@@ -467,11 +467,13 @@ func (s *Service) UpdateRecord(ctx context.Context, user *models.User, zoneID st
 	}
 
 	// Resolve an unspecified (zero) TTL: inherit the TTL of the RRSet being
-	// replaced, else the 3600 default. A REPLACE carrying ttl 0 would zero
-	// the whole set.
+	// replaced, else the 3600 default. The inheritance deliberately has no
+	// positive guard: a deliberate no-cache (TTL 0) RRSet must stay 0 instead
+	// of being silently upgraded to the default. Negative values were
+	// rejected at validation.
 	if rrset.TTL <= 0 {
 		rrset.TTL = DefaultRecordTTL
-		if oldRRSet != nil && oldRRSet.TTL > 0 {
+		if oldRRSet != nil {
 			rrset.TTL = oldRRSet.TTL
 		}
 	}

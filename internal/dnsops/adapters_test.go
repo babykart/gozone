@@ -224,6 +224,40 @@ func TestUpdateRecord_TTLInheritAndAudit(t *testing.T) {
 	}
 }
 
+// TestUpdateRecord_ZeroTTLInheritedFromOldRRSet pins the deliberate-zero-TTL
+// contract: a REPLACE whose TTL is unspecified inherits the TTL of the RRSet
+// being replaced even when that TTL is 0 — mirroring CreateRecord's TTL
+// inheritance. The `oldRRSet.TTL > 0` guard used to fall through to the 3600
+// default and silently raise a deliberate 0-TTL set to an hour.
+func TestUpdateRecord_ZeroTTLInheritedFromOldRRSet(t *testing.T) {
+	var sent []models.RRSet
+	existing := []models.RRSet{
+		{Name: "www.example.", Type: "A", TTL: 0, Records: []models.RecordInfo{{Content: "192.0.2.10"}}},
+	}
+	srv, client := testutil.NewTestPDNSServer(t, captureRRSets(t, &sent, existing))
+	defer srv.Close()
+	db := testutil.NewTestDB(t)
+	s := New(db, client)
+	ctx := context.Background()
+	adminID := testutil.SeedTestUser(t, db, "admin", "pass", "admin", true)
+	admin := &models.User{ID: adminID, Role: "admin"}
+
+	rrset := models.RRSet{Name: "www", Type: "A", TTL: 0, Records: []models.RecordInfo{{Content: "192.0.2.99"}}}
+	if err := PrepareValidatedRecordSet(&rrset, "example."); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if err := s.UpdateRecord(ctx, admin, "example.", rrset, SourceAPI); err != nil {
+		t.Fatalf("UpdateRecord: %v", err)
+	}
+
+	if len(sent) != 1 {
+		t.Fatalf("expected one PATCH, got %d", len(sent))
+	}
+	if sent[0].TTL != 0 {
+		t.Errorf("TTL = %d, want 0 (inherited from the replaced RRSet's deliberate 0 TTL)", sent[0].TTL)
+	}
+}
+
 func TestDeleteRecord_AuditBeforeImage(t *testing.T) {
 	var deleted []models.RRSet
 	existing := []models.RRSet{
