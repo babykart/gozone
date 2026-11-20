@@ -693,6 +693,132 @@ func TestResolveSSOUser_EmailLinkVerified(t *testing.T) {
 	}
 }
 
+// TestResolveSSOUser_AdminEmailNotLinked_AutoProvisionOff is the IdP-admin-
+// takeover regression (auto_provision off): an IdP account asserting the
+// VERIFIED email of a local ADMIN must never be linked to that admin. Email
+// auto-linking must skip admin accounts and fall through to the same
+// no-linked-account error as any unmatched identity; no external-identities
+// row may be created for the admin.
+func TestResolveSSOUser_AdminEmailNotLinked_AutoProvisionOff(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false
+	ctx := context.Background()
+	adminID := insertReturnID(t, h.DB,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"rootadmin", "admin@example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "admin")
+
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-admin-takeover",
+		Email: "admin@example.com", EmailVerified: true,
+	}
+	if _, err := h.resolveSSOUser(ctx, claims); err == nil {
+		t.Fatal("expected error: a verified admin email must not be SSO-linked (auto_provision off)")
+	}
+	linked, err := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if err != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", err)
+	}
+	if linked != nil {
+		t.Errorf("admin must not be linked via email auto-link, got %+v", linked)
+	}
+	var identityRows int
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM external_identities WHERE user_id = ?", adminID).Scan(&identityRows); err != nil {
+		t.Fatalf("count external_identities: %v", err)
+	}
+	if identityRows != 0 {
+		t.Errorf("admin account must have no external identity rows, got %d", identityRows)
+	}
+	// The admin row itself is untouched.
+	var role string
+	if err := h.DB.QueryRowContext(ctx, "SELECT role FROM users WHERE id = ?", adminID).Scan(&role); err != nil {
+		t.Fatalf("read admin role: %v", err)
+	}
+	if role != "admin" {
+		t.Errorf("admin role changed to %q", role)
+	}
+}
+
+// TestResolveSSOUser_AdminEmailNotLinked_AutoProvisionOn is the same takeover
+// regression with auto_provision on: skipping the admin email link falls
+// through to CreateExternalUser, which hits the unique-email constraint and
+// surfaces the provisioning-conflict error — a single clean failure instead
+// of a silent admin takeover. No identity row, no second user.
+func TestResolveSSOUser_AdminEmailNotLinked_AutoProvisionOn(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = true
+	h.Cfg.OIDC.DefaultRole = "user"
+	ctx := context.Background()
+	adminID := insertReturnID(t, h.DB,
+		`INSERT INTO users (username, email, password_hash, role, enabled) VALUES (?, ?, ?, ?, 1)`,
+		"rootadmin", "admin@example.com", "$2a$04$placeholderhashplaceholderhashplaceholderhashplaceholde", "admin")
+
+	claims := &oidc.Claims{
+		Issuer: "https://idp.example.com", Subject: "sub-admin-takeover",
+		Email: "admin@example.com", EmailVerified: true,
+		PreferredUsername: "attacker",
+	}
+	_, err := h.resolveSSOUser(ctx, claims)
+	if err == nil {
+		t.Fatal("expected error: a verified admin email must not be SSO-linked (auto_provision on)")
+	}
+	if !strings.Contains(err.Error(), "account provisioning conflict") {
+		t.Errorf("expected the provisioning-conflict error, got %v", err)
+	}
+	linked, lerr := h.DB.FindUserByExternalIdentity(ctx, claims.Issuer, claims.Subject)
+	if lerr != nil {
+		t.Fatalf("FindUserByExternalIdentity: %v", lerr)
+	}
+	if linked != nil {
+		t.Errorf("admin must not be linked via email auto-link, got %+v", linked)
+	}
+	var identityRows int
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM external_identities WHERE user_id = ?", adminID).Scan(&identityRows); err != nil {
+		t.Fatalf("count external_identities: %v", err)
+	}
+	if identityRows != 0 {
+		t.Errorf("admin account must have no external identity rows, got %d", identityRows)
+	}
+	var userCount int
+	if err := h.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM users WHERE email = ?", claims.Email).Scan(&userCount); err != nil {
+		t.Fatalf("count users by email: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("exactly one user with the admin email must exist, got %d", userCount)
+	}
+}
+
+// TestResolveSSOUser_AlreadyLinkedAdminSucceeds pins the unaffected side of
+// the guard: an admin whose (issuer, subject) identity was linked BEFORE (or
+// by an operator) must keep resolving by that link — step 1 of resolution is
+// not subject to the email-link admin guard.
+func TestResolveSSOUser_AlreadyLinkedAdminSucceeds(t *testing.T) {
+	t.Parallel()
+	h := newTestHandler(t)
+	h.Cfg.OIDC.AutoProvision = false // link resolution must not depend on provisioning
+	ctx := context.Background()
+	admin, err := h.DB.CreateExternalUser(ctx, "linkedadmin", "linkedadmin@example.com", "", "", "admin",
+		"https://idp.example.com", "sub-linked-admin")
+	if err != nil {
+		t.Fatalf("CreateExternalUser: %v", err)
+	}
+	claims := &oidc.Claims{Issuer: "https://idp.example.com", Subject: "sub-linked-admin"}
+	got, err := h.resolveSSOUser(ctx, claims)
+	if err != nil {
+		t.Fatalf("resolveSSOUser for an already-linked admin: %v", err)
+	}
+	if got.ID != admin.ID {
+		t.Errorf("expected the pre-linked admin %d, got %d", admin.ID, got.ID)
+	}
+	if got.Role != "admin" {
+		t.Errorf("expected role admin, got %q", got.Role)
+	}
+}
+
 func TestResolveSSOUser_ProvisionNew(t *testing.T) {
 	t.Parallel()
 	h := newTestHandler(t)

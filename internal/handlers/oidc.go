@@ -246,13 +246,15 @@ func (h *Handler) ssoEmailAllowed(email string) bool {
 //     logins would be a footgun;
 //  2. an existing local account with a matching email is linked to the identity
 //     and used — regardless of auto_provision, since linking an existing account
-//     is not provisioning. By default the email must be verified
+//     is not provisioning. ADMIN accounts are never e-mail-linked (the match is
+//     skipped and resolution falls through): whoever controls the IdP must not
+//     gain control of the GoZone admin — bind the identity manually instead. By
+//     default the email must be verified
 //     (oidc.require_verified_email, default true); setting that to false links
 //     on the email alone for trusted IdPs that do not assert email_verified.
 //     When oidc.allowed_email_domains is set, the claim's e-mail domain must
-//     be listed — otherwise any account at a public IdP preset (Google,
-//     GitHub) whose e-mail matches a local account (admins included) would
-//     link to it;
+//     be listed — otherwise any non-admin account at a public IdP preset
+//     (Google, GitHub) whose e-mail matches a local account would link to it;
 //  3. otherwise, when auto_provision is on AND the e-mail domain is allowed
 //     (a set filter also requires a real e-mail claim — the synthesized
 //     sso+...@gozone.local address is refused), a new user is provisioned and
@@ -285,7 +287,9 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 	// auto_provision — the flag below gates only the creation of NEW accounts.
 	// The domain filter (oidc.allowed_email_domains) applies here too: without
 	// it, any account at a public IdP whose verified email matches a local
-	// account would link to it, admins included.
+	// account would link to it. ADMIN accounts are excluded: an IdP asserting
+	// the admin's e-mail must not take over the GoZone admin, so the match is
+	// skipped and the normal fall-through handles it.
 	allowUnverifiedEmail := !h.Cfg.OIDC.RequireVerifiedEmail
 	emailAllowed := h.ssoEmailAllowed(claims.Email)
 	if !emailAllowed {
@@ -296,13 +300,26 @@ func (h *Handler) resolveSSOUser(ctx context.Context, claims *oidc.Claims) (*mod
 		if existing, err := h.DB.FindUserByEmail(ctx, claims.Email); err != nil {
 			return nil, fmt.Errorf("lookup user by email: %w", err)
 		} else if existing != nil {
-			if err := h.linkIdentity(ctx, existing.ID, claims.Issuer, claims.Subject); err != nil {
-				return nil, err
+			// An IdP asserting a matching e-mail must never take over an
+			// ADMIN account: whoever controls the IdP would control the
+			// GoZone admin. Admin accounts link an external identity
+			// manually only — skip the e-mail link and let the normal
+			// fall-through handle it (no-linked-account error with
+			// auto_provision off, a provisioning e-mail conflict with it
+			// on). Already-linked admins resolved by their (issuer,subject)
+			// identity above are unaffected.
+			if existing.IsAdmin() {
+				logger.Warn("oidc: refusing to e-mail-link an admin account; link the identity manually",
+					"issuer", claims.Issuer, "subject", claims.Subject, "username", existing.Username)
+			} else {
+				if err := h.linkIdentity(ctx, existing.ID, claims.Issuer, claims.Subject); err != nil {
+					return nil, err
+				}
+				if err := h.syncSSOAttributes(ctx, existing, claims); err != nil {
+					return nil, err
+				}
+				return existing, nil
 			}
-			if err := h.syncSSOAttributes(ctx, existing, claims); err != nil {
-				return nil, err
-			}
-			return existing, nil
 		}
 	}
 
