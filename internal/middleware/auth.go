@@ -487,6 +487,26 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, expi
 	})
 }
 
+// apiKeyFromRequest extracts the API key credential carried by a request:
+// the X-API-Key header first, else an Authorization header using exactly the
+// "Bearer <key>" scheme documented in docs/API.md. Any other Authorization
+// spelling (bare value, different scheme) yields "" — it is NOT a credential.
+//
+// Both API-key consumers MUST share this one extraction: authentication and
+// the per-key rate limiter have to agree on what counts as a credential, or
+// a spelling accepted by one but ignored by the other becomes a bypass (a
+// key that authenticates while escaping its rate-limit bucket).
+func apiKeyFromRequest(r *http.Request) string {
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		return key
+	}
+	const prefix = "Bearer "
+	if auth := r.Header.Get("Authorization"); len(auth) > len(prefix) && auth[:len(prefix)] == prefix {
+		return auth[len(prefix):]
+	}
+	return ""
+}
+
 // APIKeyAuth returns a middleware that validates API key tokens for the given
 // transport surface (models.SurfaceAPI for /api/v1, models.SurfaceMCP for /mcp).
 //
@@ -531,10 +551,7 @@ func APIKeyAuth(db *database.DB, surface models.APIKeySurface, passwordMaxAgeDay
 func apiKeyAuth(db *database.DB, tracker *apiKeyLastUsedTracker, surface models.APIKeySurface, passwordMaxAgeDays int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("X-API-Key")
-			if authHeader == "" {
-				authHeader = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			}
+			authHeader := apiKeyFromRequest(r)
 
 			if authHeader == "" {
 				writeAPIErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")

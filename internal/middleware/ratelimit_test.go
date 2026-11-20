@@ -295,4 +295,12 @@ func TestAPIKeyRateLimitKey(t *testing.T) {
 			t.Errorf("expected empty (limiter bypass), got %q", got)
 		}
 	})
+
+	t.Run("Bearer with empty credential returns empty", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("Authorization", "Bearer ")
+		if got := APIKeyRateLimitKey(r); got != "" {
+			t.Errorf("expected empty for an empty Bearer credential, got %q", got)
+		}
+	})
 }

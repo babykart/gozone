@@ -2257,3 +2257,85 @@ func TestAPIKeyAuth_MustChangeBeatsScope(t *testing.T) {
 	}
 	assertJSONError(t, w, "api_key_invalidated")
 }
+
+// TestAPIKeyAuthAndRateLimitKeyAgree pins that the extraction behind apiKeyAuth
+// and the one behind APIKeyRateLimitKey reach the same verdict for every
+// header spelling: a spelling accepted by authentication but ignored by the
+// per-key rate limiter would authenticate while escaping its rate-limit
+// bucket — only the per-IP limiter would remain, bypassable by rotating
+// source IPs. Documented spellings (X-API-Key, Authorization: Bearer <key>)
+// authenticate AND land in the SHA-256 bucket; every other spelling is
+// refused with the 401 UNAUTHORIZED envelope and produces no limiter key.
+func TestAPIKeyAuthAndRateLimitKeyAgree(t *testing.T) {
+	db := newTestAuthDB(t)
+	userID := seedTestUser(t, db, "parity", "user", true)
+	seedTestAPIKey(t, db, userID, "parity-key", nil)
+
+	cases := []struct {
+		name        string
+		setHeader   func(*http.Request)
+		wantReached bool
+		wantLimiter string
+	}{
+		{
+			name:        "X-API-Key authenticates and lands in bucket",
+			setHeader:   func(r *http.Request) { r.Header.Set("X-API-Key", "parity-key") },
+			wantReached: true,
+			wantLimiter: hashAPIKey("parity-key"),
+		},
+		{
+			name:        "Authorization Bearer authenticates and lands in bucket",
+			setHeader:   func(r *http.Request) { r.Header.Set("Authorization", "Bearer parity-key") },
+			wantReached: true,
+			wantLimiter: hashAPIKey("parity-key"),
+		},
+		{
+			name:        "bare Authorization is refused and has no bucket",
+			setHeader:   func(r *http.Request) { r.Header.Set("Authorization", "parity-key") },
+			wantReached: false,
+			wantLimiter: "",
+		},
+		{
+			name:        "Basic scheme is refused and has no bucket",
+			setHeader:   func(r *http.Request) { r.Header.Set("Authorization", "Basic dXNlcjpwYXNz") },
+			wantReached: false,
+			wantLimiter: "",
+		},
+		{
+			name:        "Bearer with empty credential is refused and has no bucket",
+			setHeader:   func(r *http.Request) { r.Header.Set("Authorization", "Bearer ") },
+			wantReached: false,
+			wantLimiter: "",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			reached := false
+			handler := apiKeyAuth(db, newAPIKeyLastUsedTracker(), models.SurfaceAPI, 0)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+			tt.setHeader(r)
+			handler.ServeHTTP(w, r)
+
+			if reached != tt.wantReached {
+				t.Errorf("reached = %v, want %v (status %d)", reached, tt.wantReached, w.Code)
+			}
+			if !tt.wantReached && w.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", w.Code)
+			}
+			if !tt.wantReached {
+				assertJSONError(t, w, "unauthorized")
+			}
+
+			limiter := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+			tt.setHeader(limiter)
+			if got := APIKeyRateLimitKey(limiter); got != tt.wantLimiter {
+				t.Errorf("APIKeyRateLimitKey = %q, want %q", got, tt.wantLimiter)
+			}
+		})
+	}
+}
