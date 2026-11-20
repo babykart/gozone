@@ -398,7 +398,7 @@ GET /auth/oidc/<provider>/callback?code=…&state=…
   │
   ▼ resolveSSOUser
   ├── FindUserByExternalIdentity(iss, sub)        ← existing link (external_identities)
-   ├── else email link (only if email_verified):   FindUserByEmail → link identity  (links EXISTING account, regardless of auto_provision)
+   ├── else email link (only if email_verified):   FindUserByEmail → link identity  (links EXISTING account, regardless of auto_provision; ADMIN accounts are never e-mail-linked — the match is skipped and resolution falls through to the conflict path)
    ├── else auto_provision (if enabled):           CreateExternalUser + link        (gates only NEW account creation)
   └── syncSSOAttributes (IdP-authoritative):
         ├── role (role_claim + admin_role_values, last-admin guarded)
@@ -807,7 +807,7 @@ MySQL and PostgreSQL deployments do not have these constraints and can use a nor
 - JWT tokens are HMAC-SHA256 with a key derived from `server.secret_key` via HKDF-SHA256. There is no key rotation mechanism — changing the secret invalidates all existing sessions.
 - API keys are SHA-256 hashed before comparison against the stored `key_hash`. The raw key is only shown once at creation time.
 - The default admin password (`admin`/`admin`) is logged in the startup banner when the seed matches `config.DefaultAdminPassword`. Set `GOZONE_ADMIN_PASSWORD` (or `admin.password` in YAML) at startup to avoid it. A forced-change mechanism **does** exist: every admin/operator password reset (and password expiry) sets `users.must_change_password = 1`, and the Auth middleware gates such a session to `/change-password` + `/logout` until the user sets a new password. The **initial admin seed is exempt** — it only logs a warning (force-changing the default seed remains a known, deliberately deferred gap).
-- Password policy is enforced (`internal/validators.ValidatePassword`, driven by `password.*` / `GOZONE_PASSWORD_*`): minimum length (runes) and required character classes (uppercase/lowercase/digit/special), secure-by-default (`min_length: 8`, all four classes on). It is checked at every password-set site (`CreateUser`, `UpdateUser`, `gozone user reset-password`); the admin seed is exempt as a one-time bootstrap. Optional **password history** (`password.history_size`) refuses reuse of recent hashes, and **password expiry** (`password.max_age_days`) flips `must_change_password` on login once the password age exceeds the limit.
+- Password policy is enforced (`internal/validators.ValidatePassword`, driven by `password.*` / `GOZONE_PASSWORD_*`): minimum length (runes) and required character classes (uppercase/lowercase/digit/special), secure-by-default (`min_length: 8`, all four classes on). It is checked at every password-set site (`CreateUser`, `UpdateUser`, `gozone user reset-password`); the admin seed is exempt as a one-time bootstrap. Optional **password history** (`password.history_size`) refuses reuse of recent hashes, and **password expiry** (`password.max_age_days`) flips `must_change_password` on login and on the next request of an already-active local session (SSO sessions are exempt).
 
 ### Web UI
 

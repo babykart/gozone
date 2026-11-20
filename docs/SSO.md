@@ -95,8 +95,8 @@ overridden with `GOZONE_OIDC_*` environment variables.
 |-----------|----------------------|---------|-------------|
 | `oidc.enabled` | `GOZONE_OIDC_ENABLED` | `false` | Master switch. |
 | `oidc.allow_local_login` | `GOZONE_OIDC_ALLOW_LOCAL_LOGIN` | `true` | Keep the username/password form alongside SSO buttons. `false` hides the form **and** makes `POST /login` refuse password authentication — SSO (and its MFA) cannot be bypassed with local credentials. Inert when SSO is disabled. |
-| `oidc.allowed_email_domains` | `GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS` | *(empty)* | Restrict which e-mail domains may establish a **new** SSO association: both the e-mail link to an existing local account (admins included) and auto-provisioning require the claim's e-mail domain to be listed (exact, case-insensitive). When set, provisioning without an e-mail claim is refused. Existing `(issuer, subject)` links keep working. Empty accepts every domain — with public presets (Google, GitHub) that means any IdP account can link or be provisioned. |
-| `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. Gates only NEW account creation. When `false`, login still succeeds for a pre-existing external-identity link, or for an existing local account whose email matches a *verified* IdP email (`email_verified: true`). |
+| `oidc.allowed_email_domains` | `GOZONE_OIDC_ALLOWED_EMAIL_DOMAINS` | *(empty)* | Restrict which e-mail domains may establish a **new** SSO association: both the e-mail link to an existing local account (admin accounts are **never** e-mail-linked — see below) and auto-provisioning require the claim's e-mail domain to be listed (exact, case-insensitive). When set, provisioning without an e-mail claim is refused. Existing `(issuer, subject)` links keep working. Empty accepts every domain — with public presets (Google, GitHub) that means any IdP account can link or be provisioned. |
+| `oidc.auto_provision` | `GOZONE_OIDC_AUTO_PROVISION` | `false` | Create a local user on first SSO login. Gates only NEW account creation. When `false`, login still succeeds for a pre-existing external-identity link, or for an existing **non-admin** local account whose email matches a *verified* IdP email (`email_verified: true`). Admin accounts are never linked by email — bind their IdP identity in the database manually if needed. |
 | `oidc.require_verified_email` | `GOZONE_OIDC_REQUIRE_VERIFIED_EMAIL` | `true` | Require `email_verified: true` to link an existing local account by email. Set to `false` for a trusted IdP whose emails are authoritative but not marked verified (e.g. a Keycloak realm that does not emit `email_verified`); linking then keys on the email alone. Only affects email linking, never provisioning. |
 | `oidc.default_role` | `GOZONE_OIDC_DEFAULT_ROLE` | `user` | Role for auto-provisioned users (`admin`, `operator` or `user`). |
 | `oidc.scopes` | `GOZONE_OIDC_SCOPES` | `[openid, profile, email]` | Global fallback scopes (`openid` is always added). |
@@ -229,10 +229,12 @@ oidc:
       client_secret: "<client-secret>"
 ```
 
-Google issues a verified `email` claim, so existing local accounts with the
-same (verified) email are auto-linked on first SSO login. This linking runs
-independently of `auto_provision`, which gates only the creation of NEW
-accounts.
+Google issues a verified `email` claim, so existing **non-admin** local
+accounts with the same (verified) email are auto-linked on first SSO login.
+Admin accounts are never linked by email: whoever controls the IdP must not
+gain control of the GoZone admin — bind an admin's identity manually in the
+`external_identities` table instead. This linking runs independently of
+`auto_provision`, which gates only the creation of NEW accounts.
 
 ### GitLab (SaaS or self-hosted)
 
@@ -486,8 +488,8 @@ writes, so cross-instance idle lags by at most ~1 minute).
 |---------|--------------|-----|
 | `oidc provider discovery failed; skipping` at startup | `issuer_url` wrong, or the provider does not expose `/.well-known/openid-configuration` | `curl` the discovery URL; correct `issuer_url`; ensure the provider supports OIDC (GitHub user OAuth does not — see [GitHub](#github--not-directly-supported)). |
 | No "Sign in with…" button on `/login` | `oidc.enabled: false`, or no provider could be discovered | Check the startup log; at least one provider must discover successfully. |
-| `Single sign-on failed.` after the IdP redirect | `state` mismatch/expired, token verification failed, or the account is disabled / not provisioned | Verify clocks are in sync (JWT `exp`/`iat`); decode the ID token (e.g. `jwt.io`) and check `email_verified` is `true`; set `auto_provision: true`, pre-link the account, or ensure a local account exists with the matching verified email; check the server log for the specific `oidc callback:` warning. |
-| `account provisioning conflict; ask an administrator to link your account` | `auto_provision: true` but the IdP did not assert `email_verified: true`, so the matching existing account was not linked and provisioning collided with it | Preferred: verify the user's email in the IdP realm so `email_verified: true` is emitted. Or, for a trusted IdP, set `oidc.require_verified_email: false` to link on the email alone. (This message implies `auto_provision` is on at runtime.) |
+| `Single sign-on failed.` after the IdP redirect | `state` mismatch/expired, token verification failed, or the account is disabled / not provisioned | Verify clocks are in sync (JWT `exp`/`iat`); decode the ID token (e.g. `jwt.io`) and check `email_verified` is `true`; set `auto_provision: true`, pre-link the account, or ensure a local account exists with the matching verified email (admin accounts are never linked by email — bind the identity manually); check the server log for the specific `oidc callback:` warning. |
+| `account provisioning conflict; ask an administrator to link your account` | `auto_provision: true` but the IdP did not assert `email_verified: true`, so the matching existing account was not linked and provisioning collided with it — or the matching account is an **admin**, which is never e-mail-linked | Preferred: verify the user's email in the IdP realm so `email_verified: true` is emitted. Or, for a trusted IdP, set `oidc.require_verified_email: false` to link on the email alone. (This message implies `auto_provision` is on at runtime.) For an admin account, bind the identity manually in `external_identities`. |
 | Provider returns an error about the redirect URI | The callback URL registered at the provider does not match `https://<host>/auth/oidc/<name>/callback` exactly (scheme/host/path) | Re-register the exact redirect URI; remember the `<name>` segment. |
 | RP-initiated logout does not reach the IdP | The session was a local login, or the provider has no `end_session_endpoint` | Check the discovery document for `end_session_endpoint`; SSO logout only fires for SSO sessions. |
 | Keycloak logout shows *"Paramètres manquants : id_token_hint"* | The session predates server-side hint storage (≤ v0.16.7), or the server-side write failed at login | Re-login so a fresh session stores the ID token server-side; check the server log for the `failed to store id_token_hint` warning. |

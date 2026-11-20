@@ -300,7 +300,7 @@ curl -X POST \
 |-------|------|----------|-------|
 | `name` | string | **yes** | Relative (`www`), absolute (`www.example.com.`), or `@` for apex |
 | `type` | string | **yes** | Any valid DNS record type |
-| `ttl` | int | no | Time-to-live in seconds. Accepted range `0`..`2147483647` (RFC 2181 maximum); values above the maximum are rejected with a 400. `0` or omitted: POST inherits the TTL of the existing (merged) RRSet — including an explicit `0` (no-cache RRSet stays no-cache) — else the 3600 default; PUT inherits the replaced RRSet's TTL only when positive, else the 3600 default. Negative values are rejected with a 400. |
+| `ttl` | int | no | Time-to-live in seconds. Accepted range `0`..`2147483647` (RFC 2181 maximum); values above the maximum are rejected with a 400. `0` or omitted: POST inherits the TTL of the existing (merged) RRSet — including an explicit `0` (no-cache RRSet stays no-cache) — else the 3600 default; PUT inherits the replaced RRSet's TTL — including an explicit `0` — when a replaced RRSet exists, else the 3600 default. Negative values are rejected with a 400. |
 | `records` | array | **yes** | Array of record objects. Must contain at least one record — an empty array is rejected with a 400 (removing an RRSet is `DELETE`'s job, for both POST and PUT) |
 | `records[].content` | string | **yes** | Record content. FQDN targets (CNAME, DNAME, NS, PTR, ALIAS, AFSDB, NAPTR, MX, SRV) get a trailing dot appended automatically if missing. For multi-field types where the FQDN is not the last field (SOA mname/rname, RP mbox/txtname, MINFO rmailbx/emailbx, NSEC next_domain), per-field normalisation is applied. TXT/SPF content is auto-quoted. |
 | `records[].priority` | int | no | For MX and SRV types |

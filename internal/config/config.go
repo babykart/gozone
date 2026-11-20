@@ -321,8 +321,10 @@ type OIDCConfig struct {
 	// (linking an existing local account whose email matches the IdP claim)
 	// and auto-provisioning require the claim's e-mail domain to be listed —
 	// with public provider presets (Google, GitHub) an unrestricted config
-	// lets any IdP account link to an existing account (admins included) or
-	// become a provisioned user. Matching is exact on the lowercased domain;
+	// lets any IdP account link to an existing account or become a
+	// provisioned user. Admin accounts are never e-mail-linked regardless of
+	// this filter: whoever controls the IdP must not gain control of the
+	// GoZone admin. Matching is exact on the lowercased domain;
 	// entries are normalized (trimmed, lowercased, one leading "@" stripped)
 	// at load time. Existing (issuer, subject) links are unaffected: they
 	// were established deliberately and keep working. Empty (default) accepts
@@ -390,7 +392,10 @@ type PasswordConfig struct {
 	HistorySize int `yaml:"history_size"`
 	// MaxAgeDays is the maximum password age in days. 0 (default) means no
 	// expiry: passwords never expire. When > 0, a user whose password is older
-	// than MaxAgeDays is forced to change it on next login.
+	// than MaxAgeDays is forced to change it on next login and on the next
+	// request of an already-active local session (SSO sessions are exempt:
+	// the user authenticates against the IdP, so the local password age is
+	// irrelevant to them).
 	MaxAgeDays int `yaml:"max_age_days"`
 	// ExpiryWarnDays is the number of days before expiry during which the
 	// dashboard shows a "password expiring soon" warning. 0 (default) disables
