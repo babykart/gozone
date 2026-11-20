@@ -239,7 +239,9 @@ func canonicalZoneArg(zone string) (string, *toolError) {
 // zone IDs: underscore zones (_dmarc.example.com.) and RFC 2317 reverse
 // delegations with a slash (0/25.2.0.192.in-addr.arpa.) are legitimate
 // zones in PowerDNS. The check is deliberately narrow: non-empty, at most
-// 253 characters, no whitespace or control characters. Anything else is
+// 253 characters, no whitespace or control characters, and (via
+// dnsops.IsValidZoneID) no dot-only ids or empty labels — url.PathEscape
+// passes those through as traversal-looking dot segments. Anything else is
 // accepted and canonicalised; existence is enforced downstream by the
 // service layer (ZONE_NOT_FOUND, fail-closed).
 func validZoneArg(zone string) *toolError {
@@ -256,6 +258,9 @@ func validZoneArg(zone string) *toolError {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
 			return toolErrorf("VALIDATION_ERROR", "zone contains whitespace or control characters")
 		}
+	}
+	if !dnsops.IsValidZoneID(zone) {
+		return toolErrorf("VALIDATION_ERROR", "zone must be a domain name without empty labels")
 	}
 	return nil
 }

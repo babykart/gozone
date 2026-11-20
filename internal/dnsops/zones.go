@@ -23,6 +23,29 @@ func NormalizeZoneName(name string) string {
 	return models.EnsureTrailingDot(name)
 }
 
+// IsValidZoneID reports whether zone is a syntactically plausible zone
+// identifier: not dot-only, and with no empty labels. url.PathEscape passes
+// "." and ".." through verbatim (they are not path separators it escapes), so
+// such an id reaches PowerDNS URLs as a traversal-looking dot segment — the
+// Go client does not normalize it, but a reverse proxy in front of PowerDNS
+// may resolve it to the parent path. The check is deliberately narrow, like
+// the MCP-side sanity check: underscore zones (_dmarc.example.com.) and
+// RFC 2317 reverse delegations with a slash (0/25.2.0.192.in-addr.arpa.) are
+// legitimate PowerDNS zone ids, so this is a rejection predicate, not full
+// RFC 1035 validation.
+func IsValidZoneID(zone string) bool {
+	if zone == "" {
+		return false
+	}
+	labels := strings.Split(strings.TrimSuffix(zone, "."), ".")
+	for _, label := range labels {
+		if label == "" {
+			return false
+		}
+	}
+	return true
+}
+
 // PurgeZoneGroupGrants deletes the zone's group-grant rows. Deleting or
 // renaming a zone directly in PowerDNS leaves orphaned grants: the hourly
 // reconciliation eventually revokes the data, but a lingering grant must not

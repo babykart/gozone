@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -532,6 +533,76 @@ func TestDeleteZone_EmptyID(t *testing.T) {
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("expected redirect 303, got %d", w.Code)
+	}
+}
+
+// TestDeleteZone_RejectsInvalidZoneID pins the form-path guard: the delete
+// form carries zone_id as form data (no {zone_id} route segment), so the
+// middleware validation never sees it — a dot-only or empty-label id must be
+// rejected before the service builds a PowerDNS path like
+// /servers/<id>/zones/... (a reverse proxy may resolve the dot segment). The
+// whitespace-padded case pins the order: canonicalization (which trims)
+// happens BEFORE the shape check, or " .. " would normalize to ".." and slip
+// through.
+func TestDeleteZone_RejectsInvalidZoneID(t *testing.T) {
+	t.Parallel()
+	var pdnsHits int
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsHits++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	for _, zoneID := range []string{"..", ".", "example..com", " .", " .. "} {
+		w := httptest.NewRecorder()
+		form := url.Values{"zone_id": {zoneID}}.Encode()
+		r := httptest.NewRequest(http.MethodPost, "/zones/delete", strings.NewReader(form))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r = r.WithContext(ctx)
+		h.DeleteZone(w, r)
+
+		if w.Code == http.StatusSeeOther {
+			t.Errorf("zone_id %q must not be accepted (got a success redirect)", zoneID)
+		}
+	}
+	if pdnsHits != 0 {
+		t.Errorf("PowerDNS must never see an invalid zone id, got %d calls", pdnsHits)
+	}
+}
+
+// TestBulkDeleteZones_RejectsInvalidZoneID pins the same guard on the bulk
+// JSON path: one invalid checkbox value fails the whole request with a 400
+// instead of building a traversal-looking PowerDNS path for it.
+func TestBulkDeleteZones_RejectsInvalidZoneID(t *testing.T) {
+	t.Parallel()
+	var pdnsHits int
+	h, pdnsSrv := newTestHandlerWithPDNS(t, func(w http.ResponseWriter, r *http.Request) {
+		pdnsHits++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer pdnsSrv.Close()
+
+	testutil.SeedTestUser(t, h.DB, "admin", "admin", "admin", true)
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	ctx := context.WithValue(context.Background(), middleware.UserContextKey, user)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/zones/bulk-delete", strings.NewReader("zone_id=example.com&zone_id=.."))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r = r.WithContext(ctx)
+	h.BulkDeleteZones(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if pdnsHits != 0 {
+		t.Errorf("PowerDNS must never see an invalid zone id, got %d calls", pdnsHits)
 	}
 }
 

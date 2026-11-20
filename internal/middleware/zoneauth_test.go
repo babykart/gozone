@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/babykart/gozone/internal/database"
@@ -418,6 +419,129 @@ func TestCanonicalizeZoneID_EmptyZoneID(t *testing.T) {
 	}
 	if !called {
 		t.Error("next handler must be called when the route carries no zone_id")
+	}
+}
+
+// TestCanonicalizeZoneID_RejectsInvalidZoneID is the defense-in-depth pin:
+// a dot-only or empty-label zone id would reach the PowerDNS URL path as a
+// traversal-looking dot segment (url.PathEscape passes "." and ".." through
+// verbatim), so the middleware must reject it with 400 before any downstream
+// consumer sees it. Valid ids must still canonicalize and pass.
+func TestCanonicalizeZoneID_RejectsInvalidZoneID(t *testing.T) {
+	serve := func(raw string) (int, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/"+raw, nil)
+		r.SetPathValue("zone_id", raw)
+		var seen string
+		CanonicalizeZoneID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr.Code, seen
+	}
+
+	for _, raw := range []string{"..", ".", "example..com"} {
+		code, seen := serve(raw)
+		if code != http.StatusBadRequest {
+			t.Errorf("zone_id %q: expected 400, got %d (body: %s)", raw, code, seen)
+		}
+		if seen != "" {
+			t.Errorf("zone_id %q: next handler must not run, saw %q", raw, seen)
+		}
+	}
+}
+
+// TestCanonicalizeZoneID_RejectsInvalidZoneID_APIPath pins the API branch of
+// the rejection: an API-shaped request gets the JSON envelope with the
+// string code, not the plain-text body.
+func TestCanonicalizeZoneID_RejectsInvalidZoneID_APIPath(t *testing.T) {
+	rr := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones/..", nil)
+	r.Header.Set("Accept", "application/json")
+	r.SetPathValue("zone_id", "..")
+	CanonicalizeZoneID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not run for an invalid zone id")
+	})).ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("API rejection must be JSON, got Content-Type %q", ct)
+	}
+	if !strings.Contains(rr.Body.String(), "VALIDATION_ERROR") {
+		t.Errorf("envelope must carry the VALIDATION_ERROR code, got %q", rr.Body.String())
+	}
+}
+
+// Regression: canonicalization still applies to legitimate ids.
+func TestCanonicalizeZoneID_CanonicalizesLegitIDs(t *testing.T) {
+	serve := func(raw string) (int, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/"+raw, nil)
+		r.SetPathValue("zone_id", raw)
+		var seen string
+		CanonicalizeZoneID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr.Code, seen
+	}
+
+	for _, tc := range []struct{ in, want string }{
+		{"Example.COM", "example.com."},
+		{"example.com.", "example.com."},
+	} {
+		code, seen := serve(tc.in)
+		if code != http.StatusOK {
+			t.Errorf("zone_id %q: expected 200, got %d", tc.in, code)
+		}
+		if seen != tc.want {
+			t.Errorf("zone_id %q: downstream handler must observe %q, got %q", tc.in, tc.want, seen)
+		}
+	}
+}
+
+// TestCheckZoneAccess_RejectsInvalidZoneID mirrors the rejection on the
+// user-accessible gate: an invalid zone id is refused before the grant probe,
+// for every role (admins/operators included — nothing legitimate
+// canonicalizes to a dot-only or empty-label id).
+func TestCheckZoneAccess_RejectsInvalidZoneID(t *testing.T) {
+	db := newTestAuthDB(t)
+
+	serve := func(user *models.User, raw string) (int, string) {
+		rr := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/zones/"+raw, nil)
+		r.SetPathValue("zone_id", raw)
+		r = withTestUser(r, user)
+		var seen string
+		CheckZoneAccess(db)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = r.PathValue("zone_id")
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, r)
+		return rr.Code, seen
+	}
+
+	users := map[string]*models.User{
+		"admin":    {ID: 1, Username: "admin", Role: "admin"},
+		"operator": {ID: 3, Username: "operator", Role: "operator"},
+	}
+	for role, user := range users {
+		for _, raw := range []string{"..", ".", "example..com."} {
+			code, seen := serve(user, raw)
+			if code != http.StatusBadRequest {
+				t.Errorf("%s with zone_id %q: expected 400, got %d", role, raw, code)
+			}
+			if seen != "" {
+				t.Errorf("%s with zone_id %q: next handler must not run, saw %q", role, raw, seen)
+			}
+		}
+	}
+
+	// Regression: a legitimate id still passes and canonicalizes.
+	code, seen := serve(users["admin"], "Example.COM")
+	if code != http.StatusOK || seen != "example.com." {
+		t.Errorf("admin with zone_id %q: expected 200 + canonical id, got %d / %q", "Example.COM", code, seen)
 	}
 }
 

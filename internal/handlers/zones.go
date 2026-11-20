@@ -455,6 +455,20 @@ func (h *Handler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The form path carries no {zone_id} route segment, so the middleware
+	// validation never sees this value. Canonicalize FIRST — NormalizeZoneName
+	// trims whitespace and appends the dot, so a whitespace-padded "." would
+	// otherwise pass the raw shape check and normalize to the dot-only id
+	// down in the service — then reject dot-only / empty-label ids before the
+	// PowerDNS URL path is built, where a reverse proxy could resolve the dot
+	// segment. The canonical id is also what the service receives, so
+	// validation and deletion key on the same spelling.
+	zoneID = dnsops.NormalizeZoneName(zoneID)
+	if !dnsops.IsValidZoneID(zoneID) {
+		h.renderError(w, r, "Invalid zone id")
+		return
+	}
+
 	if err := h.Ops.DeleteZone(r.Context(), user, zoneID, dnsops.SourceWeb); err != nil {
 		h.renderInternalError(w, r, "Failed to delete zone", err)
 		return
@@ -488,6 +502,14 @@ func (h *Handler) BulkDeleteZones(w http.ResponseWriter, r *http.Request) {
 		id = dnsops.NormalizeZoneName(id)
 		if id == "" {
 			continue
+		}
+		// Form-supplied ids skip the {zone_id} middleware validation: reject
+		// dot-only / empty-label ids instead of building a traversal-looking
+		// PowerDNS path for them. One invalid value fails the whole request —
+		// silently skipping it would delete an unintended subset.
+		if !dnsops.IsValidZoneID(id) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid zone id"})
+			return
 		}
 		// Canonicalise before the seen-map check so "example.com" and
 		// "Example.COM." dedupe to one delete keyed on the canonical ID.

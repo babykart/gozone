@@ -441,7 +441,8 @@ func TestExportZoneTool_UngrantedForbidden(t *testing.T) {
 // zone IDs: underscore zones (_dmarc.example.com.) and RFC 2317 reverse
 // delegations with a slash (0/25.2.0.192.in-addr.arpa.) are real zones in
 // PowerDNS. The sanity check is deliberately narrow: non-empty, at most 253
-// characters, no whitespace or control characters. Anything else is accepted
+// characters, no whitespace or control characters, and no dot-only ids or
+// empty labels (dnsops.IsValidZoneID). Everything else is accepted
 // and canonicalised (lowercase + trailing dot); existence is enforced
 // downstream by the service (ZONE_NOT_FOUND, fail-closed).
 func TestCanonicalZoneArg_Relaxed(t *testing.T) {
@@ -451,6 +452,9 @@ func TestCanonicalZoneArg_Relaxed(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
+		{"dot dot", "..", "", true},
+		{"root dot only", ".", "", true},
+		{"empty inner label", "example..com.", "", true},
 		{"underscore zone", "_dmarc.example.com.", "_dmarc.example.com.", false},
 		{"rfc2317 slash zone", "0/25.2.0.192.in-addr.arpa.", "0/25.2.0.192.in-addr.arpa.", false},
 		{"canonicalises casing and dot", "Example.COM", "example.com.", false},

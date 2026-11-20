@@ -29,6 +29,14 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 				return
 			}
 
+			// Defense in depth: a dot-only or empty-label id would reach the
+			// PowerDNS URL path as a traversal-looking dot segment. Reject
+			// before authorization/lookup — nothing legitimate canonicalizes
+			// to such an id.
+			if rejectInvalidZoneID(w, r, zoneID) {
+				return
+			}
+
 			// Admins and operators manage every zone: both skip the
 			// per-zone grant probe (see models.User.CanManageDNS).
 			// Canonicalization already happened above, so downstream
@@ -84,10 +92,29 @@ func CheckZoneAccess(db *database.DB) func(next http.Handler) http.Handler {
 func CanonicalizeZoneID() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			canonicalizeZonePathValue(r)
+			zoneID := canonicalizeZonePathValue(r)
+			if zoneID != "" && rejectInvalidZoneID(w, r, zoneID) {
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// rejectInvalidZoneID writes the shared 400 response for a dot-only or
+// empty-label zone id and reports whether it did. Entry-point validation
+// against traversal-looking dot segments reaching the PowerDNS URL path; the
+// API surface gets the standard JSON envelope, web routes a plain body.
+func rejectInvalidZoneID(w http.ResponseWriter, r *http.Request, zoneID string) bool {
+	if dnsops.IsValidZoneID(zoneID) {
+		return false
+	}
+	if isAPIRequest(r) {
+		writeAPIErrorEnvelope(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid zone id")
+	} else {
+		http.Error(w, "invalid zone id", http.StatusBadRequest)
+	}
+	return true
 }
 
 // canonicalizeZonePathValue normalises the {zone_id} path value in place and
