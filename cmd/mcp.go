@@ -7,11 +7,13 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +25,13 @@ import (
 
 	"github.com/babykart/gozone/internal/logger"
 )
+
+// bridgeMaxResponseBytes caps how much of a single upstream JSON response
+// the bridge reads into memory (the SSE scanner applies the same value as a
+// PER-LINE limit, and the HTTP-error branch reads at most 1 MiB — the SSE
+// aggregate is therefore not bounded by this constant alone). 32 MiB is
+// generous for any MCP message.
+const bridgeMaxResponseBytes int64 = 32 << 20
 
 // newMCPCmd builds the `gozone mcp` namespace. Bare `gozone mcp` prints help,
 // like the root command.
@@ -227,15 +236,43 @@ func (b *stdioBridge) relay(ctx context.Context, line string, out io.Writer) err
 		// SSE-framed response: each complete data: payload is one JSON-RPC
 		// message. The stateless server sends exactly one per POST, but the
 		// parser handles any count.
-		for _, msg := range extractSSEMessages(resp.Body) {
+		messages, err := extractSSEMessages(resp.Body)
+		// Relay whatever complete messages were extracted before the failure,
+		// then make sure the request is never left unanswered: the MCP client
+		// would otherwise block until its own timeout. A request that already
+		// received its response must NOT be answered twice — JSON-RPC has no
+		// second response for a completed id — so the synthetic error is
+		// emitted only when no relayed message answered it.
+		answered := false
+		for _, msg := range messages {
 			writeLine(out, msg)
+			if !answered && messageAnswersID(msg, env.ID) {
+				answered = true
+			}
+		}
+		if err != nil {
+			if env.ID != nil && !answered {
+				writeJSONRPCError(out, env.ID, -32603, "internal error: "+err.Error())
+			}
+			logger.Warn("mcp stdio bridge: SSE stream error", "error", err)
 		}
 	case resp.StatusCode == http.StatusOK:
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, bridgeMaxResponseBytes+1))
 		if err != nil {
 			if env.ID != nil {
 				writeJSONRPCError(out, env.ID, -32603, "internal error: read response: "+err.Error())
 			}
+			return nil
+		}
+		if int64(len(body)) > bridgeMaxResponseBytes {
+			// The limit+1 read distinguishes an exactly-at-limit body from an
+			// over-limit one: over the limit, the payload cannot be trusted
+			// complete — answer the request instead of relaying a truncated
+			// (therefore unparseable) JSON value.
+			if env.ID != nil {
+				writeJSONRPCError(out, env.ID, -32603, fmt.Sprintf("internal error: response exceeds %d-byte limit", bridgeMaxResponseBytes))
+			}
+			logger.Warn("mcp stdio bridge: upstream response over limit", "bytes", len(body))
 			return nil
 		}
 		if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
@@ -295,9 +332,74 @@ func isEventStream(ct string) bool {
 	return strings.HasPrefix(ct, "text/event-stream")
 }
 
+// messageAnswersID reports whether a relayed JSON-RPC message is a RESPONSE
+// (an id present, no method — server-initiated requests carry a method and
+// notifications carry no id) matching the request id. The SSE error path
+// uses it to synthesize a transport-error response only for requests the
+// stream never answered: JSON-RPC has no second response for a completed id.
+func messageAnswersID(msg string, id *json.RawMessage) bool {
+	if id == nil {
+		return false
+	}
+	var probe struct {
+		ID     *json.RawMessage `json:"id"`
+		Method string           `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(msg), &probe); err != nil {
+		return false
+	}
+	return probe.Method == "" && probe.ID != nil && jsonIDEqual(*probe.ID, *id)
+}
+
+// jsonIDEqual compares two raw JSON id values by semantic value, not byte
+// encoding: JSON-RPC ids are equal when their decoded values are, so "a" and
+// "\u0061" are the same id and 1 and 1e0 denote the same number. The Go SDK
+// decodes and re-encodes ids on both sides, so equivalent-but-different
+// encodings are realistic on the wire. Numbers compare exactly through
+// big.Rat — float64 coercion would lose precision on 64-bit ids. Values that
+// do not parse as JSON never compare equal.
+func jsonIDEqual(a, b json.RawMessage) bool {
+	av, aok := decodeJSONID(a)
+	bv, bok := decodeJSONID(b)
+	if !aok || !bok {
+		return false
+	}
+	return jsonValueEqual(av, bv)
+}
+
+func decodeJSONID(raw json.RawMessage) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
+func jsonValueEqual(a, b any) bool {
+	switch av := a.(type) {
+	case json.Number:
+		bn, ok := b.(json.Number)
+		if !ok {
+			return false
+		}
+		ar, aok := new(big.Rat).SetString(string(av))
+		br, bok := new(big.Rat).SetString(string(bn))
+		return aok && bok && ar.Cmp(br) == 0
+	case string:
+		bs, ok := b.(string)
+		return ok && av == bs
+	default:
+		return a == b
+	}
+}
+
 // extractSSEMessages reads an SSE body and returns every complete data
 // payload (the JSON-RPC messages), dropping comments, events and keep-alives.
-func extractSSEMessages(r io.Reader) []string {
+// A mid-stream read failure surfaces as an error; the complete messages
+// extracted before it are still returned.
+func extractSSEMessages(r io.Reader) ([]string, error) {
 	var messages []string
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024) // exports can be large
@@ -326,8 +428,14 @@ func extractSSEMessages(r io.Reader) []string {
 			// event:, id:, retry: — framing, not payload
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		// The stream was cut: the pending data lines are an INCOMPLETE
+		// message (no blank-line terminator), not a complete payload — drop
+		// them instead of relaying a truncated JSON value.
+		return messages, fmt.Errorf("reading SSE stream: %w", err)
+	}
 	flush()
-	return messages
+	return messages, nil
 }
 
 // writeJSONRPCError writes one JSON-RPC error response. A nil id renders as
@@ -359,7 +467,16 @@ func writeJSONRPCError(w io.Writer, id *json.RawMessage, code int, message strin
 
 // writeLine writes one newline-terminated message, ignoring write errors
 // (a closed stdout means the client went away; the relay stops on the next
-// scanner read anyway).
+// scanner read anyway). A message that parses as JSON is compacted first:
+// stdout is NDJSON, so internal newlines (an indented body relayed by an
+// intermediate proxy, for instance) would split one JSON value across
+// several lines and corrupt the protocol stream. Non-JSON payloads fail
+// json.Compact and are written verbatim.
 func writeLine(w io.Writer, msg string) {
-	_, _ = io.WriteString(w, strings.TrimRight(msg, "\r\n")+"\n")
+	line := strings.TrimRight(msg, "\r\n")
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(line)); err == nil && compact.Len() > 0 {
+		line = compact.String()
+	}
+	_, _ = io.WriteString(w, line+"\n")
 }

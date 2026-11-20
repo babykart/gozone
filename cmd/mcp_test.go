@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,7 +66,10 @@ func TestExtractSSEMessages(t *testing.T) {
 		"\n" +
 		"data: {\"jsonrpc\":\"2.0\",\"id\":2}\n" +
 		"\n"
-	got := extractSSEMessages(strings.NewReader(body))
+	got, err := extractSSEMessages(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("clean stream must not error: %v", err)
+	}
 	if len(got) != 2 || got[0] != `{"jsonrpc":"2.0","id":1,"result":{}}` || got[1] != `{"jsonrpc":"2.0","id":2}` {
 		t.Fatalf("unexpected SSE extraction: %q", got)
 	}
@@ -337,4 +341,269 @@ func TestStdioBridge_RedirectNotFollowed(t *testing.T) {
 	if resp.ID != 1 || resp.Error.Code != -32000 || !strings.Contains(resp.Error.Message, "HTTP 307") {
 		t.Fatalf("expected id 1 / -32000 / HTTP 307, got id=%d code=%d msg=%q", resp.ID, resp.Error.Code, resp.Error.Message)
 	}
+}
+
+// TestStdioBridge_PrettyJSONBodyStaysOneLine pins NDJSON framing: a JSON
+// body with internal newlines (an intermediate proxy pretty-printing or
+// indenting it, for instance) must still be relayed as ONE stdout line —
+// stdout is newline-delimited, so splitting one value across lines corrupts
+// the protocol stream.
+func TestStdioBridge_PrettyJSONBodyStaysOneLine(t *testing.T) {
+	body := "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"result\": {\"echo\": true}\n}"
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body) // #nosec G104 -- test helper
+	}, "k")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n")
+
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("indented JSON body must stay one stdout line, got %d: %q", len(lines), out)
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &value); err != nil {
+		t.Fatalf("the single line must parse as JSON: %v (%q)", err, lines[0])
+	}
+	if !strings.Contains(lines[0], `"echo":true`) {
+		t.Fatalf("compacted line must carry the result, got %q", lines[0])
+	}
+}
+
+// TestStdioBridge_CompactJSONRoundTripsVerbatim is the regression twin of
+// the pretty-body test: an already-compact JSON body must come out
+// byte-identical (single line), not reformatted.
+func TestStdioBridge_CompactJSONRoundTripsVerbatim(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"result":{"echo":true}}`
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body) // #nosec G104 -- test helper
+	}, "k")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n")
+	if out != body+"\n" {
+		t.Fatalf("compact body must round-trip byte-identically, got %q", out)
+	}
+}
+
+// TestStdioBridge_OverLimitJSONAnsweredNotRelayed pins the bounded read on
+// the JSON-200 branch: an upstream body over bridgeMaxResponseBytes must
+// NOT be relayed (it would be a truncated, unparseable value) — the bridge
+// must answer the request with a -32603 error instead.
+func TestStdioBridge_OverLimitJSONAnsweredNotRelayed(t *testing.T) {
+	body := strings.Repeat("a", int(bridgeMaxResponseBytes)+1024)
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body) // #nosec G104 -- test helper
+	}, "k")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n")
+
+	if len(out) > len(body)/2 {
+		t.Fatalf("oversized body must not be relayed (stdout %d bytes)", len(out))
+	}
+	var resp struct {
+		ID    int `json:"id"`
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &resp); err != nil {
+		t.Fatalf("stdout must carry a JSON-RPC error, got %q: %v", out, err)
+	}
+	if resp.ID != 1 || resp.Error.Code != -32603 {
+		t.Fatalf("expected id 1 / -32603, got id=%d code=%d", resp.ID, resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "exceeds") || !strings.Contains(resp.Error.Message, "byte") {
+		t.Fatalf("error must mention the byte limit, got %q", resp.Error.Message)
+	}
+}
+
+// errReader fails every read with a fixed error, simulating a stream cut.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("kaboom") }
+
+// TestExtractSSEMessages_ReportsStreamError pins the scanner-error
+// contract: a mid-stream read failure surfaces as an error, and the
+// complete messages extracted before the failure are still returned.
+func TestExtractSSEMessages_ReportsStreamError(t *testing.T) {
+	got, err := extractSSEMessages(io.MultiReader(strings.NewReader("data: {\"partial\":true}\n\n"), errReader{}))
+	if err == nil {
+		t.Fatal("a stream cut must surface as an error")
+	}
+	if len(got) != 1 || got[0] != `{"partial":true}` {
+		t.Fatalf("the pre-error message must still be returned, got %q", got)
+	}
+}
+
+// TestStdioBridge_SSEStreamCutAnswersRequest pins the user-visible half of
+// the scanner-error fix: an upstream that dies mid-SSE-stream (partial data
+// line, connection aborted) must still get the request an answer — without
+// it the MCP client blocks until its own timeout.
+func TestStdioBridge_SSEStreamCutAnswersRequest(t *testing.T) {
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Unterminated payload: no blank line, then the connection is cut.
+		io.WriteString(w, `data: {"jsonrpc":"2.0","id":1,"res`) // #nosec G104 -- test helper
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		panic(http.ErrAbortHandler)
+	}, "k")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"tools/call"}`+"\n")
+
+	var resp struct {
+		ID    int `json:"id"`
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &resp); err != nil {
+		t.Fatalf("stdout must carry a JSON-RPC error, got %q: %v", out, err)
+	}
+	if resp.ID != 1 || resp.Error.Code != -32603 {
+		t.Fatalf("expected id 1 / -32603, got id=%d code=%d", resp.ID, resp.Error.Code)
+	}
+}
+
+// TestStdioBridge_SSEErrorAfterCompleteAnswerNoDuplicate pins the no-double
+// answer rule: when the SSE stream delivers the complete response for the
+// request id and THEN fails, the bridge relays the response and must NOT
+// synthesize a second (-32603) response for the same id — JSON-RPC has no
+// second response for a completed request.
+func TestStdioBridge_SSEErrorAfterCompleteAnswerNoDuplicate(t *testing.T) {
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n") // #nosec G104 -- test helper
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		panic(http.ErrAbortHandler) // cut the connection after the complete response
+	}, "sekret")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n")
+	lines := nonEmptyLines(out)
+	if len(lines) != 1 {
+		t.Fatalf("exactly one stdout message expected, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], `"ok":true`) || strings.Contains(lines[0], "-32603") {
+		t.Fatalf("the real response must be the only message, got %q", lines[0])
+	}
+}
+
+// TestStdioBridge_ExactLimitJSONRelayed locks the limit+1 boundary: a body
+// of exactly bridgeMaxResponseBytes is valid and must be relayed (only
+// limit+1 triggers the overflow answer).
+func TestStdioBridge_ExactLimitJSONRelayed(t *testing.T) {
+	prefix := `{"jsonrpc":"2.0","id":1,"result":{"pad":"`
+	suffix := `"}}`
+	fill := strings.Repeat("a", int(bridgeMaxResponseBytes)-len(prefix)-len(suffix))
+	body := prefix + fill + suffix
+	if int64(len(body)) != bridgeMaxResponseBytes {
+		t.Fatalf("test setup: body must be exactly the limit, got %d", len(body))
+	}
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body) // #nosec G104 -- test helper
+	}, "sekret")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}`+"\n")
+	if strings.Contains(out, "-32603") || !strings.Contains(out, `"pad"`) {
+		t.Fatalf("exact-limit body must be relayed verbatim, got %d bytes / prefix %q", len(out), firstLine(out))
+	}
+}
+
+// TestExtractSSEMessages_CleanEOFWithoutTrailingBlankLineFlushes pins the
+// framing rule: a stream that ends cleanly WITHOUT the final blank line
+// still delivers its last complete data payload (flush at EOF), while a
+// stream CUT (scanner error) drops unterminated data.
+func TestExtractSSEMessages_CleanEOFWithoutTrailingBlankLineFlushes(t *testing.T) {
+	got, err := extractSSEMessages(strings.NewReader("data: {\"jsonrpc\":\"2.0\",\"id\":7}\n"))
+	if err != nil {
+		t.Fatalf("clean EOF must not error: %v", err)
+	}
+	if len(got) != 1 || got[0] != `{"jsonrpc":"2.0","id":7}` {
+		t.Fatalf("final event without trailing blank line must flush, got %q", got)
+	}
+}
+
+// TestJSONIDEqual pins semantic JSON id equality: equal VALUES compare equal
+// regardless of encoding ("a" == "\u0061", 1 == 1e0), different types or
+// values do not, and big integers survive without float64 coercion.
+func TestJSONIDEqual(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical strings", `"a"`, `"a"`, true},
+		{"escaped vs literal string", `"\u0061"`, `"a"`, true},
+		{"number equal exact", `1`, `1`, true},
+		{"number exponent form", `1`, `1e0`, true},
+		{"number big integer", `12345678901234567890123`, `12345678901234567890123`, true},
+		{"string vs number", `"1"`, `1`, false},
+		{"different numbers", `1`, `2`, false},
+		{"different strings", `"a"`, `"b"`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := jsonIDEqual(json.RawMessage(tc.a), json.RawMessage(tc.b)); got != tc.want {
+				t.Fatalf("jsonIDEqual(%s, %s) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStdioBridge_SSEErrorEscapedIDNoDuplicate extends the no-double-answer
+// rule to semantically-equal-but-differently-encoded ids: the request carries
+// id "\u0061" while the SSE response uses its decoded form "a". The two are
+// the SAME id, so the stream error after the complete response must not
+// synthesize a second response.
+func TestStdioBridge_SSEErrorEscapedIDNoDuplicate(t *testing.T) {
+	b, _ := newTestBridge(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"id\":\"a\",\"result\":{\"ok\":true}}\n\n") // #nosec G104 -- test helper
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		panic(http.ErrAbortHandler)
+	}, "sekret")
+
+	out := runBridge(t, b, `{"jsonrpc":"2.0","id":"\u0061","method":"initialize","params":{}}`+"\n")
+	lines := nonEmptyLines(out)
+	if len(lines) != 1 {
+		t.Fatalf("exactly one stdout message expected, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], `"ok":true`) || strings.Contains(lines[0], "-32603") {
+		t.Fatalf("the real response must be the only message, got %q", lines[0])
+	}
+}
+
+func nonEmptyLines(s string) []string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
