@@ -423,6 +423,88 @@ func TestMySQLGetLockResult(t *testing.T) {
 	}
 }
 
+// TestMySQLReleaseLockResult covers the RELEASE_LOCK return-value classifier
+// that both release closures rely on. RELEASE_LOCK returns 1 only when THIS
+// session released the lock; 0 (not held by this session) and NULL (unknown
+// lock) are anomalies the caller must treat as an unconfirmed release and
+// invalidate the pinned connection. Like mysqlGetLockResult, this is a pure
+// function so the classification is unit-testable without a live MySQL.
+func TestMySQLReleaseLockResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		got     sql.NullInt64
+		wantErr bool
+		wantSub string
+	}{
+		{"released", sql.NullInt64{Int64: 1, Valid: true}, false, ""},
+		{"not_held_zero", sql.NullInt64{Int64: 0, Valid: true}, true, "returned 0"},
+		{"null_unknown_lock", sql.NullInt64{}, true, "NULL"},
+		{"unexpected_value", sql.NullInt64{Int64: 2, Valid: true}, true, "unexpected value 2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := mysqlReleaseLockResult(tc.got)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantSub) {
+					t.Errorf("error %q must contain %q", err.Error(), tc.wantSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected nil error for confirmed release, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestMySQLIntegration_UnconfirmedReleaseInvalidatesConn verifies the
+// unconfirmed-release path against a live MySQL: after a second RELEASE_LOCK
+// (which this session no longer holds, returning 0), the helper must report an
+// error and mark the pinned connection bad; closing it must NOT poison the
+// pool — a fresh query still gets a healthy connection. Runs ONLY in the CI
+// dbmatrix job (skips locally without GOZONE_TEST_MYSQL_DSN).
+func TestMySQLIntegration_UnconfirmedReleaseInvalidatesConn(t *testing.T) {
+	dsn := skipIfNoDSN(t, "GOZONE_TEST_MYSQL_DSN")
+	db := newIntegrationDB(t, "mysql", dsn)
+	ctx := context.Background()
+
+	conn, err := db.Conn.Conn(ctx)
+	if err != nil {
+		t.Fatalf("pin connection: %v", err)
+	}
+	const lockName = "gozone_test_unconfirmed"
+	var got int
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 1)", lockName).Scan(&got); err != nil {
+		t.Fatalf("GET_LOCK: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("GET_LOCK must return 1, got %d", got)
+	}
+
+	if err := releaseMySQLNamedLock(conn, "SELECT RELEASE_LOCK(?)", lockName); err != nil {
+		t.Fatalf("first release must be confirmed, got: %v", err)
+	}
+	if err := releaseMySQLNamedLock(conn, "SELECT RELEASE_LOCK(?)", lockName); err == nil {
+		t.Fatal("second release must fail: RELEASE_LOCK returns 0 (lock not held by this session)")
+	}
+	// The helper must have INVALIDATED the pinned connection, not left it
+	// pool-ready: after Raw(ErrBadConn) the *sql.Conn is closed, so any
+	// further use reports sql.ErrConnDone. Without this assertion the test
+	// would pass even if invalidateMySQLConn were a no-op.
+	if err := conn.PingContext(ctx); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("invalidated connection must be done, got %v", err)
+	}
+	conn.Close() // #nosec G104 -- test cleanup; the pool discards the invalidated physical connection
+
+	var one int
+	if err := db.Conn.QueryRow("SELECT 1").Scan(&one); err != nil || one != 1 {
+		t.Fatalf("pool must still serve healthy connections after invalidated Close, got one=%d err=%v", one, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests (require GOZONE_TEST_MYSQL_DSN)
 // ---------------------------------------------------------------------------

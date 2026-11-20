@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -181,12 +182,62 @@ func (m *mysqlDialect) LockMigrations(pool *sql.DB) (func(), error) {
 			return
 		}
 		released = true
-		if _, err := conn.ExecContext(ctx, "SELECT RELEASE_LOCK('gozone_migrations')"); err != nil {
-			logger.Error("failed to release mysql migration lock", "error", err)
+		if err := releaseMySQLNamedLock(conn, "SELECT RELEASE_LOCK('gozone_migrations')"); err != nil {
+			logger.Error("failed to release mysql migration lock; invalidated the pinned connection so the pool drops it and MySQL frees the lock at session end", "error", err)
 		}
-		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
+		conn.Close() // #nosec G104 -- best-effort cleanup; after invalidation the pool discards the physical connection
 	}
 	return release, nil
+}
+
+// releaseMySQLNamedLock releases a named advisory lock on the pinned session
+// and invalidates the connection when the release is not positively
+// confirmed. RELEASE_LOCK returns 1 only when THIS session released the
+// lock; 0 (not held by this session) or NULL (unknown lock) means the
+// session may still own it. Closing a healthy *sql.Conn merely returns the
+// physical connection to the pool: MySQL keeps the session — and the named
+// lock — alive until ConnMaxLifetime, blocking every other writer for the
+// zone cluster-wide. Worse, GET_LOCK is reentrant per session, so a
+// re-served connection would acquire instantly without any real exclusion.
+// Invalidating via Raw(driver.ErrBadConn) makes the pool discard the
+// physical connection on Close; MySQL frees the lock when the server-side
+// session dies.
+func releaseMySQLNamedLock(conn *sql.Conn, query string, args ...any) error {
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(context.Background(), query, args...).Scan(&got); err != nil {
+		invalidateMySQLConn(conn)
+		return fmt.Errorf("RELEASE_LOCK failed: %w", err)
+	}
+	if err := mysqlReleaseLockResult(got); err != nil {
+		invalidateMySQLConn(conn)
+		return err
+	}
+	return nil
+}
+
+// mysqlReleaseLockResult classifies the integer returned by MySQL's
+// RELEASE_LOCK: 1 = released by this session, 0 = the lock was not held by
+// this session, NULL = the lock never existed (or an internal error). Any
+// value other than 1 is an anomaly: the caller must not assume the session
+// is lock-free. Extracted as a pure function so the classification is
+// unit-testable without a live MySQL, mirroring mysqlGetLockResult.
+func mysqlReleaseLockResult(got sql.NullInt64) error {
+	switch {
+	case !got.Valid:
+		return errors.New("RELEASE_LOCK returned NULL (unknown lock or internal error)")
+	case got.Int64 == 0:
+		return errors.New("RELEASE_LOCK returned 0 (lock not held by this session)")
+	case got.Int64 == 1:
+		return nil
+	default:
+		return fmt.Errorf("RELEASE_LOCK returned unexpected value %d", got.Int64)
+	}
+}
+
+// invalidateMySQLConn marks the pinned connection bad so the pool discards
+// the physical connection on Close instead of returning it to service.
+func invalidateMySQLConn(conn *sql.Conn) {
+	_ = conn.Raw(func(driverConn any) error { return driver.ErrBadConn }) // #nosec G104 -- invalidation is by design an ignored sentinel; the caller logs the real failure
 }
 
 // mysqlZoneLockName derives a deterministic named lock for a zone. MySQL lock
@@ -236,10 +287,10 @@ func (m *mysqlDialect) LockZone(ctx context.Context, pool *sql.DB, zoneID string
 			return
 		}
 		released = true
-		if _, err := conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", name); err != nil {
-			logger.Error("failed to release mysql zone lock", "zone", zoneID, "error", err)
+		if err := releaseMySQLNamedLock(conn, "SELECT RELEASE_LOCK(?)", name); err != nil {
+			logger.Error("failed to release mysql zone lock; invalidated the pinned connection so the pool drops it and MySQL frees the lock at session end", "zone", zoneID, "error", err)
 		}
-		conn.Close() // #nosec G104 -- best-effort cleanup; the connection returns to the pool
+		conn.Close() // #nosec G104 -- best-effort cleanup; after invalidation the pool discards the physical connection
 	}
 	return release, nil
 }
