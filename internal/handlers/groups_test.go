@@ -140,6 +140,31 @@ func TestCreateGroupPage(t *testing.T) {
 	}
 }
 
+// TestCreateGroupPage_PDNSErrorIsSurfaced pins the failure contract: a
+// PowerDNS zone-list failure on the create-group form must surface as a 500
+// (renderInternalError, which also logs the cause), not render the form with
+// a silently empty zone dropdown.
+func TestCreateGroupPage_PDNSErrorIsSurfaced(t *testing.T) {
+	t.Parallel()
+	// nil mock handler: 500 on every PowerDNS request.
+	h, srv := newTestHandlerWithPDNS(t, nil)
+	defer srv.Close()
+
+	user := &models.User{ID: 1, Username: "admin", Role: "admin"}
+	w := httptest.NewRecorder()
+	r := withUserContext(httptest.NewRequest(http.MethodGet, "/groups/new", nil), user)
+	h.CreateGroupPage(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the zone list fails, got %d (%s)", w.Code, w.Body.String())
+	}
+	// The stub group_edit.html form starts with "GroupEdit:" — it must NOT
+	// be rendered when the zone list failed.
+	if strings.Contains(w.Body.String(), "GroupEdit:") {
+		t.Errorf("the create-group form must not be rendered on a zone-list failure, got: %s", w.Body.String())
+	}
+}
+
 func TestCreateGroup_Success(t *testing.T) {
 	t.Parallel()
 	h, srv := newTestHandlerWithPDNS(t, pdnsEmptyHandler())

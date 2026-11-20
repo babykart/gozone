@@ -109,7 +109,11 @@ func (h *Handler) CreateGroupPage(w http.ResponseWriter, r *http.Request) {
 	// The lists are merely capped; the truncation flags let the template
 	// point large selections at the edit page's incremental add + search.
 	allUsers, usersTruncated, _ := h.getAllUsers(r.Context(), "")
-	zonesAll, _ := h.PDNS.ListZonesWithInfo(r.Context())
+	zonesAll, err := h.PDNS.ListZonesWithInfo(r.Context())
+	if err != nil {
+		h.renderInternalError(w, r, "Failed to fetch zones", err)
+		return
+	}
 	allZones, zonesTruncated := filterZonesWithInfoForSearch(zonesAll, "")
 
 	data := map[string]interface{}{
